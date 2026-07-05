@@ -62,14 +62,14 @@ daggerTabUI <- function(id) {
   ns <- shiny::NS(id)
   shiny::tagList(
     varselectUI(ns("vars"), "Node set (Bayesian network / DAG)"),
-    shiny::selectInput(ns("algorithm"), "Structure-learning algorithm (pinned)",
+    shiny::selectInput(ns("algorithm"), "Structure-learning algorithm",
                        c("Hill-Climbing" = "hc", "Tabu Search" = "tabu",
                          "MMHC" = "mmhc", "PC Stable" = "pc.stable",
                          "Grow-Shrink" = "gs", "IAMB" = "iamb",
                          "RSMAX2" = "rsmax2")),
     shiny::conditionalPanel(
       sprintf("['hc','tabu','mmhc','rsmax2'].includes(input['%s'])", ns("algorithm")),
-      shiny::selectInput(ns("score"), "Network score (pinned)",
+      shiny::selectInput(ns("score"), "Network score",
                          c("BIC (Gaussian)" = "bic-g", "BGe" = "bge",
                            "BIC (discrete)" = "bic", "BDe" = "bde",
                            "AIC (Gaussian)" = "aic-g", "AIC (discrete)" = "aic"))

@@ -492,7 +492,7 @@ nctUI <- function(id) {
                       "and unmatched subjects dropped (reported). Without one,",
                       "equal group sizes and matching row order are ASSUMED.")
     ),
-    shiny::selectInput(ns("adjust"), "Edge-test p-value correction (pinned)",
+    shiny::selectInput(ns("adjust"), "Edge-test p-value correction",
                        c("Holm (recommended)" = "holm", "BH / FDR" = "BH",
                          "Bonferroni" = "bonferroni",
                          "None (NOT recommended)" = "none"),
