@@ -52,21 +52,92 @@ reshape_code_fragment <- function(id_col, time_col, sep = "_") {
 }
 
 # --- File loading (rule 1) ---------------------------------------------------
-# TODO(stage3-loader): implement read_any_file(path, filename, opts) with
-# extension dispatch:
-#   .csv/.txt  -> readr::read_delim(delim = opts$delim, locale =
-#                 readr::locale(decimal_mark = opts$decimal), guess_max = 10000)
-#                 (user-set delimiter + decimal mark; European ; + , support)
-#   .tsv       -> readr::read_tsv
-#   .xls/.xlsx -> readxl::read_excel(sheet = opts$sheet)
-#   .sav       -> haven::read_sav, keep labels, offer haven::as_factor
-#   .rds       -> readRDS (must be a data.frame)
-#   .RData     -> load() into new.env(); if >1 object, user picks which
-# Must return list(df, read_code) where read_code is the plain-R fragment
-# (with the explicit read args baked in) for the recorder. Always coerce to
-# plain data.frame; convert haven_labelled via haven::as_factor.
+# Extension-dispatch reader. Returns list(df, read_code, objects) where
+# read_code is the plain-R fragment (explicit args baked in) for the
+# recorder, and `objects` is only set for .RData (candidate object names).
+# Always coerces to a plain data.frame; haven_labelled columns become factors
+# so downstream estimators never see a labelled-vector class they don't expect.
 read_any_file <- function(path, filename, opts) {
-  stop("TODO(stage3-loader): extension-dispatch file reader not yet implemented")
+  ext <- tolower(tools::file_ext(filename))
+
+  delabel <- function(df) {
+    if (any(vapply(df, inherits, TRUE, what = "haven_labelled"))) {
+      df <- as.data.frame(haven::as_factor(df))
+    }
+    as.data.frame(df)
+  }
+
+  switch(ext,
+    csv = ,
+    txt = {
+      delim <- opts$delim %||% ","
+      dec   <- opts$decimal %||% "."
+      df <- as.data.frame(readr::read_delim(
+        path, delim = delim,
+        locale = readr::locale(decimal_mark = dec),
+        guess_max = 10000, show_col_types = FALSE))
+      list(df = delabel(df), read_code = sprintf(
+        paste('dat_raw <- as.data.frame(readr::read_delim("%s", delim = "%s",',
+              '  locale = readr::locale(decimal_mark = "%s"), guess_max = 10000))',
+              sep = "\n"),
+        filename, delim, dec))
+    },
+    tsv = {
+      df <- as.data.frame(readr::read_tsv(path, guess_max = 10000,
+                                          show_col_types = FALSE))
+      list(df = delabel(df), read_code = sprintf(
+        'dat_raw <- as.data.frame(readr::read_tsv("%s", guess_max = 10000))',
+        filename))
+    },
+    xls = ,
+    xlsx = {
+      sheet <- opts$sheet %||% 1L
+      df <- as.data.frame(readxl::read_excel(path, sheet = sheet))
+      list(df = delabel(df), read_code = sprintf(
+        'dat_raw <- as.data.frame(readxl::read_excel("%s", sheet = %s))',
+        filename, sheet))
+    },
+    sav = {
+      df <- haven::read_sav(path)
+      list(df = delabel(df), read_code = sprintf(
+        paste('dat_raw <- haven::read_sav("%s")',
+              '# Labelled columns converted to factors (haven::as_factor):',
+              'dat_raw <- as.data.frame(haven::as_factor(dat_raw))', sep = "\n"),
+        filename))
+    },
+    rds = {
+      df <- readRDS(path)
+      if (!is.data.frame(df)) stop(".rds file must contain a data.frame.")
+      list(df = delabel(df), read_code = sprintf(
+        'dat_raw <- readRDS("%s")', filename))
+    },
+    rdata = {
+      e <- new.env()
+      load(path, envir = e)
+      objs <- ls(e)
+      df_objs <- objs[vapply(objs, function(o) is.data.frame(get(o, e)), TRUE)]
+      if (!length(df_objs)) stop(".RData contains no data.frame objects.")
+      chosen <- opts$rdata_object %||% df_objs[1]
+      if (!(chosen %in% df_objs))
+        stop(sprintf("Object '%s' not found (or not a data.frame) in .RData.", chosen))
+      list(df = delabel(get(chosen, e)), objects = df_objs, read_code = sprintf(
+        paste('.e <- new.env(); load("%s", envir = .e)',
+              'dat_raw <- as.data.frame(get("%s", .e))', sep = "\n"),
+        filename, chosen))
+    },
+    stop(sprintf(
+      "Unsupported file type: .%s (supported: .csv .txt .tsv .xls .xlsx .sav .rds .RData)",
+      ext))
+  )
+}
+
+`%||%` <- function(a, b) if (is.null(a)) b else a
+
+# JS helper: true when the uploaded file's name ends with any of `exts`.
+.ext_condition <- function(ns_file, exts) {
+  checks <- vapply(exts, function(e)
+    sprintf("input['%s'].name.toLowerCase().endsWith('%s')", ns_file, e), "")
+  sprintf("input['%s'] != null && (%s)", ns_file, paste(checks, collapse = " || "))
 }
 
 # --- Shiny module ------------------------------------------------------------
@@ -76,8 +147,25 @@ dataModuleUI <- function(id) {
     shiny::fileInput(ns("file"), "Upload data",
                      accept = c(".csv", ".txt", ".tsv", ".xls", ".xlsx",
                                 ".sav", ".rds", ".RData")),
-    # TODO(stage3-loader-ui): delimiter + decimal-mark selects, Excel sheet
-    # numericInput, .RData object picker (all conditionalPanels on extension).
+    shiny::conditionalPanel(
+      .ext_condition(ns("file"), c(".csv", ".txt")),
+      shiny::fluidRow(
+        shiny::column(6, shiny::selectInput(ns("delim"), "Delimiter",
+          c("Comma (,)" = ",", "Semicolon (;)" = ";",
+            "Tab" = "\t", "Space" = " "))),
+        shiny::column(6, shiny::selectInput(ns("decimal"), "Decimal mark",
+          c("Period (.)" = ".", "Comma (,)" = ",")))
+      )
+    ),
+    shiny::conditionalPanel(
+      .ext_condition(ns("file"), c(".xls", ".xlsx")),
+      shiny::numericInput(ns("sheet"), "Excel sheet number", value = 1, min = 1)
+    ),
+    shiny::conditionalPanel(
+      .ext_condition(ns("file"), c(".rdata")),
+      shiny::selectInput(ns("rdata_object"), "Object to use (.RData contains multiple)",
+                         choices = NULL)
+    ),
     shiny::radioButtons(ns("layout"), "Data layout",
                         c("Wide (subjects x variables)" = "wide",
                           "Long (stacked / repeated measures)" = "long")),
@@ -106,10 +194,29 @@ dataModuleUI <- function(id) {
 dataModuleServer <- function(id, rec) {
   shiny::moduleServer(id, function(input, output, session) {
 
+    # .RData needs a peek before the "real" read so the object picker can be
+    # populated with the candidate data.frame names.
+    shiny::observeEvent(input$file, {
+      ext <- tolower(tools::file_ext(input$file$name))
+      if (identical(ext, "rdata")) {
+        e <- new.env()
+        load(input$file$datapath, envir = e)
+        objs <- ls(e)
+        df_objs <- objs[vapply(objs, function(o) is.data.frame(get(o, e)), TRUE)]
+        shiny::updateSelectInput(session, "rdata_object", choices = df_objs)
+      }
+    })
+
     raw <- shiny::reactive({
       shiny::req(input$file)
-      res <- read_any_file(input$file$datapath, input$file$name,
-                           opts = list())  # TODO(stage3-loader): pass UI opts
+      ext <- tolower(tools::file_ext(input$file$name))
+      if (identical(ext, "rdata")) shiny::req(input$rdata_object)
+      res <- read_any_file(input$file$datapath, input$file$name, opts = list(
+        delim        = input$delim,
+        decimal      = input$decimal,
+        sheet        = input$sheet,
+        rdata_object = input$rdata_object
+      ))
       # New dataset voids every downstream fragment, in every tab:
       rec_drop_prefix(rec, "bootnet_")
       rec_drop_prefix(rec, "dag_")

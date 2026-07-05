@@ -14,18 +14,18 @@
 
 varselectUI <- function(id, label = "Variables to analyse") {
   ns <- shiny::NS(id)
-  # TODO(stage3-picker): replace with
-  #   shinyWidgets::pickerInput(ns("vars"), label, choices = NULL,
-  #     multiple = TRUE,
-  #     options = shinyWidgets::pickerOptions(actionsBox = TRUE,
-  #                                           liveSearch = TRUE))
-  # plus an optional group-variable selectizeInput(ns("group_var")) with an
-  # empty "(none)" default, used by tabs that support split/multi-group runs.
   shiny::tagList(
-    shiny::selectInput(shiny::NS(id)("vars"), label,
-                       choices = NULL, multiple = TRUE),
-    shiny::selectInput(ns("group_var"), "Grouping variable (optional)",
-                       choices = c("(none)" = ""))
+    shinyWidgets::pickerInput(
+      ns("vars"), label, choices = NULL, multiple = TRUE,
+      options = shinyWidgets::pickerOptions(
+        actionsBox = TRUE, liveSearch = TRUE,
+        title = "Select variables...", selectedTextFormat = "count > 4")
+    ),
+    shinyWidgets::pickerInput(
+      ns("group_var"), "Grouping variable (optional)",
+      choices = c("(none)" = ""), multiple = FALSE,
+      options = shinyWidgets::pickerOptions(liveSearch = TRUE)
+    )
   )
 }
 
@@ -34,9 +34,9 @@ varselectServer <- function(id, data_bus, rec, rec_prefix) {
 
     shiny::observeEvent(data_bus$wide(), {
       vars <- names(data_bus$wide())
-      shiny::updateSelectInput(session, "vars", choices = vars)
-      shiny::updateSelectInput(session, "group_var",
-                               choices = c("(none)" = "", vars))
+      shinyWidgets::updatePickerInput(session, "vars", choices = vars)
+      shinyWidgets::updatePickerInput(session, "group_var",
+                                      choices = c("(none)" = "", vars))
     })
 
     selected <- shiny::reactive({

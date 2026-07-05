@@ -65,8 +65,15 @@ daggerTabUI <- function(id) {
                     "a single algorithm run is shown only as an exploratory fit."),
     shiny::hr(),
     shiny::uiOutput(ns("cpdag_caveat")),
-    shiny::plotOutput(ns("dag_plot")),
-    DT::dataTableOutput(ns("arc_table"))
+    shiny::fluidRow(
+      shiny::column(8,
+        shiny::plotOutput(ns("dag_plot")),
+        DT::dataTableOutput(ns("arc_table"))
+      ),
+      # signed = FALSE: bnlearn arcs have no sign; the "positive edge" picker
+      # is relabelled "Arc colour" and the negative-edge picker is hidden.
+      shiny::column(4, appearanceUI(ns("look"), signed = FALSE))
+    )
     # TODO(stage3-dagger-ui): blacklist/whitelist constraint builder
     # (Dagger_zero.R:2312-2379, 4140-4189), split analysis, DAG-diff plot,
     # folded temporal graph tabs — port as-is (they already consume the
@@ -171,18 +178,56 @@ daggerTabServer <- function(id, data_bus, rec) {
       )
     })
 
+    look <- appearanceServer("look", plot_closure = shiny::reactive(rv$plot_fn))
+
     output$dag_plot <- shiny::renderPlot({
       shiny::req(rv$avg)
-      pal <- house_pastel()
+      s    <- look()
       amat <- bnlearn::amat(rv$avg)
+
+      # Edge width reflects bootstrap arc strength (falls back to a flat
+      # width if a bootstrap strength isn't available for some reason).
+      width_mat <- matrix(s$esize * 0.3, nrow(amat), ncol(amat),
+                          dimnames = dimnames(amat))
+      dc <- rv$eq$dir_conf
+      if (!is.null(dc) && nrow(dc) > 0) {
+        for (i in seq_len(nrow(dc)))
+          width_mat[dc$from[i], dc$to[i]] <- s$esize * dc$strength[i]
+      }
+
+      # Dashed styling for arcs whose direction is NOT identified by the
+      # data (undirected in the CPDAG) — visually surfaces the caveat above.
+      lty_mat <- matrix(1, nrow(amat), ncol(amat), dimnames = dimnames(amat))
+      und <- rv$eq$undirected
+      if (!is.null(und) && nrow(und) > 0) {
+        for (i in seq_len(nrow(und))) {
+          a <- und[i, "from"]; b <- und[i, "to"]
+          if (amat[a, b] == 1) lty_mat[a, b] <- 2
+          if (amat[b, a] == 1) lty_mat[b, a] <- 2
+        }
+      }
+
       fn <- function() qgraph::qgraph(
         amat, directed = TRUE, layout = "spring",
-        edge.color = pal$pos_edge,      # arcs are unsigned: pos picker only
-        color = pal$node_fill, border.color = pal$node_border)
-        # TODO(stage3-dagger-viz): appearance-module wiring; edge width by
-        # boot strength; visNetwork interactive view; dashed styling for
-        # direction-unidentified arcs (from rv$eq$undirected).
+        edge.color = s$pos_edge,      # arcs are unsigned: pos picker only
+        color = s$node_fill, border.color = s$node_border,
+        vsize = s$vsize, esize = s$esize, label.cex = s$label_cex,
+        edge.width = width_mat, lty = lty_mat)
       rv$plot_fn <- fn
+
+      rec_upsert(
+        rec, "dag_plot", "plot",
+        description = "[DAG] Plotted the averaged network (qgraph, spring layout); edge width reflects bootstrap arc strength, dashed arcs have unidentified direction per the CPDAG.",
+        code = sprintf(
+          paste("amat <- bnlearn::amat(avg_net)",
+                "# width_mat: bootstrap arc strength scaled by esize; dashed",
+                "# (lty = 2) arcs are undirected in cpdag(avg_net) (see dag_stability step).",
+                'qgraph::qgraph(amat, directed = TRUE, layout = "spring",',
+                '  edge.color = "%s", color = "%s", border.color = "%s",',
+                "  vsize = %s, esize = %s, label.cex = %s,",
+                "  edge.width = width_mat, lty = lty_mat)", sep = "\n"),
+          s$pos_edge, s$node_fill, s$node_border, s$vsize, s$esize, s$label_cex)
+      )
       fn()
     })
 

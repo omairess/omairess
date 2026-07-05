@@ -31,9 +31,11 @@ ui <- shiny::navbarPage(
     shiny::h4("Analysis pipeline (house rule 8)"),
     shiny::verbatimTextOutput("pipeline_log"),
     shiny::downloadButton("dl_script", "Download reproducible R script"),
-    shiny::downloadButton("dl_bundle", "Download data + results bundle (.rds)")
-    # TODO(stage3-exports): per-figure PNG/PDF/SVG buttons via
-    # appearanceServer; CSV exports of edge lists / centrality / arc tables.
+    shiny::downloadButton("dl_bundle", "Download data + results bundle (.rds)"),
+    shiny::helpText("Per-figure PNG/PDF/SVG export is on each analysis tab",
+                    "(next to its colour/size controls).")
+    # TODO(stage3-exports): CSV exports of edge lists / centrality / arc
+    # tables (beyond the .rds bundle above) — not yet implemented.
   )
 )
 

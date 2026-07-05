@@ -14,21 +14,40 @@
 #   export it never had and adding SVG everywhere (svglite).
 # ============================================================================
 
-appearanceUI <- function(id) {
-  ns <- shiny::NS(id)
-  # TODO(stage3-appearance-ui): replace stubs with
-  #   colourpicker::colourInput(ns("node_fill"),  "Node colour",   pal$node_fill)
-  #   colourpicker::colourInput(ns("node_border"),"Node border",   pal$node_border)
-  #   colourpicker::colourInput(ns("pos_edge"),   "Positive edges",pal$pos_edge)
-  #   colourpicker::colourInput(ns("neg_edge"),   "Negative edges",pal$neg_edge)
-  #   sliderInput(ns("vsize"),     "Node size",   min=2,  max=20, value=8)
-  #   sliderInput(ns("esize"),     "Edge scaling",min=1,  max=20, value=8)
-  #   sliderInput(ns("label_cex"), "Label size",  min=.3, max=3,  value=1)
-  #   numericInput(ns("export_w"), "Export width (in)",  10)
-  #   numericInput(ns("export_h"), "Export height (in)",  8)
-  #   numericInput(ns("export_res"),"PNG resolution (dpi)", 300)
-  #   downloadButton(ns("dl_png"),"PNG"); ...(ns("dl_pdf"),"PDF"); ...(ns("dl_svg"),"SVG")
-  shiny::tagList(shiny::p("TODO(stage3-appearance-ui)"))
+# signed = FALSE for tabs whose edges have no sign (bnlearn arcs): the
+# positive-edge picker is relabelled "Arc colour" and the negative-edge
+# picker is hidden rather than faking a sign concept that doesn't exist.
+appearanceUI <- function(id, signed = TRUE) {
+  ns  <- shiny::NS(id)
+  pal <- house_pastel()
+  shiny::tagList(
+    shiny::h5("Colours"),
+    colourpicker::colourInput(ns("node_fill"), "Node colour",
+                              value = pal$node_fill, palette = "square"),
+    colourpicker::colourInput(ns("node_border"), "Node border colour",
+                              value = pal$node_border, palette = "square"),
+    colourpicker::colourInput(ns("pos_edge"),
+                              if (signed) "Positive edges" else "Arc colour",
+                              value = pal$pos_edge, palette = "square"),
+    if (signed) colourpicker::colourInput(ns("neg_edge"), "Negative edges",
+                                          value = pal$neg_edge, palette = "square"),
+    shiny::h5("Sizes"),
+    shiny::sliderInput(ns("vsize"), "Node size", min = 2, max = 20,
+                       value = 8, step = 0.5),
+    shiny::sliderInput(ns("esize"), "Edge scaling", min = 1, max = 20,
+                       value = 8, step = 0.5),
+    shiny::sliderInput(ns("label_cex"), "Label size", min = 0.3, max = 3,
+                       value = 1, step = 0.1),
+    shiny::h5("Export"),
+    shiny::fluidRow(
+      shiny::column(4, shiny::numericInput(ns("export_w"), "Width (in)", 10, min = 2)),
+      shiny::column(4, shiny::numericInput(ns("export_h"), "Height (in)", 8, min = 2)),
+      shiny::column(4, shiny::numericInput(ns("export_res"), "PNG dpi", 300, min = 72))
+    ),
+    shiny::downloadButton(ns("dl_png"), "PNG"),
+    shiny::downloadButton(ns("dl_pdf"), "PDF"),
+    shiny::downloadButton(ns("dl_svg"), "SVG")
+  )
 }
 
 appearanceServer <- function(id, plot_closure) {

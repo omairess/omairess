@@ -52,12 +52,17 @@ bootnetTabUI <- function(id) {
                     "Centrality stays locked until all three complete."),
     shiny::hr(),
     shiny::uiOutput(ns("stability_banner")),
-    shiny::plotOutput(ns("network_plot")),
-    shiny::plotOutput(ns("edge_ci_plot")),
-    shiny::uiOutput(ns("centrality_ui"))
-    # TODO(stage3-bootnet-ui): appearanceUI(ns("look")); network sub-tabs;
-    # port Bridge-Symptoms + NSON sub-tabs from BootSON.R:1633-2224 unchanged
-    # (Bridge already has its own case-drop + corStability — keep it).
+    shiny::fluidRow(
+      shiny::column(8,
+        shiny::plotOutput(ns("network_plot")),
+        shiny::plotOutput(ns("edge_ci_plot")),
+        shiny::uiOutput(ns("centrality_ui"))
+      ),
+      shiny::column(4, appearanceUI(ns("look"), signed = TRUE))
+    )
+    # TODO(stage3-bootnet-ui): network sub-tabs; port Bridge-Symptoms + NSON
+    # sub-tabs from BootSON.R:1633-2224 unchanged (Bridge already has its own
+    # case-drop + corStability — keep it).
   )
 }
 
@@ -243,17 +248,29 @@ bootnetTabServer <- function(id, data_bus, rec) {
       plot(rv$boot_np, labels = FALSE, order = "sample")
     })
 
+    look <- appearanceServer("look", plot_closure = shiny::reactive(rv$plot_fn))
+
     output$network_plot <- shiny::renderPlot({
       shiny::req(rv$net)
-      pal <- house_pastel()
+      s <- look()
       fn <- function() qgraph::qgraph(
         qgraph::getWmat(rv$net), layout = "spring",
-        posCol = pal$pos_edge, negCol = pal$neg_edge,
-        color = pal$node_fill, border.color = pal$node_border)
-        # TODO(stage3-bootnet-viz): replace fixed pastel defaults with the
-        # appearance module settings + vsize/esize/label.cex sliders, and
-        # record a "plot" phase fragment with the chosen values baked in.
+        posCol = s$pos_edge, negCol = s$neg_edge,
+        color = s$node_fill, border.color = s$node_border,
+        vsize = s$vsize, esize = s$esize, label.cex = s$label_cex)
       rv$plot_fn <- fn
+
+      rec_upsert(
+        rec, "bootnet_plot", "plot",
+        description = "[bootnet] Plotted the estimated network (qgraph, spring layout) with the chosen colours/sizes.",
+        code = sprintf(
+          paste('qgraph::qgraph(qgraph::getWmat(net), layout = "spring",',
+                '  posCol = "%s", negCol = "%s",',
+                '  color = "%s", border.color = "%s",',
+                "  vsize = %s, esize = %s, label.cex = %s)", sep = "\n"),
+          s$pos_edge, s$neg_edge, s$node_fill, s$node_border,
+          s$vsize, s$esize, s$label_cex)
+      )
       fn()
     })
 
