@@ -81,17 +81,30 @@ colour-picker + slider appearance controls wired into the GGM and DAG tabs'
 plots (with PNG/PDF/SVG export re-plotting into a fresh device), and the
 pastel default palette.
 
-Still open — **larger feature ports from the source apps, not mechanical
-scaffolding**, each marked `TODO(stage3-*)` at its point of use:
+Added in the 2026-07-05 change requests:
 
-- GGM tab: Bridge-Symptoms centrality sub-tab, the NSON sub-app, split-group
-  estimation, bootstrap edge-significance thresholding, additional estimator
-  branches (huge / IsingFit / mgm).
-- DAG tab: blacklist/whitelist constraint builder, split analysis, DAG-diff
-  plot, the folded-temporal-graph feature, the full 26-entry bnlearn score
-  list.
-- Psychonetrics tab: non-GGM model families (LNM/RNM/LRNM/panel models),
-  lambda-matrix editor, prune/step-up/model-search controls.
+- GGM tab: on-demand bootstrap validation (instant estimation; a separate
+  button runs the bootstraps — the CS-coefficient gate still locks
+  centrality until it has run for the current network); all eight
+  estimators (EBICglasso / ggmModSelect / pcor / cor / huge / IsingFit /
+  mgm / relimp); layout options (spring / circle / EGA communities / PCA);
+  node-size-by-column-mean.
+- DAG tab: blacklist/whitelist constraint builder (threaded into every
+  bootstrap replicate); advanced arc metrics (strength / direction /
+  combined) driving width and labels; layout options (spring / circle /
+  hierarchical Sugiyama); node-size-by-column-mean.
+
+Still open — **larger feature ports from the source apps**, each marked
+`TODO(port)` at its point of use:
+
+- GGM tab: Bridge-Symptoms centrality sub-tab, the NSON sub-app,
+  split-group estimation, bootstrap edge-significance thresholding.
+- DAG tab: split analysis, DAG-diff plot, the folded-temporal-graph
+  feature, the full 26-entry bnlearn score list.
+- Psychonetrics tab: non-GGM model families (LNM / RNM / LRNM / panel
+  models), the lambda-matrix editor, prune/step-up/model-search controls,
+  and the **latent** Relative-Importance network (Johnson/LMG) — distinct
+  from the GGM tab's observed-variable `relimp` estimator.
 - NCT: subject-ID matching UI for paired designs (currently requires
   equal-sized, row-aligned groups as an interim guard).
 

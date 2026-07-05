@@ -32,8 +32,20 @@ appearanceUI <- function(id, signed = TRUE) {
     if (signed) colourpicker::colourInput(ns("neg_edge"), "Negative edges",
                                           value = pal$neg_edge, palette = "square"),
     shiny::h5("Sizes"),
-    shiny::sliderInput(ns("vsize"), "Node size", min = 2, max = 20,
-                       value = 8, step = 0.5),
+    shiny::checkboxInput(ns("scale_nodes"),
+                         "Scale node size by column mean", value = FALSE),
+    shiny::conditionalPanel(
+      sprintf("!input['%s']", ns("scale_nodes")),
+      shiny::sliderInput(ns("vsize"), "Node size", min = 2, max = 20,
+                         value = 8, step = 0.5)
+    ),
+    shiny::conditionalPanel(
+      sprintf("input['%s']", ns("scale_nodes")),
+      # node size ranges linearly between these when scaled by column mean
+      shiny::sliderInput(ns("vsize_range"), "Node size range (min-max)",
+                         min = 2, max = 20, value = c(4, 14), step = 0.5),
+      shiny::helpText("Smallest node = lowest column mean, largest = highest.")
+    ),
     shiny::sliderInput(ns("esize"), "Edge scaling", min = 1, max = 20,
                        value = 8, step = 0.5),
     shiny::sliderInput(ns("label_cex"), "Label size", min = 0.3, max = 3,
@@ -57,12 +69,16 @@ appearanceServer <- function(id, plot_closure) {
     pal <- house_pastel()
 
     settings <- shiny::reactive({
+      vr <- input$vsize_range %||% c(4, 14)
       list(
         node_fill   = input$node_fill   %||% pal$node_fill,
         node_border = input$node_border %||% pal$node_border,
         pos_edge    = input$pos_edge    %||% pal$pos_edge,
         neg_edge    = input$neg_edge    %||% pal$neg_edge,
+        scale_nodes = isTRUE(input$scale_nodes),
         vsize       = input$vsize       %||% 8,
+        vsize_min   = vr[1],
+        vsize_max   = vr[2],
         esize       = input$esize       %||% 8,
         label_cex   = input$label_cex   %||% 1,
         export_w    = input$export_w    %||% 10,

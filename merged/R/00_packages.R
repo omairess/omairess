@@ -11,8 +11,10 @@ APP_PACKAGES <- c(
   "shiny", "shinyWidgets", "colourpicker", "DT", "svglite",
   # shared data handling
   "readr", "readxl", "haven", "tidyr", "tools", "RColorBrewer",
-  # bootnet tab
-  "bootnet", "qgraph", "networktools", "huge",
+  # bootnet tab (estimators: EBICglasso/ggmModSelect/pcor/cor/huge/
+  #   IsingFit/mgm/relimp; EGAnet for the EGA community layout)
+  "bootnet", "qgraph", "networktools", "huge", "IsingFit", "mgm",
+  "relaimpo", "EGAnet",
   # DAG tab
   "bnlearn", "igraph",
   # psychonetrics / NCT tab

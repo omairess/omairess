@@ -1,23 +1,23 @@
 # ============================================================================
 # 11_tab_dagger.R — bnlearn DAG tab (from Dagger_zero.R)
 #
-# CORRECTNESS-CRITICAL LOGIC WRITTEN IN FULL (do not alter in stage 3):
+# CORRECTNESS-CRITICAL LOGIC (do not alter casually):
 #   * boot.strength (R >= 500) + averaged.network is the PRIMARY result;
 #     the single algorithm run is demoted to "exploratory single fit"
 #   * CPDAG / Markov-equivalence caveat computed and surfaced in the UI
 #     whenever a DAG is displayed: arcs whose direction is not identified
-#     are listed by name, and cextend()'ed graphs are labelled as one
-#     arbitrary member of the equivalence class
+#     are listed by name; the audit runs on the averaged network BEFORE any
+#     cextend() (cextend manufactures directions, so a caveat computed after
+#     it would understate what the data cannot identify)
 #
-# DECISION: the equivalence-class analysis runs on the averaged network
-#   BEFORE any cextend() call — cextend manufactures directions, so a caveat
-#   computed after it would understate what the data cannot identify.
-# DECISION: score and algorithm are always passed explicitly (Dagger already
-#   complied); the recorder fragment bakes algorithm, score, R, threshold,
-#   and seed so the exported script is settings-complete.
-# DECISION: unqualified causal UI copy from Dagger_zero ("gold standard for
-#   causal discovery" etc.) is NOT carried over; stage 3 must port help text
-#   through the cpdag caveat wording below.
+# DECISION: blacklist/whitelist constraints are threaded into
+#   algorithm.args, so they apply to EVERY bootstrap replicate (not just a
+#   single fit) — the validated model respects the constraints. Whitelisted
+#   arcs that would create a cycle make bnlearn error; caught and surfaced.
+# DECISION: the "advanced" arc metrics are bnlearn's own boot.strength
+#   outputs: strength = P(arc present), direction = P(this orientation |
+#   present). Edge width / labels can show strength, direction, or their
+#   product; the arc table always lists both so nothing is hidden.
 # ============================================================================
 
 # Equivalence-class audit for an averaged network. Returns the CPDAG, the
@@ -25,20 +25,37 @@
 dag_equivalence_info <- function(avg_net, boot_str) {
   cpd <- bnlearn::cpdag(avg_net)
   und <- bnlearn::undirected.arcs(cpd)
-  # undirected arcs appear in both directions in bnlearn; deduplicate
   if (nrow(und) > 0) {
     key <- apply(und, 1, function(r) paste(sort(r), collapse = "~"))
     und <- und[!duplicated(key), , drop = FALSE]
   }
-  # direction confidence from the bootstrap (0.5 = coin flip)
   arcs <- bnlearn::arcs(avg_net)
   dir_conf <- if (nrow(arcs) > 0) {
     m <- merge(as.data.frame(arcs), boot_str,
                by = c("from", "to"), all.x = TRUE)
-    m[order(m$direction), c("from", "to", "strength", "direction")]
+    m$combined <- m$strength * m$direction
+    m[order(-m$strength), c("from", "to", "strength", "direction", "combined")]
   } else NULL
   list(cpdag = cpd, undirected = und, dir_conf = dir_conf,
        n_arcs = nrow(arcs), n_unidentified = nrow(und))
+}
+
+# Build a from/to constraint data.frame from a cross product of node sets,
+# dropping self-arcs. Returns NULL if empty (bnlearn treats NULL as "none").
+constraint_df <- function(from_vars, to_vars) {
+  if (!length(from_vars) || !length(to_vars)) return(NULL)
+  g <- expand.grid(from = from_vars, to = to_vars, stringsAsFactors = FALSE)
+  g <- g[g$from != g$to, , drop = FALSE]
+  if (!nrow(g)) return(NULL)
+  unique(g)
+}
+
+# Deparse a constraint data.frame into a literal for the exported script.
+constraint_code <- function(df, name) {
+  if (is.null(df) || !nrow(df))
+    return(sprintf("%s <- NULL  # no constraints", name))
+  sprintf("%s <- data.frame(from = %s, to = %s, stringsAsFactors = FALSE)",
+          name, vars_literal(df$from), vars_literal(df$to))
 }
 
 daggerTabUI <- function(id) {
@@ -50,15 +67,40 @@ daggerTabUI <- function(id) {
                          "MMHC" = "mmhc", "PC Stable" = "pc.stable",
                          "Grow-Shrink" = "gs", "IAMB" = "iamb",
                          "RSMAX2" = "rsmax2")),
-    shiny::selectInput(ns("score"), "Network score (pinned)",
-                       c("BIC (Gaussian)" = "bic-g", "BGe" = "bge",
-                         "BIC (discrete)" = "bic", "BDe" = "bde")),
-    # TODO(stage3-dagger-ui): restore Dagger's full 26-score list + per-score
-    # help text (Dagger_zero.R:51-125), gated by detected data type.
+    shiny::conditionalPanel(
+      sprintf("['hc','tabu','mmhc','rsmax2'].includes(input['%s'])", ns("algorithm")),
+      shiny::selectInput(ns("score"), "Network score (pinned)",
+                         c("BIC (Gaussian)" = "bic-g", "BGe" = "bge",
+                           "BIC (discrete)" = "bic", "BDe" = "bde",
+                           "AIC (Gaussian)" = "aic-g", "AIC (discrete)" = "aic"))
+    ),
     shiny::numericInput(ns("boot_r"), "Bootstrap replicates (boot.strength)",
                         value = 500, min = 500, step = 100),
     shiny::sliderInput(ns("threshold"), "Arc-strength inclusion threshold",
                        min = 0.05, max = 0.95, value = 0.50, step = 0.05),
+
+    # -- Constraint builder (blacklist / whitelist) --------------------------
+    shiny::hr(),
+    shiny::h5("Constraints (optional)"),
+    shiny::helpText("Blacklist = arcs forbidden. Whitelist = arcs forced.",
+                    "Pick FROM and TO node sets, then add the cross-product."),
+    shiny::fluidRow(
+      shiny::column(6, shinyWidgets::pickerInput(ns("con_from"), "FROM",
+        choices = NULL, multiple = TRUE,
+        options = shinyWidgets::pickerOptions(actionsBox = TRUE, liveSearch = TRUE))),
+      shiny::column(6, shinyWidgets::pickerInput(ns("con_to"), "TO",
+        choices = NULL, multiple = TRUE,
+        options = shinyWidgets::pickerOptions(actionsBox = TRUE, liveSearch = TRUE)))
+    ),
+    shiny::actionButton(ns("add_bl"), "Add to blacklist", class = "btn-danger btn-sm"),
+    shiny::actionButton(ns("add_wl"), "Add to whitelist", class = "btn-success btn-sm"),
+    shiny::actionButton(ns("clear_con"), "Clear all", class = "btn-default btn-sm"),
+    shiny::fluidRow(
+      shiny::column(6, shiny::strong("Blacklist"), DT::dataTableOutput(ns("bl_table"))),
+      shiny::column(6, shiny::strong("Whitelist"), DT::dataTableOutput(ns("wl_table")))
+    ),
+
+    shiny::hr(),
     shiny::actionButton(ns("run"), "Learn & validate structure",
                         class = "btn-primary"),
     shiny::helpText("The reported network is the bootstrap-AVERAGED structure;",
@@ -70,14 +112,22 @@ daggerTabUI <- function(id) {
         shiny::plotOutput(ns("dag_plot")),
         DT::dataTableOutput(ns("arc_table"))
       ),
-      # signed = FALSE: bnlearn arcs have no sign; the "positive edge" picker
-      # is relabelled "Arc colour" and the negative-edge picker is hidden.
-      shiny::column(4, appearanceUI(ns("look"), signed = FALSE))
+      shiny::column(4,
+        shiny::selectInput(ns("layout_type"), "Layout",
+                           c("Spring" = "spring", "Circle" = "circle",
+                             "Hierarchical (Sugiyama)" = "tree")),
+        shiny::selectInput(ns("edge_metric"), "Arc width / label reflects",
+                           c("Strength  P(arc present)"          = "strength",
+                             "Direction  P(orientation | present)" = "direction",
+                             "Strength x Direction (combined)"     = "combined")),
+        shiny::checkboxInput(ns("show_edge_labels"), "Show arc values", FALSE),
+        # signed = FALSE: bnlearn arcs have no sign; the "positive edge" picker
+        # is relabelled "Arc colour" and the negative-edge picker is hidden.
+        appearanceUI(ns("look"), signed = FALSE)
+      )
     )
-    # TODO(stage3-dagger-ui): blacklist/whitelist constraint builder
-    # (Dagger_zero.R:2312-2379, 4140-4189), split analysis, DAG-diff plot,
-    # folded temporal graph tabs — port as-is (they already consume the
-    # underscore wide naming this app's data contract guarantees).
+    # TODO(port): split analysis + DAG-diff plot (Dagger_zero.R:409-542,
+    # 4194-4272), folded temporal graph (:1369-1710), full 26-score list.
   )
 }
 
@@ -86,78 +136,130 @@ daggerTabServer <- function(id, data_bus, rec) {
 
     sel <- varselectServer("vars", data_bus, rec, rec_prefix = "dag")
     rv  <- shiny::reactiveValues(single = NULL, boot_str = NULL, avg = NULL,
-                                 eq = NULL, plot_fn = NULL)
+                                 eq = NULL, plot_fn = NULL,
+                                 bl = NULL, wl = NULL)
 
+    # keep constraint pickers in sync with the selected node set
+    shiny::observeEvent(sel$vars(), {
+      shinyWidgets::updatePickerInput(session, "con_from", choices = sel$vars())
+      shinyWidgets::updatePickerInput(session, "con_to",   choices = sel$vars())
+    })
+
+    # -- constraint accumulation --------------------------------------------
+    arc_key <- function(df) if (is.null(df)) character(0)
+                            else paste(df$from, df$to, sep = "->")
+    shiny::observeEvent(input$add_bl, {
+      new <- constraint_df(input$con_from, input$con_to)
+      if (is.null(new)) return()
+      rv$bl <- unique(rbind(rv$bl, new))
+      # a blacklisted arc cannot also be whitelisted
+      if (!is.null(rv$wl))
+        rv$wl <- rv$wl[!arc_key(rv$wl) %in% arc_key(rv$bl), , drop = FALSE]
+    })
+    shiny::observeEvent(input$add_wl, {
+      new <- constraint_df(input$con_from, input$con_to)
+      if (is.null(new)) return()
+      rv$wl <- unique(rbind(rv$wl, new))
+      if (!is.null(rv$bl))
+        rv$bl <- rv$bl[!arc_key(rv$bl) %in% arc_key(rv$wl), , drop = FALSE]
+    })
+    shiny::observeEvent(input$clear_con, { rv$bl <- NULL; rv$wl <- NULL })
+
+    output$bl_table <- DT::renderDataTable(
+      DT::datatable(rv$bl %||% data.frame(from = character(), to = character()),
+                    options = list(dom = "tp", pageLength = 5), rownames = FALSE))
+    output$wl_table <- DT::renderDataTable(
+      DT::datatable(rv$wl %||% data.frame(from = character(), to = character()),
+                    options = list(dom = "tp", pageLength = 5), rownames = FALSE))
+
+    # -- estimation + validation --------------------------------------------
     shiny::observeEvent(input$run, {
       vars <- sel$vars()
       dat  <- data_bus$wide()[, vars, drop = FALSE]
-      # TODO(stage3-dagger): port prepare_mixed_data() type handling
-      # (Dagger_zero.R:228-285) — continuous as numeric, discrete as factor,
-      # zero-variance checks — before this point.
       dat  <- stats::na.omit(dat)
       algo <- input$algorithm
-      scr  <- input$score
+      uses_score <- algo %in% c("hc", "tabu", "mmhc", "rsmax2")
+      scr  <- if (uses_score) input$score else NA_character_
       R    <- max(500L, as.integer(input$boot_r))   # skill floor: R >= 500
       thr  <- input$threshold
       seed <- rec_seed(rec)
+      bl   <- rv$bl; wl <- rv$wl
 
-      shiny::withProgress(message = "Structure learning + bootstrap validation", {
+      # algorithm.args: score (if score-based) + constraints, threaded into
+      # EVERY bootstrap replicate so the validated model respects them.
+      aargs <- list()
+      if (uses_score) aargs$score <- scr
+      if (!is.null(bl)) aargs$blacklist <- bl
+      if (!is.null(wl)) aargs$whitelist <- wl
 
-        # -- 1. Exploratory single fit (NOT the reported model) --------------
-        shiny::incProgress(0.1, detail = "single algorithm run")
-        algo_fn <- get(algo, envir = asNamespace("bnlearn"))
-        single  <- if (algo %in% c("hc", "tabu"))
-                     algo_fn(dat, score = scr) else algo_fn(dat)
+      res <- tryCatch(
+        shiny::withProgress(message = "Structure learning + bootstrap validation", {
+          shiny::incProgress(0.1, detail = "single algorithm run")
+          algo_fn <- get(algo, envir = asNamespace("bnlearn"))
+          single  <- do.call(algo_fn, c(list(x = dat), aargs))
 
-        # -- 2. Bootstrap model averaging: the reported model -----------------
-        shiny::incProgress(0.4, detail = sprintf("boot.strength (R = %d)", R))
-        set.seed(seed)
-        boot_str <- bnlearn::boot.strength(
-          dat, R = R, algorithm = algo,
-          algorithm.args = if (algo %in% c("hc", "tabu"))
-                             list(score = scr) else list())
-        avg <- bnlearn::averaged.network(boot_str, threshold = thr)
+          shiny::incProgress(0.4, detail = sprintf("boot.strength (R = %d)", R))
+          set.seed(seed)
+          boot_str <- bnlearn::boot.strength(dat, R = R, algorithm = algo,
+                                             algorithm.args = aargs)
+          avg <- bnlearn::averaged.network(boot_str, threshold = thr)
+          eq  <- dag_equivalence_info(avg, boot_str)
+          list(single = single, boot_str = boot_str, avg = avg, eq = eq)
+        }),
+        error = function(e) {
+          shiny::showNotification(
+            paste("Structure learning failed:", conditionMessage(e),
+                  "(a whitelist that forces a cycle is a common cause)"),
+            type = "error", duration = 12)
+          NULL
+        })
+      shiny::req(res)
 
-        # -- 3. Markov-equivalence audit BEFORE any cextend -------------------
-        eq <- dag_equivalence_info(avg, boot_str)
+      con_desc <- sprintf("%d blacklisted, %d whitelisted arcs",
+                          if (is.null(bl)) 0L else nrow(bl),
+                          if (is.null(wl)) 0L else nrow(wl))
 
-        rec_upsert(
-          rec, "dag_analysis", "analysis",
-          description = sprintf(
-            "[DAG] Learned structure on %d variables (n = %d): algorithm = %s, score = %s; validated by boot.strength (R = %d, seed %d) + averaged.network (threshold = %.2f). Reported model is the bootstrap average, not a single run.",
-            length(vars), nrow(dat), algo, scr, R, seed, thr),
-          code = sprintf(
-            paste("dag_vars <- %s",
-                  "dat_dag  <- na.omit(dat_wide[, dag_vars])",
-                  "set.seed(%d)",
-                  'boot_str <- bnlearn::boot.strength(dat_dag, R = %d,',
-                  '  algorithm = "%s", algorithm.args = %s)',
-                  "avg_net  <- bnlearn::averaged.network(boot_str, threshold = %.2f)",
-                  "# Single exploratory fit (NOT the reported model):",
-                  '# single <- bnlearn::%s(dat_dag%s)', sep = "\n"),
-            vars_literal(vars), seed, R, algo,
-            if (algo %in% c("hc", "tabu"))
-              sprintf('list(score = "%s")', scr) else "list()",
-            thr, algo,
-            if (algo %in% c("hc", "tabu")) sprintf(', score = "%s"', scr) else "")
-        )
+      rec_upsert(
+        rec, "dag_analysis", "analysis",
+        description = sprintf(
+          "[DAG] Learned structure on %d variables (n = %d): algorithm = %s%s; %s; validated by boot.strength (R = %d, seed %d) + averaged.network (threshold = %.2f). Reported model is the bootstrap average, not a single run.",
+          length(vars), nrow(dat), algo,
+          if (uses_score) sprintf(", score = %s", scr) else "",
+          con_desc, R, seed, thr),
+        code = paste(
+          sprintf("dag_vars <- %s", vars_literal(vars)),
+          "dat_dag  <- na.omit(dat_wide[, dag_vars])",
+          constraint_code(bl, "dag_blacklist"),
+          constraint_code(wl, "dag_whitelist"),
+          sprintf("dag_aargs <- list(%s)",
+            paste(c(if (uses_score) sprintf('score = "%s"', scr),
+                    "blacklist = dag_blacklist", "whitelist = dag_whitelist"),
+                  collapse = ", ")),
+          sprintf("set.seed(%d)", seed),
+          sprintf('boot_str <- bnlearn::boot.strength(dat_dag, R = %d, algorithm = "%s",',
+                  R, algo),
+          "                                   algorithm.args = dag_aargs)",
+          sprintf("avg_net  <- bnlearn::averaged.network(boot_str, threshold = %.2f)", thr),
+          "# Single exploratory fit (NOT the reported model):",
+          sprintf('# single <- do.call(bnlearn::%s, c(list(x = dat_dag), dag_aargs))', algo),
+          sep = "\n")
+      )
 
-        rec_upsert(
-          rec, "dag_stability", "stability",
-          description = sprintf(
-            "[DAG] Equivalence-class audit: %d of %d arcs have direction NOT identified by the data (undirected in the CPDAG); shown directions for those arcs are algorithmic convention, not evidence. Cross-sectional DAGs are identified only up to a Markov equivalence class.",
-            eq$n_unidentified, eq$n_arcs),
-          code = paste(
-            "cpd <- bnlearn::cpdag(avg_net)",
-            "undirected_in_cpdag <- bnlearn::undirected.arcs(cpd)",
-            "# Arcs listed here are reversible within the Markov equivalence",
-            "# class: the data cannot distinguish their direction. Do not make",
-            "# causal-direction claims about them.", sep = "\n")
-        )
+      rec_upsert(
+        rec, "dag_stability", "stability",
+        description = sprintf(
+          "[DAG] Equivalence-class audit: %d of %d arcs have direction NOT identified by the data (undirected in the CPDAG); shown directions for those arcs are algorithmic convention, not evidence. Cross-sectional DAGs are identified only up to a Markov equivalence class.",
+          res$eq$n_unidentified, res$eq$n_arcs),
+        code = paste(
+          "cpd <- bnlearn::cpdag(avg_net)",
+          "undirected_in_cpdag <- bnlearn::undirected.arcs(cpd)",
+          "# Arcs listed here are reversible within the Markov equivalence",
+          "# class: the data cannot distinguish their direction. Do not make",
+          "# causal-direction claims about them.", sep = "\n")
+      )
 
-        rv$single <- single; rv$boot_str <- boot_str
-        rv$avg <- avg; rv$eq <- eq
-      })
+      rv$single <- res$single; rv$boot_str <- res$boot_str
+      rv$avg <- res$avg; rv$eq <- res$eq
     })
 
     # --- The CPDAG caveat, surfaced with every displayed DAG -----------------
@@ -165,12 +267,10 @@ daggerTabServer <- function(id, data_bus, rec) {
       shiny::req(rv$eq)
       eq <- rv$eq
       und_txt <- if (eq$n_unidentified > 0)
-        paste(apply(eq$undirected, 1, paste, collapse = " — "),
-              collapse = "; ")
+        paste(apply(eq$undirected, 1, paste, collapse = " — "), collapse = "; ")
       else "none"
       shiny::div(
-        class = if (eq$n_unidentified > 0) "alert alert-warning"
-                else "alert alert-info",
+        class = if (eq$n_unidentified > 0) "alert alert-warning" else "alert alert-info",
         shiny::strong("Markov-equivalence caveat: "),
         sprintf(
           "this cross-sectional DAG is identified only up to its equivalence class (CPDAG). %d of %d arcs have statistically unidentified direction: %s. Arrows on those arcs are an algorithmic convention, not causal evidence. Arc-direction confidence from the bootstrap is listed in the table (direction near 0.5 = undecidable).",
@@ -182,21 +282,21 @@ daggerTabServer <- function(id, data_bus, rec) {
 
     output$dag_plot <- shiny::renderPlot({
       shiny::req(rv$avg)
-      s    <- look()
-      amat <- bnlearn::amat(rv$avg)
+      s      <- look()
+      amat   <- bnlearn::amat(rv$avg)
+      metric <- input$edge_metric %||% "strength"
+      dc     <- rv$eq$dir_conf
 
-      # Edge width reflects bootstrap arc strength (falls back to a flat
-      # width if a bootstrap strength isn't available for some reason).
-      width_mat <- matrix(s$esize * 0.3, nrow(amat), ncol(amat),
-                          dimnames = dimnames(amat))
-      dc <- rv$eq$dir_conf
+      # metric value per retained arc (strength / direction / combined)
+      metric_mat <- matrix(0, nrow(amat), ncol(amat), dimnames = dimnames(amat))
       if (!is.null(dc) && nrow(dc) > 0) {
         for (i in seq_len(nrow(dc)))
-          width_mat[dc$from[i], dc$to[i]] <- s$esize * dc$strength[i]
+          metric_mat[dc$from[i], dc$to[i]] <- dc[[metric]][i]
       }
+      # width scales with the chosen metric; floor so thin arcs stay visible
+      width_mat <- pmax(0.5, metric_mat * s$esize)
 
-      # Dashed styling for arcs whose direction is NOT identified by the
-      # data (undirected in the CPDAG) — visually surfaces the caveat above.
+      # dashed = direction unidentified in the CPDAG (reinforces the caveat)
       lty_mat <- matrix(1, nrow(amat), ncol(amat), dimnames = dimnames(amat))
       und <- rv$eq$undirected
       if (!is.null(und) && nrow(und) > 0) {
@@ -207,26 +307,55 @@ daggerTabServer <- function(id, data_bus, rec) {
         }
       }
 
+      elabels <- if (isTRUE(input$show_edge_labels)) round(metric_mat, 2) else FALSE
+
+      # node size: fixed slider or scaled by column means (shared option)
+      if (isTRUE(s$scale_nodes)) {
+        means <- vapply(data_bus$wide()[, colnames(amat), drop = FALSE],
+                        function(x) if (is.numeric(x)) mean(x, na.rm = TRUE)
+                                    else NA_real_, numeric(1))
+        vsize_arg <- scale_vsize_by_mean(means, s$vsize_min, s$vsize_max)
+      } else vsize_arg <- s$vsize
+
+      # layout
+      layout_arg <- switch(input$layout_type %||% "spring",
+        circle = "circle",
+        tree   = tryCatch({
+          g  <- igraph::graph_from_adjacency_matrix(amat, mode = "directed")
+          igraph::layout_with_sugiyama(g)$layout
+        }, error = function(e) "spring"),
+        "spring")
+
       fn <- function() qgraph::qgraph(
-        amat, directed = TRUE, layout = "spring",
+        amat, directed = TRUE, layout = layout_arg,
         edge.color = s$pos_edge,      # arcs are unsigned: pos picker only
         color = s$node_fill, border.color = s$node_border,
-        vsize = s$vsize, esize = s$esize, label.cex = s$label_cex,
-        edge.width = width_mat, lty = lty_mat)
+        vsize = vsize_arg, esize = s$esize, label.cex = s$label_cex,
+        edge.width = width_mat, lty = lty_mat, edge.labels = elabels,
+        edge.label.cex = 0.9)
       rv$plot_fn <- fn
 
       rec_upsert(
         rec, "dag_plot", "plot",
-        description = "[DAG] Plotted the averaged network (qgraph, spring layout); edge width reflects bootstrap arc strength, dashed arcs have unidentified direction per the CPDAG.",
-        code = sprintf(
-          paste("amat <- bnlearn::amat(avg_net)",
-                "# width_mat: bootstrap arc strength scaled by esize; dashed",
-                "# (lty = 2) arcs are undirected in cpdag(avg_net) (see dag_stability step).",
-                'qgraph::qgraph(amat, directed = TRUE, layout = "spring",',
-                '  edge.color = "%s", color = "%s", border.color = "%s",',
-                "  vsize = %s, esize = %s, label.cex = %s,",
-                "  edge.width = width_mat, lty = lty_mat)", sep = "\n"),
-          s$pos_edge, s$node_fill, s$node_border, s$vsize, s$esize, s$label_cex)
+        description = sprintf(
+          "[DAG] Plotted the averaged network (qgraph, %s layout); arc width/labels show %s; dashed arcs have unidentified direction per the CPDAG.",
+          input$layout_type %||% "spring", metric),
+        code = paste(
+          "amat <- bnlearn::amat(avg_net)",
+          "# arc-metric matrix from boot.strength (see arc table): strength /",
+          "# direction / combined; dashed (lty=2) arcs are undirected in cpdag(avg_net).",
+          sprintf('# metric shown: %s', metric),
+          "arc_info <- merge(as.data.frame(bnlearn::arcs(avg_net)), boot_str,",
+          '                  by = c("from","to"), all.x = TRUE)',
+          "arc_info$combined <- arc_info$strength * arc_info$direction",
+          sprintf('qgraph::qgraph(amat, directed = TRUE, layout = "%s",',
+                  if (identical(input$layout_type, "tree")) "spring" else (input$layout_type %||% "spring")),
+          sprintf('  edge.color = "%s", color = "%s", border.color = "%s",',
+                  s$pos_edge, s$node_fill, s$node_border),
+          sprintf("  vsize = %s, esize = %s, label.cex = %s)  # + edge.width by %s",
+                  if (isTRUE(s$scale_nodes)) "vsize_arg" else as.character(s$vsize),
+                  s$esize, s$label_cex, metric),
+          sep = "\n")
       )
       fn()
     })
@@ -234,17 +363,10 @@ daggerTabServer <- function(id, data_bus, rec) {
     output$arc_table <- DT::renderDataTable({
       shiny::req(rv$eq$dir_conf)
       DT::datatable(rv$eq$dir_conf,
-                    caption = "Arc strength & direction confidence (bootstrap). direction ~ 0.5 means the data cannot decide the arrow.",
+                    caption = "Arc strength, direction confidence, and their product (bootstrap). strength = P(arc present); direction = P(this orientation | present); combined = strength x direction. direction ~ 0.5 means the data cannot decide the arrow.",
                     options = list(pageLength = 15)) |>
-        DT::formatRound(c("strength", "direction"), 3)
+        DT::formatRound(c("strength", "direction", "combined"), 3)
     })
-
-    # TODO(stage3-dagger): port split-group analysis (Dagger_zero.R:4194-4272)
-    # + common layout (:288-406), DAG-diff plot (:409-542), folded temporal
-    # graph (:1369-1710), score/algorithm help text (scrubbed of unqualified
-    # causal language), cextend option — if exposed, its output MUST carry the
-    # label "one arbitrary member of the equivalence class" and rv$eq must
-    # keep being computed pre-cextend.
 
     list(avg = shiny::reactive(rv$avg), plot_fn = shiny::reactive(rv$plot_fn))
   })
