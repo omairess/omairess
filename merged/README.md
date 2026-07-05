@@ -94,19 +94,31 @@ Added in the 2026-07-05 change requests:
   combined) driving width and labels; layout options (spring / circle /
   hierarchical Sugiyama); node-size-by-column-mean.
 
-Still open — **larger feature ports from the source apps**, each marked
+Also ported (2026-07-05, second pass):
+
+- Psychonetrics tab: CFA / LNM / RNM / LRNM model families with the
+  lambda-matrix editor (checkbox grid + auto simple structure),
+  identification choice, and prune / step-up / model-search chains in the
+  original's order; plots for the observed GGM (omega), latent network
+  (omega_zeta), residual network (omega_epsilon), and the **latent
+  Relative-Importance network** (Johnson/LMG — the exact Shapley
+  decomposition from the original app, verified bit-identical, plotted as
+  a directed network).
+- NCT: subject-ID matching for paired designs (rows matched
+  subject-by-subject, unmatched dropped and reported; the no-ID fallback
+  keeps the equal-n guard and states its row-order assumption).
+
+Still open — **feature ports from the source apps**, each marked
 `TODO(port)` at its point of use:
 
 - GGM tab: Bridge-Symptoms centrality sub-tab, the NSON sub-app,
   split-group estimation, bootstrap edge-significance thresholding.
 - DAG tab: split analysis, DAG-diff plot, the folded-temporal-graph
   feature, the full 26-entry bnlearn score list.
-- Psychonetrics tab: non-GGM model families (LNM / RNM / LRNM / panel
-  models), the lambda-matrix editor, prune/step-up/model-search controls,
-  and the **latent** Relative-Importance network (Johnson/LMG) — distinct
-  from the GGM tab's observed-variable `relimp` estimator.
-- NCT: subject-ID matching UI for paired designs (currently requires
-  equal-sized, row-aligned groups as an interim guard).
+- Psychonetrics tab: panel families (dlvm1 / panelgvar / ri_clpm) with
+  wave detection and the beta-matrix editor; the Ising family; factor
+  scores; modification indices; second-model comparison; the
+  data-transform pipeline (as a recorded step).
 
 None of these are wired into the shared recorder yet, so none of them can
 silently violate either governing skill in the meantime — they simply
