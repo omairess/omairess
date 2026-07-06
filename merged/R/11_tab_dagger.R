@@ -170,6 +170,7 @@ daggerTabUI <- function(id) {
     ),
 
     shiny::hr(),
+    transformUI(ns("transform")),
     shiny::actionButton(ns("run"), "Learn & validate structure",
                         class = "btn-primary"),
     shiny::helpText("The reported network is the bootstrap-AVERAGED structure;",
@@ -185,7 +186,39 @@ daggerTabUI <- function(id) {
         shiny::selectInput(ns("layout_type"), "Layout",
                            c("Spring" = "spring", "Circle" = "circle",
                              "Cascade (layered, curved edges)" = "cascade",
-                             "Hierarchical (Sugiyama)" = "tree")),
+                             "Layered / dot-like (with controls)" = "dot",
+                             "Stress majorization (neato-like)" = "kk",
+                             "Force-directed (fdp-like)" = "fr",
+                             "Manual (edit positions)" = "manual")),
+        shiny::helpText("dot/neato/fdp are igraph equivalents (Sugiyama /",
+                        "Kamada-Kawai / Fruchterman-Reingold) — Rgraphviz is",
+                        "Bioconductor-only, which the app's CRAN installer",
+                        "cannot fetch. Arrows and edge widths/labels are",
+                        "independent of the layout and stay visible."),
+        shiny::conditionalPanel(
+          sprintf("input['%s'] == 'dot'", ns("layout_type")),
+          shiny::sliderInput(ns("ranksep"), "Rank separation (vertical)",
+                             min = 0.5, max = 4, value = 1, step = 0.1),
+          shiny::sliderInput(ns("nodesep"), "Node separation (horizontal)",
+                             min = 0.5, max = 4, value = 1, step = 0.1),
+          shiny::sliderInput(ns("organic"),
+                             "Relax rank alignment (0 = strict ranks, 1 = organic)",
+                             min = 0, max = 1, value = 0.3, step = 0.05),
+          shiny::checkboxInput(ns("layout_weights"),
+                               "Use arc strength as layout weights", value = TRUE),
+          shiny::helpText("Relaxing blends the layered coordinates with a",
+                          "stress layout, so nodes stop sitting exactly",
+                          "below one another while ranks stay recognisable.")
+        ),
+        shiny::conditionalPanel(
+          sprintf("input['%s'] == 'manual'", ns("layout_type")),
+          shiny::helpText("Double-click a cell to edit x/y (positions are",
+                          "pinned across replots). Starts from the last",
+                          "computed layout."),
+          DT::dataTableOutput(ns("pos_table")),
+          shiny::actionButton(ns("reset_pos"), "Reset to last computed layout",
+                              class = "btn-default btn-xs")
+        ),
         shiny::selectInput(ns("edge_metric"), "Arc width / label reflects",
                            c("Strength  P(arc present)"          = "strength",
                              "Direction  P(orientation | present)" = "direction",
@@ -264,6 +297,9 @@ daggerTabServer <- function(id, data_bus, rec) {
     shiny::observeEvent(input$run, {
       vars <- sel$vars()
       dat  <- data_bus$wide()[, vars, drop = FALSE]
+      # Per-module transform: after variable selection, before learning.
+      trans <- input$transform %||% "none"
+      dat  <- apply_house_transform(dat, trans)
       dat  <- stats::na.omit(dat)
       algo <- input$algorithm
       uses_score <- algo %in% c("hc", "tabu", "mmhc", "rsmax2")
@@ -310,13 +346,16 @@ daggerTabServer <- function(id, data_bus, rec) {
       rec_upsert(
         rec, "dag_analysis", "analysis",
         description = sprintf(
-          "[DAG] Learned structure on %d variables (n = %d): algorithm = %s%s; %s; validated by boot.strength (R = %d, seed %d) + averaged.network (threshold = %.2f). Reported model is the bootstrap average, not a single run.",
+          "[DAG] Learned structure on %d variables (n = %d): algorithm = %s%s; %s; transform: %s; validated by boot.strength (R = %d, seed %d) + averaged.network (threshold = %.2f). Reported model is the bootstrap average, not a single run.",
           length(vars), nrow(dat), algo,
           if (uses_score) sprintf(", score = %s", scr) else "",
-          con_desc, R, seed, thr),
+          con_desc, names(TRANSFORM_LABELS)[TRANSFORM_LABELS == trans],
+          R, seed, thr),
         code = paste(
           sprintf("dag_vars <- %s", vars_literal(vars)),
-          "dat_dag  <- na.omit(dat_wide[, dag_vars])",
+          "dat_dag  <- dat_wide[, dag_vars]",
+          transform_code_fragment(trans, "dat_dag"),
+          "dat_dag  <- na.omit(dat_dag)",
           constraint_code(bl, "dag_blacklist"),
           constraint_code(wl, "dag_whitelist"),
           sprintf("dag_aargs <- list(%s)",
@@ -373,6 +412,43 @@ daggerTabServer <- function(id, data_bus, rec) {
       shiny::plotOutput(session$ns("dag_plot"),
                         height = sprintf("%dpx", look()$plot_height))
     })
+
+    # --- Manual node positions (pin mode) ------------------------------------
+    layout_store <- shiny::reactiveVal(NULL)   # last computed coords (named)
+    manual_pos   <- shiny::reactiveVal(NULL)   # user-pinned coords
+
+    output$pos_table <- DT::renderDataTable({
+      co <- manual_pos() %||% layout_store()
+      shiny::validate(shiny::need(!is.null(co),
+        "Plot once with any other layout, then switch to Manual."))
+      DT::datatable(data.frame(node = rownames(co),
+                               x = round(co[, 1], 2), y = round(co[, 2], 2)),
+                    editable = list(target = "cell", disable = list(columns = 0)),
+                    options = list(pageLength = 25, dom = "tp"),
+                    rownames = FALSE, selection = "none")
+    })
+    shiny::observeEvent(input$pos_table_cell_edit, {
+      ed <- input$pos_table_cell_edit
+      co <- manual_pos() %||% layout_store()
+      shiny::req(co)
+      val <- suppressWarnings(as.numeric(ed$value))
+      # DT columns are 0-based with rownames = FALSE: 0 = node (locked),
+      # 1 = x, 2 = y — which conveniently match the matrix columns 1/2.
+      if (!is.na(val) && ed$col %in% c(1, 2)) {
+        co[ed$row, ed$col] <- val
+        manual_pos(co)
+      }
+    })
+    shiny::observeEvent(input$reset_pos, manual_pos(NULL))
+
+    # Rescale columns to [-1, 1] so different engines can be blended.
+    .norm_coords <- function(co) {
+      apply(co, 2, function(v) {
+        r <- range(v)
+        if (diff(r) < 1e-9) rep(0, length(v))
+        else -1 + 2 * (v - r[1]) / diff(r)
+      })
+    }
 
     # DISPLAY arc set (request #4): every bootstrap arc passing BOTH the
     # strength and the direction thresholds, applied live at plot time.
@@ -431,10 +507,24 @@ daggerTabServer <- function(id, data_bus, rec) {
         vsize_arg <- scale_vsize_by_mean(means, s$vsize_min, s$vsize_max)
       } else vsize_arg <- s$vsize
 
-      # layout — cascade gets layered coords + per-edge curves so edges never
-      # run through intermediate nodes (request #8, DAGger's clean cascade)
+      # layout — engines:
+      #   cascade: DAGger's layered coords + per-edge curves
+      #   dot:     Sugiyama with ranksep/nodesep controls and an "organic"
+      #            blend toward a stress layout, breaking exact rank
+      #            alignment while keeping the hierarchy readable
+      #   kk/fr:   stress majorization (neato-like) / force-directed (fdp-like)
+      #   manual:  user-pinned coordinates from the editable table
       lt <- input$layout_type %||% "spring"
       curve_arg <- 0.2; curve_all <- FALSE
+      g_lay <- igraph::graph_from_adjacency_matrix(amat, mode = "directed")
+      lay_w <- if (isTRUE(input$layout_weights) && nrow(da) > 0) {
+        # heavier arcs pull nodes closer (graphviz `weight` analogue)
+        e <- igraph::as_edgelist(g_lay)
+        vapply(seq_len(nrow(e)), function(i) {
+          hit <- which(da$from == e[i, 1] & da$to == e[i, 2])
+          if (length(hit)) max(0.1, da$strength[hit[1]]) else 0.1
+        }, numeric(1))
+      } else NULL
       layout_arg <- switch(lt,
         circle  = "circle",
         cascade = {
@@ -443,11 +533,44 @@ daggerTabServer <- function(id, data_bus, rec) {
           curve_arg <- curve_mat; curve_all <- TRUE
           coords
         },
-        tree    = tryCatch({
-          g <- igraph::graph_from_adjacency_matrix(amat, mode = "directed")
-          igraph::layout_with_sugiyama(g)$layout
+        dot = tryCatch({
+          co <- igraph::layout_with_sugiyama(
+            g_lay, weights = lay_w,
+            hgap = input$nodesep %||% 1,      # graphviz nodesep analogue
+            vgap = input$ranksep %||% 1)$layout  # graphviz ranksep analogue
+          co <- .norm_coords(co)
+          b  <- input$organic %||% 0
+          if (b > 0) {                        # relax strict rank alignment
+            # KK weights are desired DISTANCES -> invert so strong arcs attract
+            co_kk <- .norm_coords(igraph::layout_with_kk(
+              g_lay, weights = if (!is.null(lay_w)) 1 / lay_w))
+            co <- (1 - b) * co + b * co_kk
+          }
+          rownames(co) <- colnames(amat)
+          co
         }, error = function(e) "spring"),
+        kk = tryCatch({
+          co <- .norm_coords(igraph::layout_with_kk(
+            g_lay, weights = if (!is.null(lay_w)) 1 / lay_w))
+          rownames(co) <- colnames(amat); co
+        }, error = function(e) "spring"),
+        fr = tryCatch({
+          set.seed(rec_seed(rec))             # deterministic force layout
+          co <- .norm_coords(igraph::layout_with_fr(g_lay, weights = lay_w))
+          rownames(co) <- colnames(amat); co
+        }, error = function(e) "spring"),
+        manual = {
+          co <- manual_pos() %||% layout_store()
+          if (is.null(co)) "spring" else co[colnames(amat), , drop = FALSE]
+        },
         "spring")
+
+      # remember computed coordinates so Manual mode can start from them
+      if (is.matrix(layout_arg) && lt != "manual") {
+        co_store <- layout_arg
+        rownames(co_store) <- colnames(amat)
+        layout_store(co_store)
+      }
 
       fn <- function() qgraph::qgraph(
         amat, directed = TRUE, layout = layout_arg,
@@ -476,8 +599,13 @@ daggerTabServer <- function(id, data_bus, rec) {
           "amat <- matrix(0, length(vars), length(vars), dimnames = list(vars, vars))",
           "for (i in seq_len(nrow(bs))) amat[bs$from[i], bs$to[i]] <- 1",
           sprintf('# metric shown on arcs: %s', metric),
-          sprintf('qgraph::qgraph(amat, directed = TRUE, layout = "%s",',
-                  if (lt %in% c("tree", "cascade")) "spring" else lt),
+          if (lt == "manual" && is.matrix(layout_arg)) sprintf(
+            "layout_coords <- matrix(c(%s), ncol = 2)  # pinned positions",
+            paste(round(as.vector(layout_arg), 3), collapse = ", ")),
+          sprintf('qgraph::qgraph(amat, directed = TRUE, layout = %s,',
+                  if (lt == "manual" && is.matrix(layout_arg)) "layout_coords"
+                  else if (lt %in% c("spring", "circle")) sprintf('"%s"', lt)
+                  else '"spring"  # engine layout approximated in export'),
           "  labels = colnames(amat), label.scale = FALSE,",
           sprintf('  edge.color = "%s", color = "%s", border.color = "%s",',
                   s$pos_edge, s$node_fill, s$node_border),

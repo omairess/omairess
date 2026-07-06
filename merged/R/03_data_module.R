@@ -133,6 +133,62 @@ read_any_file <- function(path, filename, opts) {
 
 `%||%` <- function(a, b) if (is.null(a)) b else a
 
+# --- Per-module data transforms (request: z-score / centering / npn) --------
+# Applied AFTER variable selection and BEFORE the analysis, separately per
+# analysis tab. Only numeric columns are transformed. The nonparanormal is
+# the rank-based normal-scores transform (Liu et al. 2009), ported from
+# PsychoNetrix.R:930-937 (handles NAs; no extra dependency).
+apply_house_transform <- function(dat, method = c("none", "center", "zscore", "npn")) {
+  method <- match.arg(method)
+  if (method == "none") return(dat)
+  num <- vapply(dat, is.numeric, TRUE)
+  m <- as.matrix(dat[, num, drop = FALSE])
+  m_tr <- switch(method,
+    center = scale(m, center = TRUE, scale = FALSE),
+    zscore = scale(m, center = TRUE, scale = TRUE),
+    npn = apply(m, 2, function(x) {
+      n     <- sum(!is.na(x))
+      delta <- 1 / (4 * n^0.25 * sqrt(pi * log(n)))
+      r     <- rank(x, ties.method = "average", na.last = "keep")
+      stats::qnorm(pmin(pmax(r / n, delta), 1 - delta))
+    })
+  )
+  dat[, num] <- as.data.frame(m_tr)
+  dat
+}
+
+TRANSFORM_LABELS <- c(
+  "None"                                   = "none",
+  "Mean-center"                            = "center",
+  "Z-score (standardize)"                  = "zscore",
+  "Nonparanormal (rank -> normal scores)"  = "npn")
+
+# Shared UI element: one transform select per analysis tab.
+transformUI <- function(ns_id) {
+  shiny::selectInput(ns_id, "Data transformation (before analysis)",
+                     TRANSFORM_LABELS, selected = "none")
+}
+
+# Script fragment reproducing apply_house_transform for the chosen method.
+transform_code_fragment <- function(method, dat_var) {
+  switch(method,
+    none   = sprintf("# no data transformation applied to %s", dat_var),
+    center = sprintf(
+      "num <- vapply(%s, is.numeric, TRUE)\n%s[, num] <- as.data.frame(scale(as.matrix(%s[, num]), center = TRUE, scale = FALSE))",
+      dat_var, dat_var, dat_var),
+    zscore = sprintf(
+      "num <- vapply(%s, is.numeric, TRUE)\n%s[, num] <- as.data.frame(scale(as.matrix(%s[, num])))",
+      dat_var, dat_var, dat_var),
+    npn = paste(
+      sprintf("num <- vapply(%s, is.numeric, TRUE)", dat_var),
+      sprintf("%s[, num] <- as.data.frame(apply(as.matrix(%s[, num]), 2, function(x) {", dat_var, dat_var),
+      "  n     <- sum(!is.na(x))",
+      "  delta <- 1 / (4 * n^0.25 * sqrt(pi * log(n)))",
+      '  r     <- rank(x, ties.method = "average", na.last = "keep")',
+      "  qnorm(pmin(pmax(r / n, delta), 1 - delta))",
+      "}))  # nonparanormal (Liu et al. 2009)", sep = "\n"))
+}
+
 # JS helper: true when the uploaded file's name ends with any of `exts`.
 .ext_condition <- function(ns_file, exts) {
   checks <- vapply(exts, function(e)

@@ -99,6 +99,26 @@ lambda_literal <- function(lam) {
           vars_literal(rownames(lam)), vars_literal(colnames(lam)))
 }
 
+# --- Mean factor scores for latent node scaling (PsychoNetrix.R:2189-2212) --
+# Regression-method factor scores, uncentered: colMeans(X %*% S^-1 %*% lambda
+# %*% sigma_zeta) — the latent "severity level" each factor sits at. Latent
+# node size scales by |this|, NOT by observed column means.
+mean_fscores_psynet <- function(mod, lambda, dat) {
+  tryCatch({
+    sigma_z <- tryCatch(collapse_mg(psychonetrics::getmatrix(mod, "sigma_zeta"), 1L),
+                        error = function(e) NULL)
+    if (is.null(sigma_z)) sigma_z <- diag(ncol(lambda))
+    keep <- intersect(rownames(lambda), colnames(dat))
+    if (length(keep) != nrow(lambda)) stop("lambda/data name mismatch")
+    dm <- as.matrix(dat[, keep, drop = FALSE])
+    dm <- dm[stats::complete.cases(dm), , drop = FALSE]
+    if (nrow(dm) < 2) stop("too few complete rows")
+    S_inv <- tryCatch(solve(stats::cov(dm)),
+                      error = function(e) MASS::ginv(stats::cov(dm)))
+    colMeans(dm %*% S_inv %*% lambda %*% as.matrix(sigma_z))
+  }, error = function(e) NULL)
+}
+
 # --- Combined factor-structure plot spec (from PsychoNetrix.R:2439-2588) ----
 # Builds the (latents + indicators) super-network: latent-latent block =
 # omega_zeta (undirected) or the Johnson/LMG RI network (directed), plus
@@ -331,6 +351,7 @@ psynetTabUI <- function(id) {
     shiny::checkboxInput(ns("do_stepup"), "Step-up search (add edges)", FALSE),
     shiny::checkboxInput(ns("do_modelsearch"), "Full model search (slow)", FALSE),
 
+    transformUI(ns("transform")),
     shiny::actionButton(ns("run"), "Fit model", class = "btn-primary"),
 
     # -- Results (fit + interpretation, parameters, MIs, matrices) -----------
@@ -363,7 +384,8 @@ psynetTabUI <- function(id) {
             "RI latent network (raw)"              = "ri_raw",
             "RI latent network (normalized)"       = "ri_norm",
             "Residual network (omega_epsilon)"     = "residual",
-            "Observed GGM (omega)"                 = "omega")),
+            "Observed GGM (omega)"                 = "omega",
+            "Path diagram (SEM, semPlot)"          = "semplot")),
         shiny::conditionalPanel(
           sprintf("input['%s'] == 'factor_ri'", ns("plot_type")),
           shiny::checkboxInput(ns("factor_ri_norm"),
@@ -470,6 +492,9 @@ psynetTabServer <- function(id, data_bus, rec) {
     shiny::observeEvent(input$run, {
       vars <- sel$vars()
       dat  <- data_bus$wide()[, vars, drop = FALSE]
+      # Per-module transform: after variable selection, before fitting.
+      trans <- input$transform %||% "none"
+      dat   <- apply_house_transform(dat, trans)
       fam  <- input$family
       est  <- resolve_psynet_estimator(input$estimator, anyNA(dat))
       ordered_vars <- if (input$data_type %in% c("ordered", "dichotomous"))
@@ -521,8 +546,8 @@ psynetTabServer <- function(id, data_bus, rec) {
                                 type = "error", duration = 10); NULL
       })
       shiny::req(mod)
-      rv$model <- mod; rv$family <- fam
-      rv$estimator_used <- est; rv$lambda_used <- lambda
+      rv$model <- mod; rv$family <- fam; rv$dat <- dat
+      rv$estimator_used <- est; rv$lambda_used <- lambda; rv$transform <- trans
 
       # -- recorder fragment: every setting explicit, lambda baked literal ---
       fit_line <- if (fam == "ggm") {
@@ -554,10 +579,11 @@ psynetTabServer <- function(id, data_bus, rec) {
       rec_upsert(
         rec, "psynet_analysis", "analysis",
         description = sprintf(
-          "[psychonetrics] Fitted %s on %d variables (n = %d): estimator = %s (resolved explicitly%s), optimizer = nlminb, data type = %s%s%s%s.",
+          "[psychonetrics] Fitted %s on %d variables (n = %d): estimator = %s (resolved explicitly%s), optimizer = nlminb, data type = %s, transform: %s%s%s%s.",
           toupper(fam), length(vars), nrow(dat), est,
           if (input$estimator == "auto") " from 'auto'" else "",
           input$data_type,
+          names(TRANSFORM_LABELS)[TRANSFORM_LABELS == trans],
           if (fam != "ggm") sprintf(", identification = %s, %d latents",
                                     input$identification, ncol(lambda)) else "",
           if (isTRUE(input$do_prune))
@@ -567,6 +593,7 @@ psynetTabServer <- function(id, data_bus, rec) {
         code = paste(c(
           sprintf("psynet_vars <- %s", vars_literal(vars)),
           "dat_psynet  <- dat_wide[, psynet_vars]",
+          transform_code_fragment(trans, "dat_psynet"),
           fit_line, chain), collapse = "\n")
       )
     })
@@ -675,6 +702,50 @@ psynetTabServer <- function(id, data_bus, rec) {
       s  <- look()
       pt <- input$plot_type
 
+      # --- SEM path diagram (semPlot), ported from PsychoNetrix.R:3078-3117 --
+      if (pt == "semplot") {
+        shiny::req(rv$model)
+        shiny::validate(shiny::need(requireNamespace("semPlot", quietly = TRUE),
+          "Install the 'semPlot' package for path diagrams."))
+        lam <- tryCatch(collapse_mg(psychonetrics::getmatrix(rv$model, "lambda"), 1L),
+                        error = function(e) NULL)
+        shiny::validate(shiny::need(!is.null(lam),
+          "The SEM path diagram needs a fitted CFA/LNM/RNM/LRNM model (lambda)."))
+        psi <- tryCatch(collapse_mg(psychonetrics::getmatrix(rv$model, "sigma_zeta"), 1L),
+                        error = function(e) diag(ncol(lam)))
+        tht <- tryCatch(collapse_mg(psychonetrics::getmatrix(rv$model, "sigma_epsilon"), 1L),
+                        error = function(e) diag(nrow(lam)))
+        # psychonetrics matrices have empty dimnames — restore full names
+        lat_l <- colnames(rv$lambda_used) %||% paste0("L", seq_len(ncol(lam)))
+        obs_l <- rownames(rv$lambda_used) %||% paste0("V", seq_len(nrow(lam)))
+        dimnames(lam) <- list(obs_l, lat_l)
+        dimnames(psi) <- list(lat_l, lat_l)
+        dimnames(tht) <- list(obs_l, obs_l)
+        fn <- function() semPlot::semPaths(
+          semPlot::lisrelModel(LY = lam, PS = psi, TE = tht),
+          what = "std", whatLabels = "est", layout = "tree2",
+          sizeLat = s$vsize + 2, sizeMan = s$vsize,
+          edge.label.cex = s$edge_label_cex, mar = c(6, 1, 6, 1),
+          pastel = TRUE, borders = TRUE)
+        rv$plot_fn <- fn
+        rec_upsert(
+          rec, "psynet_plot", "plot",
+          description = "[psychonetrics] Plotted the SEM path diagram (semPlot::semPaths, standardized, tree2 layout).",
+          code = paste(
+            'lam <- psychonetrics::getmatrix(mod, "lambda")',
+            "if (is.list(lam)) lam <- lam[[1]]",
+            'psi <- psychonetrics::getmatrix(mod, "sigma_zeta"); if (is.list(psi)) psi <- psi[[1]]',
+            'tht <- psychonetrics::getmatrix(mod, "sigma_epsilon"); if (is.list(tht)) tht <- tht[[1]]',
+            "dimnames(lam) <- list(rownames(lambda), colnames(lambda))",
+            "dimnames(psi) <- list(colnames(lambda), colnames(lambda))",
+            "dimnames(tht) <- list(rownames(lambda), rownames(lambda))",
+            "semPlot::semPaths(semPlot::lisrelModel(LY = lam, PS = psi, TE = tht),",
+            '  what = "std", whatLabels = "est", layout = "tree2", pastel = TRUE)',
+            sep = "\n")
+        )
+        fn(); return(invisible(NULL))
+      }
+
       # --- Composite: factor structure + latent / RI network ----------------
       if (pt %in% c("factor_latent", "factor_ri")) {
         shiny::req(rv$model)
@@ -684,18 +755,39 @@ psynetTabServer <- function(id, data_bus, rec) {
           ri_norm = isTRUE(input$factor_ri_norm))
         shiny::validate(shiny::need(!is.null(spec),
           "Factor-structure plots need a fitted CFA/LNM/RNM/LRNM model (lambda + sigma_zeta)."))
-        fn <- function() qgraph::qgraph(
-          spec$W,
+
+        # Latent node size: scale by |mean factor score| (the latent severity
+        # level), NOT observed column means (request #3).
+        n_obs <- length(spec$labels) - spec$n_lat
+        lat_vsize <- rep(s$vsize * 1.6, spec$n_lat)
+        if (isTRUE(s$scale_nodes)) {
+          fs <- mean_fscores_psynet(rv$model, rv$lambda_used, rv$dat)
+          if (!is.null(fs) && length(fs) == spec$n_lat)
+            lat_vsize <- scale_vsize_by_mean(abs(fs), s$vsize_min * 1.3,
+                                             s$vsize_max * 1.3)
+        }
+        # Predictability rings on LATENTS only (analytic R^2 from sigma_zeta);
+        # observed squares get no ring (NULL slots).
+        pie_arg <- if (isTRUE(s$show_pred)) {
+          sz <- tryCatch(collapse_mg(psychonetrics::getmatrix(rv$model, "sigma_zeta"), 1L),
+                         error = function(e) NULL)
+          r2l <- if (!is.null(sz)) latent_predictability_r2(sz) else NULL
+          if (!is.null(r2l) && length(r2l) == spec$n_lat)
+            c(as.list(r2l), vector("list", n_obs)) else NULL
+        } else NULL
+
+        fn <- function() do.call(qgraph::qgraph, c(
+          list(spec$W,
           directed = spec$dir_mat, layout = spec$layout,
           labels = spec$labels, label.scale = FALSE,       # full names, equal size
           label.cex = s$label_cex, shape = spec$shapes,
-          vsize = c(rep(s$vsize * 1.6, spec$n_lat),
-                    rep(s$vsize, length(spec$labels) - spec$n_lat)),
+          vsize = c(lat_vsize, rep(s$vsize, n_obs)),
           color = spec$node_cols, border.color = s$node_border,
           posCol = s$pos_edge, negCol = s$neg_edge,
           esize = s$esize, minimum = s$min_edge,
           edge.labels = if (isTRUE(s$show_edge_labels)) spec$edge_lab else FALSE,
-          edge.label.cex = s$edge_label_cex)
+          edge.label.cex = s$edge_label_cex),
+          house_pie_args(pie_arg, s)))
         rv$plot_fn <- fn
         rec_upsert(
           rec, "psynet_plot", "plot",
@@ -741,7 +833,41 @@ psynetTabServer <- function(id, data_bus, rec) {
         "latent/RI plots need an LNM/RNM/LRNM/CFA fit;",
         "omega needs a GGM.")))
 
-      args <- house_qgraph_args(pm$W, s, directed = pm$directed)
+      is_latent_net <- pt %in% c("latent", "ri_raw", "ri_norm")
+
+      # Node size: latent networks scale by |mean factor score| (request #3);
+      # observed networks scale by column means, as elsewhere.
+      vsize_arg <- NULL
+      if (isTRUE(s$scale_nodes)) {
+        vsize_arg <- if (is_latent_net) {
+          fs <- mean_fscores_psynet(rv$model, rv$lambda_used, rv$dat)
+          if (!is.null(fs) && length(fs) == ncol(pm$W))
+            scale_vsize_by_mean(abs(fs), s$vsize_min, s$vsize_max) else NULL
+        } else if (!is.null(rv$dat)) {
+          means <- vapply(rv$dat[, intersect(colnames(pm$W), names(rv$dat)),
+                                 drop = FALSE],
+                          function(x) mean(x, na.rm = TRUE), numeric(1))
+          if (length(means) == ncol(pm$W))
+            scale_vsize_by_mean(means, s$vsize_min, s$vsize_max) else NULL
+        }
+      }
+
+      # Predictability rings: latent nets use the analytic latent R^2 from
+      # sigma_zeta; observed nets use OLS R^2 from the analysis data (#4).
+      r2 <- if (isTRUE(s$show_pred)) {
+        if (is_latent_net) {
+          sz <- tryCatch(collapse_mg(psychonetrics::getmatrix(rv$model, "sigma_zeta"), 1L),
+                         error = function(e) NULL)
+          if (!is.null(sz)) latent_predictability_r2(sz) else NULL
+        } else if (!is.null(rv$dat)) {
+          keep <- intersect(colnames(pm$W), names(rv$dat))
+          if (length(keep) == ncol(pm$W))
+            node_predictability_r2(rv$dat[, keep, drop = FALSE]) else NULL
+        }
+      } else NULL
+
+      args <- house_qgraph_args(pm$W, s, directed = pm$directed,
+                                vsize = vsize_arg, pie = r2)
       fn <- function() do.call(qgraph::qgraph,
                                c(list(pm$W, layout = "spring"), args))
       rv$plot_fn <- fn

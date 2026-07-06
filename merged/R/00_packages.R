@@ -18,7 +18,7 @@ APP_PACKAGES <- c(
   # DAG tab
   "bnlearn", "igraph",
   # psychonetrics / NCT tab
-  "psychonetrics", "NetworkComparisonTest"
+  "psychonetrics", "NetworkComparisonTest", "semPlot"
 )
 
 # Install missing packages only. Updating is opt-in elsewhere, never here.

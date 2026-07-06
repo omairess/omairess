@@ -171,6 +171,7 @@ bootnetTabUI <- function(id) {
       shiny::checkboxInput(ns("relimp_normalized"),
                            "Normalize relative importance", value = TRUE)),
 
+    transformUI(ns("transform")),
     shiny::actionButton(ns("run"), "Estimate network", class = "btn-primary"),
     shiny::hr(),
 
@@ -252,6 +253,10 @@ bootnetTabServer <- function(id, data_bus, rec) {
         }
       }
 
+      # Per-module transform: after variable selection, before estimation.
+      trans <- input$transform %||% "none"
+      dat   <- apply_house_transform(dat, trans)
+
       pin <- bootnet_pinned(def, input)
 
       net <- tryCatch(
@@ -276,17 +281,21 @@ bootnetTabServer <- function(id, data_bus, rec) {
       rec_upsert(
         rec, "bootnet_analysis", "analysis",
         description = sprintf(
-          "[bootnet] Estimated %s network on %d variables (n = %d): %s.%s Bootstrap validation not yet run for this network.",
+          "[bootnet] Estimated %s network on %d variables (n = %d): %s. Transform: %s.%s Bootstrap validation not yet run for this network.",
           def, length(vars), nrow(dat), pin$desc,
+          names(TRANSFORM_LABELS)[TRANSFORM_LABELS == trans],
           if (rv$has_neg) " Contains negative edges -> expected influence reported first."
           else ""),
         code = sprintf(
           paste("bootnet_vars <- %s",
                 "dat_bootnet  <- dat_wide[, bootnet_vars]",
+                "%s",
                 "net <- bootnet::estimateNetwork(dat_bootnet,",
                 '  default = "%s",',
                 "%s)", sep = "\n"),
-          vars_literal(vars), def, args_code(pin$args))
+          vars_literal(vars),
+          transform_code_fragment(trans, "dat_bootnet"),
+          def, args_code(pin$args))
       )
     })
 
@@ -465,6 +474,10 @@ bootnetTabServer <- function(id, data_bus, rec) {
       s    <- look()
       wmat <- qgraph::getWmat(rv$net)
       dat  <- rv$dat
+      # Some estimators (notably relimp) return weight matrices with EMPTY
+      # dimnames -> qgraph numbers the nodes. Restore the variable names.
+      if (is.null(colnames(wmat)) || all(!nzchar(colnames(wmat))))
+        dimnames(wmat) <- list(colnames(dat), colnames(dat))
       directed <- identical(rv$def, "relimp")
       lt   <- input$layout_type %||% "spring"
 
@@ -530,9 +543,11 @@ bootnetTabServer <- function(id, data_bus, rec) {
 
       node_cols  <- if (!is.null(groups_list))
                       house_group_colors(length(groups_list)) else s$node_fill
+      # Predictability rings: OLS R^2 of each node on all others (#4)
+      r2 <- if (isTRUE(s$show_pred)) node_predictability_r2(dat) else NULL
       args <- house_qgraph_args(wmat, s, directed = directed,
                                 node_col = node_cols, groups = groups_list,
-                                vsize = vsize_arg)
+                                vsize = vsize_arg, pie = r2)
       fn <- function() do.call(qgraph::qgraph,
                                c(list(wmat, layout = layout_arg), args))
       rv$plot_fn <- fn

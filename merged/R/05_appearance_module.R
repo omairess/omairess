@@ -69,6 +69,17 @@ appearanceUI <- function(id, signed = TRUE, default_esize = 8,
     ),
     shiny::sliderInput(ns("plot_height"), "Plot window height (px)",
                        min = 300, max = 1400, value = 520, step = 20),
+    shiny::h5("Node predictability"),
+    shiny::checkboxInput(ns("show_pred"),
+                         "Show predictability rings (R-squared)", value = FALSE),
+    shiny::conditionalPanel(
+      sprintf("input['%s']", ns("show_pred")),
+      colourpicker::colourInput(ns("pred_ring_color"), "Ring colour",
+                                value = "#ADD8E6", palette = "square"),
+      shiny::sliderInput(ns("pred_ring_border"),
+                         "Ring thickness (0 = full pie, 1 = thin ring)",
+                         min = 0, max = 1, value = 0.3, step = 0.05)
+    ),
     shiny::h5("Export"),
     shiny::fluidRow(
       shiny::column(4, shiny::numericInput(ns("export_w"), "Width (in)", 10, min = 2)),
@@ -104,6 +115,9 @@ appearanceServer <- function(id, plot_closure) {
         show_edge_labels = isTRUE(input$show_edge_labels),
         edge_label_cex   = input$edge_label_cex %||% 0.8,
         plot_height      = input$plot_height %||% 520,
+        show_pred        = isTRUE(input$show_pred),
+        pred_ring_color  = input$pred_ring_color  %||% "#ADD8E6",
+        pred_ring_border = input$pred_ring_border %||% 0.3,
         export_w         = input$export_w    %||% 10,
         export_h         = input$export_h    %||% 8,
         export_res       = input$export_res  %||% 300
@@ -150,9 +164,12 @@ appearanceServer <- function(id, plot_closure) {
 # `directed` flips arrows on; `node_col`/`groups` allow community colouring.
 house_qgraph_args <- function(W, s, directed = FALSE,
                               node_col = NULL, groups = NULL,
-                              vsize = NULL) {
-  labs <- colnames(W); if (is.null(labs)) labs <- rownames(W)
-  list(
+                              vsize = NULL, labels = NULL, pie = NULL) {
+  labs <- labels %||% colnames(W)
+  if (is.null(labs) || all(!nzchar(labs))) labs <- rownames(W)
+  if (is.null(labs) || all(!nzchar(labs))) labs <- paste0("V", seq_len(ncol(W)))
+  c(if (!is.null(pie)) house_pie_args(pie, s),
+    list(
     directed        = directed,
     labels          = labs,             # explicit names (no numbered legend)
     label.scale     = FALSE,            # all node labels equal size
@@ -167,7 +184,58 @@ house_qgraph_args <- function(W, s, directed = FALSE,
     color           = node_col %||% s$node_fill,
     border.color    = s$node_border,
     groups          = groups
-  )
+  ))
+}
+
+# --- Node predictability (R-squared rings), ported from PsychoNetrix.R ------
+# OLS R^2 per node for OBSERVED-variable networks (PsychoNetrix.R:1971-1986).
+node_predictability_r2 <- function(data_mat) {
+  data_mat <- stats::na.omit(as.matrix(data_mat))
+  if (nrow(data_mat) < 3 || ncol(data_mat) < 2) return(NULL)
+  p <- ncol(data_mat); r2 <- numeric(p); names(r2) <- colnames(data_mat)
+  for (i in seq_len(p)) {
+    y   <- data_mat[, i]
+    fit <- tryCatch(stats::lm.fit(cbind(1, data_mat[, -i, drop = FALSE]), y),
+                    error = function(e) NULL)
+    if (!is.null(fit)) {
+      rss <- sum(fit$residuals^2, na.rm = TRUE)
+      tss <- sum((y - mean(y, na.rm = TRUE))^2, na.rm = TRUE)
+      r2[i] <- if (tss > 1e-10) max(0, min(1, 1 - rss / tss)) else 0
+    }
+  }
+  r2
+}
+
+# Analytical latent R^2 from a latent covariance matrix: with R = cov2cor(S)
+# and K = R^-1, R^2_i = 1 - 1/K_ii  (PsychoNetrix.R:1991-2004).
+latent_predictability_r2 <- function(sigma_zeta) {
+  if (is.null(sigma_zeta) || nrow(sigma_zeta) < 2) return(NULL)
+  rg <- tryCatch(stats::cov2cor(sigma_zeta), error = function(e) NULL)
+  if (is.null(rg)) return(NULL)
+  kg <- tryCatch(solve(rg),
+                 error = function(e) tryCatch(MASS::ginv(rg),
+                                              error = function(e2) NULL))
+  if (is.null(kg)) return(NULL)
+  pmax(0, pmin(1, 1 - 1 / diag(kg)))
+}
+
+# qgraph pie arguments from an R^2 vector (or list with NULL slots to skip
+# nodes, e.g. rings on latents only in the factor plots). Respects the
+# appearance module's ring colour + thickness (PsychoNetrix.R:2029-2051).
+house_pie_args <- function(r2_vec, s) {
+  if (is.null(r2_vec) || !isTRUE(s$show_pred)) return(list())
+  if (is.list(r2_vec)) {
+    has_any <- any(vapply(r2_vec, function(x)
+      !is.null(x) && length(x) > 0 && x > 0, TRUE))
+    if (!has_any) return(list())
+    return(list(pie = r2_vec, pieColor = s$pred_ring_color,
+                pieBorder = s$pred_ring_border))
+  }
+  r2_vec <- unname(r2_vec); r2_vec[is.na(r2_vec)] <- 0
+  r2_vec <- pmax(0, pmin(1, r2_vec))
+  if (all(r2_vec == 0)) return(list())
+  list(pie = r2_vec, pieColor = s$pred_ring_color,
+       pieBorder = s$pred_ring_border)
 }
 
 # The exported-script twin: renders the same arguments as R source text.
