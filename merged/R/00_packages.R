@@ -12,9 +12,10 @@ APP_PACKAGES <- c(
   # shared data handling
   "readr", "readxl", "haven", "tidyr", "tools", "RColorBrewer",
   # bootnet tab (estimators: EBICglasso/ggmModSelect/pcor/cor/huge/
-  #   IsingFit/mgm/relimp; EGAnet for the EGA community layout)
+  #   IsingFit/mgm/relimp; communities via igraph walktrap — EGAnet was
+  #   dropped: its heavy install failed silently on user machines)
   "bootnet", "qgraph", "networktools", "huge", "IsingFit", "mgm",
-  "relaimpo", "EGAnet",
+  "relaimpo",
   # DAG tab
   "bnlearn", "igraph",
   # psychonetrics / NCT tab

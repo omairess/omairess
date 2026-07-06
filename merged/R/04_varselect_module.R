@@ -21,6 +21,10 @@ varselectUI <- function(id, label = "Variables to analyse") {
         actionsBox = TRUE, liveSearch = TRUE,
         title = "Select variables...", selectedTextFormat = "count > 4")
     ),
+    # Data transform sits BETWEEN variable selection and the grouping
+    # variable in every module (user request): selected -> transformed ->
+    # (optionally grouped) -> analysed.
+    transformUI(ns("transform")),
     shinyWidgets::pickerInput(
       ns("group_var"), "Grouping variable (optional)",
       choices = c("(none)" = ""), multiple = FALSE,
@@ -59,7 +63,9 @@ varselectServer <- function(id, data_bus, rec, rec_prefix) {
       else input$group_var
     })
 
-    list(vars = selected, group_var = group_var)
+    transform <- shiny::reactive(input$transform %||% "none")
+
+    list(vars = selected, group_var = group_var, transform = transform)
   })
 }
 

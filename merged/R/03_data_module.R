@@ -243,7 +243,15 @@ dataModuleUI <- function(id) {
       shiny::h5("Pivoted (wide) preview — this is what every analysis uses"),
       shiny::verbatimTextOutput(ns("wide_dims")),
       DT::dataTableOutput(ns("wide_head"))
-    )
+    ),
+    shiny::hr(),
+    shiny::h5("Zero-order correlation heatmap"),
+    shinyWidgets::pickerInput(
+      ns("heat_vars"), "Variables in the heatmap",
+      choices = NULL, multiple = TRUE,
+      options = shinyWidgets::pickerOptions(actionsBox = TRUE,
+                                            liveSearch = TRUE)),
+    shiny::plotOutput(ns("cor_heatmap"), height = "520px")
   )
 }
 
@@ -350,6 +358,36 @@ dataModuleServer <- function(id, rec) {
     output$wide_head <- DT::renderDataTable({
       DT::datatable(utils::head(wide(), 10),
                     options = list(scrollX = TRUE, dom = "t"))
+    })
+
+    # --- Zero-order correlation heatmap over user-chosen variables ----------
+    shiny::observeEvent(wide(), {
+      num <- names(wide())[vapply(wide(), is.numeric, TRUE)]
+      shinyWidgets::updatePickerInput(session, "heat_vars",
+                                      choices = num, selected = num)
+    })
+
+    output$cor_heatmap <- shiny::renderPlot({
+      vs <- input$heat_vars
+      shiny::req(length(vs) >= 2)
+      vs <- intersect(vs, names(wide()))
+      cm <- stats::cor(wide()[, vs, drop = FALSE],
+                       use = "pairwise.complete.obs")
+      p  <- ncol(cm)
+      cols <- grDevices::colorRampPalette(
+        rev(RColorBrewer::brewer.pal(11, "RdBu")))(200)
+      op <- graphics::par(mar = c(8, 8, 2, 2))
+      on.exit(graphics::par(op), add = TRUE)
+      graphics::image(seq_len(p), seq_len(p), t(cm[p:1, , drop = FALSE]),
+                      zlim = c(-1, 1), col = cols, axes = FALSE,
+                      xlab = "", ylab = "")
+      graphics::axis(1, at = seq_len(p), labels = colnames(cm), las = 2,
+                     cex.axis = 0.85)
+      graphics::axis(2, at = seq_len(p), labels = rev(colnames(cm)), las = 2,
+                     cex.axis = 0.85)
+      for (i in seq_len(p)) for (j in seq_len(p))
+        graphics::text(j, p - i + 1, sprintf("%.2f", cm[i, j]), cex = 0.75)
+      graphics::box()
     })
 
     list(raw = raw, wide = wide, meta = meta)

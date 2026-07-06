@@ -351,7 +351,6 @@ psynetTabUI <- function(id) {
     shiny::checkboxInput(ns("do_stepup"), "Step-up search (add edges)", FALSE),
     shiny::checkboxInput(ns("do_modelsearch"), "Full model search (slow)", FALSE),
 
-    transformUI(ns("transform")),
     shiny::actionButton(ns("run"), "Fit model", class = "btn-primary"),
 
     # -- Results (fit + interpretation, parameters, MIs, matrices) -----------
@@ -397,7 +396,8 @@ psynetTabUI <- function(id) {
                         "latent i. Multi-group models show group 1."),
         # edge labels ON by default so the RI network shows its weights
         # as numbers on the arrows rather than hiding them (request #4).
-        appearanceUI(ns("look"), signed = TRUE, default_edge_labels = TRUE)
+        appearanceUI(ns("look"), signed = TRUE, default_edge_labels = TRUE,
+                     scale_label = "Scale node size by mean latent score (latents) / column mean (indicators)")
       )
     )
 
@@ -493,7 +493,7 @@ psynetTabServer <- function(id, data_bus, rec) {
       vars <- sel$vars()
       dat  <- data_bus$wide()[, vars, drop = FALSE]
       # Per-module transform: after variable selection, before fitting.
-      trans <- input$transform %||% "none"
+      trans <- sel$transform()
       dat   <- apply_house_transform(dat, trans)
       fam  <- input$family
       est  <- resolve_psynet_estimator(input$estimator, anyNA(dat))
@@ -780,7 +780,9 @@ psynetTabServer <- function(id, data_bus, rec) {
           list(spec$W,
           directed = spec$dir_mat, layout = spec$layout,
           labels = spec$labels, label.scale = FALSE,       # full names, equal size
-          label.cex = s$label_cex, shape = spec$shapes,
+          label.cex = s$label_cex,
+          label.font = if (isTRUE(s$label_bold)) 2 else 1,
+          shape = spec$shapes,
           vsize = c(lat_vsize, rep(s$vsize, n_obs)),
           color = spec$node_cols, border.color = s$node_border,
           posCol = s$pos_edge, negCol = s$neg_edge,
@@ -1016,6 +1018,10 @@ nctServer <- function(id, data_bus, rec, gg_settings) {
       num <- intersect(num, names(dat)[vapply(dat, is.numeric, TRUE)])
       shiny::validate(shiny::need(length(num) >= 2,
         "Select at least 2 numeric nodes to compare."))
+      # Per-module transform, applied to the node set BEFORE splitting so
+      # both groups are transformed on the pooled scale.
+      trans <- sel$transform()
+      dat[, num] <- apply_house_transform(dat[, num, drop = FALSE], trans)
       d1  <- dat[g == lv[1], num, drop = FALSE]
       d2  <- dat[g == lv[2], num, drop = FALSE]
       paired  <- identical(input$design, "paired")
@@ -1049,15 +1055,18 @@ nctServer <- function(id, data_bus, rec, gg_settings) {
       rec_upsert(
         rec, "nct_comparison", "comparison",
         description = sprintf(
-          "[NCT] Compared '%s' vs '%s' (%s design, paired = %s):%s %d permutations, seed %d; edge-level p-values corrected with '%s'; estimation pinned to %s / %s / gamma = %s. A null NCT is not proof of equality.",
+          "[NCT] Compared '%s' vs '%s' (%s design, paired = %s):%s %d permutations, seed %d; transform: %s; edge-level p-values corrected with '%s'; estimation pinned to %s / %s / gamma = %s. A null NCT is not proof of equality.",
           lv[1], lv[2], input$design, paired, id_note,
-          input$iterations, seed, input$adjust,
-          gg$default, gg$corMethod, gg$tuning),
+          input$iterations, seed,
+          names(TRANSFORM_LABELS)[TRANSFORM_LABELS == trans],
+          input$adjust, gg$default, gg$corMethod, gg$tuning),
         code = paste(c(
           sprintf("nct_vars <- %s", vars_literal(num)),
+          "dat_nct <- dat_wide[, nct_vars]",
+          transform_code_fragment(trans, "dat_nct"),
           sprintf('g <- dat_wide[["%s"]]', input$group_col),
-          sprintf('d1 <- dat_wide[g == "%s", nct_vars]', lv[1]),
-          sprintf('d2 <- dat_wide[g == "%s", nct_vars]', lv[2]),
+          sprintf('d1 <- dat_nct[g == "%s", ]', lv[1]),
+          sprintf('d2 <- dat_nct[g == "%s", ]', lv[2]),
           if (paired && nzchar(id_note) && grepl("matched by ID", id_note)) c(
             sprintf('ids1 <- dat_wide[["%s"]][g == "%s"]', input$id_col, lv[1]),
             sprintf('ids2 <- dat_wide[["%s"]][g == "%s"]', input$id_col, lv[2]),

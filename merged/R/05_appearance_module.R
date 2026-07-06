@@ -20,7 +20,8 @@
 # default_esize / default_edge_labels let a tab set its own starting values
 # (DAG wants thinner edges; the RI network wants edge labels on).
 appearanceUI <- function(id, signed = TRUE, default_esize = 8,
-                         default_edge_labels = FALSE) {
+                         default_edge_labels = FALSE,
+                         scale_label = "Scale node size by column mean") {
   ns  <- shiny::NS(id)
   pal <- house_pastel()
   shiny::tagList(
@@ -35,8 +36,7 @@ appearanceUI <- function(id, signed = TRUE, default_esize = 8,
     if (signed) colourpicker::colourInput(ns("neg_edge"), "Negative edges",
                                           value = pal$neg_edge, palette = "square"),
     shiny::h5("Sizes"),
-    shiny::checkboxInput(ns("scale_nodes"),
-                         "Scale node size by column mean", value = FALSE),
+    shiny::checkboxInput(ns("scale_nodes"), scale_label, value = FALSE),
     shiny::conditionalPanel(
       sprintf("!input['%s']", ns("scale_nodes")),
       shiny::sliderInput(ns("vsize"), "Node size", min = 2, max = 20,
@@ -53,6 +53,7 @@ appearanceUI <- function(id, signed = TRUE, default_esize = 8,
                        value = default_esize, step = 0.5),
     shiny::sliderInput(ns("label_cex"), "Node label size", min = 0.3, max = 3,
                        value = 1, step = 0.1),
+    shiny::checkboxInput(ns("label_bold"), "Bold node labels", value = FALSE),
     shiny::helpText("Node labels are drawn at one fixed size (not scaled per",
                     "node), so every label is equally legible."),
     shiny::h5("Edges shown"),
@@ -111,6 +112,7 @@ appearanceServer <- function(id, plot_closure) {
         vsize_max        = vr[2],
         esize            = input$esize       %||% 8,
         label_cex        = input$label_cex   %||% 1,
+        label_bold       = isTRUE(input$label_bold),
         min_edge         = input$min_edge    %||% 0,
         show_edge_labels = isTRUE(input$show_edge_labels),
         edge_label_cex   = input$edge_label_cex %||% 0.8,
@@ -174,6 +176,7 @@ house_qgraph_args <- function(W, s, directed = FALSE,
     labels          = labs,             # explicit names (no numbered legend)
     label.scale     = FALSE,            # all node labels equal size
     label.cex       = s$label_cex,
+    label.font      = if (isTRUE(s$label_bold)) 2 else 1,
     vsize           = vsize %||% s$vsize,
     esize           = s$esize,
     minimum         = s$min_edge,       # hide edges below this |value|
@@ -245,8 +248,8 @@ house_qgraph_args_code <- function(s, directed, wobj = "W",
                                    vsize_expr = NULL) {
   lines <- c(
     sprintf("  directed = %s,", directed),
-    sprintf("  labels = colnames(%s), label.scale = FALSE, label.cex = %s,",
-            wobj, s$label_cex),
+    sprintf("  labels = colnames(%s), label.scale = FALSE, label.cex = %s, label.font = %s,",
+            wobj, s$label_cex, if (isTRUE(s$label_bold)) 2 else 1),
     sprintf("  vsize = %s, esize = %s, minimum = %s,",
             vsize_expr %||% as.character(s$vsize), s$esize, s$min_edge),
     sprintf("  edge.labels = %s, edge.label.cex = %s,",

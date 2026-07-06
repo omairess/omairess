@@ -129,6 +129,17 @@ daggerTabUI <- function(id) {
                            "BIC (discrete)" = "bic", "BDe" = "bde",
                            "AIC (Gaussian)" = "aic-g", "AIC (discrete)" = "aic"))
     ),
+    shiny::conditionalPanel(
+      sprintf("input['%s'] == 'hc'", ns("algorithm")),
+      shiny::fluidRow(
+        shiny::column(6, shiny::numericInput(ns("restarts"),
+          "Random restarts", value = 0, min = 0, step = 1)),
+        shiny::column(6, shiny::numericInput(ns("perturb"),
+          "Perturbations per restart", value = 1, min = 1, step = 1))
+      ),
+      shiny::helpText("Restarts re-run hill-climbing from perturbed graphs to",
+                      "escape local optima (bnlearn's restart/perturb).")
+    ),
     shiny::numericInput(ns("boot_r"), "Bootstrap replicates (boot.strength)",
                         value = 500, min = 500, step = 100),
     shiny::sliderInput(ns("threshold"), "Arc-strength inclusion threshold",
@@ -170,7 +181,6 @@ daggerTabUI <- function(id) {
     ),
 
     shiny::hr(),
-    transformUI(ns("transform")),
     shiny::actionButton(ns("run"), "Learn & validate structure",
                         class = "btn-primary"),
     shiny::helpText("The reported network is the bootstrap-AVERAGED structure;",
@@ -197,10 +207,10 @@ daggerTabUI <- function(id) {
                         "independent of the layout and stay visible."),
         shiny::conditionalPanel(
           sprintf("input['%s'] == 'dot'", ns("layout_type")),
-          shiny::sliderInput(ns("ranksep"), "Rank separation (vertical)",
-                             min = 0.5, max = 4, value = 1, step = 0.1),
-          shiny::sliderInput(ns("nodesep"), "Node separation (horizontal)",
-                             min = 0.5, max = 4, value = 1, step = 0.1),
+          shiny::sliderInput(ns("ranksep"), "Rank separation (vertical stretch)",
+                             min = 0.2, max = 4, value = 1, step = 0.1),
+          shiny::sliderInput(ns("nodesep"), "Node separation (horizontal stretch)",
+                             min = 0.2, max = 4, value = 1, step = 0.1),
           shiny::sliderInput(ns("organic"),
                              "Relax rank alignment (0 = strict ranks, 1 = organic)",
                              min = 0, max = 1, value = 0.3, step = 0.05),
@@ -298,7 +308,7 @@ daggerTabServer <- function(id, data_bus, rec) {
       vars <- sel$vars()
       dat  <- data_bus$wide()[, vars, drop = FALSE]
       # Per-module transform: after variable selection, before learning.
-      trans <- input$transform %||% "none"
+      trans <- sel$transform()
       dat  <- apply_house_transform(dat, trans)
       dat  <- stats::na.omit(dat)
       algo <- input$algorithm
@@ -309,10 +319,15 @@ daggerTabServer <- function(id, data_bus, rec) {
       seed <- rec_seed(rec)
       bl   <- rv$bl; wl <- rv$wl
 
-      # algorithm.args: score (if score-based) + constraints, threaded into
-      # EVERY bootstrap replicate so the validated model respects them.
+      # algorithm.args: score (if score-based) + constraints + hc restarts,
+      # threaded into EVERY bootstrap replicate so the validated model
+      # respects them.
       aargs <- list()
       if (uses_score) aargs$score <- scr
+      if (algo == "hc") {
+        aargs$restart <- max(0L, as.integer(input$restarts %||% 0))
+        aargs$perturb <- max(1L, as.integer(input$perturb %||% 1))
+      }
       if (!is.null(bl)) aargs$blacklist <- bl
       if (!is.null(wl)) aargs$whitelist <- wl
 
@@ -346,9 +361,11 @@ daggerTabServer <- function(id, data_bus, rec) {
       rec_upsert(
         rec, "dag_analysis", "analysis",
         description = sprintf(
-          "[DAG] Learned structure on %d variables (n = %d): algorithm = %s%s; %s; transform: %s; validated by boot.strength (R = %d, seed %d) + averaged.network (threshold = %.2f). Reported model is the bootstrap average, not a single run.",
+          "[DAG] Learned structure on %d variables (n = %d): algorithm = %s%s%s; %s; transform: %s; validated by boot.strength (R = %d, seed %d) + averaged.network (threshold = %.2f). Reported model is the bootstrap average, not a single run.",
           length(vars), nrow(dat), algo,
           if (uses_score) sprintf(", score = %s", scr) else "",
+          if (algo == "hc") sprintf(", restarts = %d (perturb = %d)",
+                                    aargs$restart, aargs$perturb) else "",
           con_desc, names(TRANSFORM_LABELS)[TRANSFORM_LABELS == trans],
           R, seed, thr),
         code = paste(
@@ -360,6 +377,8 @@ daggerTabServer <- function(id, data_bus, rec) {
           constraint_code(wl, "dag_whitelist"),
           sprintf("dag_aargs <- list(%s)",
             paste(c(if (uses_score) sprintf('score = "%s"', scr),
+                    if (algo == "hc") sprintf("restart = %d, perturb = %d",
+                                              aargs$restart, aargs$perturb),
                     "blacklist = dag_blacklist", "whitelist = dag_whitelist"),
                   collapse = ", ")),
           sprintf("set.seed(%d)", seed),
@@ -534,10 +553,7 @@ daggerTabServer <- function(id, data_bus, rec) {
           coords
         },
         dot = tryCatch({
-          co <- igraph::layout_with_sugiyama(
-            g_lay, weights = lay_w,
-            hgap = input$nodesep %||% 1,      # graphviz nodesep analogue
-            vgap = input$ranksep %||% 1)$layout  # graphviz ranksep analogue
+          co <- igraph::layout_with_sugiyama(g_lay, weights = lay_w)$layout
           co <- .norm_coords(co)
           b  <- input$organic %||% 0
           if (b > 0) {                        # relax strict rank alignment
@@ -546,6 +562,11 @@ daggerTabServer <- function(id, data_bus, rec) {
               g_lay, weights = if (!is.null(lay_w)) 1 / lay_w))
             co <- (1 - b) * co + b * co_kk
           }
+          # ranksep/nodesep: uniform scaling would be cancelled by qgraph's
+          # own rescale, so they work as a STRETCH RATIO (y vs x), preserved
+          # by plotting with aspect = TRUE (see qgraph call below).
+          co[, 1] <- co[, 1] * (input$nodesep %||% 1)
+          co[, 2] <- co[, 2] * (input$ranksep %||% 1)
           rownames(co) <- colnames(amat)
           co
         }, error = function(e) "spring"),
@@ -574,7 +595,9 @@ daggerTabServer <- function(id, data_bus, rec) {
 
       fn <- function() qgraph::qgraph(
         amat, directed = TRUE, layout = layout_arg,
+        aspect = identical(lt, "dot"),  # preserve the ranksep/nodesep ratio
         labels = colnames(amat), label.scale = FALSE,   # equal-size node labels
+        label.font = if (isTRUE(s$label_bold)) 2 else 1,
         edge.color = s$pos_edge,      # arcs are unsigned: pos picker only
         color = s$node_fill, border.color = s$node_border,
         vsize = vsize_arg, esize = s$esize, label.cex = s$label_cex,

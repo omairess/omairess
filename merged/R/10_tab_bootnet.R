@@ -171,7 +171,6 @@ bootnetTabUI <- function(id) {
       shiny::checkboxInput(ns("relimp_normalized"),
                            "Normalize relative importance", value = TRUE)),
 
-    transformUI(ns("transform")),
     shiny::actionButton(ns("run"), "Estimate network", class = "btn-primary"),
     shiny::hr(),
 
@@ -193,19 +192,35 @@ bootnetTabUI <- function(id) {
     shiny::fluidRow(
       shiny::column(8,
         shiny::uiOutput(ns("network_plot_ui")),      # height follows slider
-        shiny::h5("Edge-weight bootstrap (CIs)"),
+        shiny::h5("Bootstrap plot (JASP-style: pick what it shows)"),
+        shiny::checkboxGroupInput(ns("boot_plot_stats"), NULL,
+          c("Edges" = "edge", "Strength" = "strength",
+            "Expected influence" = "expectedInfluence",
+            "Closeness" = "closeness", "Betweenness" = "betweenness"),
+          selected = "edge", inline = TRUE),
         shiny::plotOutput(ns("edge_ci_plot")),
         shiny::h5("Case-dropping stability plot"),
         shiny::plotOutput(ns("case_stab_plot")),
+        shiny::h5("Centrality measures to show"),
+        shiny::checkboxGroupInput(ns("cent_measures"), NULL,
+          c("Strength" = "strength",
+            "Expected influence" = "expected_influence",
+            "Degree" = "degree", "Closeness" = "closeness",
+            "Betweenness" = "betweenness"),
+          selected = c("strength", "expected_influence"), inline = TRUE),
+        shiny::helpText("Betweenness and closeness are typically unstable and",
+                        "poorly interpretable in psychological networks",
+                        "(Bringmann et al., 2019) — include them knowingly."),
         shiny::uiOutput(ns("centrality_ui"))
       ),
       shiny::column(4,
         shiny::selectInput(ns("layout_type"), "Layout",
                            c("Spring" = "spring", "Circle" = "circle",
-                             "EGA communities" = "ega",
+                             "Communities (walktrap)" = "ega",
                              "PCA (first two components)" = "pca")),
         shiny::checkboxInput(ns("colour_by_community"),
-                             "Colour nodes by EGA community", value = FALSE),
+                             "Colour nodes by community (walktrap)",
+                             value = FALSE),
         appearanceUI(ns("look"), signed = TRUE)
       )
     )
@@ -254,7 +269,7 @@ bootnetTabServer <- function(id, data_bus, rec) {
       }
 
       # Per-module transform: after variable selection, before estimation.
-      trans <- input$transform %||% "none"
+      trans <- sel$transform()
       dat   <- apply_house_transform(dat, trans)
 
       pin <- bootnet_pinned(def, input)
@@ -323,11 +338,17 @@ bootnetTabServer <- function(id, data_bus, rec) {
 
         if (do_np) {
           shiny::incProgress(0.1, detail = "nonparametric bootstrap (edge CIs)")
+          # statistics pinned so the bootstrap plot can show any of them later
+          np_stats <- c("edge", "strength", "expectedInfluence",
+                        "closeness", "betweenness")
           set.seed(seed)
-          boot_np <- bootnet::bootnet(rv$net, nBoots = nb, type = "nonparametric")
+          boot_np <- bootnet::bootnet(rv$net, nBoots = nb,
+                                      type = "nonparametric",
+                                      statistics = np_stats)
           frags <- c(frags,
             sprintf("set.seed(%d)", seed),
-            sprintf('boot_np <- bootnet::bootnet(net, nBoots = %d, type = "nonparametric")', nb),
+            sprintf('boot_np <- bootnet::bootnet(net, nBoots = %d, type = "nonparametric",', nb),
+            sprintf("  statistics = %s)", vars_literal(np_stats)),
             "# Overlapping edge CIs in plot(boot_np) mean edge ORDER is not interpretable.")
         }
         if (do_case) {
@@ -363,16 +384,33 @@ bootnetTabServer <- function(id, data_bus, rec) {
     })
 
     # --- Transparent centrality from the weights matrix ---------------------
+    # strength / EI / degree computed directly from W (version-proof);
+    # closeness / betweenness via qgraph::centrality_auto when requested.
     centrality_tbl <- shiny::reactive({
       shiny::req(rv$net)
-      w  <- qgraph::getWmat(rv$net)
-      tb <- data.frame(
-        node               = colnames(w),
-        strength           = colSums(abs(w)),
-        expected_influence = colSums(w),
-        row.names = NULL
-      )
-      if (rv$has_neg) tb[, c("node", "expected_influence", "strength")] else tb
+      w <- qgraph::getWmat(rv$net)
+      if (is.null(colnames(w)) || all(!nzchar(colnames(w))))
+        dimnames(w) <- list(colnames(rv$dat), colnames(rv$dat))
+      lead  <- if (rv$has_neg) "expected_influence" else "strength"
+      picks <- unique(c(lead, input$cent_measures %||%
+                          c("strength", "expected_influence")))
+      tb <- data.frame(node = colnames(w), row.names = NULL)
+      if ("strength" %in% picks)           tb$strength <- colSums(abs(w))
+      if ("expected_influence" %in% picks) tb$expected_influence <- colSums(w)
+      if ("degree" %in% picks)             tb$degree <- colSums(w != 0)
+      if (any(c("closeness", "betweenness") %in% picks)) {
+        ca <- tryCatch(qgraph::centrality_auto(w)$node.centrality,
+                       error = function(e) NULL)
+        if (!is.null(ca)) {
+          if ("closeness" %in% picks && "Closeness" %in% names(ca))
+            tb$closeness <- ca$Closeness
+          if ("betweenness" %in% picks && "Betweenness" %in% names(ca))
+            tb$betweenness <- ca$Betweenness
+        }
+      }
+      # lead (gated) measure always in column 2
+      lead_col <- intersect(lead, names(tb))
+      tb[, c("node", lead_col, setdiff(names(tb), c("node", lead_col)))]
     })
 
     # --- The CS gate ---------------------------------------------------------
@@ -446,9 +484,12 @@ bootnetTabServer <- function(id, data_bus, rec) {
     output$edge_ci_plot <- shiny::renderPlot({
       shiny::req(rv$net)
       shiny::validate(shiny::need(!is.null(rv$boot_np),
-        "Edge-weight CIs locked: run the bootstrap validation (nonparametric) to see them."))
-      # bootnet's CI plot; overlapping CIs = edge order not interpretable.
-      plot(rv$boot_np, labels = FALSE, order = "sample")
+        "Bootstrap plot locked: run the bootstrap validation (nonparametric) to see it."))
+      stats_sel <- input$boot_plot_stats %||% "edge"
+      # bootnet's CI plot; several statistics can share one graph (JASP-style).
+      # Overlapping CIs = ordering not interpretable.
+      print(plot(rv$boot_np, statistics = stats_sel,
+                 labels = FALSE, order = "sample"))
     })
 
     # Case-dropping stability curve (avg correlation with original sample as
@@ -481,30 +522,39 @@ bootnetTabServer <- function(id, data_bus, rec) {
       directed <- identical(rv$def, "relimp")
       lt   <- input$layout_type %||% "spring"
 
-      # Community detection (EGA) drives node colours whenever the layout is
-      # EGA/PCA or the "colour by community" box is ticked (request #7).
-      # NB: qgraph's `groups` must be a list of node INDICES (a list of names
-      # colours the legend but leaves the nodes white — the bug fixed here).
+      # Community detection drives node colours whenever the layout is
+      # communities/PCA or the "colour by community" box is ticked.
+      # DECISION: walktrap runs directly on the |weights| of the ESTIMATED
+      # network via igraph (a hard dependency) — this is what EGA does
+      # internally after its own glasso, but it cannot fail to install and
+      # it colours the network you are actually looking at. (Replaces the
+      # EGAnet call, whose install/runtime failures made the checkbox
+      # appear to "do nothing".)
       want_comm <- lt %in% c("ega", "pca") || isTRUE(input$colour_by_community)
       groups_list <- NULL; comm_code <- NULL
       if (want_comm) {
-        ega <- tryCatch(
-          EGAnet::EGA(dat, model = "glasso", algorithm = "walktrap",
-                      plot.EGA = FALSE),
-          error = function(e) NULL)
-        if (!is.null(ega) && !is.null(ega$wc)) {
-          groups_list <- split(seq_len(ncol(wmat)), ega$wc)
+        wc <- tryCatch({
+          aw <- abs(wmat); aw <- (aw + t(aw)) / 2   # symmetrize (relimp is directed)
+          g  <- igraph::graph_from_adjacency_matrix(aw, mode = "undirected",
+                                                    weighted = TRUE, diag = FALSE)
+          igraph::cluster_walktrap(g)$membership
+        }, error = function(e) NULL)
+        if (!is.null(wc)) {
+          # qgraph's `groups` needs node INDICES (names colour only the legend)
+          groups_list <- split(seq_len(ncol(wmat)), wc)
           names(groups_list) <- paste("Community", names(groups_list))
           comm_code <- paste(
-            "# EGA communities used for node COLOUR only; the reported network",
-            "# is still the estimateNetwork result above.",
-            'ega <- EGAnet::EGA(dat_bootnet, model = "glasso",',
-            '                   algorithm = "walktrap", plot.EGA = FALSE)',
-            "groups_list <- split(seq_along(colnames(dat_bootnet)), ega$wc)",
+            "# Walktrap communities of the ESTIMATED network, colour only —",
+            "# the reported network is still the estimateNetwork result above.",
+            "aw <- abs(qgraph::getWmat(net)); aw <- (aw + t(aw)) / 2",
+            'g_comm <- igraph::graph_from_adjacency_matrix(aw, mode = "undirected",',
+            "                                              weighted = TRUE, diag = FALSE)",
+            "wc <- igraph::cluster_walktrap(g_comm)$membership",
+            "groups_list <- split(seq_along(wc), wc)",
             'names(groups_list) <- paste("Community", names(groups_list))',
             sep = "\n")
         } else shiny::showNotification(
-          "EGA community detection failed; nodes use a single colour.",
+          "Community detection failed; nodes use a single colour.",
           type = "warning")
       }
 
