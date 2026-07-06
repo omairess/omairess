@@ -25,7 +25,8 @@ ui <- shiny::navbarPage(
                                       value = 12345, min = 1)),
   shiny::tabPanel("GGM (bootnet)",        bootnetTabUI("bootnet")),
   shiny::tabPanel("DAG (bnlearn)",        daggerTabUI("dag")),
-  shiny::tabPanel("Latent (psychonetrics) & NCT", psynetTabUI("psynet")),
+  shiny::tabPanel("Latent (psychonetrics)", psynetTabUI("psynet")),
+  shiny::tabPanel("Compare networks (NCT)", nctUI("nct")),
   shiny::tabPanel(
     "Pipeline & Export",
     shiny::h4("Analysis pipeline (house rule 8)"),
@@ -52,10 +53,11 @@ server <- function(input, output, session) {
 
   bootnet_out <- bootnetTabServer("bootnet", data_bus, rec)
   dag_out     <- daggerTabServer("dag", data_bus, rec)
-  # NCT (inside the psychonetrics tab) consumes the bootnet tab's pinned
-  # settings reactive — one source of truth for estimator/corMethod/gamma.
-  psynet_out  <- psynetTabServer("psynet", data_bus, rec,
-                                 gg_settings = bootnet_out$settings)
+  psynet_out  <- psynetTabServer("psynet", data_bus, rec)
+  # NCT is now its OWN top-level tab. It still consumes the bootnet tab's GGM
+  # settings reactive — one source of truth for estimator/corMethod/gamma, so
+  # the comparison uses the same settings as the networks on the GGM tab.
+  nctServer("nct", data_bus, rec, gg_settings = bootnet_out$settings)
 
   # --- Rule 8: live pipeline log -------------------------------------------
   output$pipeline_log <- shiny::renderText({

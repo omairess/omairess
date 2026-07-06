@@ -120,10 +120,11 @@ daggerTabUI <- function(id) {
                            c("Strength  P(arc present)"          = "strength",
                              "Direction  P(orientation | present)" = "direction",
                              "Strength x Direction (combined)"     = "combined")),
-        shiny::checkboxInput(ns("show_edge_labels"), "Show arc values", FALSE),
         # signed = FALSE: bnlearn arcs have no sign; the "positive edge" picker
         # is relabelled "Arc colour" and the negative-edge picker is hidden.
-        appearanceUI(ns("look"), signed = FALSE)
+        # default_esize = 2 per request; "Show edge values as labels" lives in
+        # the appearance panel and shows the chosen arc metric.
+        appearanceUI(ns("look"), signed = FALSE, default_esize = 2)
       )
     )
     # TODO(port): split analysis + DAG-diff plot (Dagger_zero.R:409-542,
@@ -307,7 +308,8 @@ daggerTabServer <- function(id, data_bus, rec) {
         }
       }
 
-      elabels <- if (isTRUE(input$show_edge_labels)) round(metric_mat, 2) else FALSE
+      # edge labels: show the chosen arc metric when the appearance toggle is on
+      elabels <- if (isTRUE(s$show_edge_labels)) round(metric_mat, 2) else FALSE
 
       # node size: fixed slider or scaled by column means (shared option)
       if (isTRUE(s$scale_nodes)) {
@@ -328,11 +330,13 @@ daggerTabServer <- function(id, data_bus, rec) {
 
       fn <- function() qgraph::qgraph(
         amat, directed = TRUE, layout = layout_arg,
+        labels = colnames(amat), label.scale = FALSE,   # equal-size node labels
         edge.color = s$pos_edge,      # arcs are unsigned: pos picker only
         color = s$node_fill, border.color = s$node_border,
         vsize = vsize_arg, esize = s$esize, label.cex = s$label_cex,
+        minimum = s$min_edge,         # hide arcs below this metric value
         edge.width = width_mat, lty = lty_mat, edge.labels = elabels,
-        edge.label.cex = 0.9)
+        edge.label.cex = s$edge_label_cex)
       rv$plot_fn <- fn
 
       rec_upsert(
@@ -350,8 +354,10 @@ daggerTabServer <- function(id, data_bus, rec) {
           "arc_info$combined <- arc_info$strength * arc_info$direction",
           sprintf('qgraph::qgraph(amat, directed = TRUE, layout = "%s",',
                   if (identical(input$layout_type, "tree")) "spring" else (input$layout_type %||% "spring")),
+          "  labels = colnames(amat), label.scale = FALSE,",
           sprintf('  edge.color = "%s", color = "%s", border.color = "%s",',
                   s$pos_edge, s$node_fill, s$node_border),
+          sprintf("  minimum = %s, edge.label.cex = %s,", s$min_edge, s$edge_label_cex),
           sprintf("  vsize = %s, esize = %s, label.cex = %s)  # + edge.width by %s",
                   if (isTRUE(s$scale_nodes)) "vsize_arg" else as.character(s$vsize),
                   s$esize, s$label_cex, metric),

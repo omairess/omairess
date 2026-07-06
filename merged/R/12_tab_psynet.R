@@ -99,6 +99,90 @@ lambda_literal <- function(lam) {
           vars_literal(rownames(lam)), vars_literal(colnames(lam)))
 }
 
+# --- Fit-index interpretation (ported from PsychoNetrix.R:1535-1707) --------
+# Thresholds + a plain-text "Model Fit Summary" that labels each index
+# Excellent/Good/Acceptable/Poor with references. Behaviour unchanged.
+PSYNET_FIT_THRESHOLDS <- list(
+  CFI  = list(dir="high", cuts=c(.90,.95,.97), labs=c("Poor (<.90)","Acceptable (.90-.94)","Good (.95-.96)","Excellent (>=.97)")),
+  TLI  = list(dir="high", cuts=c(.90,.95,.97), labs=c("Poor (<.90)","Acceptable (.90-.94)","Good (.95-.96)","Excellent (>=.97)")),
+  NNFI = list(dir="high", cuts=c(.90,.95,.97), labs=c("Poor (<.90)","Acceptable (.90-.94)","Good (.95-.96)","Excellent (>=.97)")),
+  NFI  = list(dir="high", cuts=c(.90,.95,.97), labs=c("Poor (<.90)","Acceptable (.90-.94)","Good (.95-.96)","Excellent (>=.97)")),
+  IFI  = list(dir="high", cuts=c(.90,.95,.97), labs=c("Poor (<.90)","Acceptable (.90-.94)","Good (.95-.96)","Excellent (>=.97)")),
+  RMSEA= list(dir="low",  cuts=c(.05,.08,.10), labs=c("Excellent (<=.05)","Good (.05-.08)","Acceptable (.08-.10)","Poor (>.10)")),
+  SRMR = list(dir="low",  cuts=c(.05,.08,.10), labs=c("Excellent (<=.05)","Good (.05-.08)","Acceptable (.08-.10)","Poor (>.10)")),
+  GFI  = list(dir="high", cuts=c(.85,.90,.95), labs=c("Poor (<.85)","Acceptable (.85-.89)","Good (.90-.94)","Excellent (>=.95)"))
+)
+
+print_psynet_fit_guide <- function(ft) {
+  if (is.null(ft) || !is.data.frame(ft)) { print(ft); return(invisible(NULL)) }
+  get_val <- function(nm) {
+    idx <- which(toupper(ft$Measure) == toupper(nm))
+    if (!length(idx)) return(NA_real_)
+    suppressWarnings(as.numeric(ft$Value[idx[1]]))
+  }
+  classify <- function(val, spec) {
+    if (is.na(val)) return(NA_character_)
+    cu <- spec$cuts; la <- spec$labs
+    if (spec$dir == "high")
+      if (val >= cu[3]) la[4] else if (val >= cu[2]) la[3] else if (val >= cu[1]) la[2] else la[1]
+    else
+      if (val <= cu[1]) la[1] else if (val <= cu[2]) la[2] else if (val <= cu[3]) la[3] else la[4]
+  }
+  verdict <- function(val, nm) {
+    spec <- PSYNET_FIT_THRESHOLDS[[toupper(nm)]]
+    if (is.null(spec) || is.na(val)) return("")
+    lab <- classify(val, spec); if (is.na(lab)) return("")
+    tag <- if (grepl("^Excellent", lab)) "[++]" else if (grepl("^Good", lab)) "[+] "
+           else if (grepl("^Acceptable", lab)) "[~] " else "[x] "
+    paste0("  ", tag, " ", lab)
+  }
+  row1 <- function(nm, label = nm) {
+    v <- get_val(nm); if (is.na(v)) return(invisible(NULL))
+    cat(sprintf("  %-16s %7.3f%s\n", label, v, verdict(v, nm)))
+  }
+  SEP <- "  --------------------------------------------------------------\n"
+  cat("==================================================================\n")
+  cat("  Model Fit Summary\n")
+  cat("==================================================================\n")
+  info <- c(if (!is.na(get_val("nvar"))) sprintf("Variables: %g", get_val("nvar")),
+            if (!is.na(get_val("npar"))) sprintf("Free parameters: %g", get_val("npar")),
+            if (!is.na(get_val("df")))   sprintf("df: %g", get_val("df")))
+  if (length(info)) cat("  ", paste(info, collapse = "   "), "\n", sep = "")
+  chisq <- get_val("chisq"); pv <- get_val("pvalue")
+  if (!is.na(chisq)) {
+    cat("\n  Chi-square test of exact fit\n"); cat(SEP)
+    cat(sprintf("  %-16s %7.2f%s\n", sprintf("chi2 (df=%g)", get_val("df")), chisq,
+                if (is.na(pv)) "" else if (pv < .001) "  p < .001" else sprintf("  p = %.3f", pv)))
+    cat("  (Significant chi2 is expected for large N; rely on indices below)\n")
+  }
+  if (any(!is.na(c(get_val("rmsea"), get_val("srmr"), get_val("gfi"))))) {
+    cat("\n  Absolute fit\n"); cat(SEP)
+    vr <- get_val("rmsea")
+    if (!is.na(vr)) {
+      lb <- get_val("rmsea.ci.lower"); ub <- get_val("rmsea.ci.upper")
+      ci <- if (!is.na(lb) && !is.na(ub)) sprintf("  90%% CI [%.3f, %.3f]", lb, ub) else ""
+      cat(sprintf("  %-16s %7.3f%s%s\n", "RMSEA", vr, ci, verdict(vr, "RMSEA")))
+    }
+    row1("srmr", "SRMR"); row1("gfi", "GFI")
+  }
+  if (any(vapply(c("cfi","tli","nnfi","nfi","ifi"), function(n) !is.na(get_val(n)), TRUE))) {
+    cat("\n  Incremental fit\n"); cat(SEP)
+    for (nm in c("cfi","tli","nnfi","nfi","ifi")) row1(nm, toupper(nm))
+  }
+  ic <- Filter(function(x) !is.na(x$v),
+    lapply(list(c("aic","AIC"), c("bic","BIC"), c("ebic.5","eBIC(.5)")),
+           function(p) list(lab = p[2], v = get_val(p[1]))))
+  if (length(ic)) {
+    cat("\n  Information criteria  (lower = better; for model comparison)\n"); cat(SEP)
+    for (x in ic) cat(sprintf("  %-16s %10.2f\n", x$lab, x$v))
+  }
+  cat("\n"); cat(SEP)
+  cat("  Legend: [++] Excellent  [+] Good  [~] Acceptable  [x] Poor\n")
+  cat("  Refs: Hu & Bentler (1999); Browne & Cudeck (1992);\n")
+  cat("        Schermelleh-Engel et al. (2003); Kline (2016).\n")
+  cat("==================================================================\n")
+}
+
 psynetTabUI <- function(id) {
   ns <- shiny::NS(id)
   latent_family <- sprintf("['lvm','lnm','rnm','lrnm'].includes(input['%s'])",
@@ -156,7 +240,24 @@ psynetTabUI <- function(id) {
     shiny::checkboxInput(ns("do_modelsearch"), "Full model search (slow)", FALSE),
 
     shiny::actionButton(ns("run"), "Fit model", class = "btn-primary"),
-    shiny::verbatimTextOutput(ns("fit_summary")),
+
+    # -- Results (fit + interpretation, parameters, MIs, matrices) -----------
+    shiny::hr(),
+    shiny::tabsetPanel(
+      shiny::tabPanel("Fit indices",
+        shiny::verbatimTextOutput(ns("fit_summary"))),
+      shiny::tabPanel("Parameters",
+        DT::dataTableOutput(ns("param_table"))),
+      shiny::tabPanel("Modification indices",
+        shiny::helpText("Largest suggested additions first. High MI = adding",
+                        "that parameter would improve fit; corroborate with theory."),
+        DT::dataTableOutput(ns("mi_table"))),
+      shiny::tabPanel("Matrices",
+        shiny::selectInput(ns("matrix_select"), "Matrix",
+          c("omega", "omega_zeta", "sigma_zeta", "lambda",
+            "omega_epsilon", "beta", "sigma", "kappa")),
+        shiny::verbatimTextOutput(ns("matrix_output")))
+    ),
 
     # -- Plots ----------------------------------------------------------------
     shiny::hr(),
@@ -173,22 +274,19 @@ psynetTabUI <- function(id) {
                         "(Johnson/LMG): a DIRECTED network where the arrow",
                         "j -> i shows latent j's share of the R-squared of",
                         "latent i. Multi-group models show group 1."),
-        appearanceUI(ns("look"), signed = TRUE)
+        # edge labels ON by default so the RI network shows its weights
+        # as numbers on the arrows rather than hiding them (request #4).
+        appearanceUI(ns("look"), signed = TRUE, default_edge_labels = TRUE)
       )
-    ),
+    )
 
     # TODO(port): panel families (dlvm1 / panelgvar / ri_clpm) + wave
     # detection + beta-matrix editor (PsychoNetrix.R:334-399, 1112-1250,
-    # 1411-1468); Ising family; factor scores; modification indices;
-    # model2 comparison; data-transform pipeline as a recorded reshape step.
-
-    shiny::hr(),
-    shiny::h4("Network Comparison Test (NCT)"),
-    nctUI(ns("nct"))
+    # 1411-1468); Ising family; factor scores; data-transform pipeline.
   )
 }
 
-psynetTabServer <- function(id, data_bus, rec, gg_settings) {
+psynetTabServer <- function(id, data_bus, rec) {
   shiny::moduleServer(id, function(input, output, session) {
 
     sel <- varselectServer("vars", data_bus, rec, rec_prefix = "psynet")
@@ -376,7 +474,48 @@ psynetTabServer <- function(id, data_bus, rec, gg_settings) {
 
     output$fit_summary <- shiny::renderPrint({
       shiny::req(rv$model)
-      psychonetrics::fit(rv$model)
+      ft <- tryCatch(psychonetrics::fit(rv$model), error = function(e) NULL)
+      print_psynet_fit_guide(ft)
+    })
+
+    output$param_table <- DT::renderDataTable({
+      shiny::req(rv$model)
+      pr <- tryCatch(rv$model@parameters, error = function(e) NULL)
+      shiny::validate(shiny::need(!is.null(pr), "No parameters available."))
+      keep <- intersect(c("var1", "op", "var2", "matrix", "row", "col",
+                          "est", "se", "p", "std"), names(pr))
+      tb <- as.data.frame(pr)[, keep, drop = FALSE]
+      num <- intersect(c("est", "se", "p", "std"), names(tb))
+      DT::datatable(tb, options = list(pageLength = 25, scrollX = TRUE)) |>
+        DT::formatRound(num, 3)
+    })
+
+    output$mi_table <- DT::renderDataTable({
+      shiny::req(rv$model)
+      mi <- tryCatch(
+        psychonetrics::MIs(rv$model, matrices = "omega", type = "free"),
+        error = function(e) tryCatch(psychonetrics::MIs(rv$model),
+                                     error = function(e2) NULL))
+      shiny::validate(shiny::need(!is.null(mi) && NROW(mi) > 0,
+        "No modification indices available for this model."))
+      mi <- as.data.frame(mi)
+      mic <- intersect(c("mi", "epc", "matrix", "row", "col"), names(mi))
+      mi <- mi[, mic, drop = FALSE]
+      if ("mi" %in% names(mi)) mi <- mi[order(-mi$mi), ]
+      DT::datatable(mi, options = list(pageLength = 25, scrollX = TRUE)) |>
+        DT::formatRound(intersect(c("mi", "epc"), names(mi)), 3)
+    })
+
+    output$matrix_output <- shiny::renderPrint({
+      shiny::req(rv$model)
+      m <- tryCatch(psychonetrics::getmatrix(rv$model, input$matrix_select),
+                    error = function(e) NULL)
+      if (is.null(m)) {
+        cat(sprintf("Matrix '%s' is not available for this model.\n",
+                    input$matrix_select))
+      } else {
+        print(round(collapse_mg(m, 1L), 4))
+      }
     })
 
     # --- Plots: omega / latent / RI / residual -------------------------------
@@ -422,12 +561,9 @@ psynetTabServer <- function(id, data_bus, rec, gg_settings) {
       s  <- look()
       pt <- input$plot_type
 
-      fn <- function() qgraph::qgraph(
-        pm$W, directed = pm$directed, layout = "spring",
-        posCol = s$pos_edge, negCol = s$neg_edge,
-        color = s$node_fill, border.color = s$node_border,
-        vsize = s$vsize, esize = s$esize, label.cex = s$label_cex,
-        edge.labels = pm$directed, edge.label.cex = 0.9)
+      args <- house_qgraph_args(pm$W, s, directed = pm$directed)
+      fn <- function() do.call(qgraph::qgraph,
+                               c(list(pm$W, layout = "spring"), args))
       rv$plot_fn <- fn
 
       extract_code <- switch(pt,
@@ -454,20 +590,13 @@ psynetTabServer <- function(id, data_bus, rec, gg_settings) {
         code = paste(
           extract_code,
           "if (is.list(W) && !is.data.frame(W)) W <- W[[1]]  # multi-group: group 1",
-          sprintf(paste(
-            'qgraph::qgraph(as.matrix(W), directed = %s, layout = "spring",',
-            '  posCol = "%s", negCol = "%s",',
-            '  color = "%s", border.color = "%s",',
-            "  vsize = %s, esize = %s, label.cex = %s)", sep = "\n"),
-            pm$directed, s$pos_edge, s$neg_edge, s$node_fill, s$node_border,
-            s$vsize, s$esize, s$label_cex),
-          sep = "\n")
+          "W <- as.matrix(W)",
+          'qgraph::qgraph(W, layout = "spring",',
+          house_qgraph_args_code(s, pm$directed, wobj = "W"),
+          ")", sep = "\n")
       )
       fn()
     })
-
-    # NCT lives on this tab; shares the bootnet tab's pinned GGM settings.
-    nctServer("nct", data_bus, rec, gg_settings)
 
     list(model = shiny::reactive(rv$model))
   })
@@ -479,29 +608,39 @@ psynetTabServer <- function(id, data_bus, rec, gg_settings) {
 
 nctUI <- function(id) {
   ns <- shiny::NS(id)
-  shiny::tagList(
-    shiny::selectInput(ns("group_col"), "Grouping column", choices = NULL),
-    shiny::radioButtons(ns("design"), "Design (required — determines paired)",
-                        c("Independent groups (paired = FALSE)" = "independent",
-                          "Pre-post / repeated measures (paired = TRUE)" = "paired")),
-    shiny::conditionalPanel(
-      sprintf("input['%s'] == 'paired'", ns("design")),
-      shiny::selectInput(ns("id_col"), "Subject-ID column (aligns the pairs)",
-                         choices = c("(none — assume matching row order)" = "")),
-      shiny::helpText("With an ID column, rows are matched subject-by-subject",
-                      "and unmatched subjects dropped (reported). Without one,",
-                      "equal group sizes and matching row order are ASSUMED.")
+  shiny::fluidRow(
+    shiny::column(4,
+      varselectUI(ns("vars"), "Nodes to compare"),
+      shiny::selectInput(ns("group_col"), "Grouping column", choices = NULL),
+      shiny::radioButtons(ns("design"), "Design (required — determines paired)",
+                          c("Independent groups (paired = FALSE)" = "independent",
+                            "Pre-post / repeated measures (paired = TRUE)" = "paired")),
+      shiny::conditionalPanel(
+        sprintf("input['%s'] == 'paired'", ns("design")),
+        shiny::selectInput(ns("id_col"), "Subject-ID column (aligns the pairs)",
+                           choices = c("(none — assume matching row order)" = "")),
+        shiny::helpText("With an ID column, rows are matched subject-by-subject",
+                        "and unmatched subjects dropped (reported). Without one,",
+                        "equal group sizes and matching row order are ASSUMED.")
+      ),
+      shiny::selectInput(ns("adjust"), "Edge-test p-value correction",
+                         c("Holm (recommended)" = "holm", "BH / FDR" = "BH",
+                           "Bonferroni" = "bonferroni",
+                           "None (NOT recommended)" = "none"),
+                         selected = "holm"),
+      shiny::numericInput(ns("iterations"), "Permutation iterations",
+                          value = 1000, min = 100, step = 100),
+      shiny::actionButton(ns("run"), "Run NCT", class = "btn-primary"),
+      shiny::helpText("Networks are estimated with the GGM tab's settings",
+                      "(default = EBICglasso). A null NCT is not proof of equality.")
     ),
-    shiny::selectInput(ns("adjust"), "Edge-test p-value correction",
-                       c("Holm (recommended)" = "holm", "BH / FDR" = "BH",
-                         "Bonferroni" = "bonferroni",
-                         "None (NOT recommended)" = "none"),
-                       selected = "holm"),
-    shiny::numericInput(ns("iterations"), "Permutation iterations",
-                        value = 1000, min = 100, step = 100),
-    shiny::actionButton(ns("run"), "Run NCT"),
-    shiny::verbatimTextOutput(ns("nct_summary")),
-    DT::dataTableOutput(ns("edge_table"))
+    shiny::column(8,
+      shiny::h4("Group networks (same layout, so they are directly comparable)"),
+      shiny::plotOutput(ns("group_plots"), height = "360px"),
+      shiny::hr(),
+      shiny::verbatimTextOutput(ns("nct_summary")),
+      DT::dataTableOutput(ns("edge_table"))
+    )
   )
 }
 
@@ -551,6 +690,8 @@ align_paired_by_id <- function(d1, d2, ids1, ids2) {
 nctServer <- function(id, data_bus, rec, gg_settings) {
   shiny::moduleServer(id, function(input, output, session) {
 
+    sel <- varselectServer("vars", data_bus, rec, rec_prefix = "nct")
+
     shiny::observeEvent(data_bus$wide(), {
       shiny::updateSelectInput(session, "group_col",
                                choices = names(data_bus$wide()))
@@ -564,8 +705,11 @@ nctServer <- function(id, data_bus, rec, gg_settings) {
       shiny::req(input$group_col %in% names(dat))
       g   <- dat[[input$group_col]]
       lv  <- names(sort(table(g), decreasing = TRUE))[1:2]
-      num <- names(dat)[vapply(dat, is.numeric, TRUE)]
-      num <- setdiff(num, c(input$group_col, input$id_col))
+      # nodes: the user's selection, minus the group/id columns
+      num <- setdiff(sel$vars(), c(input$group_col, input$id_col))
+      num <- intersect(num, names(dat)[vapply(dat, is.numeric, TRUE)])
+      shiny::validate(shiny::need(length(num) >= 2,
+        "Select at least 2 numeric nodes to compare."))
       d1  <- dat[g == lv[1], num, drop = FALSE]
       d2  <- dat[g == lv[2], num, drop = FALSE]
       paired  <- identical(input$design, "paired")
@@ -620,7 +764,32 @@ nctServer <- function(id, data_bus, rec, gg_settings) {
           sprintf('  p.adjust.methods = "%s")  # edge-level correction',
                   input$adjust)), collapse = "\n")
       )
-      list(res = res, groups = lv)
+      list(res = res, groups = lv, d1 = d1, d2 = d2, gg = gg, num = num)
+    })
+
+    # --- Side-by-side group networks, SHARED layout (request #10) -----------
+    output$group_plots <- shiny::renderPlot({
+      r  <- res_r()
+      gg <- r$gg
+      est <- function(d) tryCatch(qgraph::getWmat(
+        bootnet::estimateNetwork(d, default = gg$default,
+                                 corMethod = gg$corMethod, tuning = gg$tuning)),
+        error = function(e) NULL)
+      W1 <- est(r$d1); W2 <- est(r$d2)
+      shiny::validate(shiny::need(!is.null(W1) && !is.null(W2),
+        "Could not estimate one of the group networks."))
+      pal <- house_pastel()
+      # one averaged layout so node positions match across the two panels
+      L <- qgraph::averageLayout(W1, W2)
+      op <- graphics::par(mfrow = c(1, 2)); on.exit(graphics::par(op), add = TRUE)
+      qgraph::qgraph(W1, layout = L, labels = colnames(W1), label.scale = FALSE,
+                     posCol = pal$pos_edge, negCol = pal$neg_edge,
+                     color = pal$node_fill, border.color = pal$node_border,
+                     title = paste("Group:", r$groups[1]))
+      qgraph::qgraph(W2, layout = L, labels = colnames(W2), label.scale = FALSE,
+                     posCol = pal$pos_edge, negCol = pal$neg_edge,
+                     color = pal$node_fill, border.color = pal$node_border,
+                     title = paste("Group:", r$groups[2]))
     })
 
     output$nct_summary <- shiny::renderPrint({

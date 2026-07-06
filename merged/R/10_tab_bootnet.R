@@ -177,13 +177,16 @@ bootnetTabUI <- function(id) {
     # -- on-demand validation (correctness gate still enforced) --------------
     shiny::numericInput(ns("nboots"), "Bootstrap samples (both types)",
                         value = 1000, min = 250, step = 250),
+    shiny::checkboxGroupInput(ns("boot_types"), "Bootstrap procedures to run",
+      c("Nonparametric (edge-weight accuracy / CIs)"      = "np",
+        "Case-dropping (centrality stability / CS-coefficient)" = "case"),
+      selected = c("np", "case")),
     shiny::actionButton(ns("run_boot"),
                         "Run bootstrap validation (required before interpreting centrality / edge order)",
                         class = "btn-warning"),
-    shiny::helpText("On demand: runs the nonparametric bootstrap (edge CIs) +",
-                    "case-dropping bootstrap (CS-coefficients) for the current",
-                    "network. Centrality and edge-CI panels stay locked until",
-                    "it has been run; re-estimating clears old results."),
+    shiny::helpText("On demand. The case-dropping bootstrap is what produces",
+                    "the CS-coefficient; centrality stays locked until it has",
+                    "run for the current network. Re-estimating clears old results."),
     shiny::hr(),
     shiny::uiOutput(ns("stability_banner")),
     shiny::fluidRow(
@@ -197,6 +200,8 @@ bootnetTabUI <- function(id) {
                            c("Spring" = "spring", "Circle" = "circle",
                              "EGA communities" = "ega",
                              "PCA (first two components)" = "pca")),
+        shiny::checkboxInput(ns("colour_by_community"),
+                             "Colour nodes by EGA community", value = FALSE),
         appearanceUI(ns("look"), signed = TRUE)
       )
     )
@@ -291,36 +296,54 @@ bootnetTabServer <- function(id, data_bus, rec) {
         type = "warning")
       seed <- rec_seed(rec)
 
-      shiny::withProgress(message = "Bootstrap validation", {
-        shiny::incProgress(0.1, detail = "nonparametric bootstrap (edge CIs)")
-        set.seed(seed)
-        boot_np <- bootnet::bootnet(rv$net, nBoots = nb, type = "nonparametric")
+      types <- input$boot_types %||% c("np", "case")
+      do_np   <- "np"   %in% types
+      do_case <- "case" %in% types
+      shiny::validate(shiny::need(do_np || do_case,
+        "Select at least one bootstrap procedure to run."))
 
-        cd_stats <- c("strength",
-                      if (rv$has_neg) "expectedInfluence",
-                      "closeness", "betweenness")
-        shiny::incProgress(0.5, detail = "case-dropping bootstrap (CS)")
-        set.seed(seed)
-        boot_cd <- bootnet::bootnet(rv$net, nBoots = nb, type = "case",
-                                    statistics = cd_stats)
-        cs <- bootnet::corStability(boot_cd)
+      cd_stats <- c("strength",
+                    if (rv$has_neg) "expectedInfluence",
+                    "closeness", "betweenness")
+
+      shiny::withProgress(message = "Bootstrap validation", {
+        boot_np <- NULL; boot_cd <- NULL; cs <- NULL; frags <- character(0)
+
+        if (do_np) {
+          shiny::incProgress(0.1, detail = "nonparametric bootstrap (edge CIs)")
+          set.seed(seed)
+          boot_np <- bootnet::bootnet(rv$net, nBoots = nb, type = "nonparametric")
+          frags <- c(frags,
+            sprintf("set.seed(%d)", seed),
+            sprintf('boot_np <- bootnet::bootnet(net, nBoots = %d, type = "nonparametric")', nb),
+            "# Overlapping edge CIs in plot(boot_np) mean edge ORDER is not interpretable.")
+        }
+        if (do_case) {
+          shiny::incProgress(0.5, detail = "case-dropping bootstrap (CS)")
+          set.seed(seed)
+          boot_cd <- bootnet::bootnet(rv$net, nBoots = nb, type = "case",
+                                      statistics = cd_stats)
+          cs <- bootnet::corStability(boot_cd)
+          frags <- c(frags,
+            sprintf("set.seed(%d)", seed),
+            sprintf('boot_cd <- bootnet::bootnet(net, nBoots = %d, type = "case",', nb),
+            sprintf("  statistics = %s)", vars_literal(cd_stats)),
+            "cs <- bootnet::corStability(boot_cd)")
+        }
+
+        cs_txt <- if (!is.null(cs))
+          paste(sprintf("%s = %.2f", names(cs), cs), collapse = ", ")
+          else "not run (case-dropping bootstrap skipped — centrality remains locked)"
 
         rec_upsert(
           rec, "bootnet_stability", "stability",
           description = sprintf(
-            "[bootnet] Ran %d nonparametric (edge CIs) and %d case-dropping bootstraps (seed %d); CS-coefficients: %s. CS < 0.25 blocks centrality-order interpretation; >= 0.5 preferred.",
-            nb, nb, seed,
-            paste(sprintf("%s = %.2f", names(cs), cs), collapse = ", ")),
-          code = sprintf(
-            paste("set.seed(%d)",
-                  'boot_np <- bootnet::bootnet(net, nBoots = %d, type = "nonparametric")',
-                  "set.seed(%d)",
-                  'boot_cd <- bootnet::bootnet(net, nBoots = %d, type = "case",',
-                  "  statistics = %s)",
-                  "cs <- bootnet::corStability(boot_cd)",
-                  "# Overlapping edge CIs in plot(boot_np) mean edge ORDER is not interpretable.",
-                  sep = "\n"),
-            seed, nb, seed, nb, vars_literal(cd_stats))
+            "[bootnet] Bootstrap validation (%d samples, seed %d): %s%s%s. CS-coefficients: %s. CS < 0.25 blocks centrality-order interpretation; >= 0.5 preferred.",
+            nb, seed,
+            if (do_np) "nonparametric edge CIs" else "",
+            if (do_np && do_case) " + " else "",
+            if (do_case) "case-dropping (CS)" else "", cs_txt),
+          code = paste(frags, collapse = "\n")
         )
 
         rv$boot_np <- boot_np; rv$boot_cd <- boot_cd; rv$cs <- cs
@@ -427,14 +450,32 @@ bootnetTabServer <- function(id, data_bus, rec) {
       directed <- identical(rv$def, "relimp")
       lt   <- input$layout_type %||% "spring"
 
-      # Layout / grouping
-      groups_list <- NULL
-      node_cols   <- s$node_fill
-      layout_arg  <- "spring"
-      layout_code <- 'layout_arg <- "spring"'
+      # Community detection (EGA) drives node colours whenever the layout is
+      # EGA/PCA or the "colour by community" box is ticked (request #7).
+      want_comm <- lt %in% c("ega", "pca") || isTRUE(input$colour_by_community)
+      groups_list <- NULL; comm_code <- NULL
+      if (want_comm) {
+        ega <- tryCatch(
+          EGAnet::EGA(dat, model = "glasso", algorithm = "walktrap",
+                      plot.EGA = FALSE),
+          error = function(e) NULL)
+        if (!is.null(ega) && !is.null(ega$wc)) {
+          groups_list <- split(colnames(wmat), ega$wc)
+          comm_code <- paste(
+            "# EGA communities used for node COLOUR only; the reported network",
+            "# is still the estimateNetwork result above.",
+            'ega <- EGAnet::EGA(dat_bootnet, model = "glasso",',
+            '                   algorithm = "walktrap", plot.EGA = FALSE)',
+            "groups_list <- split(colnames(dat_bootnet), ega$wc)", sep = "\n")
+        } else shiny::showNotification(
+          "EGA community detection failed; nodes use a single colour.",
+          type = "warning")
+      }
+
+      # Layout
+      layout_arg <- "spring"; layout_code <- 'layout_arg <- "spring"'
       if (lt == "circle") {
-        layout_arg  <- "circle"
-        layout_code <- 'layout_arg <- "circle"'
+        layout_arg <- "circle"; layout_code <- 'layout_arg <- "circle"'
       } else if (lt == "pca") {
         pc <- tryCatch(stats::prcomp(scale(stats::na.omit(dat))),
                        error = function(e) NULL)
@@ -446,23 +487,6 @@ bootnetTabServer <- function(id, data_bus, rec) {
             sep = "\n")
         } else shiny::showNotification("PCA layout failed; using spring.",
                                        type = "warning")
-      } else if (lt == "ega") {
-        ega <- tryCatch(
-          EGAnet::EGA(dat, model = "glasso", algorithm = "walktrap",
-                      plot.EGA = FALSE),
-          error = function(e) NULL)
-        if (!is.null(ega) && !is.null(ega$wc)) {
-          groups_list <- split(colnames(wmat), ega$wc)
-          node_cols   <- house_group_colors(length(groups_list))
-          layout_code <- paste(
-            "# EGA used for communities/colouring only; the reported network",
-            "# is still the pinned estimateNetwork result above.",
-            'ega <- EGAnet::EGA(dat_bootnet, model = "glasso",',
-            '                   algorithm = "walktrap", plot.EGA = FALSE)',
-            "groups_list <- split(colnames(dat_bootnet), ega$wc)",
-            'layout_arg <- "spring"', sep = "\n")
-        } else shiny::showNotification("EGA failed; using spring layout.",
-                                       type = "warning")
       }
 
       # Node size: fixed slider or scaled by column means (user option)
@@ -470,6 +494,7 @@ bootnetTabServer <- function(id, data_bus, rec) {
         means <- vapply(dat, function(x)
           if (is.numeric(x)) mean(x, na.rm = TRUE) else NA_real_, numeric(1))
         vsize_arg  <- scale_vsize_by_mean(means, s$vsize_min, s$vsize_max)
+        vsize_expr <- "vsize_arg"
         vsize_code <- paste(
           SCALE_VSIZE_FRAGMENT,
           "node_means <- vapply(dat_bootnet, function(x)",
@@ -477,16 +502,16 @@ bootnetTabServer <- function(id, data_bus, rec) {
           sprintf("vsize_arg <- scale_vsize(node_means, %s, %s)",
                   s$vsize_min, s$vsize_max), sep = "\n")
       } else {
-        vsize_arg  <- s$vsize
-        vsize_code <- sprintf("vsize_arg <- %s", s$vsize)
+        vsize_arg <- s$vsize; vsize_expr <- NULL; vsize_code <- NULL
       }
 
-      fn <- function() qgraph::qgraph(
-        wmat, directed = directed, layout = layout_arg,
-        groups = groups_list,
-        posCol = s$pos_edge, negCol = s$neg_edge,
-        color = node_cols, border.color = s$node_border,
-        vsize = vsize_arg, esize = s$esize, label.cex = s$label_cex)
+      node_cols  <- if (!is.null(groups_list))
+                      house_group_colors(length(groups_list)) else s$node_fill
+      args <- house_qgraph_args(wmat, s, directed = directed,
+                                node_col = node_cols, groups = groups_list,
+                                vsize = vsize_arg)
+      fn <- function() do.call(qgraph::qgraph,
+                               c(list(wmat, layout = layout_arg), args))
       rv$plot_fn <- fn
 
       rec_upsert(
@@ -494,25 +519,17 @@ bootnetTabServer <- function(id, data_bus, rec) {
         description = sprintf(
           "[bootnet] Plotted the %s network (qgraph, %s layout%s%s).",
           rv$def, lt,
-          if (lt == "ega") ", coloured by EGA walktrap communities" else "",
+          if (!is.null(groups_list)) ", nodes coloured by EGA community" else "",
           if (isTRUE(s$scale_nodes)) ", node size scaled by column means" else ""),
-        code = paste(
-          layout_code, vsize_code,
-          sprintf(
-            paste("qgraph::qgraph(qgraph::getWmat(net), directed = %s,",
-                  "  layout = layout_arg,%s",
-                  '  posCol = "%s", negCol = "%s",',
-                  '  color = %s, border.color = "%s",',
-                  "  vsize = vsize_arg, esize = %s, label.cex = %s)",
-                  sep = "\n"),
-            directed,
-            if (lt == "ega") "\n  groups = groups_list," else "",
-            s$pos_edge, s$neg_edge,
-            # bake literal colours — the script must run without app helpers
-            if (lt == "ega") vars_literal(node_cols)
-            else sprintf('"%s"', s$node_fill),
-            s$node_border, s$esize, s$label_cex),
-          sep = "\n")
+        code = paste(c(
+          comm_code, layout_code, vsize_code,
+          "qgraph::qgraph(qgraph::getWmat(net), layout = layout_arg,",
+          house_qgraph_args_code(s, directed, wobj = "qgraph::getWmat(net)",
+            node_col_expr = if (!is.null(groups_list))
+              vars_literal(node_cols) else NULL,
+            groups_expr = if (!is.null(groups_list)) "groups_list" else NULL,
+            vsize_expr = vsize_expr),
+          ")"), collapse = "\n")
       )
       fn()
     })

@@ -17,7 +17,10 @@
 # signed = FALSE for tabs whose edges have no sign (bnlearn arcs): the
 # positive-edge picker is relabelled "Arc colour" and the negative-edge
 # picker is hidden rather than faking a sign concept that doesn't exist.
-appearanceUI <- function(id, signed = TRUE) {
+# default_esize / default_edge_labels let a tab set its own starting values
+# (DAG wants thinner edges; the RI network wants edge labels on).
+appearanceUI <- function(id, signed = TRUE, default_esize = 8,
+                         default_edge_labels = FALSE) {
   ns  <- shiny::NS(id)
   pal <- house_pastel()
   shiny::tagList(
@@ -47,9 +50,23 @@ appearanceUI <- function(id, signed = TRUE) {
       shiny::helpText("Smallest node = lowest column mean, largest = highest.")
     ),
     shiny::sliderInput(ns("esize"), "Edge scaling", min = 1, max = 20,
-                       value = 8, step = 0.5),
-    shiny::sliderInput(ns("label_cex"), "Label size", min = 0.3, max = 3,
+                       value = default_esize, step = 0.5),
+    shiny::sliderInput(ns("label_cex"), "Node label size", min = 0.3, max = 3,
                        value = 1, step = 0.1),
+    shiny::helpText("Node labels are drawn at one fixed size (not scaled per",
+                    "node), so every label is equally legible."),
+    shiny::h5("Edges shown"),
+    # minimum absolute weight for an edge to be DRAWN (qgraph `minimum`)
+    shiny::numericInput(ns("min_edge"),
+                        "Minimum |value| to show an edge", value = 0,
+                        min = 0, step = 0.01),
+    shiny::checkboxInput(ns("show_edge_labels"), "Show edge values as labels",
+                         value = default_edge_labels),
+    shiny::conditionalPanel(
+      sprintf("input['%s']", ns("show_edge_labels")),
+      shiny::sliderInput(ns("edge_label_cex"), "Edge label size",
+                         min = 0.3, max = 2, value = 0.8, step = 0.1)
+    ),
     shiny::h5("Export"),
     shiny::fluidRow(
       shiny::column(4, shiny::numericInput(ns("export_w"), "Width (in)", 10, min = 2)),
@@ -71,19 +88,22 @@ appearanceServer <- function(id, plot_closure) {
     settings <- shiny::reactive({
       vr <- input$vsize_range %||% c(4, 14)
       list(
-        node_fill   = input$node_fill   %||% pal$node_fill,
-        node_border = input$node_border %||% pal$node_border,
-        pos_edge    = input$pos_edge    %||% pal$pos_edge,
-        neg_edge    = input$neg_edge    %||% pal$neg_edge,
-        scale_nodes = isTRUE(input$scale_nodes),
-        vsize       = input$vsize       %||% 8,
-        vsize_min   = vr[1],
-        vsize_max   = vr[2],
-        esize       = input$esize       %||% 8,
-        label_cex   = input$label_cex   %||% 1,
-        export_w    = input$export_w    %||% 10,
-        export_h    = input$export_h    %||% 8,
-        export_res  = input$export_res  %||% 300
+        node_fill        = input$node_fill   %||% pal$node_fill,
+        node_border      = input$node_border %||% pal$node_border,
+        pos_edge         = input$pos_edge    %||% pal$pos_edge,
+        neg_edge         = input$neg_edge    %||% pal$neg_edge,
+        scale_nodes      = isTRUE(input$scale_nodes),
+        vsize            = input$vsize       %||% 8,
+        vsize_min        = vr[1],
+        vsize_max        = vr[2],
+        esize            = input$esize       %||% 8,
+        label_cex        = input$label_cex   %||% 1,
+        min_edge         = input$min_edge    %||% 0,
+        show_edge_labels = isTRUE(input$show_edge_labels),
+        edge_label_cex   = input$edge_label_cex %||% 0.8,
+        export_w         = input$export_w    %||% 10,
+        export_h         = input$export_h    %||% 8,
+        export_res       = input$export_res  %||% 300
       )
     })
 
@@ -116,3 +136,53 @@ appearanceServer <- function(id, plot_closure) {
 }
 
 `%||%` <- function(a, b) if (is.null(a)) b else a
+
+# ---------------------------------------------------------------------------
+# Shared qgraph arguments built from an appearance `settings` list, so every
+# network in the app obeys the same rules:
+#   * label.scale = FALSE       -> node labels are ALL the same size (rule #2)
+#   * labels = colnames(W)      -> real names, never numbered-with-legend (#4)
+#   * edge.labels + edge.label.cex from the toggle/slider           (#3)
+#   * minimum = min |value| to draw an edge                          (#9)
+# `directed` flips arrows on; `node_col`/`groups` allow community colouring.
+house_qgraph_args <- function(W, s, directed = FALSE,
+                              node_col = NULL, groups = NULL,
+                              vsize = NULL) {
+  labs <- colnames(W); if (is.null(labs)) labs <- rownames(W)
+  list(
+    directed        = directed,
+    labels          = labs,             # explicit names (no numbered legend)
+    label.scale     = FALSE,            # all node labels equal size
+    label.cex       = s$label_cex,
+    vsize           = vsize %||% s$vsize,
+    esize           = s$esize,
+    minimum         = s$min_edge,       # hide edges below this |value|
+    edge.labels     = isTRUE(s$show_edge_labels),
+    edge.label.cex  = s$edge_label_cex,
+    posCol          = s$pos_edge,
+    negCol          = s$neg_edge,
+    color           = node_col %||% s$node_fill,
+    border.color    = s$node_border,
+    groups          = groups
+  )
+}
+
+# The exported-script twin: renders the same arguments as R source text.
+# `wobj` is the name of the weight-matrix variable in the script (e.g. "W").
+house_qgraph_args_code <- function(s, directed, wobj = "W",
+                                   node_col_expr = NULL, groups_expr = NULL,
+                                   vsize_expr = NULL) {
+  lines <- c(
+    sprintf("  directed = %s,", directed),
+    sprintf("  labels = colnames(%s), label.scale = FALSE, label.cex = %s,",
+            wobj, s$label_cex),
+    sprintf("  vsize = %s, esize = %s, minimum = %s,",
+            vsize_expr %||% as.character(s$vsize), s$esize, s$min_edge),
+    sprintf("  edge.labels = %s, edge.label.cex = %s,",
+            isTRUE(s$show_edge_labels), s$edge_label_cex),
+    sprintf('  posCol = "%s", negCol = "%s",', s$pos_edge, s$neg_edge),
+    sprintf("  color = %s, border.color = \"%s\"",
+            node_col_expr %||% sprintf('"%s"', s$node_fill), s$node_border),
+    if (!is.null(groups_expr)) sprintf("  , groups = %s", groups_expr))
+  paste(lines, collapse = "\n")
+}
