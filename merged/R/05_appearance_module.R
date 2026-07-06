@@ -67,6 +67,8 @@ appearanceUI <- function(id, signed = TRUE, default_esize = 8,
       shiny::sliderInput(ns("edge_label_cex"), "Edge label size",
                          min = 0.3, max = 2, value = 0.8, step = 0.1)
     ),
+    shiny::sliderInput(ns("plot_height"), "Plot window height (px)",
+                       min = 300, max = 1400, value = 520, step = 20),
     shiny::h5("Export"),
     shiny::fluidRow(
       shiny::column(4, shiny::numericInput(ns("export_w"), "Width (in)", 10, min = 2)),
@@ -101,6 +103,7 @@ appearanceServer <- function(id, plot_closure) {
         min_edge         = input$min_edge    %||% 0,
         show_edge_labels = isTRUE(input$show_edge_labels),
         edge_label_cex   = input$edge_label_cex %||% 0.8,
+        plot_height      = input$plot_height %||% 520,
         export_w         = input$export_w    %||% 10,
         export_h         = input$export_h    %||% 8,
         export_res       = input$export_res  %||% 300

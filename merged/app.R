@@ -23,9 +23,9 @@ ui <- shiny::navbarPage(
   shiny::tabPanel("Data",       dataModuleUI("data"),
                   shiny::numericInput("seed", "Master seed (all bootstraps)",
                                       value = 12345, min = 1)),
-  shiny::tabPanel("GGM (bootnet)",        bootnetTabUI("bootnet")),
-  shiny::tabPanel("DAG (bnlearn)",        daggerTabUI("dag")),
-  shiny::tabPanel("Latent (psychonetrics)", psynetTabUI("psynet")),
+  shiny::tabPanel("PMRFs (bootnet)",       bootnetTabUI("bootnet")),
+  shiny::tabPanel("DAGs (bnlearn)",        daggerTabUI("dag")),
+  shiny::tabPanel("LNMs (psychonetrics)",  psynetTabUI("psynet")),
   shiny::tabPanel("Compare networks (NCT)", nctUI("nct")),
   shiny::tabPanel(
     "Pipeline & Export",

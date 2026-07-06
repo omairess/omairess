@@ -191,8 +191,11 @@ bootnetTabUI <- function(id) {
     shiny::uiOutput(ns("stability_banner")),
     shiny::fluidRow(
       shiny::column(8,
-        shiny::plotOutput(ns("network_plot")),
+        shiny::uiOutput(ns("network_plot_ui")),      # height follows slider
+        shiny::h5("Edge-weight bootstrap (CIs)"),
         shiny::plotOutput(ns("edge_ci_plot")),
+        shiny::h5("Case-dropping stability plot"),
+        shiny::plotOutput(ns("case_stab_plot")),
         shiny::uiOutput(ns("centrality_ui"))
       ),
       shiny::column(4,
@@ -434,13 +437,28 @@ bootnetTabServer <- function(id, data_bus, rec) {
     output$edge_ci_plot <- shiny::renderPlot({
       shiny::req(rv$net)
       shiny::validate(shiny::need(!is.null(rv$boot_np),
-        "Edge-weight CIs locked: run the bootstrap validation to see them."))
+        "Edge-weight CIs locked: run the bootstrap validation (nonparametric) to see them."))
       # bootnet's CI plot; overlapping CIs = edge order not interpretable.
       plot(rv$boot_np, labels = FALSE, order = "sample")
     })
 
+    # Case-dropping stability curve (avg correlation with original sample as
+    # cases are dropped) — the visual counterpart of the CS-coefficient.
+    output$case_stab_plot <- shiny::renderPlot({
+      shiny::req(rv$net)
+      shiny::validate(shiny::need(!is.null(rv$boot_cd),
+        "Stability plot locked: run the bootstrap validation (case-dropping) to see it."))
+      print(plot(rv$boot_cd))   # bootnet returns a ggplot; print renders it
+    })
+
     # ---- Plot: layouts (spring/circle/EGA/PCA) + node-size-by-mean ----------
     look <- appearanceServer("look", plot_closure = shiny::reactive(rv$plot_fn))
+
+    # Resizable plot window: height follows the appearance slider.
+    output$network_plot_ui <- shiny::renderUI({
+      shiny::plotOutput(session$ns("network_plot"),
+                        height = sprintf("%dpx", look()$plot_height))
+    })
 
     output$network_plot <- shiny::renderPlot({
       shiny::req(rv$net)
@@ -452,6 +470,8 @@ bootnetTabServer <- function(id, data_bus, rec) {
 
       # Community detection (EGA) drives node colours whenever the layout is
       # EGA/PCA or the "colour by community" box is ticked (request #7).
+      # NB: qgraph's `groups` must be a list of node INDICES (a list of names
+      # colours the legend but leaves the nodes white — the bug fixed here).
       want_comm <- lt %in% c("ega", "pca") || isTRUE(input$colour_by_community)
       groups_list <- NULL; comm_code <- NULL
       if (want_comm) {
@@ -460,13 +480,16 @@ bootnetTabServer <- function(id, data_bus, rec) {
                       plot.EGA = FALSE),
           error = function(e) NULL)
         if (!is.null(ega) && !is.null(ega$wc)) {
-          groups_list <- split(colnames(wmat), ega$wc)
+          groups_list <- split(seq_len(ncol(wmat)), ega$wc)
+          names(groups_list) <- paste("Community", names(groups_list))
           comm_code <- paste(
             "# EGA communities used for node COLOUR only; the reported network",
             "# is still the estimateNetwork result above.",
             'ega <- EGAnet::EGA(dat_bootnet, model = "glasso",',
             '                   algorithm = "walktrap", plot.EGA = FALSE)',
-            "groups_list <- split(colnames(dat_bootnet), ega$wc)", sep = "\n")
+            "groups_list <- split(seq_along(colnames(dat_bootnet)), ega$wc)",
+            'names(groups_list) <- paste("Community", names(groups_list))',
+            sep = "\n")
         } else shiny::showNotification(
           "EGA community detection failed; nodes use a single colour.",
           type = "warning")

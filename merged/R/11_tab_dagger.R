@@ -40,6 +40,61 @@ dag_equivalence_info <- function(avg_net, boot_str) {
        n_arcs = nrow(arcs), n_unidentified = nrow(und))
 }
 
+# --- Cascade layout (ported from Dagger_zero.R:1073-1114) -------------------
+# Layered top-down placement: y = Katz centrality band (sources high, sinks
+# low), x spread evenly within each band. Deterministic and overlap-free.
+dagger_cascade_coords <- function(amat) {
+  n <- nrow(amat)
+  g <- igraph::graph_from_adjacency_matrix((amat > 0) * 1, mode = "directed",
+                                           diag = FALSE)
+  katz <- tryCatch(igraph::alpha_centrality(g, alpha = 0.1),
+                   error = function(e) igraph::degree(g, mode = "in"))
+  yn <- if (length(unique(katz)) > 1)
+          1 - (katz - min(katz)) / (max(katz) - min(katz))
+        else rep(0.5, n)
+  y_lev  <- round(yn * 8) / 8            # snap to 8 bands
+  coords <- matrix(0, n, 2, dimnames = list(rownames(amat), NULL))
+  for (lv in unique(y_lev)) {
+    idx <- which(abs(y_lev - lv) < 0.07)
+    coords[idx, 1] <- if (length(idx) > 1)
+                        seq(-1, 1, length.out = length(idx)) else 0
+    coords[idx, 2] <- lv                 # same band = exactly same y
+  }
+  coords
+}
+
+# --- Cascade edge curving (ported from Dagger_zero.R:924-968) ----------------
+# Bends any edge that would pass through an intermediate node, so the layered
+# view stays readable. Returns a per-edge curvature matrix for qgraph.
+compute_cascade_curves <- function(adj, coords) {
+  n <- nrow(adj)
+  curve_mat <- matrix(0, n, n)
+  coord_range <- max(diff(range(coords[, 1])), diff(range(coords[, 2])), 0.5)
+  node_radius <- coord_range * 0.10
+  for (i in seq_len(n)) for (j in seq_len(n)) {
+    if (adj[i, j] <= 0) next
+    x1 <- coords[i, 1]; y1 <- coords[i, 2]
+    x2 <- coords[j, 1]; y2 <- coords[j, 2]
+    dx <- x2 - x1;      dy <- y2 - y1
+    len_sq <- dx^2 + dy^2
+    if (len_sq < 1e-10) next
+    y_lo <- min(y1, y2); y_hi <- max(y1, y2)
+    for (k in seq_len(n)) {
+      if (k == i || k == j) next
+      xk <- coords[k, 1]; yk <- coords[k, 2]
+      if (yk < y_lo - node_radius || yk > y_hi + node_radius) next
+      t <- max(0, min(1, ((xk - x1) * dx + (yk - y1) * dy) / len_sq))
+      dist <- sqrt((xk - x1 - t * dx)^2 + (yk - y1 - t * dy)^2)
+      if (dist < node_radius) {
+        cross <- dx * (yk - y1) - dy * (xk - x1)
+        curve_mat[i, j] <- if (cross > 0) 0.4 else -0.4
+        break
+      }
+    }
+  }
+  curve_mat
+}
+
 # Build a from/to constraint data.frame from a cross product of node sets,
 # dropping self-arcs. Returns NULL if empty (bnlearn treats NULL as "none").
 constraint_df <- function(from_vars, to_vars) {
@@ -77,7 +132,13 @@ daggerTabUI <- function(id) {
     shiny::numericInput(ns("boot_r"), "Bootstrap replicates (boot.strength)",
                         value = 500, min = 500, step = 100),
     shiny::sliderInput(ns("threshold"), "Arc-strength inclusion threshold",
-                       min = 0.05, max = 0.95, value = 0.50, step = 0.05),
+                       min = 0, max = 0.95, value = 0.50, step = 0.05),
+    shiny::sliderInput(ns("dir_threshold"), "Direction inclusion threshold",
+                       min = 0, max = 0.95, value = 0.50, step = 0.05),
+    shiny::helpText("Displayed arcs need bootstrap strength >= the first",
+                    "threshold AND direction confidence >= the second.",
+                    "Set BOTH to 0 to see every arc that ever appeared",
+                    "in the bootstrap (as in DAGger)."),
 
     # -- Constraint builder (blacklist / whitelist) --------------------------
     shiny::hr(),
@@ -94,10 +155,18 @@ daggerTabUI <- function(id) {
     ),
     shiny::actionButton(ns("add_bl"), "Add to blacklist", class = "btn-danger btn-sm"),
     shiny::actionButton(ns("add_wl"), "Add to whitelist", class = "btn-success btn-sm"),
-    shiny::actionButton(ns("clear_con"), "Clear all", class = "btn-default btn-sm"),
+    shiny::helpText("Add as many FROM/TO batches as you like — each click",
+                    "APPENDS to the list. Click rows in a table to select",
+                    "them, then remove just those."),
     shiny::fluidRow(
-      shiny::column(6, shiny::strong("Blacklist"), DT::dataTableOutput(ns("bl_table"))),
-      shiny::column(6, shiny::strong("Whitelist"), DT::dataTableOutput(ns("wl_table")))
+      shiny::column(6, shiny::strong("Blacklist"),
+        DT::dataTableOutput(ns("bl_table")),
+        shiny::actionButton(ns("rm_bl"), "Remove selected", class = "btn-default btn-xs"),
+        shiny::actionButton(ns("clear_bl"), "Clear blacklist", class = "btn-default btn-xs")),
+      shiny::column(6, shiny::strong("Whitelist"),
+        DT::dataTableOutput(ns("wl_table")),
+        shiny::actionButton(ns("rm_wl"), "Remove selected", class = "btn-default btn-xs"),
+        shiny::actionButton(ns("clear_wl"), "Clear whitelist", class = "btn-default btn-xs"))
     ),
 
     shiny::hr(),
@@ -109,12 +178,13 @@ daggerTabUI <- function(id) {
     shiny::uiOutput(ns("cpdag_caveat")),
     shiny::fluidRow(
       shiny::column(8,
-        shiny::plotOutput(ns("dag_plot")),
+        shiny::uiOutput(ns("dag_plot_ui")),        # height follows slider
         DT::dataTableOutput(ns("arc_table"))
       ),
       shiny::column(4,
         shiny::selectInput(ns("layout_type"), "Layout",
                            c("Spring" = "spring", "Circle" = "circle",
+                             "Cascade (layered, curved edges)" = "cascade",
                              "Hierarchical (Sugiyama)" = "tree")),
         shiny::selectInput(ns("edge_metric"), "Arc width / label reflects",
                            c("Strength  P(arc present)"          = "strength",
@@ -164,14 +234,31 @@ daggerTabServer <- function(id, data_bus, rec) {
       if (!is.null(rv$bl))
         rv$bl <- rv$bl[!arc_key(rv$bl) %in% arc_key(rv$wl), , drop = FALSE]
     })
-    shiny::observeEvent(input$clear_con, { rv$bl <- NULL; rv$wl <- NULL })
+    shiny::observeEvent(input$clear_bl, { rv$bl <- NULL })
+    shiny::observeEvent(input$clear_wl, { rv$wl <- NULL })
+    shiny::observeEvent(input$rm_bl, {
+      sel <- input$bl_table_rows_selected
+      if (length(sel) && !is.null(rv$bl)) {
+        rv$bl <- rv$bl[-sel, , drop = FALSE]
+        if (!nrow(rv$bl)) rv$bl <- NULL
+      }
+    })
+    shiny::observeEvent(input$rm_wl, {
+      sel <- input$wl_table_rows_selected
+      if (length(sel) && !is.null(rv$wl)) {
+        rv$wl <- rv$wl[-sel, , drop = FALSE]
+        if (!nrow(rv$wl)) rv$wl <- NULL
+      }
+    })
 
     output$bl_table <- DT::renderDataTable(
       DT::datatable(rv$bl %||% data.frame(from = character(), to = character()),
-                    options = list(dom = "tp", pageLength = 5), rownames = FALSE))
+                    options = list(dom = "tp", pageLength = 5), rownames = FALSE,
+                    selection = "multiple"))
     output$wl_table <- DT::renderDataTable(
       DT::datatable(rv$wl %||% data.frame(from = character(), to = character()),
-                    options = list(dom = "tp", pageLength = 5), rownames = FALSE))
+                    options = list(dom = "tp", pageLength = 5), rownames = FALSE,
+                    selection = "multiple"))
 
     # -- estimation + validation --------------------------------------------
     shiny::observeEvent(input$run, {
@@ -281,18 +368,41 @@ daggerTabServer <- function(id, data_bus, rec) {
 
     look <- appearanceServer("look", plot_closure = shiny::reactive(rv$plot_fn))
 
+    # Resizable plot window: height follows the appearance slider.
+    output$dag_plot_ui <- shiny::renderUI({
+      shiny::plotOutput(session$ns("dag_plot"),
+                        height = sprintf("%dpx", look()$plot_height))
+    })
+
+    # DISPLAY arc set (request #4): every bootstrap arc passing BOTH the
+    # strength and the direction thresholds, applied live at plot time.
+    # Both at 0 = every arc that ever appeared (DAGger behaviour). The
+    # REPORTED model (recorder / CPDAG audit) stays averaged.network at the
+    # strength threshold chosen when "Learn & validate" was clicked.
+    display_arcs <- shiny::reactive({
+      shiny::req(rv$boot_str)
+      bs <- as.data.frame(rv$boot_str)
+      bs <- bs[bs$strength > 0 &
+               bs$strength  >= input$threshold &
+               bs$direction >= input$dir_threshold, , drop = FALSE]
+      bs$combined <- bs$strength * bs$direction
+      bs[order(-bs$strength), ]
+    })
+
     output$dag_plot <- shiny::renderPlot({
       shiny::req(rv$avg)
       s      <- look()
-      amat   <- bnlearn::amat(rv$avg)
+      da     <- display_arcs()
+      vars   <- bnlearn::nodes(rv$avg)
       metric <- input$edge_metric %||% "strength"
-      dc     <- rv$eq$dir_conf
 
-      # metric value per retained arc (strength / direction / combined)
-      metric_mat <- matrix(0, nrow(amat), ncol(amat), dimnames = dimnames(amat))
-      if (!is.null(dc) && nrow(dc) > 0) {
-        for (i in seq_len(nrow(dc)))
-          metric_mat[dc$from[i], dc$to[i]] <- dc[[metric]][i]
+      # adjacency + metric matrices from the display arc set
+      amat <- matrix(0, length(vars), length(vars),
+                     dimnames = list(vars, vars))
+      metric_mat <- amat
+      if (nrow(da) > 0) for (i in seq_len(nrow(da))) {
+        amat[da$from[i], da$to[i]]       <- 1
+        metric_mat[da$from[i], da$to[i]] <- da[[metric]][i]
       }
       # width scales with the chosen metric; floor so thin arcs stay visible
       width_mat <- pmax(0.5, metric_mat * s$esize)
@@ -303,8 +413,10 @@ daggerTabServer <- function(id, data_bus, rec) {
       if (!is.null(und) && nrow(und) > 0) {
         for (i in seq_len(nrow(und))) {
           a <- und[i, "from"]; b <- und[i, "to"]
-          if (amat[a, b] == 1) lty_mat[a, b] <- 2
-          if (amat[b, a] == 1) lty_mat[b, a] <- 2
+          if (a %in% vars && b %in% vars) {
+            if (amat[a, b] == 1) lty_mat[a, b] <- 2
+            if (amat[b, a] == 1) lty_mat[b, a] <- 2
+          }
         }
       }
 
@@ -313,17 +425,26 @@ daggerTabServer <- function(id, data_bus, rec) {
 
       # node size: fixed slider or scaled by column means (shared option)
       if (isTRUE(s$scale_nodes)) {
-        means <- vapply(data_bus$wide()[, colnames(amat), drop = FALSE],
+        means <- vapply(data_bus$wide()[, vars, drop = FALSE],
                         function(x) if (is.numeric(x)) mean(x, na.rm = TRUE)
                                     else NA_real_, numeric(1))
         vsize_arg <- scale_vsize_by_mean(means, s$vsize_min, s$vsize_max)
       } else vsize_arg <- s$vsize
 
-      # layout
-      layout_arg <- switch(input$layout_type %||% "spring",
-        circle = "circle",
-        tree   = tryCatch({
-          g  <- igraph::graph_from_adjacency_matrix(amat, mode = "directed")
+      # layout — cascade gets layered coords + per-edge curves so edges never
+      # run through intermediate nodes (request #8, DAGger's clean cascade)
+      lt <- input$layout_type %||% "spring"
+      curve_arg <- 0.2; curve_all <- FALSE
+      layout_arg <- switch(lt,
+        circle  = "circle",
+        cascade = {
+          coords <- dagger_cascade_coords(amat)
+          curve_mat <- compute_cascade_curves(amat, coords)
+          curve_arg <- curve_mat; curve_all <- TRUE
+          coords
+        },
+        tree    = tryCatch({
+          g <- igraph::graph_from_adjacency_matrix(amat, mode = "directed")
           igraph::layout_with_sugiyama(g)$layout
         }, error = function(e) "spring"),
         "spring")
@@ -334,26 +455,29 @@ daggerTabServer <- function(id, data_bus, rec) {
         edge.color = s$pos_edge,      # arcs are unsigned: pos picker only
         color = s$node_fill, border.color = s$node_border,
         vsize = vsize_arg, esize = s$esize, label.cex = s$label_cex,
-        minimum = s$min_edge,         # hide arcs below this metric value
+        minimum = s$min_edge,
         edge.width = width_mat, lty = lty_mat, edge.labels = elabels,
-        edge.label.cex = s$edge_label_cex)
+        edge.label.cex = s$edge_label_cex,
+        curve = curve_arg, curveAll = curve_all)
       rv$plot_fn <- fn
 
       rec_upsert(
         rec, "dag_plot", "plot",
         description = sprintf(
-          "[DAG] Plotted the averaged network (qgraph, %s layout); arc width/labels show %s; dashed arcs have unidentified direction per the CPDAG.",
-          input$layout_type %||% "spring", metric),
+          "[DAG] Plotted arcs with bootstrap strength >= %.2f AND direction >= %.2f (%d arcs, %s layout); width/labels show %s; dashed arcs have unidentified direction per the CPDAG. The reported model remains the averaged network from the analysis step.",
+          input$threshold, input$dir_threshold, nrow(da), lt, metric),
         code = paste(
-          "amat <- bnlearn::amat(avg_net)",
-          "# arc-metric matrix from boot.strength (see arc table): strength /",
-          "# direction / combined; dashed (lty=2) arcs are undirected in cpdag(avg_net).",
-          sprintf('# metric shown: %s', metric),
-          "arc_info <- merge(as.data.frame(bnlearn::arcs(avg_net)), boot_str,",
-          '                  by = c("from","to"), all.x = TRUE)',
-          "arc_info$combined <- arc_info$strength * arc_info$direction",
+          "# DISPLAY arc set: strength & direction thresholds applied to boot_str",
+          "bs <- as.data.frame(boot_str)",
+          sprintf("bs <- bs[bs$strength > 0 & bs$strength >= %.2f & bs$direction >= %.2f, ]",
+                  input$threshold, input$dir_threshold),
+          "bs$combined <- bs$strength * bs$direction",
+          "vars <- unique(c(bs$from, bs$to, colnames(dat_dag)))",
+          "amat <- matrix(0, length(vars), length(vars), dimnames = list(vars, vars))",
+          "for (i in seq_len(nrow(bs))) amat[bs$from[i], bs$to[i]] <- 1",
+          sprintf('# metric shown on arcs: %s', metric),
           sprintf('qgraph::qgraph(amat, directed = TRUE, layout = "%s",',
-                  if (identical(input$layout_type, "tree")) "spring" else (input$layout_type %||% "spring")),
+                  if (lt %in% c("tree", "cascade")) "spring" else lt),
           "  labels = colnames(amat), label.scale = FALSE,",
           sprintf('  edge.color = "%s", color = "%s", border.color = "%s",',
                   s$pos_edge, s$node_fill, s$node_border),
@@ -367,9 +491,9 @@ daggerTabServer <- function(id, data_bus, rec) {
     })
 
     output$arc_table <- DT::renderDataTable({
-      shiny::req(rv$eq$dir_conf)
-      DT::datatable(rv$eq$dir_conf,
-                    caption = "Arc strength, direction confidence, and their product (bootstrap). strength = P(arc present); direction = P(this orientation | present); combined = strength x direction. direction ~ 0.5 means the data cannot decide the arrow.",
+      da <- display_arcs()
+      DT::datatable(da[, c("from", "to", "strength", "direction", "combined")],
+                    caption = "Arcs passing the current strength AND direction thresholds. strength = P(arc present); direction = P(this orientation | present); combined = their product. direction ~ 0.5 means the data cannot decide the arrow.",
                     options = list(pageLength = 15)) |>
         DT::formatRound(c("strength", "direction", "combined"), 3)
     })

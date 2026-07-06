@@ -99,6 +99,98 @@ lambda_literal <- function(lam) {
           vars_literal(rownames(lam)), vars_literal(colnames(lam)))
 }
 
+# --- Combined factor-structure plot spec (from PsychoNetrix.R:2439-2588) ----
+# Builds the (latents + indicators) super-network: latent-latent block =
+# omega_zeta (undirected) or the Johnson/LMG RI network (directed), plus
+# directed loading arrows latent -> indicator. Latents are circles on an
+# inner ring; indicators are squares fanned around their dominant latent.
+# Labels are always the FULL variable/factor names.
+build_factor_spec <- function(mod, lambda_hint, type = c("latent", "ri"),
+                              ri_norm = FALSE) {
+  type    <- match.arg(type)
+  lambda  <- tryCatch(collapse_mg(psychonetrics::getmatrix(mod, "lambda"), 1L),
+                      error = function(e) NULL)
+  if (is.null(lambda)) return(NULL)
+  # psychonetrics matrices often come back with empty dimnames — restore the
+  # names from the lambda the user built in the editor.
+  if ((is.null(rownames(lambda)) || all(!nzchar(rownames(lambda)))) &&
+      !is.null(lambda_hint) && nrow(lambda_hint) == nrow(lambda))
+    rownames(lambda) <- rownames(lambda_hint)
+  if ((is.null(colnames(lambda)) || all(!nzchar(colnames(lambda)))) &&
+      !is.null(lambda_hint) && ncol(lambda_hint) == ncol(lambda))
+    colnames(lambda) <- colnames(lambda_hint)
+  lat_names <- colnames(lambda) %||% paste0("L", seq_len(ncol(lambda)))
+  obs_labs  <- rownames(lambda) %||% paste0("V", seq_len(nrow(lambda)))
+
+  n_lat <- ncol(lambda); n_obs <- nrow(lambda); n_total <- n_lat + n_obs
+
+  lat_block <- if (type == "ri") {
+    sigma_z <- tryCatch(collapse_mg(psychonetrics::getmatrix(mod, "sigma_zeta"), 1L),
+                        error = function(e) NULL)
+    if (is.null(sigma_z)) return(NULL)
+    RI <- johnson_rw_from_cor(stats::cov2cor(sigma_z))
+    if (ri_norm) { cs <- colSums(RI); cs[cs < 1e-10] <- 1; RI <- sweep(RI, 2, cs, "/") }
+    RI
+  } else {
+    tryCatch(collapse_mg(psychonetrics::getmatrix(mod, "omega_zeta"), 1L),
+             error = function(e) NULL)
+  }
+  if (is.null(lat_block)) return(NULL)
+
+  W <- matrix(0, n_total, n_total)
+  W[1:n_lat, 1:n_lat]             <- lat_block
+  W[1:n_lat, (n_lat + 1):n_total] <- t(lambda)
+
+  # loadings always directed; latent block directed only for the RI network
+  dir_mat <- matrix(FALSE, n_total, n_total)
+  dir_mat[1:n_lat, (n_lat + 1):n_total] <- TRUE
+  if (type == "ri") dir_mat[1:n_lat, 1:n_lat] <- TRUE
+
+  # boost near-zero loadings for DISPLAY so cross-loadings stay visible;
+  # edge labels still show the true fitted values
+  lambda_w <- lambda
+  max_load <- if (any(lambda_w != 0)) max(abs(lambda_w[lambda_w != 0])) else 0
+  if (max_load > 1e-6) {
+    min_vis <- max_load * 0.20
+    nz <- lambda_w != 0 & abs(lambda_w) < min_vis
+    lambda_w[nz] <- sign(lambda_w[nz]) * min_vis
+  }
+  W_disp <- W
+  W_disp[1:n_lat, (n_lat + 1):n_total] <- t(lambda_w)
+
+  edge_lab <- matrix("", n_total, n_total)
+  edge_lab[1:n_lat, 1:n_lat] <-
+    ifelse(lat_block != 0, as.character(round(lat_block, 2)), "")
+  edge_lab[1:n_lat, (n_lat + 1):n_total] <-
+    ifelse(t(lambda) != 0, as.character(round(t(lambda), 2)), "")
+
+  # latents on an inner ring; indicators fanned around their dominant latent
+  dominant   <- apply(abs(lambda), 1, which.max)
+  angles_lat <- seq(0, 2 * pi, length.out = n_lat + 1)[seq_len(n_lat)]
+  lat_pos    <- cbind(cos(angles_lat), sin(angles_lat)) * 0.38
+  obs_pos    <- matrix(0, n_obs, 2)
+  for (k in seq_len(n_lat)) {
+    idx <- which(dominant == k); n_k <- length(idx)
+    if (n_k == 0) next
+    half <- (pi / n_lat) * 0.85
+    angs <- if (n_k == 1) angles_lat[k] else
+              seq(angles_lat[k] - half, angles_lat[k] + half, length.out = n_k)
+    obs_pos[idx, 1] <- cos(angs); obs_pos[idx, 2] <- sin(angs)
+  }
+
+  pal <- house_group_colors(n_lat)
+  list(W = W_disp, dir_mat = dir_mat, edge_lab = edge_lab,
+       labels = c(lat_names, obs_labs),
+       shapes = c(rep("circle", n_lat), rep("square", n_obs)),
+       node_cols = c(pal, pal[dominant]),
+       layout = rbind(lat_pos, obs_pos),
+       n_lat = n_lat,
+       what = if (type == "ri")
+                sprintf("factor structure + RI latent network (%s)",
+                        if (ri_norm) "normalized" else "raw")
+              else "factor structure + latent network (omega_zeta)")
+}
+
 # --- Fit-index interpretation (ported from PsychoNetrix.R:1535-1707) --------
 # Thresholds + a plain-text "Model Fit Summary" that labels each index
 # Excellent/Good/Acceptable/Poor with references. Behaviour unchanged.
@@ -262,14 +354,21 @@ psynetTabUI <- function(id) {
     # -- Plots ----------------------------------------------------------------
     shiny::hr(),
     shiny::fluidRow(
-      shiny::column(8, shiny::plotOutput(ns("psynet_plot"), height = "480px")),
+      shiny::column(8, shiny::uiOutput(ns("psynet_plot_ui"))),
       shiny::column(4,
         shiny::selectInput(ns("plot_type"), "Network to plot",
-          c("Observed GGM (omega)"                 = "omega",
+          c("Factor structure + latent network"    = "factor_latent",
+            "Factor structure + RI latent network" = "factor_ri",
             "Latent network (omega_zeta)"          = "latent",
             "RI latent network (raw)"              = "ri_raw",
             "RI latent network (normalized)"       = "ri_norm",
-            "Residual network (omega_epsilon)"     = "residual")),
+            "Residual network (omega_epsilon)"     = "residual",
+            "Observed GGM (omega)"                 = "omega")),
+        shiny::conditionalPanel(
+          sprintf("input['%s'] == 'factor_ri'", ns("plot_type")),
+          shiny::checkboxInput(ns("factor_ri_norm"),
+                               "Normalize RI edges (column = share of R-squared)",
+                               value = FALSE)),
         shiny::helpText("RI = Relative-Importance latent network",
                         "(Johnson/LMG): a DIRECTED network where the arrow",
                         "j -> i shows latent j's share of the R-squared of",
@@ -522,17 +621,31 @@ psynetTabServer <- function(id, data_bus, rec) {
     look <- appearanceServer("look", plot_closure = shiny::reactive(rv$plot_fn))
 
     # Extract + prepare the matrix for the chosen plot type; NULL if absent.
+    # psychonetrics matrices often come back with EMPTY dimnames — without
+    # restoring them qgraph would label nodes 1..p. Full names, always (#6).
     plot_matrix <- shiny::reactive({
       shiny::req(rv$model)
       pt <- input$plot_type
-      get_mat <- function(name) tryCatch(
-        collapse_mg(psychonetrics::getmatrix(rv$model, name), 1L),
-        error = function(e) NULL)
-      if (pt == "omega")    return(list(W = get_mat("omega"), directed = FALSE,
+      lat_names <- colnames(rv$lambda_used)
+      obs_names <- if (!is.null(rv$lambda_used)) rownames(rv$lambda_used)
+                   else tryCatch(sel$vars(), error = function(e) NULL)
+      get_mat <- function(name, nms = NULL) {
+        m <- tryCatch(collapse_mg(psychonetrics::getmatrix(rv$model, name), 1L),
+                      error = function(e) NULL)
+        if (!is.null(m) &&
+            (is.null(colnames(m)) || all(!nzchar(colnames(m)))) &&
+            !is.null(nms) && length(nms) == ncol(m))
+          dimnames(m) <- list(nms, nms)
+        m
+      }
+      if (pt == "omega")    return(list(W = get_mat("omega", obs_names),
+                                        directed = FALSE,
                                         what = "observed GGM (omega)"))
-      if (pt == "latent")   return(list(W = get_mat("omega_zeta"), directed = FALSE,
+      if (pt == "latent")   return(list(W = get_mat("omega_zeta", lat_names),
+                                        directed = FALSE,
                                         what = "latent network (omega_zeta)"))
-      if (pt == "residual") return(list(W = get_mat("omega_epsilon"), directed = FALSE,
+      if (pt == "residual") return(list(W = get_mat("omega_epsilon", obs_names),
+                                        directed = FALSE,
                                         what = "residual network (omega_epsilon)"))
       # RI networks from sigma_zeta -> latent correlations -> Johnson/LMG
       sz <- get_mat("sigma_zeta")
@@ -552,14 +665,81 @@ psynetTabServer <- function(id, data_bus, rec) {
                           if (pt == "ri_norm") "normalized" else "raw"))
     })
 
+    # Resizable plot window: height follows the appearance slider.
+    output$psynet_plot_ui <- shiny::renderUI({
+      shiny::plotOutput(session$ns("psynet_plot"),
+                        height = sprintf("%dpx", look()$plot_height))
+    })
+
     output$psynet_plot <- shiny::renderPlot({
+      s  <- look()
+      pt <- input$plot_type
+
+      # --- Composite: factor structure + latent / RI network ----------------
+      if (pt %in% c("factor_latent", "factor_ri")) {
+        shiny::req(rv$model)
+        spec <- build_factor_spec(
+          rv$model, rv$lambda_used,
+          type = if (pt == "factor_ri") "ri" else "latent",
+          ri_norm = isTRUE(input$factor_ri_norm))
+        shiny::validate(shiny::need(!is.null(spec),
+          "Factor-structure plots need a fitted CFA/LNM/RNM/LRNM model (lambda + sigma_zeta)."))
+        fn <- function() qgraph::qgraph(
+          spec$W,
+          directed = spec$dir_mat, layout = spec$layout,
+          labels = spec$labels, label.scale = FALSE,       # full names, equal size
+          label.cex = s$label_cex, shape = spec$shapes,
+          vsize = c(rep(s$vsize * 1.6, spec$n_lat),
+                    rep(s$vsize, length(spec$labels) - spec$n_lat)),
+          color = spec$node_cols, border.color = s$node_border,
+          posCol = s$pos_edge, negCol = s$neg_edge,
+          esize = s$esize, minimum = s$min_edge,
+          edge.labels = if (isTRUE(s$show_edge_labels)) spec$edge_lab else FALSE,
+          edge.label.cex = s$edge_label_cex)
+        rv$plot_fn <- fn
+        rec_upsert(
+          rec, "psynet_plot", "plot",
+          description = sprintf(
+            "[psychonetrics] Plotted the %s: latents as circles on an inner ring (one colour per factor), indicators as squares coloured by their dominant factor, loading arrows latent -> indicator.",
+            spec$what),
+          code = paste(c(
+            'lambda  <- psychonetrics::getmatrix(mod, "lambda")',
+            "if (is.list(lambda)) lambda <- lambda[[1]]",
+            if (pt == "factor_ri") c(
+              'sigma_z <- psychonetrics::getmatrix(mod, "sigma_zeta")',
+              "if (is.list(sigma_z)) sigma_z <- sigma_z[[1]]",
+              JOHNSON_RW_FRAGMENT,
+              "lat_block <- johnson_rw_from_cor(cov2cor(as.matrix(sigma_z)))",
+              if (isTRUE(input$factor_ri_norm))
+                "cs <- colSums(lat_block); cs[cs < 1e-10] <- 1; lat_block <- sweep(lat_block, 2, cs, \"/\")")
+            else c(
+              'lat_block <- psychonetrics::getmatrix(mod, "omega_zeta")',
+              "if (is.list(lat_block)) lat_block <- lat_block[[1]]"),
+            "n_lat <- ncol(lambda); n_obs <- nrow(lambda); n <- n_lat + n_obs",
+            "W <- matrix(0, n, n)",
+            "W[1:n_lat, 1:n_lat] <- as.matrix(lat_block)",
+            "W[1:n_lat, (n_lat + 1):n] <- t(as.matrix(lambda))",
+            "dir_mat <- matrix(FALSE, n, n)",
+            "dir_mat[1:n_lat, (n_lat + 1):n] <- TRUE",
+            if (pt == "factor_ri") "dir_mat[1:n_lat, 1:n_lat] <- TRUE",
+            "# latents = circles (inner ring), indicators = squares near their",
+            "# dominant factor; labels are the full variable/factor names.",
+            'qgraph::qgraph(W, directed = dir_mat, layout = "spring",',
+            "  labels = c(colnames(lambda), rownames(lambda)),",
+            sprintf("  label.scale = FALSE, label.cex = %s,", s$label_cex),
+            sprintf('  shape = c(rep("circle", n_lat), rep("square", n_obs)),'),
+            sprintf("  esize = %s, minimum = %s)", s$esize, s$min_edge)),
+            collapse = "\n")
+        )
+        fn(); return(invisible(NULL))
+      }
+
+      # --- Simple single-matrix plots ----------------------------------------
       pm <- plot_matrix()
       shiny::validate(shiny::need(!is.null(pm$W), paste(
         "This matrix is not available for the fitted model —",
         "latent/RI plots need an LNM/RNM/LRNM/CFA fit;",
         "omega needs a GGM.")))
-      s  <- look()
-      pt <- input$plot_type
 
       args <- house_qgraph_args(pm$W, s, directed = pm$directed)
       fn <- function() do.call(qgraph::qgraph,
