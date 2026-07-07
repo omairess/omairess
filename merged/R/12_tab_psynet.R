@@ -390,10 +390,15 @@ psynetTabUI <- function(id) {
           shiny::checkboxInput(ns("factor_ri_norm"),
                                "Normalize RI edges (column = share of R-squared)",
                                value = FALSE)),
+        shiny::selectInput(ns("psynet_layout"), "Layout (matrix plots)",
+                           c("Spring" = "spring", "Circle" = "circle"),
+                           selected = "spring"),
         shiny::helpText("RI = Relative-Importance latent network",
                         "(Johnson/LMG): a DIRECTED network where the arrow",
                         "j -> i shows latent j's share of the R-squared of",
-                        "latent i. Multi-group models show group 1."),
+                        "latent i. Multi-group fits draw one panel per group",
+                        "on a SHARED layout (matrix plots); composite/SEM",
+                        "views show group 1."),
         # edge labels ON by default so the RI network shows its weights
         # as numbers on the arrows rather than hiding them (request #4).
         appearanceUI(ns("look"), signed = TRUE, default_edge_labels = TRUE,
@@ -465,17 +470,27 @@ psynetTabServer <- function(id, data_bus, rec) {
       header <- shiny::tags$tr(
         shiny::tags$th("Variable"),
         lapply(latents, function(l)
-          shiny::tags$th(l, style = "text-align:center;")))
+          shiny::tags$th(l, style = "text-align:center; padding:2px 8px;")))
       rows <- lapply(seq_along(vars), function(i) shiny::tags$tr(
-        shiny::tags$td(shiny::tags$b(vars[i])),
+        shiny::tags$td(shiny::tags$b(vars[i]),
+                       style = "padding:1px 8px; white-space:nowrap;"),
         lapply(seq_along(latents), function(j) shiny::tags$td(
           shiny::checkboxInput(ns(sprintf("lam_%d_%d", i, j)), NULL,
-                               value = as.logical(lam[i, j])),
-          style = "text-align:center; padding:0 6px;"))))
-      shiny::tags$div(style = "overflow-x:auto;",
-        shiny::tags$table(class = "table table-condensed table-bordered",
-                          shiny::tags$thead(header),
-                          shiny::tags$tbody(rows)))
+                               value = as.logical(lam[i, j]),
+                               width = "24px"),
+          style = "text-align:center; padding:0 8px; width:1%;"))))
+      shiny::tags$div(style = "overflow-x:auto; display:inline-block;",
+        # compact: kill checkbox form-group margins, shrink the table to
+        # its content instead of the full panel width
+        shiny::tags$style(shiny::HTML(
+          ".lambda-tight table {width:auto !important; margin-bottom:4px;}
+           .lambda-tight .checkbox {margin:0; min-height:0;}
+           .lambda-tight .form-group {margin:0;}
+           .lambda-tight .shiny-input-container {margin:0; padding:0; width:24px !important;}")),
+        shiny::tags$div(class = "lambda-tight",
+          shiny::tags$table(class = "table table-condensed table-bordered",
+                            shiny::tags$thead(header),
+                            shiny::tags$tbody(rows))))
     })
 
     get_lambda <- shiny::reactive({
@@ -647,49 +662,59 @@ psynetTabServer <- function(id, data_bus, rec) {
     # --- Plots: omega / latent / RI / residual -------------------------------
     look <- appearanceServer("look", plot_closure = shiny::reactive(rv$plot_fn))
 
-    # Extract + prepare the matrix for the chosen plot type; NULL if absent.
+    # Extract + prepare the matrix/matrices for the chosen plot type.
     # psychonetrics matrices often come back with EMPTY dimnames — without
     # restoring them qgraph would label nodes 1..p. Full names, always (#6).
+    # Multi-group fits return W_list with one matrix PER GROUP (#9).
     plot_matrix <- shiny::reactive({
       shiny::req(rv$model)
       pt <- input$plot_type
       lat_names <- colnames(rv$lambda_used)
       obs_names <- if (!is.null(rv$lambda_used)) rownames(rv$lambda_used)
                    else tryCatch(sel$vars(), error = function(e) NULL)
-      get_mat <- function(name, nms = NULL) {
-        m <- tryCatch(collapse_mg(psychonetrics::getmatrix(rv$model, name), 1L),
-                      error = function(e) NULL)
-        if (!is.null(m) &&
-            (is.null(colnames(m)) || all(!nzchar(colnames(m)))) &&
-            !is.null(nms) && length(nms) == ncol(m))
-          dimnames(m) <- list(nms, nms)
-        m
+      get_mats <- function(name, nms = NULL) {
+        raw <- tryCatch(psychonetrics::getmatrix(rv$model, name),
+                        error = function(e) NULL)
+        if (is.null(raw)) return(NULL)
+        mats <- if (is.list(raw) && !is.data.frame(raw))
+                  lapply(raw, as.matrix) else list(as.matrix(raw))
+        lapply(mats, function(m) {
+          if ((is.null(colnames(m)) || all(!nzchar(colnames(m)))) &&
+              !is.null(nms) && length(nms) == ncol(m))
+            dimnames(m) <- list(nms, nms)
+          m
+        })
       }
-      if (pt == "omega")    return(list(W = get_mat("omega", obs_names),
-                                        directed = FALSE,
-                                        what = "observed GGM (omega)"))
-      if (pt == "latent")   return(list(W = get_mat("omega_zeta", lat_names),
-                                        directed = FALSE,
-                                        what = "latent network (omega_zeta)"))
-      if (pt == "residual") return(list(W = get_mat("omega_epsilon", obs_names),
-                                        directed = FALSE,
-                                        what = "residual network (omega_epsilon)"))
-      # RI networks from sigma_zeta -> latent correlations -> Johnson/LMG
-      sz <- get_mat("sigma_zeta")
-      if (is.null(sz)) return(list(W = NULL))
-      R_lat <- tryCatch(stats::cov2cor(sz), error = function(e) NULL)
-      if (is.null(R_lat)) return(list(W = NULL))
-      lat <- colnames(rv$lambda_used)
-      if (!is.null(lat) && length(lat) == ncol(R_lat))
-        dimnames(R_lat) <- list(lat, lat)
-      RI <- johnson_rw_from_cor(R_lat)
-      if (pt == "ri_norm") {
-        cs <- colSums(RI); cs[cs < 1e-10] <- 1
-        RI <- sweep(RI, 2, cs, "/")
+      pack <- function(mats, directed, what) {
+        if (is.null(mats)) return(list(W = NULL))
+        list(W = mats[[1]], W_list = mats, directed = directed, what = what)
       }
-      list(W = RI, directed = TRUE,
-           what = sprintf("RI latent network (%s)",
-                          if (pt == "ri_norm") "normalized" else "raw"))
+      if (pt == "omega")
+        return(pack(get_mats("omega", obs_names), FALSE, "observed GGM (omega)"))
+      if (pt == "latent")
+        return(pack(get_mats("omega_zeta", lat_names), FALSE,
+                    "latent network (omega_zeta)"))
+      if (pt == "residual")
+        return(pack(get_mats("omega_epsilon", obs_names), FALSE,
+                    "residual network (omega_epsilon)"))
+      # RI networks from sigma_zeta -> latent correlations -> Johnson/LMG,
+      # computed per group for multi-group fits
+      szs <- get_mats("sigma_zeta", lat_names)
+      if (is.null(szs)) return(list(W = NULL))
+      ri_one <- function(sz) {
+        R_lat <- tryCatch(stats::cov2cor(sz), error = function(e) NULL)
+        if (is.null(R_lat)) return(NULL)
+        RI <- johnson_rw_from_cor(R_lat)
+        if (pt == "ri_norm") {
+          cs <- colSums(RI); cs[cs < 1e-10] <- 1
+          RI <- sweep(RI, 2, cs, "/")
+        }
+        RI
+      }
+      ris <- lapply(szs, ri_one)
+      if (any(vapply(ris, is.null, TRUE))) return(list(W = NULL))
+      pack(ris, TRUE, sprintf("RI latent network (%s)",
+                              if (pt == "ri_norm") "normalized" else "raw"))
     })
 
     # Resizable plot window: height follows the appearance slider.
@@ -786,7 +811,7 @@ psynetTabServer <- function(id, data_bus, rec) {
           vsize = c(lat_vsize, rep(s$vsize, n_obs)),
           color = spec$node_cols, border.color = s$node_border,
           posCol = s$pos_edge, negCol = s$neg_edge,
-          esize = s$esize, minimum = s$min_edge,
+          esize = s$esize, asize = s$asize, minimum = s$min_edge,
           edge.labels = if (isTRUE(s$show_edge_labels)) spec$edge_lab else FALSE,
           edge.label.cex = s$edge_label_cex),
           house_pie_args(pie_arg, s)))
@@ -836,11 +861,15 @@ psynetTabServer <- function(id, data_bus, rec) {
         "omega needs a GGM.")))
 
       is_latent_net <- pt %in% c("latent", "ri_raw", "ri_norm")
+      W_list <- pm$W_list %||% list(pm$W)
+      multi  <- length(W_list) > 1
+      lay_choice <- input$psynet_layout %||% "spring"
 
       # Node size: latent networks scale by |mean factor score| (request #3);
-      # observed networks scale by column means, as elsewhere.
+      # observed networks scale by column means. (Single-group only — group-
+      # specific scores/means would differ per panel.)
       vsize_arg <- NULL
-      if (isTRUE(s$scale_nodes)) {
+      if (isTRUE(s$scale_nodes) && !multi) {
         vsize_arg <- if (is_latent_net) {
           fs <- mean_fscores_psynet(rv$model, rv$lambda_used, rv$dat)
           if (!is.null(fs) && length(fs) == ncol(pm$W))
@@ -854,9 +883,8 @@ psynetTabServer <- function(id, data_bus, rec) {
         }
       }
 
-      # Predictability rings: latent nets use the analytic latent R^2 from
-      # sigma_zeta; observed nets use OLS R^2 from the analysis data (#4).
-      r2 <- if (isTRUE(s$show_pred)) {
+      # Predictability rings (single-group only, same reason as above).
+      r2 <- if (isTRUE(s$show_pred) && !multi) {
         if (is_latent_net) {
           sz <- tryCatch(collapse_mg(psychonetrics::getmatrix(rv$model, "sigma_zeta"), 1L),
                          error = function(e) NULL)
@@ -870,8 +898,30 @@ psynetTabServer <- function(id, data_bus, rec) {
 
       args <- house_qgraph_args(pm$W, s, directed = pm$directed,
                                 vsize = vsize_arg, pie = r2)
-      fn <- function() do.call(qgraph::qgraph,
-                               c(list(pm$W, layout = "spring"), args))
+      grp_labels <- {
+        gv <- sel$group_var()
+        lv <- if (!is.null(gv)) sort(unique(stats::na.omit(
+                data_bus$wide()[[gv]]))) else NULL
+        if (!is.null(lv) && length(lv) == length(W_list))
+          as.character(lv) else paste("Group", seq_along(W_list))
+      }
+      fn <- if (multi) {
+        # Side-by-side group networks on ONE shared layout so node positions
+        # match across panels (request #9); groups named in panel titles.
+        L <- if (lay_choice == "circle") "circle"
+             else do.call(qgraph::averageLayout, W_list)
+        function() {
+          op <- graphics::par(mfrow = c(1, length(W_list)))
+          on.exit(graphics::par(op), add = TRUE)
+          for (k in seq_along(W_list))
+            do.call(qgraph::qgraph,
+                    c(list(W_list[[k]], layout = L, title = grp_labels[k]),
+                      args))
+        }
+      } else {
+        function() do.call(qgraph::qgraph,
+                           c(list(pm$W, layout = lay_choice), args))
+      }
       rv$plot_fn <- fn
 
       extract_code <- switch(pt,
@@ -892,16 +942,29 @@ psynetTabServer <- function(id, data_bus, rec) {
       rec_upsert(
         rec, "psynet_plot", "plot",
         description = sprintf(
-          "[psychonetrics] Plotted the %s (qgraph%s).", pm$what,
-          if (pm$directed) ", directed: arrow j -> i = j's share of i's R-squared"
+          "[psychonetrics] Plotted the %s (qgraph, %s layout%s%s).", pm$what,
+          lay_choice,
+          if (pm$directed) "; directed: arrow j -> i = j's share of i's R-squared"
+          else "",
+          if (multi) sprintf("; %d groups side by side on one shared layout (%s)",
+                             length(W_list), paste(grp_labels, collapse = ", "))
           else ""),
-        code = paste(
+        code = paste(c(
           extract_code,
-          "if (is.list(W) && !is.data.frame(W)) W <- W[[1]]  # multi-group: group 1",
-          "W <- as.matrix(W)",
-          'qgraph::qgraph(W, layout = "spring",',
-          house_qgraph_args_code(s, pm$directed, wobj = "W"),
-          ")", sep = "\n")
+          if (multi) c(
+            "W_list <- if (is.list(W) && !is.data.frame(W)) lapply(W, as.matrix) else list(as.matrix(W))",
+            "L <- do.call(qgraph::averageLayout, W_list)  # shared layout across groups",
+            "op <- par(mfrow = c(1, length(W_list))); on.exit(par(op), add = TRUE)",
+            "for (k in seq_along(W_list)) qgraph::qgraph(W_list[[k]], layout = L,",
+            sprintf('  title = %s[k],', vars_literal(grp_labels)),
+            house_qgraph_args_code(s, pm$directed, wobj = "W_list[[k]]"),
+            ")")
+          else c(
+            "if (is.list(W) && !is.data.frame(W)) W <- W[[1]]",
+            "W <- as.matrix(W)",
+            sprintf('qgraph::qgraph(W, layout = "%s",', lay_choice),
+            house_qgraph_args_code(s, pm$directed, wobj = "W"),
+            ")")), collapse = "\n")
       )
       fn()
     })
@@ -952,21 +1015,22 @@ nctUI <- function(id) {
   )
 }
 
-# Core NCT call. Pins estimation to the shared gg settings and applies the
-# chosen edge-level correction natively when NCT supports it, manually if not.
+# Core NCT call.
+# FIX (user-reported "comparison (==) is possible only for atomic and list
+# types"): some NCT builds compare their `estimator` argument with `==`,
+# which errors when handed a FUNCTION. So we never pass an estimator
+# function — estimation is pinned via `gamma` (NCT's own default is then
+# EBICglasso on cor_auto, matching the GGM tab's defaults), plus
+# `binary.data = TRUE` when every node is binary (IsingFit path).
 run_nct_corrected <- function(dat1, dat2, paired, it, adjust, gg, seed) {
   set.seed(seed)
   nct_formals <- names(formals(NetworkComparisonTest::NCT))
   args <- list(data1 = dat1, data2 = dat2, it = it, paired = paired,
                test.edges = TRUE, edges = "all")
-  # Pin estimation so NCT uses the same settings as the bootnet tab:
-  if (all(c("estimator", "estimatorArgs") %in% nct_formals)) {
-    args$estimator <- bootnet::estimateNetwork
-    args$estimatorArgs <- list(default = gg$default,
-                               corMethod = gg$corMethod, tuning = gg$tuning)
-  } else if ("gamma" %in% nct_formals) {
-    args$gamma <- gg$tuning
-  }
+  if ("gamma" %in% nct_formals) args$gamma <- gg$tuning
+  all_binary <- all(vapply(dat1, function(x)
+    length(unique(stats::na.omit(x))) <= 2, TRUE))
+  if (all_binary && "binary.data" %in% nct_formals) args$binary.data <- TRUE
   native_adjust <- "p.adjust.methods" %in% nct_formals
   if (native_adjust) args$p.adjust.methods <- adjust
   res <- do.call(NetworkComparisonTest::NCT, args)
@@ -978,6 +1042,7 @@ run_nct_corrected <- function(dat1, dat2, paired, it, adjust, gg, seed) {
                                               method = adjust)
   }
   attr(res, "edge_p_adjust") <- adjust
+  attr(res, "binary_data")  <- all_binary
   res
 }
 
@@ -1055,11 +1120,14 @@ nctServer <- function(id, data_bus, rec, gg_settings) {
       rec_upsert(
         rec, "nct_comparison", "comparison",
         description = sprintf(
-          "[NCT] Compared '%s' vs '%s' (%s design, paired = %s):%s %d permutations, seed %d; transform: %s; edge-level p-values corrected with '%s'; estimation pinned to %s / %s / gamma = %s. A null NCT is not proof of equality.",
+          "[NCT] Compared '%s' vs '%s' (%s design, paired = %s):%s %d permutations, seed %d; transform: %s; edge-level p-values corrected with '%s'; estimation = NCT default (%s), gamma = %s. A null NCT is not proof of equality.",
           lv[1], lv[2], input$design, paired, id_note,
           input$iterations, seed,
           names(TRANSFORM_LABELS)[TRANSFORM_LABELS == trans],
-          input$adjust, gg$default, gg$corMethod, gg$tuning),
+          input$adjust,
+          if (isTRUE(attr(res, "binary_data")))
+            "IsingFit, binary.data = TRUE" else "EBICglasso on cor_auto",
+          gg$tuning),
         code = paste(c(
           sprintf("nct_vars <- %s", vars_literal(num)),
           "dat_nct <- dat_wide[, nct_vars]",
@@ -1074,7 +1142,10 @@ nctServer <- function(id, data_bus, rec, gg_settings) {
             "d1 <- d1[match(common, ids1), ]; d2 <- d2[match(common, ids2), ]"),
           sprintf("set.seed(%d)", seed),
           "nct_res <- NetworkComparisonTest::NCT(d1, d2,",
-          sprintf("  it = %d, paired = %s,", input$iterations, paired),
+          sprintf("  it = %d, paired = %s, gamma = %s,",
+                  input$iterations, paired, gg$tuning),
+          if (isTRUE(attr(res, "binary_data")))
+            "  binary.data = TRUE,  # all nodes binary -> IsingFit path",
           '  test.edges = TRUE, edges = "all",',
           sprintf('  p.adjust.methods = "%s")  # edge-level correction',
                   input$adjust)), collapse = "\n")

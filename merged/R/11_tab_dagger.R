@@ -95,6 +95,39 @@ compute_cascade_curves <- function(adj, coords) {
   curve_mat
 }
 
+# --- Score/data-type reconciliation ------------------------------------------
+# bnlearn is strict: discrete scores (bic/aic/bde) need FACTOR columns,
+# Gaussian scores (bic-g/aic-g/bge) need numeric. Binary 0/1 columns read
+# from a file arrive numeric, so "BIC (discrete)" used to error while
+# "BIC (Gaussian)" silently treated binary data as continuous. This coerces
+# the data to what the chosen score needs (auto-detect for constraint-based
+# algorithms: <= 5 unique values -> factor).
+DAG_DISCRETE_SCORES <- c("bic", "aic", "bde")
+DAG_GAUSSIAN_SCORES <- c("bic-g", "aic-g", "bge")
+
+dag_prepare_types <- function(dat, score = NA_character_) {
+  to_factor  <- function(d) { d[] <- lapply(d, function(x) as.factor(x)); d }
+  to_numeric <- function(d) {
+    d[] <- lapply(d, function(x)
+      if (is.numeric(x)) x else suppressWarnings(as.numeric(as.character(x))))
+    d
+  }
+  if (!is.na(score) && score %in% DAG_DISCRETE_SCORES)
+    return(list(dat = to_factor(dat), coerced = "factor",
+                code = "dat_dag[] <- lapply(dat_dag, as.factor)  # discrete score needs factors"))
+  if (!is.na(score) && score %in% DAG_GAUSSIAN_SCORES)
+    return(list(dat = to_numeric(dat), coerced = "numeric",
+                code = "dat_dag[] <- lapply(dat_dag, function(x) as.numeric(as.character(x)))  # Gaussian score needs numeric"))
+  # constraint-based: auto-detect (few unique values -> categorical tests)
+  uq <- vapply(dat, function(x) length(unique(stats::na.omit(x))), 0L)
+  if (all(uq <= 5))
+    list(dat = to_factor(dat), coerced = "factor (auto: <= 5 unique values)",
+         code = "dat_dag[] <- lapply(dat_dag, as.factor)  # auto: few unique values -> categorical tests")
+  else
+    list(dat = to_numeric(dat), coerced = "numeric (auto)",
+         code = "dat_dag[] <- lapply(dat_dag, function(x) as.numeric(as.character(x)))")
+}
+
 # Build a from/to constraint data.frame from a cross product of node sets,
 # dropping self-arcs. Returns NULL if empty (bnlearn treats NULL as "none").
 constraint_df <- function(from_vars, to_vars) {
@@ -235,9 +268,10 @@ daggerTabUI <- function(id) {
                              "Strength x Direction (combined)"     = "combined")),
         # signed = FALSE: bnlearn arcs have no sign; the "positive edge" picker
         # is relabelled "Arc colour" and the negative-edge picker is hidden.
-        # default_esize = 2 per request; "Show edge values as labels" lives in
-        # the appearance panel and shows the chosen arc metric.
-        appearanceUI(ns("look"), signed = FALSE, default_esize = 2)
+        # default_esize = 2, slider capped at 4 (arc widths multiply by
+        # bootstrap strength, so large esize values are useless here).
+        appearanceUI(ns("look"), signed = FALSE, default_esize = 2,
+                     esize_max = 4)
       )
     )
     # TODO(port): split analysis + DAG-diff plot (Dagger_zero.R:409-542,
@@ -314,6 +348,15 @@ daggerTabServer <- function(id, data_bus, rec) {
       algo <- input$algorithm
       uses_score <- algo %in% c("hc", "tabu", "mmhc", "rsmax2")
       scr  <- if (uses_score) input$score else NA_character_
+      if (!is.null(sel$group_var())) shiny::showNotification(
+        "Grouping on the DAG tab is not yet supported (split analysis pending); the grouping variable is ignored here.",
+        type = "warning", duration = 8)
+      # Coerce column types to what the chosen score/algorithm needs
+      # (fixes: binary 0/1 data + discrete BIC previously errored).
+      prep <- dag_prepare_types(dat, scr)
+      dat  <- prep$dat
+      shiny::showNotification(sprintf("DAG variables treated as %s.", prep$coerced),
+                              type = "message", duration = 5)
       R    <- max(500L, as.integer(input$boot_r))   # skill floor: R >= 500
       thr  <- input$threshold
       seed <- rec_seed(rec)
@@ -373,6 +416,7 @@ daggerTabServer <- function(id, data_bus, rec) {
           "dat_dag  <- dat_wide[, dag_vars]",
           transform_code_fragment(trans, "dat_dag"),
           "dat_dag  <- na.omit(dat_dag)",
+          prep$code,
           constraint_code(bl, "dag_blacklist"),
           constraint_code(wl, "dag_whitelist"),
           sprintf("dag_aargs <- list(%s)",
@@ -600,7 +644,8 @@ daggerTabServer <- function(id, data_bus, rec) {
         label.font = if (isTRUE(s$label_bold)) 2 else 1,
         edge.color = s$pos_edge,      # arcs are unsigned: pos picker only
         color = s$node_fill, border.color = s$node_border,
-        vsize = vsize_arg, esize = s$esize, label.cex = s$label_cex,
+        vsize = vsize_arg, esize = s$esize, asize = s$asize,
+        label.cex = s$label_cex,
         minimum = s$min_edge,
         edge.width = width_mat, lty = lty_mat, edge.labels = elabels,
         edge.label.cex = s$edge_label_cex,

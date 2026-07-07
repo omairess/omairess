@@ -19,7 +19,8 @@ for (f in sort(list.files("R", full.names = TRUE))) source(f)
 ensure_packages()   # install missing only — never auto-update (rule 0)
 
 ui <- shiny::navbarPage(
-  "Network Psychometrics Workbench",
+  shiny::div(title = "Cross-Sectional networks For All", "XS4ALL"),
+  windowTitle = "XS4ALL — Cross-Sectional networks For All",
   shiny::tabPanel("Data",       dataModuleUI("data"),
                   shiny::numericInput("seed", "Master seed (all bootstraps)",
                                       value = 12345, min = 1)),
@@ -69,7 +70,7 @@ server <- function(input, output, session) {
   output$dl_script <- shiny::downloadHandler(
     filename = function() sprintf("analysis_%s.R", format(Sys.Date())),
     content = function(file) {
-      writeLines(build_script(rec, APP_PACKAGES, vers), file)
+      writeLines(build_script(rec, APP_PACKAGES, vers, app_name = "XS4ALL (Cross-Sectional networks For All)"), file)
     }
   )
 
@@ -85,7 +86,7 @@ server <- function(input, output, session) {
         dag_avg      = dag_out$avg(),
         psynet_model = psynet_out$model(),
         pipeline     = build_pipeline_log(rec),
-        script       = build_script(rec, APP_PACKAGES, vers),
+        script       = build_script(rec, APP_PACKAGES, vers, app_name = "XS4ALL (Cross-Sectional networks For All)"),
         pkg_versions = vers,
         seed         = rec_seed(rec),
         timestamp    = Sys.time()

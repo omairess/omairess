@@ -20,7 +20,7 @@
 # default_esize / default_edge_labels let a tab set its own starting values
 # (DAG wants thinner edges; the RI network wants edge labels on).
 appearanceUI <- function(id, signed = TRUE, default_esize = 8,
-                         default_edge_labels = FALSE,
+                         esize_max = 20, default_edge_labels = FALSE,
                          scale_label = "Scale node size by column mean") {
   ns  <- shiny::NS(id)
   pal <- house_pastel()
@@ -49,8 +49,10 @@ appearanceUI <- function(id, signed = TRUE, default_esize = 8,
                          min = 2, max = 20, value = c(4, 14), step = 0.5),
       shiny::helpText("Smallest node = lowest column mean, largest = highest.")
     ),
-    shiny::sliderInput(ns("esize"), "Edge scaling", min = 1, max = 20,
-                       value = default_esize, step = 0.5),
+    shiny::sliderInput(ns("esize"), "Edge scaling", min = 0.5, max = esize_max,
+                       value = min(default_esize, esize_max), step = 0.5),
+    shiny::sliderInput(ns("asize"), "Arrowhead size", min = 1, max = 10,
+                       value = 3, step = 0.5),
     shiny::sliderInput(ns("label_cex"), "Node label size", min = 0.3, max = 3,
                        value = 1, step = 0.1),
     shiny::checkboxInput(ns("label_bold"), "Bold node labels", value = FALSE),
@@ -111,6 +113,7 @@ appearanceServer <- function(id, plot_closure) {
         vsize_min        = vr[1],
         vsize_max        = vr[2],
         esize            = input$esize       %||% 8,
+        asize            = input$asize       %||% 3,
         label_cex        = input$label_cex   %||% 1,
         label_bold       = isTRUE(input$label_bold),
         min_edge         = input$min_edge    %||% 0,
@@ -184,10 +187,13 @@ house_qgraph_args <- function(W, s, directed = FALSE,
     edge.label.cex  = s$edge_label_cex,
     posCol          = s$pos_edge,
     negCol          = s$neg_edge,
+    asize           = s$asize %||% 3,   # arrowhead size (directed plots)
     color           = node_col %||% s$node_fill,
     border.color    = s$node_border,
     groups          = groups
-  ))
+  ),
+  # community colouring shows in the nodes themselves; no legend (request)
+  if (!is.null(groups)) list(legend = FALSE))
 }
 
 # --- Node predictability (R-squared rings), ported from PsychoNetrix.R ------
@@ -254,7 +260,8 @@ house_qgraph_args_code <- function(s, directed, wobj = "W",
             vsize_expr %||% as.character(s$vsize), s$esize, s$min_edge),
     sprintf("  edge.labels = %s, edge.label.cex = %s,",
             isTRUE(s$show_edge_labels), s$edge_label_cex),
-    sprintf('  posCol = "%s", negCol = "%s",', s$pos_edge, s$neg_edge),
+    sprintf('  posCol = "%s", negCol = "%s", asize = %s,',
+            s$pos_edge, s$neg_edge, s$asize %||% 3),
     sprintf("  color = %s, border.color = \"%s\"",
             node_col_expr %||% sprintf('"%s"', s$node_fill), s$node_border),
     if (!is.null(groups_expr)) sprintf("  , groups = %s", groups_expr))

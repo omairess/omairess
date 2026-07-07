@@ -249,7 +249,9 @@ bootnetTabServer <- function(id, data_bus, rec) {
 
     rv <- shiny::reactiveValues(net = NULL, def = NULL, dat = NULL,
                                 boot_np = NULL, boot_cd = NULL, cs = NULL,
-                                has_neg = FALSE, plot_fn = NULL)
+                                has_neg = FALSE, plot_fn = NULL,
+                                grouped = FALSE, nets = NULL,
+                                group_labels = NULL)
 
     # ---- 1. Estimation (instant, no bootstraps) -----------------------------
     shiny::observeEvent(input$run, {
@@ -273,6 +275,54 @@ bootnetTabServer <- function(id, data_bus, rec) {
       dat   <- apply_house_transform(dat, trans)
 
       pin <- bootnet_pinned(def, input)
+
+      # ---- Grouped estimation: one network per group, shown side by side ---
+      grp <- sel$group_var()
+      if (!is.null(grp)) {
+        gvec <- data_bus$wide()[[grp]]
+        lv   <- names(sort(table(gvec), decreasing = TRUE))
+        if (length(lv) > 4) {
+          lv <- lv[1:4]
+          shiny::showNotification("More than 4 groups: showing the 4 largest.",
+                                  type = "warning")
+        }
+        nets <- lapply(lv, function(l) tryCatch(
+          do.call(bootnet::estimateNetwork,
+                  c(list(data = dat[which(gvec == l), , drop = FALSE],
+                         default = def), pin$args)),
+          error = function(e) NULL))
+        names(nets) <- lv
+        shiny::validate(shiny::need(!any(vapply(nets, is.null, TRUE)),
+          "Estimation failed for at least one group (often: too few rows)."))
+        rv$nets <- nets; rv$group_labels <- lv; rv$grouped <- TRUE
+        rv$net <- NULL; rv$def <- def; rv$dat <- dat
+        rv$boot_np <- NULL; rv$boot_cd <- NULL; rv$cs <- NULL
+        rec_drop(rec, "bootnet_stability")
+        rec_upsert(
+          rec, "bootnet_analysis", "analysis",
+          description = sprintf(
+            "[bootnet] Estimated one %s network PER GROUP of '%s' (%s; n per group: %s): %s. Transform: %s. Networks displayed side by side on a shared layout; bootstrap validation/centrality gates require ungrouped estimation (or use NCT for formal comparison).",
+            def, grp, paste(lv, collapse = ", "),
+            paste(vapply(lv, function(l) sum(gvec == l, na.rm = TRUE), 0L),
+                  collapse = ", "),
+            pin$desc, names(TRANSFORM_LABELS)[TRANSFORM_LABELS == trans]),
+          code = sprintf(
+            paste("bootnet_vars <- %s",
+                  "dat_bootnet  <- dat_wide[, bootnet_vars]",
+                  "%s",
+                  'g <- dat_wide[["%s"]]',
+                  "group_levels <- %s",
+                  "nets <- lapply(group_levels, function(l)",
+                  "  bootnet::estimateNetwork(dat_bootnet[which(g == l), ],",
+                  '    default = "%s",',
+                  "%s))",
+                  "names(nets) <- group_levels", sep = "\n"),
+            vars_literal(vars), transform_code_fragment(trans, "dat_bootnet"),
+            grp, vars_literal(lv), def, args_code(pin$args))
+        )
+        return()
+      }
+      rv$grouped <- FALSE; rv$nets <- NULL; rv$group_labels <- NULL
 
       net <- tryCatch(
         do.call(bootnet::estimateNetwork,
@@ -316,6 +366,12 @@ bootnetTabServer <- function(id, data_bus, rec) {
 
     # ---- 2. On-demand bootstrap validation ----------------------------------
     shiny::observeEvent(input$run_boot, {
+      if (isTRUE(rv$grouped)) {
+        shiny::showNotification(
+          "Bootstrap validation runs on a single network — remove the grouping variable first (use the NCT tab for formal group comparison).",
+          type = "warning", duration = 10)
+        return()
+      }
       shiny::req(rv$net)
       nb   <- max(250L, as.integer(input$nboots))
       if (nb < 500) shiny::showNotification(
@@ -421,6 +477,13 @@ bootnetTabServer <- function(id, data_bus, rec) {
     })
 
     output$stability_banner <- shiny::renderUI({
+      if (isTRUE(rv$grouped)) {
+        return(shiny::div(class = "alert alert-info",
+          "Grouped estimation: one network per group, side by side on a shared
+           layout. Bootstrap validation and the CS centrality gate apply to a
+           SINGLE network — remove the grouping variable to validate, or use
+           the NCT tab for a formal comparison."))
+      }
       shiny::req(rv$net)
       if (is.null(rv$cs)) {
         return(shiny::div(class = "alert alert-info",
@@ -511,8 +574,49 @@ bootnetTabServer <- function(id, data_bus, rec) {
     })
 
     output$network_plot <- shiny::renderPlot({
+      s <- look()
+
+      # ---- Grouped: one panel per group, SHARED layout (request) -----------
+      if (isTRUE(rv$grouped)) {
+        shiny::req(rv$nets)
+        directed <- identical(rv$def, "relimp")
+        Ws <- lapply(rv$nets, function(n) {
+          w <- qgraph::getWmat(n)
+          if (is.null(colnames(w)) || all(!nzchar(colnames(w))))
+            dimnames(w) <- list(colnames(rv$dat), colnames(rv$dat))
+          w
+        })
+        lt2 <- input$layout_type %||% "spring"
+        L   <- if (lt2 == "circle") "circle"
+               else do.call(qgraph::averageLayout, unname(Ws))
+        args <- house_qgraph_args(Ws[[1]], s, directed = directed)
+        labs <- rv$group_labels
+        fn <- function() {
+          op <- graphics::par(mfrow = c(1, length(Ws)))
+          on.exit(graphics::par(op), add = TRUE)
+          for (k in seq_along(Ws))
+            do.call(qgraph::qgraph,
+                    c(list(Ws[[k]], layout = L, title = labs[k]), args))
+        }
+        rv$plot_fn <- fn
+        rec_upsert(
+          rec, "bootnet_plot", "plot",
+          description = sprintf(
+            "[bootnet] Plotted %d group networks side by side (%s) on ONE shared layout so panels are directly comparable.",
+            length(Ws), paste(labs, collapse = ", ")),
+          code = paste(c(
+            "Ws <- lapply(nets, qgraph::getWmat)",
+            "L  <- do.call(qgraph::averageLayout, unname(Ws))  # shared layout",
+            "op <- par(mfrow = c(1, length(Ws))); on.exit(par(op), add = TRUE)",
+            "for (k in seq_along(Ws)) qgraph::qgraph(Ws[[k]], layout = L,",
+            "  title = names(nets)[k],",
+            house_qgraph_args_code(s, directed, wobj = "Ws[[k]]"),
+            ")"), collapse = "\n")
+        )
+        fn(); return(invisible(NULL))
+      }
+
       shiny::req(rv$net)
-      s    <- look()
       wmat <- qgraph::getWmat(rv$net)
       dat  <- rv$dat
       # Some estimators (notably relimp) return weight matrices with EMPTY

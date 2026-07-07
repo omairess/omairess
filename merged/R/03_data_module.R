@@ -361,26 +361,43 @@ dataModuleServer <- function(id, rec) {
     })
 
     # --- Zero-order correlation heatmap over user-chosen variables ----------
+    # Binary variables are included: two-level factors/characters/logicals
+    # are coerced to 0/1, and Pearson on 0/1 IS the phi coefficient.
+    heat_coerce <- function(x) {
+      if (is.numeric(x)) return(x)
+      if (is.logical(x)) return(as.numeric(x))
+      u <- unique(stats::na.omit(x))
+      if (length(u) == 2) return(as.numeric(factor(x, levels = sort(u))) - 1)
+      NULL
+    }
+
     shiny::observeEvent(wide(), {
-      num <- names(wide())[vapply(wide(), is.numeric, TRUE)]
+      ok <- names(wide())[vapply(wide(),
+              function(x) !is.null(heat_coerce(x)), TRUE)]
       shinyWidgets::updatePickerInput(session, "heat_vars",
-                                      choices = num, selected = num)
+                                      choices = ok, selected = ok)
     })
 
     output$cor_heatmap <- shiny::renderPlot({
       vs <- input$heat_vars
       shiny::req(length(vs) >= 2)
       vs <- intersect(vs, names(wide()))
-      cm <- stats::cor(wide()[, vs, drop = FALSE],
-                       use = "pairwise.complete.obs")
+      dm <- as.data.frame(lapply(wide()[, vs, drop = FALSE], heat_coerce))
+      names(dm) <- vs
+      cm <- stats::cor(dm, use = "pairwise.complete.obs")
       p  <- ncol(cm)
+      binary <- vapply(dm, function(x) length(unique(stats::na.omit(x))) == 2, TRUE)
+      # green (-1) -> yellow/orange (0) -> red (+1)
       cols <- grDevices::colorRampPalette(
-        rev(RColorBrewer::brewer.pal(11, "RdBu")))(200)
+        rev(RColorBrewer::brewer.pal(11, "RdYlGn")))(200)
       op <- graphics::par(mar = c(8, 8, 2, 2))
       on.exit(graphics::par(op), add = TRUE)
       graphics::image(seq_len(p), seq_len(p), t(cm[p:1, , drop = FALSE]),
                       zlim = c(-1, 1), col = cols, axes = FALSE,
-                      xlab = "", ylab = "")
+                      xlab = "", ylab = "",
+                      main = if (all(binary))
+                        "Correlations (phi: all variables binary)" else
+                        "Zero-order correlations (Pearson; phi for binary pairs)")
       graphics::axis(1, at = seq_len(p), labels = colnames(cm), las = 2,
                      cex.axis = 0.85)
       graphics::axis(2, at = seq_len(p), labels = rev(colnames(cm)), las = 2,
