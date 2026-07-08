@@ -12,7 +12,9 @@
 #   later selection change cannot silently redefine an already-run analysis.
 # ============================================================================
 
-varselectUI <- function(id, label = "Variables to analyse") {
+# show_group = FALSE for tabs that provide their OWN grouping control (the
+# NCT tab), so the module doesn't render a second, redundant one.
+varselectUI <- function(id, label = "Variables to analyse", show_group = TRUE) {
   ns <- shiny::NS(id)
   shiny::tagList(
     shinyWidgets::pickerInput(
@@ -25,7 +27,7 @@ varselectUI <- function(id, label = "Variables to analyse") {
     # variable in every module (user request): selected -> transformed ->
     # (optionally grouped) -> analysed.
     transformUI(ns("transform")),
-    shinyWidgets::pickerInput(
+    if (show_group) shinyWidgets::pickerInput(
       ns("group_var"), "Grouping variable (optional)",
       choices = c("(none)" = ""), multiple = FALSE,
       options = shinyWidgets::pickerOptions(liveSearch = TRUE)
