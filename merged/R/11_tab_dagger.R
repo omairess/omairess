@@ -146,6 +146,50 @@ constraint_code <- function(df, name) {
           name, vars_literal(df$from), vars_literal(df$to))
 }
 
+# Filter a boot.strength table to the arcs passing BOTH thresholds (pure).
+dag_disp <- function(boot_str, thr, dthr) {
+  bs <- as.data.frame(boot_str)
+  bs <- bs[bs$strength > 0 & bs$strength >= thr & bs$direction >= dthr, ,
+           drop = FALSE]
+  bs$combined <- bs$strength * bs$direction
+  bs[order(-bs$strength), ]
+}
+
+# Draw ONE DAG (used by both single and grouped modes). `da` = filtered arcs,
+# `eq` = its equivalence-class info, `vars` = the shared node set, `layout_arg`
+# = a shared layout so grouped panels are comparable.
+draw_one_dag <- function(da, eq, vars, s, metric, layout_arg, curve_arg,
+                         curve_all, vsize_arg, lt, title = NULL) {
+  amat <- matrix(0, length(vars), length(vars), dimnames = list(vars, vars))
+  metric_mat <- amat
+  if (nrow(da) > 0) for (i in seq_len(nrow(da))) {
+    amat[da$from[i], da$to[i]]       <- 1
+    metric_mat[da$from[i], da$to[i]] <- da[[metric]][i]
+  }
+  width_mat <- pmax(0.5, metric_mat * s$esize)
+  lty_mat <- matrix(1, nrow(amat), ncol(amat), dimnames = dimnames(amat))
+  und <- eq$undirected
+  if (!is.null(und) && nrow(und) > 0) for (i in seq_len(nrow(und))) {
+    a <- und[i, "from"]; b <- und[i, "to"]
+    if (a %in% vars && b %in% vars) {
+      if (amat[a, b] == 1) lty_mat[a, b] <- 2
+      if (amat[b, a] == 1) lty_mat[b, a] <- 2
+    }
+  }
+  elabels <- if (isTRUE(s$show_edge_labels)) round(metric_mat, 2) else FALSE
+  qgraph::qgraph(
+    amat, directed = TRUE, layout = layout_arg,
+    aspect = identical(lt, "dot"),
+    labels = colnames(amat), label.scale = FALSE,
+    label.font = if (isTRUE(s$label_bold)) 2 else 1,
+    edge.color = s$pos_edge, color = s$node_fill, border.color = s$node_border,
+    vsize = vsize_arg, esize = s$esize, asize = s$asize,
+    label.cex = s$label_cex, minimum = s$min_edge,
+    edge.width = width_mat, lty = lty_mat, edge.labels = elabels,
+    edge.label.cex = s$edge_label_cex, curve = curve_arg, curveAll = curve_all,
+    title = title)
+}
+
 daggerTabUI <- function(id) {
   ns <- shiny::NS(id)
   shiny::tagList(
@@ -285,7 +329,9 @@ daggerTabServer <- function(id, data_bus, rec) {
     sel <- varselectServer("vars", data_bus, rec, rec_prefix = "dag")
     rv  <- shiny::reactiveValues(single = NULL, boot_str = NULL, avg = NULL,
                                  eq = NULL, plot_fn = NULL,
-                                 bl = NULL, wl = NULL)
+                                 bl = NULL, wl = NULL, vars = NULL,
+                                 grouped = FALSE, group_results = NULL,
+                                 group_labels = NULL)
 
     # keep constraint pickers in sync with the selected node set
     shiny::observeEvent(sel$vars(), {
@@ -340,19 +386,23 @@ daggerTabServer <- function(id, data_bus, rec) {
     # -- estimation + validation --------------------------------------------
     shiny::observeEvent(input$run, {
       vars <- sel$vars()
-      dat  <- data_bus$wide()[, vars, drop = FALSE]
+      full <- data_bus$wide()
+      dat  <- full[, vars, drop = FALSE]
       # Per-module transform: after variable selection, before learning.
       trans <- sel$transform()
       dat  <- apply_house_transform(dat, trans)
+      # Attach the group column (if any) BEFORE na.omit so rows stay aligned.
+      gv_name <- sel$group_var()
+      if (!is.null(gv_name)) dat[[".grp"]] <- full[[gv_name]]
       dat  <- stats::na.omit(dat)
+      grp_vec <- if (!is.null(gv_name)) as.character(dat[[".grp"]]) else NULL
+      if (!is.null(gv_name)) dat[[".grp"]] <- NULL
       algo <- input$algorithm
       uses_score <- algo %in% c("hc", "tabu", "mmhc", "rsmax2")
       scr  <- if (uses_score) input$score else NA_character_
-      if (!is.null(sel$group_var())) shiny::showNotification(
-        "Grouping on the DAG tab is not yet supported (split analysis pending); the grouping variable is ignored here.",
-        type = "warning", duration = 8)
-      # Coerce column types to what the chosen score/algorithm needs
-      # (fixes: binary 0/1 data + discrete BIC previously errored).
+      # Coerce column types on the FULL data (so factor levels are consistent
+      # across groups) — fixes binary 0/1 + discrete BIC, and lets discrete
+      # scores work per group.
       prep <- dag_prepare_types(dat, scr)
       dat  <- prep$dat
       shiny::showNotification(sprintf("DAG variables treated as %s.", prep$coerced),
@@ -374,19 +424,87 @@ daggerTabServer <- function(id, data_bus, rec) {
       if (!is.null(bl)) aargs$blacklist <- bl
       if (!is.null(wl)) aargs$whitelist <- wl
 
+      algo_fn <- get(algo, envir = asNamespace("bnlearn"))
+      learn_one <- function(dg) {
+        single <- do.call(algo_fn, c(list(x = dg), aargs))
+        set.seed(seed)
+        bs <- bnlearn::boot.strength(dg, R = R, algorithm = algo,
+                                     algorithm.args = aargs)
+        av <- bnlearn::averaged.network(bs, threshold = thr)
+        list(single = single, boot_str = bs, avg = av,
+             eq = dag_equivalence_info(av, bs))
+      }
+
+      # ---- Grouped (split) analysis: one DAG per group --------------------
+      if (!is.null(grp_vec)) {
+        lv  <- names(sort(table(grp_vec), decreasing = TRUE))
+        lv  <- lv[vapply(lv, function(l) sum(grp_vec == l) >= 20, TRUE)]
+        if (length(lv) > 4) lv <- lv[1:4]
+        shiny::validate(shiny::need(length(lv) >= 2,
+          "Need at least 2 groups with >= 20 complete rows each for split analysis."))
+        gres <- tryCatch(
+          shiny::withProgress(message = "Split structure learning per group", {
+            out <- lapply(seq_along(lv), function(k) {
+              shiny::incProgress(1 / length(lv),
+                detail = sprintf("group '%s' (%d/%d)", lv[k], k, length(lv)))
+              r <- learn_one(dat[grp_vec == lv[k], , drop = FALSE])
+              r$label <- lv[k]; r$n <- sum(grp_vec == lv[k]); r
+            })
+            names(out) <- lv; out
+          }),
+          error = function(e) {
+            shiny::showNotification(
+              paste("Split structure learning failed:", conditionMessage(e)),
+              type = "error", duration = 12); NULL
+          })
+        shiny::req(gres)
+        rv$grouped <- TRUE; rv$group_results <- gres; rv$group_labels <- lv
+        rv$vars <- colnames(dat)
+        # keep single-network slots pointing at group 1 for the export bundle
+        rv$boot_str <- gres[[1]]$boot_str; rv$avg <- gres[[1]]$avg; rv$eq <- gres[[1]]$eq
+
+        rec_upsert(
+          rec, "dag_analysis", "analysis",
+          description = sprintf(
+            "[DAG] SPLIT analysis by '%s' (%s): one bootstrap-averaged DAG per group (algorithm = %s%s; transform: %s; R = %d, seed %d, threshold = %.2f), drawn side by side on a shared layout. n per group: %s.",
+            gv_name, paste(lv, collapse = ", "), algo,
+            if (uses_score) sprintf(", score = %s", scr) else "",
+            names(TRANSFORM_LABELS)[TRANSFORM_LABELS == trans], R, seed, thr,
+            paste(vapply(gres, function(r) r$n, 0L), collapse = ", ")),
+          code = paste(
+            sprintf("dag_vars <- %s", vars_literal(vars)),
+            sprintf('g <- dat_wide[["%s"]]', gv_name),
+            "dat_dag  <- dat_wide[, dag_vars]",
+            transform_code_fragment(trans, "dat_dag"),
+            "dat_dag[] <- lapply(dat_dag, as.factor)  # (or numeric per score)",
+            sprintf("group_levels <- %s", vars_literal(lv)),
+            "nets <- lapply(group_levels, function(l) {",
+            "  dg <- na.omit(dat_dag[g == l, ])",
+            sprintf("  set.seed(%d)", seed),
+            sprintf('  bs <- bnlearn::boot.strength(dg, R = %d, algorithm = "%s")',
+                    R, algo),
+            sprintf("  bnlearn::averaged.network(bs, threshold = %.2f)", thr),
+            "})", sep = "\n")
+        )
+        rec_upsert(
+          rec, "dag_stability", "stability",
+          description = sprintf(
+            "[DAG] Per-group equivalence-class audit: %s. Cross-sectional DAGs are identified only up to a Markov equivalence class; comparisons of arc direction across groups are especially fragile.",
+            paste(vapply(gres, function(r)
+              sprintf("%s: %d/%d arcs unidentified", r$label,
+                      r$eq$n_unidentified, r$eq$n_arcs), ""), collapse = "; ")),
+          code = "# cpdag(avg_net) per group; see dag_analysis step."
+        )
+        return()
+      }
+
+      # ---- Single (ungrouped) analysis ------------------------------------
+      rv$grouped <- FALSE; rv$group_results <- NULL; rv$group_labels <- NULL
+      rv$vars <- colnames(dat)
       res <- tryCatch(
         shiny::withProgress(message = "Structure learning + bootstrap validation", {
-          shiny::incProgress(0.1, detail = "single algorithm run")
-          algo_fn <- get(algo, envir = asNamespace("bnlearn"))
-          single  <- do.call(algo_fn, c(list(x = dat), aargs))
-
-          shiny::incProgress(0.4, detail = sprintf("boot.strength (R = %d)", R))
-          set.seed(seed)
-          boot_str <- bnlearn::boot.strength(dat, R = R, algorithm = algo,
-                                             algorithm.args = aargs)
-          avg <- bnlearn::averaged.network(boot_str, threshold = thr)
-          eq  <- dag_equivalence_info(avg, boot_str)
-          list(single = single, boot_str = boot_str, avg = avg, eq = eq)
+          shiny::incProgress(0.5, detail = sprintf("boot.strength (R = %d)", R))
+          learn_one(dat)
         }),
         error = function(e) {
           shiny::showNotification(
@@ -454,6 +572,16 @@ daggerTabServer <- function(id, data_bus, rec) {
 
     # --- The CPDAG caveat, surfaced with every displayed DAG -----------------
     output$cpdag_caveat <- shiny::renderUI({
+      if (isTRUE(rv$grouped)) {
+        shiny::req(rv$group_results)
+        per <- vapply(rv$group_results, function(r)
+          sprintf("%s: %d/%d arcs unidentified", r$label,
+                  r$eq$n_unidentified, r$eq$n_arcs), "")
+        return(shiny::div(class = "alert alert-warning",
+          shiny::strong("Markov-equivalence caveat (per group): "),
+          sprintf("%s. Each cross-sectional DAG is identified only up to its equivalence class (CPDAG); dashed arcs have unidentified direction. Comparing arc DIRECTIONS across groups is especially fragile — differences may be equivalence-class artefacts, not real structural differences.",
+                  paste(per, collapse = "; "))))
+      }
       shiny::req(rv$eq)
       eq <- rv$eq
       und_txt <- if (eq$n_unidentified > 0)
@@ -513,180 +641,169 @@ daggerTabServer <- function(id, data_bus, rec) {
       })
     }
 
-    # DISPLAY arc set (request #4): every bootstrap arc passing BOTH the
-    # strength and the direction thresholds, applied live at plot time.
-    # Both at 0 = every arc that ever appeared (DAGger behaviour). The
-    # REPORTED model (recorder / CPDAG audit) stays averaged.network at the
+    # DISPLAY arc set (request #4): arcs passing BOTH thresholds, applied live.
+    # The REPORTED model (recorder/CPDAG audit) stays averaged.network at the
     # strength threshold chosen when "Learn & validate" was clicked.
     display_arcs <- shiny::reactive({
       shiny::req(rv$boot_str)
-      bs <- as.data.frame(rv$boot_str)
-      bs <- bs[bs$strength > 0 &
-               bs$strength  >= input$threshold &
-               bs$direction >= input$dir_threshold, , drop = FALSE]
-      bs$combined <- bs$strength * bs$direction
-      bs[order(-bs$strength), ]
+      dag_disp(rv$boot_str, input$threshold, input$dir_threshold)
     })
 
-    output$dag_plot <- shiny::renderPlot({
-      shiny::req(rv$avg)
-      s      <- look()
-      da     <- display_arcs()
-      vars   <- bnlearn::nodes(rv$avg)
-      metric <- input$edge_metric %||% "strength"
-
-      # adjacency + metric matrices from the display arc set
-      amat <- matrix(0, length(vars), length(vars),
-                     dimnames = list(vars, vars))
-      metric_mat <- amat
-      if (nrow(da) > 0) for (i in seq_len(nrow(da))) {
-        amat[da$from[i], da$to[i]]       <- 1
-        metric_mat[da$from[i], da$to[i]] <- da[[metric]][i]
-      }
-      # width scales with the chosen metric; floor so thin arcs stay visible
-      width_mat <- pmax(0.5, metric_mat * s$esize)
-
-      # dashed = direction unidentified in the CPDAG (reinforces the caveat)
-      lty_mat <- matrix(1, nrow(amat), ncol(amat), dimnames = dimnames(amat))
-      und <- rv$eq$undirected
-      if (!is.null(und) && nrow(und) > 0) {
-        for (i in seq_len(nrow(und))) {
-          a <- und[i, "from"]; b <- und[i, "to"]
-          if (a %in% vars && b %in% vars) {
-            if (amat[a, b] == 1) lty_mat[a, b] <- 2
-            if (amat[b, a] == 1) lty_mat[b, a] <- 2
-          }
-        }
-      }
-
-      # edge labels: show the chosen arc metric when the appearance toggle is on
-      elabels <- if (isTRUE(s$show_edge_labels)) round(metric_mat, 2) else FALSE
-
-      # node size: fixed slider or scaled by column means (shared option)
-      if (isTRUE(s$scale_nodes)) {
-        means <- vapply(data_bus$wide()[, vars, drop = FALSE],
-                        function(x) if (is.numeric(x)) mean(x, na.rm = TRUE)
-                                    else NA_real_, numeric(1))
-        vsize_arg <- scale_vsize_by_mean(means, s$vsize_min, s$vsize_max)
-      } else vsize_arg <- s$vsize
-
-      # layout — engines:
-      #   cascade: DAGger's layered coords + per-edge curves
-      #   dot:     Sugiyama with ranksep/nodesep controls and an "organic"
-      #            blend toward a stress layout, breaking exact rank
-      #            alignment while keeping the hierarchy readable
-      #   kk/fr:   stress majorization (neato-like) / force-directed (fdp-like)
-      #   manual:  user-pinned coordinates from the editable table
+    # Compute a layout for a given adjacency + arc set with the chosen engine.
+    # Returns list(layout, curve, curveAll, lt). Used for the single network
+    # and (on the UNION adjacency) for the shared grouped layout.
+    compute_layout <- function(amat, da) {
       lt <- input$layout_type %||% "spring"
       curve_arg <- 0.2; curve_all <- FALSE
       g_lay <- igraph::graph_from_adjacency_matrix(amat, mode = "directed")
       lay_w <- if (isTRUE(input$layout_weights) && nrow(da) > 0) {
-        # heavier arcs pull nodes closer (graphviz `weight` analogue)
         e <- igraph::as_edgelist(g_lay)
         vapply(seq_len(nrow(e)), function(i) {
           hit <- which(da$from == e[i, 1] & da$to == e[i, 2])
           if (length(hit)) max(0.1, da$strength[hit[1]]) else 0.1
         }, numeric(1))
       } else NULL
-      layout_arg <- switch(lt,
-        circle  = "circle",
-        cascade = {
-          coords <- dagger_cascade_coords(amat)
-          curve_mat <- compute_cascade_curves(amat, coords)
-          curve_arg <- curve_mat; curve_all <- TRUE
-          coords
-        },
-        dot = tryCatch({
-          co <- igraph::layout_with_sugiyama(g_lay, weights = lay_w)$layout
-          co <- .norm_coords(co)
-          b  <- input$organic %||% 0
-          if (b > 0) {                        # relax strict rank alignment
-            # KK weights are desired DISTANCES -> invert so strong arcs attract
-            co_kk <- .norm_coords(igraph::layout_with_kk(
+      if (lt == "cascade") {
+        coords <- dagger_cascade_coords(amat)
+        curve_arg <- compute_cascade_curves(amat, coords); curve_all <- TRUE
+        layout_arg <- coords
+      } else {
+        layout_arg <- switch(lt,
+          circle = "circle",
+          dot = tryCatch({
+            co <- .norm_coords(igraph::layout_with_sugiyama(g_lay, weights = lay_w)$layout)
+            b  <- input$organic %||% 0
+            if (b > 0) {
+              co_kk <- .norm_coords(igraph::layout_with_kk(
+                g_lay, weights = if (!is.null(lay_w)) 1 / lay_w))
+              co <- (1 - b) * co + b * co_kk
+            }
+            co[, 1] <- co[, 1] * (input$nodesep %||% 1)
+            co[, 2] <- co[, 2] * (input$ranksep %||% 1)
+            rownames(co) <- colnames(amat); co
+          }, error = function(e) "spring"),
+          kk = tryCatch({
+            co <- .norm_coords(igraph::layout_with_kk(
               g_lay, weights = if (!is.null(lay_w)) 1 / lay_w))
-            co <- (1 - b) * co + b * co_kk
-          }
-          # ranksep/nodesep: uniform scaling would be cancelled by qgraph's
-          # own rescale, so they work as a STRETCH RATIO (y vs x), preserved
-          # by plotting with aspect = TRUE (see qgraph call below).
-          co[, 1] <- co[, 1] * (input$nodesep %||% 1)
-          co[, 2] <- co[, 2] * (input$ranksep %||% 1)
-          rownames(co) <- colnames(amat)
-          co
-        }, error = function(e) "spring"),
-        kk = tryCatch({
-          co <- .norm_coords(igraph::layout_with_kk(
-            g_lay, weights = if (!is.null(lay_w)) 1 / lay_w))
-          rownames(co) <- colnames(amat); co
-        }, error = function(e) "spring"),
-        fr = tryCatch({
-          set.seed(rec_seed(rec))             # deterministic force layout
-          co <- .norm_coords(igraph::layout_with_fr(g_lay, weights = lay_w))
-          rownames(co) <- colnames(amat); co
-        }, error = function(e) "spring"),
-        manual = {
-          co <- manual_pos() %||% layout_store()
-          if (is.null(co)) "spring" else co[colnames(amat), , drop = FALSE]
-        },
-        "spring")
-
-      # remember computed coordinates so Manual mode can start from them
+            rownames(co) <- colnames(amat); co
+          }, error = function(e) "spring"),
+          fr = tryCatch({
+            set.seed(rec_seed(rec))
+            co <- .norm_coords(igraph::layout_with_fr(g_lay, weights = lay_w))
+            rownames(co) <- colnames(amat); co
+          }, error = function(e) "spring"),
+          manual = {
+            co <- manual_pos() %||% layout_store()
+            if (is.null(co)) "spring" else co[colnames(amat), , drop = FALSE]
+          },
+          "spring")
+      }
       if (is.matrix(layout_arg) && lt != "manual") {
-        co_store <- layout_arg
-        rownames(co_store) <- colnames(amat)
-        layout_store(co_store)
+        rownames(layout_arg) <- colnames(amat); layout_store(layout_arg)
+      }
+      list(layout = layout_arg, curve = curve_arg, curveAll = curve_all, lt = lt)
+    }
+
+    # node size shared across panels (fixed slider, or pooled column means)
+    vsize_for <- function(vars, s) {
+      if (!isTRUE(s$scale_nodes)) return(s$vsize)
+      means <- vapply(data_bus$wide()[, vars, drop = FALSE],
+                      function(x) if (is.numeric(x)) mean(x, na.rm = TRUE)
+                                  else NA_real_, numeric(1))
+      scale_vsize_by_mean(means, s$vsize_min, s$vsize_max)
+    }
+
+    output$dag_plot <- shiny::renderPlot({
+      s      <- look()
+      metric <- input$edge_metric %||% "strength"
+      thr    <- input$threshold; dthr <- input$dir_threshold
+
+      # ---- Grouped: one DAG per group, SHARED layout ----------------------
+      if (isTRUE(rv$grouped)) {
+        shiny::req(rv$group_results)
+        vars <- rv$vars
+        gres <- rv$group_results
+        das  <- lapply(gres, function(r) dag_disp(r$boot_str, thr, dthr))
+        # union adjacency -> one shared layout for every panel
+        um <- matrix(0, length(vars), length(vars), dimnames = list(vars, vars))
+        uda <- do.call(rbind, das)
+        if (!is.null(uda) && nrow(uda) > 0)
+          for (i in seq_len(nrow(uda))) um[uda$from[i], uda$to[i]] <- 1
+        lay <- compute_layout(um, if (is.null(uda)) das[[1]] else uda)
+        vsz <- vsize_for(vars, s)
+        fn <- function() {
+          op <- graphics::par(mfrow = c(1, length(gres)))
+          on.exit(graphics::par(op), add = TRUE)
+          for (k in seq_along(gres))
+            draw_one_dag(das[[k]], gres[[k]]$eq, vars, s, metric,
+                         lay$layout, lay$curve, lay$curveAll, vsz, lay$lt,
+                         title = sprintf("%s (n=%d)", gres[[k]]$label, gres[[k]]$n))
+        }
+        rv$plot_fn <- fn
+        rec_upsert(
+          rec, "dag_plot", "plot",
+          description = sprintf(
+            "[DAG] Plotted %d group DAGs side by side (%s) on a shared layout; arcs with strength >= %.2f AND direction >= %.2f; width/labels show %s.",
+            length(gres), paste(rv$group_labels, collapse = ", "),
+            thr, dthr, metric),
+          code = paste(
+            "# one shared layout (union of all groups' arcs), then one panel per group",
+            "op <- par(mfrow = c(1, length(nets))); on.exit(par(op), add = TRUE)",
+            "for (k in seq_along(nets)) qgraph::qgraph(bnlearn::amat(nets[[k]]),",
+            "  directed = TRUE, layout = shared_layout, title = names(nets)[k])",
+            sep = "\n")
+        )
+        fn(); return(invisible(NULL))
       }
 
-      fn <- function() qgraph::qgraph(
-        amat, directed = TRUE, layout = layout_arg,
-        aspect = identical(lt, "dot"),  # preserve the ranksep/nodesep ratio
-        labels = colnames(amat), label.scale = FALSE,   # equal-size node labels
-        label.font = if (isTRUE(s$label_bold)) 2 else 1,
-        edge.color = s$pos_edge,      # arcs are unsigned: pos picker only
-        color = s$node_fill, border.color = s$node_border,
-        vsize = vsize_arg, esize = s$esize, asize = s$asize,
-        label.cex = s$label_cex,
-        minimum = s$min_edge,
-        edge.width = width_mat, lty = lty_mat, edge.labels = elabels,
-        edge.label.cex = s$edge_label_cex,
-        curve = curve_arg, curveAll = curve_all)
+      # ---- Single network -------------------------------------------------
+      shiny::req(rv$avg)
+      da   <- display_arcs()
+      vars <- bnlearn::nodes(rv$avg)
+      amat <- matrix(0, length(vars), length(vars), dimnames = list(vars, vars))
+      if (nrow(da) > 0) for (i in seq_len(nrow(da)))
+        amat[da$from[i], da$to[i]] <- 1
+      lay <- compute_layout(amat, da)
+      vsz <- vsize_for(vars, s)
+      fn <- function() draw_one_dag(da, rv$eq, vars, s, metric, lay$layout,
+                                    lay$curve, lay$curveAll, vsz, lay$lt)
       rv$plot_fn <- fn
 
       rec_upsert(
         rec, "dag_plot", "plot",
         description = sprintf(
-          "[DAG] Plotted arcs with bootstrap strength >= %.2f AND direction >= %.2f (%d arcs, %s layout); width/labels show %s; dashed arcs have unidentified direction per the CPDAG. The reported model remains the averaged network from the analysis step.",
-          input$threshold, input$dir_threshold, nrow(da), lt, metric),
+          "[DAG] Plotted arcs with bootstrap strength >= %.2f AND direction >= %.2f (%d arcs, %s layout); width/labels show %s; dashed arcs have unidentified direction per the CPDAG.",
+          thr, dthr, nrow(da), lay$lt, metric),
         code = paste(
-          "# DISPLAY arc set: strength & direction thresholds applied to boot_str",
           "bs <- as.data.frame(boot_str)",
           sprintf("bs <- bs[bs$strength > 0 & bs$strength >= %.2f & bs$direction >= %.2f, ]",
-                  input$threshold, input$dir_threshold),
-          "bs$combined <- bs$strength * bs$direction",
-          "vars <- unique(c(bs$from, bs$to, colnames(dat_dag)))",
+                  thr, dthr),
+          "vars <- colnames(dat_dag)",
           "amat <- matrix(0, length(vars), length(vars), dimnames = list(vars, vars))",
           "for (i in seq_len(nrow(bs))) amat[bs$from[i], bs$to[i]] <- 1",
-          sprintf('# metric shown on arcs: %s', metric),
-          if (lt == "manual" && is.matrix(layout_arg)) sprintf(
-            "layout_coords <- matrix(c(%s), ncol = 2)  # pinned positions",
-            paste(round(as.vector(layout_arg), 3), collapse = ", ")),
-          sprintf('qgraph::qgraph(amat, directed = TRUE, layout = %s,',
-                  if (lt == "manual" && is.matrix(layout_arg)) "layout_coords"
-                  else if (lt %in% c("spring", "circle")) sprintf('"%s"', lt)
-                  else '"spring"  # engine layout approximated in export'),
-          "  labels = colnames(amat), label.scale = FALSE,",
-          sprintf('  edge.color = "%s", color = "%s", border.color = "%s",',
-                  s$pos_edge, s$node_fill, s$node_border),
-          sprintf("  minimum = %s, edge.label.cex = %s,", s$min_edge, s$edge_label_cex),
-          sprintf("  vsize = %s, esize = %s, label.cex = %s)  # + edge.width by %s",
-                  if (isTRUE(s$scale_nodes)) "vsize_arg" else as.character(s$vsize),
-                  s$esize, s$label_cex, metric),
+          sprintf('qgraph::qgraph(amat, directed = TRUE, layout = "%s",',
+                  if (lay$lt %in% c("spring", "circle")) lay$lt else "spring"),
+          sprintf("  labels = colnames(amat), esize = %s)  # width by %s",
+                  s$esize, metric),
           sep = "\n")
       )
       fn()
     })
 
     output$arc_table <- DT::renderDataTable({
+      if (isTRUE(rv$grouped)) {
+        shiny::req(rv$group_results)
+        tb <- do.call(rbind, lapply(rv$group_results, function(r) {
+          d <- dag_disp(r$boot_str, input$threshold, input$dir_threshold)
+          if (nrow(d) == 0) return(NULL)
+          cbind(group = r$label, d[, c("from", "to", "strength", "direction", "combined")])
+        }))
+        shiny::validate(shiny::need(!is.null(tb) && nrow(tb) > 0,
+          "No arcs pass the current thresholds in any group."))
+        return(DT::datatable(tb, caption = "Per-group arcs passing both thresholds.",
+                             options = list(pageLength = 20)) |>
+          DT::formatRound(c("strength", "direction", "combined"), 3))
+      }
       da <- display_arcs()
       DT::datatable(da[, c("from", "to", "strength", "direction", "combined")],
                     caption = "Arcs passing the current strength AND direction thresholds. strength = P(arc present); direction = P(this orientation | present); combined = their product. direction ~ 0.5 means the data cannot decide the arrow.",
