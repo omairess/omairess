@@ -159,7 +159,8 @@ dag_disp <- function(boot_str, thr, dthr) {
 # `eq` = its equivalence-class info, `vars` = the shared node set, `layout_arg`
 # = a shared layout so grouped panels are comparable.
 draw_one_dag <- function(da, eq, vars, s, metric, layout_arg, curve_arg,
-                         curve_all, vsize_arg, lt, title = NULL) {
+                         curve_all, vsize_arg, lt, title = NULL,
+                         node_values = NULL) {
   amat <- matrix(0, length(vars), length(vars), dimnames = list(vars, vars))
   metric_mat <- amat
   if (nrow(da) > 0) for (i in seq_len(nrow(da))) {
@@ -177,10 +178,13 @@ draw_one_dag <- function(da, eq, vars, s, metric, layout_arg, curve_arg,
     }
   }
   elabels <- if (isTRUE(s$show_edge_labels)) round(metric_mat, 2) else FALSE
+  labs <- colnames(amat)
+  if (isTRUE(s$show_means) && !is.null(node_values))
+    labs <- label_with_means(labs, node_values[colnames(amat)])
   qgraph::qgraph(
     amat, directed = TRUE, layout = layout_arg,
     aspect = identical(lt, "dot"),
-    labels = colnames(amat), label.scale = FALSE,
+    labels = labs, label.scale = FALSE,
     label.font = if (isTRUE(s$label_bold)) 2 else 1,
     edge.color = s$pos_edge, color = s$node_fill, border.color = s$node_border,
     vsize = vsize_arg, esize = s$esize, asize = s$asize,
@@ -330,6 +334,7 @@ daggerTabServer <- function(id, data_bus, rec) {
     rv  <- shiny::reactiveValues(single = NULL, boot_str = NULL, avg = NULL,
                                  eq = NULL, plot_fn = NULL,
                                  bl = NULL, wl = NULL, vars = NULL,
+                                 node_means = NULL,
                                  grouped = FALSE, group_results = NULL,
                                  group_labels = NULL)
 
@@ -397,6 +402,9 @@ daggerTabServer <- function(id, data_bus, rec) {
       dat  <- stats::na.omit(dat)
       grp_vec <- if (!is.null(gv_name)) as.character(dat[[".grp"]]) else NULL
       if (!is.null(gv_name)) dat[[".grp"]] <- NULL
+      # numeric snapshot (pre-factor-coercion) for node means / size scaling
+      num_dat <- suppressWarnings(
+        vapply(dat, function(x) as.numeric(as.character(x)), numeric(nrow(dat))))
       algo <- input$algorithm
       uses_score <- algo %in% c("hc", "tabu", "mmhc", "rsmax2")
       scr  <- if (uses_score) input$score else NA_character_
@@ -448,7 +456,10 @@ daggerTabServer <- function(id, data_bus, rec) {
               shiny::incProgress(1 / length(lv),
                 detail = sprintf("group '%s' (%d/%d)", lv[k], k, length(lv)))
               r <- learn_one(dat[grp_vec == lv[k], , drop = FALSE])
-              r$label <- lv[k]; r$n <- sum(grp_vec == lv[k]); r
+              r$label <- lv[k]; r$n <- sum(grp_vec == lv[k])
+              r$means <- colMeans(num_dat[grp_vec == lv[k], , drop = FALSE],
+                                  na.rm = TRUE)
+              r
             })
             names(out) <- lv; out
           }),
@@ -460,6 +471,7 @@ daggerTabServer <- function(id, data_bus, rec) {
         shiny::req(gres)
         rv$grouped <- TRUE; rv$group_results <- gres; rv$group_labels <- lv
         rv$vars <- colnames(dat)
+        rv$node_means <- colMeans(num_dat, na.rm = TRUE)   # pooled (for "across")
         # keep single-network slots pointing at group 1 for the export bundle
         rv$boot_str <- gres[[1]]$boot_str; rv$avg <- gres[[1]]$avg; rv$eq <- gres[[1]]$eq
 
@@ -501,6 +513,7 @@ daggerTabServer <- function(id, data_bus, rec) {
       # ---- Single (ungrouped) analysis ------------------------------------
       rv$grouped <- FALSE; rv$group_results <- NULL; rv$group_labels <- NULL
       rv$vars <- colnames(dat)
+      rv$node_means <- colMeans(num_dat, na.rm = TRUE)
       res <- tryCatch(
         shiny::withProgress(message = "Structure learning + bootstrap validation", {
           shiny::incProgress(0.5, detail = sprintf("boot.strength (R = %d)", R))
@@ -570,39 +583,54 @@ daggerTabServer <- function(id, data_bus, rec) {
       rv$avg <- res$avg; rv$eq <- res$eq
     })
 
-    # --- The CPDAG caveat, surfaced with every displayed DAG -----------------
+    look <- appearanceServer("look", plot_closure = shiny::reactive(rv$plot_fn))
+
+    # --- The CPDAG caveat — recomputed LIVE at the current threshold ---------
     output$cpdag_caveat <- shiny::renderUI({
       if (isTRUE(rv$grouped)) {
         shiny::req(rv$group_results)
-        per <- vapply(rv$group_results, function(r)
+        per <- vapply(rv$group_results, function(r) {
+          eq <- live_eq(r$boot_str, r$eq)
           sprintf("%s: %d/%d arcs unidentified", r$label,
-                  r$eq$n_unidentified, r$eq$n_arcs), "")
+                  eq$n_unidentified, eq$n_arcs)
+        }, "")
         return(shiny::div(class = "alert alert-warning",
-          shiny::strong("Markov-equivalence caveat (per group): "),
+          shiny::strong("Markov-equivalence caveat (per group, at the current threshold): "),
           sprintf("%s. Each cross-sectional DAG is identified only up to its equivalence class (CPDAG); dashed arcs have unidentified direction. Comparing arc DIRECTIONS across groups is especially fragile — differences may be equivalence-class artefacts, not real structural differences.",
                   paste(per, collapse = "; "))))
       }
-      shiny::req(rv$eq)
-      eq <- rv$eq
+      shiny::req(rv$boot_str)
+      eq <- live_eq(rv$boot_str, rv$eq)
       und_txt <- if (eq$n_unidentified > 0)
         paste(apply(eq$undirected, 1, paste, collapse = " — "), collapse = "; ")
       else "none"
       shiny::div(
         class = if (eq$n_unidentified > 0) "alert alert-warning" else "alert alert-info",
-        shiny::strong("Markov-equivalence caveat: "),
+        shiny::strong("Markov-equivalence caveat (at the current strength threshold): "),
         sprintf(
           "this cross-sectional DAG is identified only up to its equivalence class (CPDAG). %d of %d arcs have statistically unidentified direction: %s. Arrows on those arcs are an algorithmic convention, not causal evidence. Arc-direction confidence from the bootstrap is listed in the table (direction near 0.5 = undecidable).",
           eq$n_unidentified, eq$n_arcs, und_txt)
       )
     })
 
-    look <- appearanceServer("look", plot_closure = shiny::reactive(rv$plot_fn))
-
     # Resizable plot window: height follows the appearance slider.
     output$dag_plot_ui <- shiny::renderUI({
       shiny::plotOutput(session$ns("dag_plot"),
                         height = sprintf("%dpx", look()$plot_height))
     })
+
+    # LIVE equivalence-class audit: recompute the CPDAG at the CURRENT strength
+    # threshold so the dashed arcs + caveat always match what is on screen
+    # (the run-time rv$eq can lag once the slider moves). Cheap: no bootstrap,
+    # just re-threshold + cpdag(); falls back to the run-time eq on error
+    # (very low thresholds can yield a cyclic averaged network).
+    live_eq <- function(boot_str, fallback) {
+      tryCatch(
+        dag_equivalence_info(
+          bnlearn::averaged.network(boot_str, threshold = input$threshold),
+          boot_str),
+        error = function(e) fallback)
+    }
 
     # --- Manual node positions (pin mode) ------------------------------------
     layout_store <- shiny::reactiveVal(NULL)   # last computed coords (named)
@@ -704,13 +732,10 @@ daggerTabServer <- function(id, data_bus, rec) {
       list(layout = layout_arg, curve = curve_arg, curveAll = curve_all, lt = lt)
     }
 
-    # node size shared across panels (fixed slider, or pooled column means)
-    vsize_for <- function(vars, s) {
+    # Node size from a value vector, scaled against a reference range.
+    vsize_from <- function(values, ref_range, s) {
       if (!isTRUE(s$scale_nodes)) return(s$vsize)
-      means <- vapply(data_bus$wide()[, vars, drop = FALSE],
-                      function(x) if (is.numeric(x)) mean(x, na.rm = TRUE)
-                                  else NA_real_, numeric(1))
-      scale_vsize_by_mean(means, s$vsize_min, s$vsize_max)
+      scale_vsize_ref(values, ref_range, s$vsize_min, s$vsize_max)
     }
 
     output$dag_plot <- shiny::renderPlot({
@@ -730,14 +755,31 @@ daggerTabServer <- function(id, data_bus, rec) {
         if (!is.null(uda) && nrow(uda) > 0)
           for (i in seq_len(nrow(uda))) um[uda$from[i], uda$to[i]] <- 1
         lay <- compute_layout(um, if (is.null(uda)) das[[1]] else uda)
-        vsz <- vsize_for(vars, s)
+        # FIX: a layout STRING ("spring") makes qgraph compute a fresh (random)
+        # layout in every panel -> different positions. Resolve to concrete
+        # coordinates ONCE on the union so all panels share them.
+        if (is.character(lay$layout)) {
+          set.seed(rec_seed(rec))
+          lay$layout <- qgraph::qgraph(um, layout = lay$layout,
+                                       DoNotPlot = TRUE)$layout
+          rownames(lay$layout) <- vars
+        }
+        # node-size reference range: pooled ("across") or per-group ("within")
+        pooled_rng <- range(rv$node_means[vars], na.rm = TRUE)
         fn <- function() {
           op <- graphics::par(mfrow = c(1, length(gres)))
           on.exit(graphics::par(op), add = TRUE)
-          for (k in seq_along(gres))
-            draw_one_dag(das[[k]], gres[[k]]$eq, vars, s, metric,
-                         lay$layout, lay$curve, lay$curveAll, vsz, lay$lt,
-                         title = sprintf("%s (n=%d)", gres[[k]]$label, gres[[k]]$n))
+          for (k in seq_along(gres)) {
+            mk  <- gres[[k]]$means[vars]
+            rng <- if (identical(s$scale_ref, "within"))
+                     range(mk, na.rm = TRUE) else pooled_rng
+            vsz <- vsize_from(mk, rng, s)
+            draw_one_dag(das[[k]], live_eq(gres[[k]]$boot_str, gres[[k]]$eq),
+                         vars, s, metric, lay$layout, lay$curve, lay$curveAll,
+                         vsz, lay$lt,
+                         title = sprintf("%s (n=%d)", gres[[k]]$label, gres[[k]]$n),
+                         node_values = mk)
+          }
         }
         rv$plot_fn <- fn
         rec_upsert(
@@ -764,9 +806,12 @@ daggerTabServer <- function(id, data_bus, rec) {
       if (nrow(da) > 0) for (i in seq_len(nrow(da)))
         amat[da$from[i], da$to[i]] <- 1
       lay <- compute_layout(amat, da)
-      vsz <- vsize_for(vars, s)
-      fn <- function() draw_one_dag(da, rv$eq, vars, s, metric, lay$layout,
-                                    lay$curve, lay$curveAll, vsz, lay$lt)
+      mns <- rv$node_means[vars]
+      vsz <- vsize_from(mns, range(mns, na.rm = TRUE), s)
+      eq_now <- live_eq(rv$boot_str, rv$eq)   # dashed arcs match current threshold
+      fn <- function() draw_one_dag(da, eq_now, vars, s, metric, lay$layout,
+                                    lay$curve, lay$curveAll, vsz, lay$lt,
+                                    node_values = mns)
       rv$plot_fn <- fn
 
       rec_upsert(

@@ -751,6 +751,8 @@ psynetTabServer <- function(id, data_bus, rec) {
           what = "std", whatLabels = "est", layout = "tree2",
           sizeLat = s$vsize + 2, sizeMan = s$vsize,
           edge.label.cex = s$edge_label_cex, mar = c(6, 1, 6, 1),
+          nCharNodes = 0, nCharEdges = 0,   # do NOT abbreviate labels
+          label.font = if (isTRUE(s$label_bold)) 2 else 1,
           pastel = TRUE, borders = TRUE)
         rv$plot_fn <- fn
         rec_upsert(
@@ -765,7 +767,8 @@ psynetTabServer <- function(id, data_bus, rec) {
             "dimnames(psi) <- list(colnames(lambda), colnames(lambda))",
             "dimnames(tht) <- list(rownames(lambda), rownames(lambda))",
             "semPlot::semPaths(semPlot::lisrelModel(LY = lam, PS = psi, TE = tht),",
-            '  what = "std", whatLabels = "est", layout = "tree2", pastel = TRUE)',
+            '  what = "std", whatLabels = "est", layout = "tree2", pastel = TRUE,',
+            "  nCharNodes = 0, nCharEdges = 0)  # full labels, no abbreviation",
             sep = "\n")
         )
         fn(); return(invisible(NULL))
@@ -896,8 +899,24 @@ psynetTabServer <- function(id, data_bus, rec) {
         }
       } else NULL
 
+      # means under labels (single-group): factor scores for latent nets,
+      # column means for observed nets.
+      nvals <- if (!multi) {
+        if (is_latent_net) {
+          fs <- mean_fscores_psynet(rv$model, rv$lambda_used, rv$dat)
+          if (!is.null(fs) && length(fs) == ncol(pm$W))
+            stats::setNames(fs, colnames(pm$W)) else NULL
+        } else if (!is.null(rv$dat)) {
+          keep <- intersect(colnames(pm$W), names(rv$dat))
+          if (length(keep) == ncol(pm$W))
+            vapply(rv$dat[, keep, drop = FALSE], mean, numeric(1), na.rm = TRUE)
+          else NULL
+        }
+      } else NULL
+
       args <- house_qgraph_args(pm$W, s, directed = pm$directed,
-                                vsize = vsize_arg, pie = r2)
+                                vsize = vsize_arg, pie = r2,
+                                node_values = nvals)
       grp_labels <- {
         gv <- sel$group_var()
         lv <- if (!is.null(gv)) sort(unique(stats::na.omit(
@@ -998,6 +1017,14 @@ nctUI <- function(id) {
                         "and unmatched subjects dropped (reported). Without one,",
                         "equal group sizes and matching row order are ASSUMED.")
       ),
+      shiny::selectInput(ns("nct_est"), "Network estimator",
+                         c("Auto (IsingFit if binary, else EBICglasso)" = "auto",
+                           "EBICglasso" = "EBICglasso",
+                           "ggmModSelect" = "ggmModSelect",
+                           "pcor (partial correlations)" = "pcor",
+                           "cor (marginal correlations)" = "cor",
+                           "IsingFit (binary)" = "IsingFit"),
+                         selected = "auto"),
       shiny::selectInput(ns("adjust"), "Edge-test p-value correction",
                          c("Holm (recommended)" = "holm", "BH / FDR" = "BH",
                            "Bonferroni" = "bonferroni",
@@ -1006,8 +1033,8 @@ nctUI <- function(id) {
       shiny::numericInput(ns("iterations"), "Permutation iterations",
                           value = 1000, min = 100, step = 100),
       shiny::actionButton(ns("run"), "Run NCT", class = "btn-primary"),
-      shiny::helpText("Networks are estimated with the GGM tab's settings",
-                      "(default = EBICglasso). A null NCT is not proof of equality.")
+      shiny::helpText("Both group networks use the SAME chosen estimator.",
+                      "A null NCT is not proof of equality.")
     ),
     shiny::column(8,
       shiny::h4("Group networks (same layout, so they are directly comparable)"),
@@ -1019,40 +1046,53 @@ nctUI <- function(id) {
   )
 }
 
-# Estimate one network from a data matrix with the GGM/Ising machinery
-# (binary -> IsingFit, else EBICglasso on cor_auto). Returns a weights matrix.
-nct_estimate_one <- function(m, binary, gamma) {
-  def <- if (binary) "IsingFit" else "EBICglasso"
-  net <- if (binary)
-    bootnet::estimateNetwork(m, default = "IsingFit", tuning = gamma)
-  else
+# Estimate one network from a data matrix with any of the supported
+# estimators (request #4). `est` in {auto, EBICglasso, ggmModSelect, pcor,
+# cor, IsingFit}; "auto" -> IsingFit if binary else EBICglasso.
+nct_estimate_one <- function(m, est, gamma, binary = FALSE) {
+  if (identical(est, "auto")) est <- if (binary) "IsingFit" else "EBICglasso"
+  net <- switch(est,
+    IsingFit     = bootnet::estimateNetwork(m, default = "IsingFit", tuning = gamma),
+    EBICglasso   = bootnet::estimateNetwork(m, default = "EBICglasso",
+                                            corMethod = "cor_auto", tuning = gamma),
+    ggmModSelect = bootnet::estimateNetwork(m, default = "ggmModSelect",
+                                            corMethod = "cor_auto", tuning = gamma),
+    pcor         = bootnet::estimateNetwork(m, default = "pcor",
+                                            corMethod = "cor_auto"),
+    cor          = bootnet::estimateNetwork(m, default = "cor",
+                                            corMethod = "cor_auto"),
     bootnet::estimateNetwork(m, default = "EBICglasso",
-                             corMethod = "cor_auto", tuning = gamma)
+                             corMethod = "cor_auto", tuning = gamma))
   qgraph::getWmat(net)
 }
 
 # Self-contained permutation Network Comparison Test — the fallback used when
 # the installed NetworkComparisonTest package errors (e.g. the version-
-# specific "comparison (==)..." bug). Tests the two invariants NCT reports:
+# specific "comparison (==)..." bug). Tests, by permuting group labels and
+# re-estimating with the chosen estimator:
 #   * global strength invariance  (sum of |edge weights|)
 #   * network structure invariance (max |edge difference|)
-# by permuting group labels and re-estimating. Same logic van Borkulo's NCT
-# uses; fully under our control so it cannot hit a package bug. Edge- and
-# centrality-level tests are NOT reproduced here (that is why we prefer the
-# real package when it works).
-manual_nct <- function(m1, m2, it, binary, gamma, paired, seed) {
+#   * EVERY individual edge (|difference| per edge, request #5) — with the
+#     requested multiple-comparison correction.
+manual_nct <- function(m1, m2, it, est, gamma, binary, paired, seed,
+                       adjust = "holm") {
   set.seed(seed)
-  W1 <- nct_estimate_one(m1, binary, gamma)
-  W2 <- nct_estimate_one(m2, binary, gamma)
-  glstr <- function(W) sum(abs(W[upper.tri(W)]))
+  W1 <- nct_estimate_one(m1, est, gamma, binary)
+  W2 <- nct_estimate_one(m2, est, gamma, binary)
+  ut    <- upper.tri(W1)
+  glstr <- function(W) sum(abs(W[ut]))
   s_obs <- abs(glstr(W1) - glstr(W2))
   d_obs <- max(abs(W1 - W2))
+  e_obs <- abs(W1[ut] - W2[ut])                 # observed |diff| per edge
+  nm    <- colnames(W1)
+  pairs <- which(ut, arr.ind = TRUE)
   pooled <- rbind(as.matrix(m1), as.matrix(m2))
   n1 <- nrow(m1); N <- nrow(pooled)
   s_perm <- numeric(it); d_perm <- numeric(it)
+  e_ge   <- numeric(length(e_obs)); e_n <- 0L    # count perms with |diff|>=obs
   for (b in seq_len(it)) {
     if (paired && nrow(m1) == nrow(m2)) {
-      swap <- stats::rbinom(n1, 1, 0.5) == 1        # swap each pair's members
+      swap <- stats::rbinom(n1, 1, 0.5) == 1
       pm1 <- rbind(as.matrix(m1)[!swap, , drop = FALSE],
                    as.matrix(m2)[swap, , drop = FALSE])
       pm2 <- rbind(as.matrix(m2)[!swap, , drop = FALSE],
@@ -1062,48 +1102,67 @@ manual_nct <- function(m1, m2, it, binary, gamma, paired, seed) {
       pm1 <- pooled[idx[seq_len(n1)], , drop = FALSE]
       pm2 <- pooled[idx[(n1 + 1):N], , drop = FALSE]
     }
-    PW1 <- tryCatch(nct_estimate_one(pm1, binary, gamma), error = function(e) NULL)
-    PW2 <- tryCatch(nct_estimate_one(pm2, binary, gamma), error = function(e) NULL)
+    PW1 <- tryCatch(nct_estimate_one(pm1, est, gamma, binary), error = function(e) NULL)
+    PW2 <- tryCatch(nct_estimate_one(pm2, est, gamma, binary), error = function(e) NULL)
     if (is.null(PW1) || is.null(PW2)) { s_perm[b] <- NA; d_perm[b] <- NA; next }
     s_perm[b] <- abs(glstr(PW1) - glstr(PW2))
     d_perm[b] <- max(abs(PW1 - PW2))
+    e_ge <- e_ge + (abs(PW1[ut] - PW2[ut]) >= e_obs)
+    e_n  <- e_n + 1L
   }
+  edge_p <- if (e_n > 0) (e_ge + 1) / (e_n + 1) else rep(NA_real_, length(e_obs))
+  edge_p <- stats::p.adjust(edge_p, method = adjust)
+  einv <- data.frame(
+    Var1 = nm[pairs[, 1]], Var2 = nm[pairs[, 2]],
+    diff = e_obs, p = edge_p, stringsAsFactors = FALSE)
+  einv <- einv[order(einv$p, -einv$diff), ]
   structure(list(
     glstrinv.real = s_obs,
     glstrinv.pval = mean(c(s_perm, s_obs) >= s_obs, na.rm = TRUE),
     nwinv.real    = d_obs,
     nwinv.pval    = mean(c(d_perm, d_obs) >= d_obs, na.rm = TRUE),
+    einv.pvals    = einv,
     nperm = sum(!is.na(s_perm))),
     class = "manual_nct")
 }
 
 print.manual_nct <- function(x, ...) {
-  cat("Fallback permutation NCT (global invariants only)\n")
-  cat(sprintf("  Global strength invariance:  diff = %.4f, p = %.4f\n",
+  cat("Fallback permutation NCT\n")
+  cat(sprintf("  Global strength invariance:   diff = %.4f, p = %.4f\n",
               x$glstrinv.real, x$glstrinv.pval))
   cat(sprintf("  Network structure invariance: max|diff| = %.4f, p = %.4f\n",
               x$nwinv.real, x$nwinv.pval))
+  if (!is.null(x$einv.pvals)) {
+    sig <- sum(x$einv.pvals$p < 0.05, na.rm = TRUE)
+    cat(sprintf("  Edge-level tests: %d of %d edges differ (corrected p < .05); see the table.\n",
+                sig, nrow(x$einv.pvals)))
+  }
   cat(sprintf("  (%d valid permutations)\n", x$nperm))
   invisible(x)
 }
-summary.manual_nct <- function(object, ...) print(object)
+# Return the object (no printing) so an outer print() renders it exactly once
+# — the previous version printed inside summary AND via the outer print,
+# which duplicated the output.
+summary.manual_nct <- function(object, ...) invisible(object)
 
 # Core NCT call. Prefers the installed package; if it errors (version-specific
 # bugs such as the "comparison (==) is possible only for atomic and list
 # types" crash), falls back to the self-contained permutation test above.
 # Data are coerced to a plain numeric matrix first (data frames with any odd
 # column class are a common trigger). No estimator FUNCTION is ever passed.
-run_nct_corrected <- function(dat1, dat2, paired, it, adjust, gg, seed) {
+run_nct_corrected <- function(dat1, dat2, paired, it, adjust, gg, seed,
+                              est = "auto") {
   m1 <- data.matrix(dat1); m2 <- data.matrix(dat2)
   all_binary <- all(apply(rbind(m1, m2), 2,
                           function(x) length(unique(stats::na.omit(x))) <= 2))
+  use_binary <- all_binary || identical(est, "IsingFit")
   res <- tryCatch({
     set.seed(seed)
     nct_formals <- names(formals(NetworkComparisonTest::NCT))
     args <- list(data1 = as.data.frame(m1), data2 = as.data.frame(m2),
                  it = it, paired = paired, test.edges = TRUE, edges = "all")
     if ("gamma" %in% nct_formals) args$gamma <- gg$tuning
-    if (all_binary && "binary.data" %in% nct_formals) args$binary.data <- TRUE
+    if (use_binary && "binary.data" %in% nct_formals) args$binary.data <- TRUE
     if ("p.adjust.methods" %in% nct_formals) args$p.adjust.methods <- adjust
     r <- do.call(NetworkComparisonTest::NCT, args)
     if (!("p.adjust.methods" %in% nct_formals) &&
@@ -1114,7 +1173,8 @@ run_nct_corrected <- function(dat1, dat2, paired, it, adjust, gg, seed) {
     attr(r, "engine") <- "NetworkComparisonTest"
     r
   }, error = function(e) {
-    r <- manual_nct(m1, m2, min(it, 500L), all_binary, gg$tuning, paired, seed)
+    r <- manual_nct(m1, m2, min(it, 500L), est, gg$tuning, use_binary, paired,
+                    seed, adjust = adjust)
     attr(r, "engine") <- "fallback"
     attr(r, "pkg_error") <- conditionMessage(e)
     r
@@ -1195,6 +1255,7 @@ nctServer <- function(id, data_bus, rec, gg_settings) {
                           function(x) length(unique(stats::na.omit(x))) <= 2))
       list(d1 = d1, d2 = d2, groups = lv, num = num, paired = paired,
            id_note = id_note, trans = trans, binary = binary,
+           est = input$nct_est %||% "auto",
            gg = gg_settings(), seed = rec_seed(rec))
     })
 
@@ -1203,7 +1264,7 @@ nctServer <- function(id, data_bus, rec, gg_settings) {
       lv <- p$groups; num <- p$num; trans <- p$trans
       paired <- p$paired; id_note <- p$id_note; gg <- p$gg; seed <- p$seed
       res  <- run_nct_corrected(p$d1, p$d2, paired, input$iterations,
-                                input$adjust, gg, seed)
+                                input$adjust, gg, seed, est = p$est)
       if (identical(attr(res, "engine"), "fallback"))
         shiny::showNotification(paste(
           "The installed NetworkComparisonTest package errored, so a built-in",
@@ -1252,7 +1313,7 @@ nctServer <- function(id, data_bus, rec, gg_settings) {
     output$group_plots <- shiny::renderPlot({
       p <- prep_r()
       est <- function(d) tryCatch(
-        nct_estimate_one(data.matrix(d), p$binary, p$gg$tuning),
+        nct_estimate_one(data.matrix(d), p$est, p$gg$tuning, p$binary),
         error = function(e) NULL)
       W1 <- est(p$d1); W2 <- est(p$d2)
       shiny::validate(shiny::need(!is.null(W1) && !is.null(W2),

@@ -251,7 +251,8 @@ bootnetTabServer <- function(id, data_bus, rec) {
                                 boot_np = NULL, boot_cd = NULL, cs = NULL,
                                 has_neg = FALSE, plot_fn = NULL,
                                 grouped = FALSE, nets = NULL,
-                                group_labels = NULL)
+                                group_labels = NULL, group_means = NULL,
+                                node_means = NULL)
 
     # ---- 1. Estimation (instant, no bootstraps) -----------------------------
     shiny::observeEvent(input$run, {
@@ -294,6 +295,11 @@ bootnetTabServer <- function(id, data_bus, rec) {
         names(nets) <- lv
         shiny::validate(shiny::need(!any(vapply(nets, is.null, TRUE)),
           "Estimation failed for at least one group (often: too few rows)."))
+        num_dat <- data.matrix(dat)
+        rv$group_means <- lapply(lv, function(l)
+          colMeans(num_dat[which(gvec == l), , drop = FALSE], na.rm = TRUE))
+        names(rv$group_means) <- lv
+        rv$node_means <- colMeans(num_dat, na.rm = TRUE)
         rv$nets <- nets; rv$group_labels <- lv; rv$grouped <- TRUE
         rv$net <- NULL; rv$def <- def; rv$dat <- dat
         rv$boot_np <- NULL; rv$boot_cd <- NULL; rv$cs <- NULL
@@ -589,14 +595,23 @@ bootnetTabServer <- function(id, data_bus, rec) {
         lt2 <- input$layout_type %||% "spring"
         L   <- if (lt2 == "circle") "circle"
                else do.call(qgraph::averageLayout, unname(Ws))
-        args <- house_qgraph_args(Ws[[1]], s, directed = directed)
         labs <- rv$group_labels
+        pooled_rng <- range(rv$node_means, na.rm = TRUE)
         fn <- function() {
           op <- graphics::par(mfrow = c(1, length(Ws)))
           on.exit(graphics::par(op), add = TRUE)
-          for (k in seq_along(Ws))
+          for (k in seq_along(Ws)) {
+            mk  <- rv$group_means[[labs[k]]][colnames(Ws[[k]])]
+            vsz <- if (isTRUE(s$scale_nodes)) {
+              rng <- if (identical(s$scale_ref, "within"))
+                       range(mk, na.rm = TRUE) else pooled_rng
+              scale_vsize_ref(mk, rng, s$vsize_min, s$vsize_max)
+            } else NULL
+            args <- house_qgraph_args(Ws[[k]], s, directed = directed,
+                                      vsize = vsz, node_values = mk)
             do.call(qgraph::qgraph,
                     c(list(Ws[[k]], layout = L, title = labs[k]), args))
+          }
         }
         rv$plot_fn <- fn
         rec_upsert(
@@ -699,9 +714,13 @@ bootnetTabServer <- function(id, data_bus, rec) {
                       house_group_colors(length(groups_list)) else s$node_fill
       # Predictability rings: OLS R^2 of each node on all others (#4)
       r2 <- if (isTRUE(s$show_pred)) node_predictability_r2(dat) else NULL
+      # means under labels: column means of the (transformed) analysis data
+      nvals <- vapply(dat, function(x)
+        if (is.numeric(x)) mean(x, na.rm = TRUE) else NA_real_, numeric(1))
       args <- house_qgraph_args(wmat, s, directed = directed,
                                 node_col = node_cols, groups = groups_list,
-                                vsize = vsize_arg, pie = r2)
+                                vsize = vsize_arg, pie = r2,
+                                node_values = nvals[colnames(wmat)])
       fn <- function() do.call(qgraph::qgraph,
                                c(list(wmat, layout = layout_arg), args))
       rv$plot_fn <- fn

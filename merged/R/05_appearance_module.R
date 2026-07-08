@@ -47,7 +47,14 @@ appearanceUI <- function(id, signed = TRUE, default_esize = 8,
       # node size ranges linearly between these when scaled by column mean
       shiny::sliderInput(ns("vsize_range"), "Node size range (min-max)",
                          min = 2, max = 20, value = c(4, 14), step = 0.5),
-      shiny::helpText("Smallest node = lowest column mean, largest = highest.")
+      shiny::helpText("Smallest node = lowest value, largest = highest."),
+      # for grouped/side-by-side plots: rescale each panel by its OWN values,
+      # or all panels on ONE shared scale so node sizes are comparable.
+      shiny::radioButtons(ns("scale_ref"),
+                          "When groups are shown side by side, scale sizes:",
+                          c("Across groups (shared scale, comparable)" = "across",
+                            "Within each group (own scale per panel)"   = "within"),
+                          selected = "across")
     ),
     shiny::sliderInput(ns("esize"), "Edge scaling", min = 0.5, max = esize_max,
                        value = min(default_esize, esize_max), step = 0.5),
@@ -56,6 +63,8 @@ appearanceUI <- function(id, signed = TRUE, default_esize = 8,
     shiny::sliderInput(ns("label_cex"), "Node label size", min = 0.3, max = 3,
                        value = 1, step = 0.1),
     shiny::checkboxInput(ns("label_bold"), "Bold node labels", value = FALSE),
+    shiny::checkboxInput(ns("show_means"),
+                         "Show node mean under each label", value = FALSE),
     shiny::helpText("Node labels are drawn at one fixed size (not scaled per",
                     "node), so every label is equally legible."),
     shiny::h5("Edges shown"),
@@ -116,6 +125,8 @@ appearanceServer <- function(id, plot_closure) {
         asize            = input$asize       %||% 3,
         label_cex        = input$label_cex   %||% 1,
         label_bold       = isTRUE(input$label_bold),
+        show_means       = isTRUE(input$show_means),
+        scale_ref        = input$scale_ref   %||% "across",
         min_edge         = input$min_edge    %||% 0,
         show_edge_labels = isTRUE(input$show_edge_labels),
         edge_label_cex   = input$edge_label_cex %||% 0.8,
@@ -167,12 +178,33 @@ appearanceServer <- function(id, plot_closure) {
 #   * edge.labels + edge.label.cex from the toggle/slider           (#3)
 #   * minimum = min |value| to draw an edge                          (#9)
 # `directed` flips arrows on; `node_col`/`groups` allow community colouring.
+# Map `values` into [vmin, vmax] using an explicit reference range. For
+# grouped plots: "within" passes each group's own range; "across" passes the
+# pooled range so node sizes are directly comparable across panels.
+scale_vsize_ref <- function(values, rng, vmin, vmax) {
+  values[is.na(values)] <- mean(values, na.rm = TRUE)
+  if (diff(rng) < 1e-9) return(rep((vmin + vmax) / 2, length(values)))
+  n <- pmin(1, pmax(0, (values - rng[1]) / diff(rng)))
+  vmin + n * (vmax - vmin)
+}
+
+# two-line "name\nvalue" labels for the show-means option.
+label_with_means <- function(labs, node_values) {
+  if (is.null(node_values)) return(labs)
+  paste0(labs, "\n", formatC(node_values, format = "g", digits = 2))
+}
+
 house_qgraph_args <- function(W, s, directed = FALSE,
                               node_col = NULL, groups = NULL,
-                              vsize = NULL, labels = NULL, pie = NULL) {
+                              vsize = NULL, labels = NULL, pie = NULL,
+                              node_values = NULL) {
   labs <- labels %||% colnames(W)
   if (is.null(labs) || all(!nzchar(labs))) labs <- rownames(W)
   if (is.null(labs) || all(!nzchar(labs))) labs <- paste0("V", seq_len(ncol(W)))
+  # show means under the label (request): "Name\n0.42"
+  if (isTRUE(s$show_means) && !is.null(node_values) &&
+      length(node_values) == length(labs))
+    labs <- label_with_means(labs, node_values)
   c(if (!is.null(pie)) house_pie_args(pie, s),
     list(
     directed        = directed,
