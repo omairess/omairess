@@ -252,7 +252,7 @@ bootnetTabServer <- function(id, data_bus, rec) {
                                 has_neg = FALSE, plot_fn = NULL,
                                 grouped = FALSE, nets = NULL,
                                 group_labels = NULL, group_means = NULL,
-                                node_means = NULL)
+                                group_data = NULL, node_means = NULL)
 
     # ---- 1. Estimation (instant, no bootstraps) -----------------------------
     shiny::observeEvent(input$run, {
@@ -299,6 +299,11 @@ bootnetTabServer <- function(id, data_bus, rec) {
         rv$group_means <- lapply(lv, function(l)
           colMeans(num_dat[which(gvec == l), , drop = FALSE], na.rm = TRUE))
         names(rv$group_means) <- lv
+        # per-group data subsets: needed for per-subgroup community detection,
+        # PCA layout, and predictability rings (requests #1, #4).
+        rv$group_data <- lapply(lv, function(l)
+          dat[which(gvec == l), , drop = FALSE])
+        names(rv$group_data) <- lv
         rv$node_means <- colMeans(num_dat, na.rm = TRUE)
         rv$nets <- nets; rv$group_labels <- lv; rv$grouped <- TRUE
         rv$net <- NULL; rv$def <- def; rv$dat <- dat
@@ -582,7 +587,14 @@ bootnetTabServer <- function(id, data_bus, rec) {
     output$network_plot <- shiny::renderPlot({
       s <- look()
 
-      # ---- Grouped: one panel per group, SHARED layout (request) -----------
+      # ---- Grouped: one panel per group ----------------------------------
+      # DECISION (request #1): the LAYOUT choice determines whether groups
+      # share coordinates. spring/circle -> ONE shared layout (positions
+      # comparable). Community/PCA layout -> per-subgroup layout (each panel
+      # laid out by its OWN community/PCA structure) — because those layouts
+      # ENCODE each group's structure, which is the point of choosing them.
+      # The separate "colour by community" checkbox colours nodes by each
+      # group's own communities WITHOUT changing the (shared) layout.
       if (isTRUE(rv$grouped)) {
         shiny::req(rv$nets)
         directed <- identical(rv$def, "relimp")
@@ -592,38 +604,59 @@ bootnetTabServer <- function(id, data_bus, rec) {
             dimnames(w) <- list(colnames(rv$dat), colnames(rv$dat))
           w
         })
-        lt2 <- input$layout_type %||% "spring"
-        L   <- if (lt2 == "circle") "circle"
-               else do.call(qgraph::averageLayout, unname(Ws))
+        lt2  <- input$layout_type %||% "spring"
         labs <- rv$group_labels
+        per_group_layout <- lt2 %in% c("ega", "pca")
+        colour_comm <- per_group_layout || isTRUE(input$colour_by_community)
+        # shared layout only when NOT per-group
+        Lshared <- if (per_group_layout) NULL
+                   else if (lt2 == "circle") "circle"
+                   else do.call(qgraph::averageLayout, unname(Ws))
         pooled_rng <- range(rv$node_means, na.rm = TRUE)
         fn <- function() {
           op <- graphics::par(mfrow = c(1, length(Ws)))
           on.exit(graphics::par(op), add = TRUE)
           for (k in seq_along(Ws)) {
-            mk  <- rv$group_means[[labs[k]]][colnames(Ws[[k]])]
+            Wk <- Ws[[k]]; dk <- rv$group_data[[labs[k]]]
+            mk <- rv$group_means[[labs[k]]][colnames(Wk)]
             vsz <- if (isTRUE(s$scale_nodes)) {
               rng <- if (identical(s$scale_ref, "within"))
                        range(mk, na.rm = TRUE) else pooled_rng
               scale_vsize_ref(mk, rng, s$vsize_min, s$vsize_max)
             } else NULL
-            args <- house_qgraph_args(Ws[[k]], s, directed = directed,
-                                      vsize = vsz, node_values = mk)
+            # per-group communities (colour) and layout
+            grp_k <- if (colour_comm) house_communities(Wk) else NULL
+            col_k <- if (!is.null(grp_k))
+                       house_group_colors(length(grp_k)) else NULL
+            Lk <- if (!per_group_layout) Lshared
+                  else if (lt2 == "pca") {
+                    p <- house_pca_layout(dk); if (is.null(p)) "spring" else p
+                  } else "spring"   # ega: community groups drive spring layout
+            # predictability rings per subgroup (request #4)
+            r2 <- if (isTRUE(s$show_pred)) node_predictability_r2(dk) else NULL
+            args <- house_qgraph_args(Wk, s, directed = directed, vsize = vsz,
+                                      node_col = col_k, groups = grp_k,
+                                      node_values = mk, pie = r2)
             do.call(qgraph::qgraph,
-                    c(list(Ws[[k]], layout = L, title = labs[k]), args))
+                    c(list(Wk, layout = Lk, title = labs[k]), args))
           }
         }
         rv$plot_fn <- fn
         rec_upsert(
           rec, "bootnet_plot", "plot",
           description = sprintf(
-            "[bootnet] Plotted %d group networks side by side (%s) on ONE shared layout so panels are directly comparable.",
-            length(Ws), paste(labs, collapse = ", ")),
+            "[bootnet] Plotted %d group networks side by side (%s); %s. Communities/PCA and predictability are computed PER SUBGROUP.",
+            length(Ws), paste(labs, collapse = ", "),
+            if (per_group_layout) "each panel uses its OWN community/PCA layout"
+            else "one shared layout so positions are comparable"),
           code = paste(c(
             "Ws <- lapply(nets, qgraph::getWmat)",
-            "L  <- do.call(qgraph::averageLayout, unname(Ws))  # shared layout",
+            if (!per_group_layout)
+              "L  <- do.call(qgraph::averageLayout, unname(Ws))  # shared",
             "op <- par(mfrow = c(1, length(Ws))); on.exit(par(op), add = TRUE)",
-            "for (k in seq_along(Ws)) qgraph::qgraph(Ws[[k]], layout = L,",
+            "for (k in seq_along(Ws)) qgraph::qgraph(Ws[[k]],",
+            if (per_group_layout) '  # layout computed per group (community/PCA)'
+            else "  layout = L,",
             "  title = names(nets)[k],",
             house_qgraph_args_code(s, directed, wobj = "Ws[[k]]"),
             ")"), collapse = "\n")

@@ -1164,7 +1164,11 @@ run_nct_corrected <- function(dat1, dat2, paired, it, adjust, gg, seed,
     if ("gamma" %in% nct_formals) args$gamma <- gg$tuning
     if (use_binary && "binary.data" %in% nct_formals) args$binary.data <- TRUE
     if ("p.adjust.methods" %in% nct_formals) args$p.adjust.methods <- adjust
-    r <- do.call(NetworkComparisonTest::NCT, args)
+    if ("progressbar" %in% nct_formals) args$progressbar <- FALSE  # no console bar
+    # swallow any residual console progress printing from NCT/bootnet
+    r <- NULL
+    invisible(utils::capture.output(suppressMessages(
+      r <- do.call(NetworkComparisonTest::NCT, args))))
     if (!("p.adjust.methods" %in% nct_formals) &&
         !identical(adjust, "none") && !is.null(r$einv.pvals)) {
       pcol <- grep("p", names(r$einv.pvals), ignore.case = TRUE, value = TRUE)[1]
@@ -1173,8 +1177,10 @@ run_nct_corrected <- function(dat1, dat2, paired, it, adjust, gg, seed,
     attr(r, "engine") <- "NetworkComparisonTest"
     r
   }, error = function(e) {
-    r <- manual_nct(m1, m2, min(it, 500L), est, gg$tuning, use_binary, paired,
-                    seed, adjust = adjust)
+    r <- NULL
+    invisible(utils::capture.output(suppressMessages(
+      r <- manual_nct(m1, m2, min(it, 500L), est, gg$tuning, use_binary, paired,
+                      seed, adjust = adjust))))
     attr(r, "engine") <- "fallback"
     attr(r, "pkg_error") <- conditionMessage(e)
     r
@@ -1263,14 +1269,21 @@ nctServer <- function(id, data_bus, rec, gg_settings) {
       p <- prep_r()
       lv <- p$groups; num <- p$num; trans <- p$trans
       paired <- p$paired; id_note <- p$id_note; gg <- p$gg; seed <- p$seed
-      res  <- run_nct_corrected(p$d1, p$d2, paired, input$iterations,
-                                input$adjust, gg, seed, est = p$est)
+      res <- shiny::withProgress(
+        message = "Running network comparison",
+        detail = "estimating + permuting (this can take a minute)...",
+        value = 0.5,
+        run_nct_corrected(p$d1, p$d2, paired, input$iterations,
+                          input$adjust, gg, seed, est = p$est))
       if (identical(attr(res, "engine"), "fallback"))
-        shiny::showNotification(paste(
-          "The installed NetworkComparisonTest package errored, so a built-in",
-          "permutation test (global strength + structure only) was used.",
-          "Edge/centrality tests need a working package install."),
-          type = "warning", duration = 12)
+        shiny::showNotification(paste0(
+          "Your installed NetworkComparisonTest package errored (see the ",
+          "results box for the reason), so XS4ALL ran its BUILT-IN permutation ",
+          "NCT instead — same method (van Borkulo et al.): global strength, ",
+          "global structure, and per-edge tests. Centrality-difference tests ",
+          "still need the package. To use the package itself, update it in R: ",
+          "remotes::install_github('cvborkulo/NetworkComparisonTest')."),
+          type = "warning", duration = 15)
 
       engine_note <- if (identical(attr(res, "engine"), "fallback"))
         "built-in permutation fallback (package errored)" else
@@ -1312,9 +1325,12 @@ nctServer <- function(id, data_bus, rec, gg_settings) {
     # --- Side-by-side group networks, SHARED layout (independent of NCT) ----
     output$group_plots <- shiny::renderPlot({
       p <- prep_r()
-      est <- function(d) tryCatch(
-        nct_estimate_one(data.matrix(d), p$est, p$gg$tuning, p$binary),
-        error = function(e) NULL)
+      est <- function(d) tryCatch({
+        W <- NULL
+        invisible(utils::capture.output(suppressMessages(
+          W <- nct_estimate_one(data.matrix(d), p$est, p$gg$tuning, p$binary))))
+        W
+      }, error = function(e) NULL)
       W1 <- est(p$d1); W2 <- est(p$d2)
       shiny::validate(shiny::need(!is.null(W1) && !is.null(W2),
         "Could not estimate one of the group networks (a node may be constant within a group)."))

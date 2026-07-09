@@ -155,6 +155,40 @@ dag_disp <- function(boot_str, thr, dthr) {
   bs[order(-bs$strength), ]
 }
 
+# Compute arc.strength on the averaged network at `thr`, return a named vector
+# keyed "from->to" so it can be joined into the display arc table. NULL if it
+# can't be computed (criterion/data-type mismatch etc.).
+dag_arcstrength <- function(boot_str, data, crit, thr) {
+  tryCatch({
+    av  <- bnlearn::cextend(bnlearn::averaged.network(boot_str, threshold = thr))
+    ast <- bnlearn::arc.strength(av, data = data, criterion = crit)
+    stats::setNames(ast$strength, paste(ast$from, ast$to, sep = "->"))
+  }, error = function(e) NULL)
+}
+
+# Text block: bnlearn::score() + arc.strength() for one averaged network,
+# mirroring the reference workflow. Guarded (bnlearn errors -> message).
+dag_score_report <- function(boot_str, data, crit, thr, header = NULL) {
+  if (!is.null(header)) cat(header, "\n")
+  av <- tryCatch(
+    bnlearn::cextend(bnlearn::averaged.network(boot_str, threshold = thr)),
+    error = function(e) NULL)
+  if (is.null(av)) { cat("  (averaged network unavailable at this threshold)\n"); return() }
+  sc <- tryCatch(bnlearn::score(av, data = data, type = crit),
+                 error = function(e) paste("error:", conditionMessage(e)))
+  cat(sprintf("  score(avgnet, data, type = \"%s\") = %s\n", crit,
+              if (is.numeric(sc)) formatC(sc, format = "f", digits = 3) else sc))
+  ast <- tryCatch(bnlearn::arc.strength(av, data = data, criterion = crit),
+                  error = function(e) NULL)
+  if (is.null(ast)) {
+    cat(sprintf("  arc.strength: not available for criterion \"%s\" and this data type.\n", crit))
+  } else {
+    ast <- ast[order(ast$strength), ]
+    cat(sprintf("  arc.strength(avgnet, data, \"%s\") — more negative = stronger:\n", crit))
+    print(utils::head(ast, 30), row.names = FALSE)
+  }
+}
+
 # Draw ONE DAG (used by both single and grouped modes). `da` = filtered arcs,
 # `eq` = its equivalence-class info, `vars` = the shared node set, `layout_arg`
 # = a shared layout so grouped panels are comparable.
@@ -181,6 +215,12 @@ draw_one_dag <- function(da, eq, vars, s, metric, layout_arg, curve_arg,
   labs <- colnames(amat)
   if (isTRUE(s$show_means) && !is.null(node_values))
     labs <- label_with_means(labs, node_values[colnames(amat)])
+  # cascade keeps its per-edge curve matrix; every other layout uses the
+  # appearance curvature slider.
+  if (!is.matrix(curve_arg)) {
+    curve_arg <- s$curvature %||% 0.2
+    curve_all <- (s$curvature %||% 0) > 0
+  }
   qgraph::qgraph(
     amat, directed = TRUE, layout = layout_arg,
     aspect = identical(lt, "dot"),
@@ -271,7 +311,12 @@ daggerTabUI <- function(id) {
     shiny::fluidRow(
       shiny::column(8,
         shiny::uiOutput(ns("dag_plot_ui")),        # height follows slider
-        DT::dataTableOutput(ns("arc_table")),
+        shiny::checkboxInput(ns("show_arc_table"),
+                             "Show arc table (strength / direction / arc.strength)",
+                             value = FALSE),
+        shiny::conditionalPanel(
+          sprintf("input['%s']", ns("show_arc_table")),
+          DT::dataTableOutput(ns("arc_table"))),
         shiny::hr(),
         shiny::h5("Network fit & BIC arc strengths (of the averaged network)"),
         shiny::helpText("bnlearn::score() and arc.strength() on the averaged",
@@ -332,7 +377,7 @@ daggerTabUI <- function(id) {
         # default_esize = 2, slider capped at 4 (arc widths multiply by
         # bootstrap strength, so large esize values are useless here).
         appearanceUI(ns("look"), signed = FALSE, default_esize = 2,
-                     esize_max = 4)
+                     esize_max = 4, default_curve = 0.2)
       )
     )
     # TODO(port): split analysis + DAG-diff plot (Dagger_zero.R:409-542,
@@ -469,8 +514,10 @@ daggerTabServer <- function(id, data_bus, rec) {
             out <- lapply(seq_along(lv), function(k) {
               shiny::incProgress(1 / length(lv),
                 detail = sprintf("group '%s' (%d/%d)", lv[k], k, length(lv)))
-              r <- learn_one(dat[grp_vec == lv[k], , drop = FALSE])
+              dg <- dat[grp_vec == lv[k], , drop = FALSE]
+              r <- learn_one(dg)
               r$label <- lv[k]; r$n <- sum(grp_vec == lv[k])
+              r$data  <- dg     # kept for per-group score() / arc.strength()
               r$means <- colMeans(num_dat[grp_vec == lv[k], , drop = FALSE],
                                   na.rm = TRUE)
               r
@@ -486,6 +533,7 @@ daggerTabServer <- function(id, data_bus, rec) {
         rv$grouped <- TRUE; rv$group_results <- gres; rv$group_labels <- lv
         rv$vars <- colnames(dat)
         rv$node_means <- colMeans(num_dat, na.rm = TRUE)   # pooled (for "across")
+        rv$dag_crit <- if (grepl("factor", prep$coerced)) "bic" else "bic-g"
         # keep single-network slots pointing at group 1 for the export bundle
         rv$boot_str <- gres[[1]]$boot_str; rv$avg <- gres[[1]]$avg; rv$eq <- gres[[1]]$eq
 
@@ -860,61 +908,58 @@ daggerTabServer <- function(id, data_bus, rec) {
       fn()
     })
 
+    # join arc.strength (BIC change) onto a display-arc table
+    add_arcstrength <- function(d, boot_str, data) {
+      crit <- if (identical(input$score_crit, "auto")) rv$dag_crit
+              else input$score_crit
+      as_vec <- if (!is.null(data)) dag_arcstrength(boot_str, data, crit,
+                                                    input$threshold) else NULL
+      d$arc.strength <- if (!is.null(as_vec))
+        unname(as_vec[paste(d$from, d$to, sep = "->")]) else NA_real_
+      d
+    }
+
     output$arc_table <- DT::renderDataTable({
+      cols <- c("from", "to", "strength", "direction", "combined", "arc.strength")
       if (isTRUE(rv$grouped)) {
         shiny::req(rv$group_results)
         tb <- do.call(rbind, lapply(rv$group_results, function(r) {
           d <- dag_disp(r$boot_str, input$threshold, input$dir_threshold)
           if (nrow(d) == 0) return(NULL)
-          cbind(group = r$label, d[, c("from", "to", "strength", "direction", "combined")])
+          d <- add_arcstrength(d, r$boot_str, r$data)
+          cbind(group = r$label, d[, cols])
         }))
         shiny::validate(shiny::need(!is.null(tb) && nrow(tb) > 0,
           "No arcs pass the current thresholds in any group."))
-        return(DT::datatable(tb, caption = "Per-group arcs passing both thresholds.",
+        return(DT::datatable(tb, caption = "Per-group arcs passing both thresholds. strength/direction/combined = bootstrap; arc.strength = BIC change on removal (more negative = stronger).",
                              options = list(pageLength = 20)) |>
-          DT::formatRound(c("strength", "direction", "combined"), 3))
+          DT::formatRound(c("strength", "direction", "combined", "arc.strength"), 3))
       }
-      da <- display_arcs()
-      DT::datatable(da[, c("from", "to", "strength", "direction", "combined")],
-                    caption = "Arcs passing the current strength AND direction thresholds. strength = P(arc present); direction = P(this orientation | present); combined = their product. direction ~ 0.5 means the data cannot decide the arrow.",
+      da <- add_arcstrength(display_arcs(), rv$boot_str, rv$dag_data)
+      DT::datatable(da[, cols],
+                    caption = "Arcs passing the strength AND direction thresholds. strength = P(arc present); direction = P(this orientation | present); combined = product (bootstrap). arc.strength = change in network BIC when the arc is removed (more negative = stronger) — a DIFFERENT quantity.",
                     options = list(pageLength = 15)) |>
-        DT::formatRound(c("strength", "direction", "combined"), 3)
+        DT::formatRound(c("strength", "direction", "combined", "arc.strength"), 3)
     })
 
-    # --- Network fit (score) + arc.strength, mirroring the reference code ---
+    # --- Network fit (score) + arc.strength, mirroring the reference code,
+    #     for the single network OR each subgroup ---------------------------
     output$dag_fit <- shiny::renderPrint({
-      if (isTRUE(rv$grouped)) {
-        cat("Score & arc.strength are shown for single-network analysis only.\n",
-            "Remove the grouping variable to see them.\n"); return()
-      }
-      shiny::req(rv$boot_str, rv$dag_data)
       crit <- if (identical(input$score_crit, "auto")) rv$dag_crit
               else input$score_crit
-      # averaged network at the CURRENT threshold (matches what is displayed)
-      av <- tryCatch(
-        bnlearn::averaged.network(rv$boot_str, threshold = input$threshold),
-        error = function(e) rv$avg)
-      # bnlearn::score needs a fully directed DAG; extend if partially directed
-      av_dag <- tryCatch(bnlearn::cextend(av), error = function(e) av)
-      sc <- tryCatch(
-        bnlearn::score(av_dag, data = rv$dag_data, type = crit),
-        error = function(e) paste("score() error:", conditionMessage(e)))
-      cat(sprintf("averaged.network(BST, threshold = %.2f)\n", input$threshold))
-      cat(sprintf("bnlearn::score(avgnet, data, type = \"%s\") = %s\n\n",
-                  crit, if (is.numeric(sc)) formatC(sc, format = "f", digits = 3) else sc))
-      cat(sprintf("arc.strength(avgnet, data, criterion = \"%s\"):\n", crit))
-      astr <- tryCatch(
-        bnlearn::arc.strength(av_dag, data = rv$dag_data, criterion = crit),
-        error = function(e) NULL)
-      if (is.null(astr)) {
-        cat("  (not available — criterion may not match the data type;",
-            "try a matching BIC variant above.)\n")
+      thr  <- input$threshold
+      cat(sprintf("averaged.network(BST, threshold = %.2f); criterion = \"%s\".\n",
+                  thr, crit))
+      cat("arc.strength here = change in network score when an arc is REMOVED",
+          "(more negative = stronger) — a DIFFERENT quantity from bootstrap strength.\n\n")
+      if (isTRUE(rv$grouped)) {
+        shiny::req(rv$group_results)
+        for (r in rv$group_results)
+          dag_score_report(r$boot_str, r$data, crit, thr,
+                           header = sprintf("== Group: %s (n=%d) ==", r$label, r$n))
       } else {
-        astr <- astr[order(astr$strength), ]   # bnlearn: more negative = stronger
-        print(utils::head(astr, 50), row.names = FALSE)
-        cat("\n(For arc.strength with an information criterion, 'strength' is the",
-            "change in network score from REMOVING the arc: more negative =",
-            "the arc contributes more to fit. This is NOT the bootstrap strength.)\n")
+        shiny::req(rv$boot_str, rv$dag_data)
+        dag_score_report(rv$boot_str, rv$dag_data, crit, thr)
       }
     })
 

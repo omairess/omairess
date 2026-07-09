@@ -129,6 +129,18 @@ All mechanical work is marked `TODO(stage3-...)` in code: file-loader dispatch +
 88. **NCT double-print fixed + edge-level tests in the fallback** — `summary.manual_nct` no longer prints (it returned via an inner print AND the outer print → duplicate); the permutation fallback now tests EVERY individual edge (per-edge |difference| permutation p-values with the chosen multiple-comparison correction) and populates the edge table, not just the two global invariants. (#5, `12_tab_psynet.R`)
 89. **semPlot path diagram: no label abbreviation** — `nCharNodes = 0, nCharEdges = 0` (plus bold-label passthrough). (#6, `12_tab_psynet.R`)
 
+## Tenth batch of user change requests (2026-07-09)
+
+90. **Grouped community/PCA run per subgroup** — on the PMRF tab, choosing the Community or PCA *layout* now lays out each panel by its OWN structure (per-subgroup walktrap / PCA), while the separate "colour by community" checkbox colours each panel by its own communities on the shared layout. Per-group data subsets stored at run time. (#1, `10_tab_bootnet.R`, `05_appearance_module.R`)
+91. **Score & arc.strength for every subgroup** — the DAG fit panel now loops over groups (per-group data stored); "single-network only" message removed. (#2, `11_tab_dagger.R`)
+92. **arc.strength column added to the DAG arc table** alongside bootstrap strength / direction / combined, clearly labelled as the BIC-change quantity. (#3, `11_tab_dagger.R`)
+93. **Predictability rings per subgroup** — computed on each group's own data in grouped PMRF plots. (#4, `10_tab_bootnet.R`)
+94. **New default colours + qualitative palette** — nodes #FFFFFF, border #878787, pos #2C4778, neg #E03920, ring #FFAE00; categorical fills use a curated Okabe-Ito-based distinct palette (datawrapper "beautiful colors" principle) not pastels. (#5, `02_palette.R`)
+95. **Edge-curvature slider for all networks** — appearance `curvature` threaded into `house_qgraph_args`; DAG cascade keeps its per-edge curve matrix, other layouts use the slider. (#6)
+96. **DAG arc table hidden by default** behind a "Show arc table" checkbox. (#7, `11_tab_dagger.R`)
+97. **NCT: progress spinner + no console leak** — `withProgress`, `progressbar = FALSE`, and `capture.output(suppressMessages(...))` around the package call, fallback, and group-network estimation. (#8, `12_tab_psynet.R`)
+98. **Clearer fallback message** — cause + van-Borkulo-method note + `remotes::install_github(...)` fix. (#9, `12_tab_psynet.R`)
+
 ## Eighth batch — DAG split analysis (2026-07-08)
 
 82. **DAG grouping/split analysis implemented** (replaces the "not yet supported" notice) — selecting a grouping variable now learns one bootstrap-averaged DAG per group (≤4 largest groups, ≥20 complete rows each), drawn side by side on ONE shared layout (computed from the union of all groups' arcs) so panels are directly comparable. Column types are coerced on the FULL data first so factor levels stay consistent across groups; each group gets its own boot.strength + averaged.network + CPDAG audit; the caveat and arc table go per-group; the recorder logs the split. Plotting was refactored into reusable `dag_disp()` / `draw_one_dag()` / `compute_layout()` helpers so single and grouped modes share identical arc-filtering, styling, and layout-engine logic. A cross-group direction-comparison caveat is added (differences may be equivalence-class artefacts). Bootstrap validation on a single network is unaffected. Verified with synthetic boot.strength tables (filtering, union adjacency, per-group table, shared cascade layout); the bnlearn learning path itself couldn't be run in-sandbox (package unavailable). (`11_tab_dagger.R`)

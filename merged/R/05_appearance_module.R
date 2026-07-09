@@ -21,6 +21,7 @@
 # (DAG wants thinner edges; the RI network wants edge labels on).
 appearanceUI <- function(id, signed = TRUE, default_esize = 8,
                          esize_max = 20, default_edge_labels = FALSE,
+                         default_curve = 0,
                          scale_label = "Scale node size by column mean") {
   ns  <- shiny::NS(id)
   pal <- house_pastel()
@@ -60,6 +61,8 @@ appearanceUI <- function(id, signed = TRUE, default_esize = 8,
                        value = min(default_esize, esize_max), step = 0.5),
     shiny::sliderInput(ns("asize"), "Arrowhead size", min = 1, max = 10,
                        value = 3, step = 0.5),
+    shiny::sliderInput(ns("curvature"), "Edge curvature", min = 0, max = 2,
+                       value = default_curve, step = 0.05),
     shiny::sliderInput(ns("label_cex"), "Node label size", min = 0.3, max = 3,
                        value = 1, step = 0.1),
     shiny::checkboxInput(ns("label_bold"), "Bold node labels", value = FALSE),
@@ -87,7 +90,7 @@ appearanceUI <- function(id, signed = TRUE, default_esize = 8,
     shiny::conditionalPanel(
       sprintf("input['%s']", ns("show_pred")),
       colourpicker::colourInput(ns("pred_ring_color"), "Ring colour",
-                                value = "#ADD8E6", palette = "square"),
+                                value = pal$ring, palette = "square"),
       shiny::sliderInput(ns("pred_ring_border"),
                          "Ring thickness (0 = full pie, 1 = thin ring)",
                          min = 0, max = 1, value = 0.3, step = 0.05)
@@ -123,6 +126,7 @@ appearanceServer <- function(id, plot_closure) {
         vsize_max        = vr[2],
         esize            = input$esize       %||% 8,
         asize            = input$asize       %||% 3,
+        curvature        = input$curvature   %||% 0,
         label_cex        = input$label_cex   %||% 1,
         label_bold       = isTRUE(input$label_bold),
         show_means       = isTRUE(input$show_means),
@@ -178,6 +182,28 @@ appearanceServer <- function(id, plot_closure) {
 #   * edge.labels + edge.label.cex from the toggle/slider           (#3)
 #   * minimum = min |value| to draw an edge                          (#9)
 # `directed` flips arrows on; `node_col`/`groups` allow community colouring.
+# Walktrap communities of a weights matrix -> a qgraph `groups` list of node
+# INDICES (names colour only the legend). Runs on |weights| (symmetrized).
+# NULL if it fails or there is only one community.
+house_communities <- function(W) {
+  tryCatch({
+    aw <- abs(W); aw <- (aw + t(aw)) / 2
+    g  <- igraph::graph_from_adjacency_matrix(aw, mode = "undirected",
+                                              weighted = TRUE, diag = FALSE)
+    wc <- igraph::cluster_walktrap(g)$membership
+    gl <- split(seq_len(ncol(W)), wc)
+    names(gl) <- paste("Community", names(gl))
+    gl
+  }, error = function(e) NULL)
+}
+
+# PCA layout: node coordinates = first two principal-component loadings of the
+# data. NULL if it fails.
+house_pca_layout <- function(dat) {
+  tryCatch(stats::prcomp(scale(stats::na.omit(dat)))$rotation[, 1:2],
+           error = function(e) NULL)
+}
+
 # Map `values` into [vmin, vmax] using an explicit reference range. For
 # grouped plots: "within" passes each group's own range; "across" passes the
 # pooled range so node sizes are directly comparable across panels.
@@ -220,6 +246,8 @@ house_qgraph_args <- function(W, s, directed = FALSE,
     posCol          = s$pos_edge,
     negCol          = s$neg_edge,
     asize           = s$asize %||% 3,   # arrowhead size (directed plots)
+    curve           = s$curvature %||% 0,
+    curveAll        = isTRUE((s$curvature %||% 0) > 0),
     color           = node_col %||% s$node_fill,
     border.color    = s$node_border,
     groups          = groups
@@ -292,8 +320,9 @@ house_qgraph_args_code <- function(s, directed, wobj = "W",
             vsize_expr %||% as.character(s$vsize), s$esize, s$min_edge),
     sprintf("  edge.labels = %s, edge.label.cex = %s,",
             isTRUE(s$show_edge_labels), s$edge_label_cex),
-    sprintf('  posCol = "%s", negCol = "%s", asize = %s,',
-            s$pos_edge, s$neg_edge, s$asize %||% 3),
+    sprintf('  posCol = "%s", negCol = "%s", asize = %s, curve = %s, curveAll = %s,',
+            s$pos_edge, s$neg_edge, s$asize %||% 3, s$curvature %||% 0,
+            isTRUE((s$curvature %||% 0) > 0)),
     sprintf("  color = %s, border.color = \"%s\"",
             node_col_expr %||% sprintf('"%s"', s$node_fill), s$node_border),
     if (!is.null(groups_expr)) sprintf("  , groups = %s", groups_expr))
