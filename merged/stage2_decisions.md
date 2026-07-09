@@ -141,6 +141,10 @@ All mechanical work is marked `TODO(stage3-...)` in code: file-loader dispatch +
 97. **NCT: progress spinner + no console leak** — `withProgress`, `progressbar = FALSE`, and `capture.output(suppressMessages(...))` around the package call, fallback, and group-network estimation. (#8, `12_tab_psynet.R`)
 98. **Clearer fallback message** — cause + van-Borkulo-method note + `remotes::install_github(...)` fix. (#9, `12_tab_psynet.R`)
 
+## Eleventh change (2026-07-09)
+
+99. **Categorical palette replaced with user-supplied 12-colour set** — `HOUSE_QUAL_PALETTE` swapped in verbatim (muted blue, soft orange, turquoise, ochre, soft vermillion, warm yellow, pale yellow, burnt orange, sage, khaki, olive green, brown), superseding the prior Okabe-Ito-based set; `house_pastel()$groups` and `house_group_colors()` unchanged otherwise. (`02_palette.R`)
+
 ## Eighth batch — DAG split analysis (2026-07-08)
 
 82. **DAG grouping/split analysis implemented** (replaces the "not yet supported" notice) — selecting a grouping variable now learns one bootstrap-averaged DAG per group (≤4 largest groups, ≥20 complete rows each), drawn side by side on ONE shared layout (computed from the union of all groups' arcs) so panels are directly comparable. Column types are coerced on the FULL data first so factor levels stay consistent across groups; each group gets its own boot.strength + averaged.network + CPDAG audit; the caveat and arc table go per-group; the recorder logs the split. Plotting was refactored into reusable `dag_disp()` / `draw_one_dag()` / `compute_layout()` helpers so single and grouped modes share identical arc-filtering, styling, and layout-engine logic. A cross-group direction-comparison caveat is added (differences may be equivalence-class artefacts). Bootstrap validation on a single network is unaffected. Verified with synthetic boot.strength tables (filtering, union adjacency, per-group table, shared cascade layout); the bnlearn learning path itself couldn't be run in-sandbox (package unavailable). (`11_tab_dagger.R`)
