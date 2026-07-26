@@ -4,6 +4,9 @@
 # plot files stay byte-identical to R-Winsteps.
 #
 # Adds:
+#   * threshold_advance_min() / category_diagnostics()  -- category-count-aware
+#     minimum threshold advance. DELIBERATELY OVERRIDES the engine's
+#     category_diagnostics() (see note below).
 #   * keyform_data() / plot_keyform()  -- WINSTEPS Table 2.2 general keyform
 #     (expected-score), with Rasch-Thurstone (2.3) and modal (2.1) variants.
 #   * dgf_analysis() / plot_dgf()      -- WINSTEPS Table 33 Differential Group
@@ -13,6 +16,97 @@
 # category_table(), .probs_group()-style maths, .ets_class(), ws_style(),
 # .pal(), .grid(), %||%).
 # =============================================================================
+
+# ---------------------------------------------------------------------------
+# Minimum threshold advance (replaces the flat "1.4 logits" rule)
+# ---------------------------------------------------------------------------
+
+#' Minimum required advance between adjacent Andrich thresholds.
+#'
+#' The often-quoted "thresholds must advance by 1.4 logits" is NOT a general
+#' constant: 1.4 is the three-category case only. The criterion comes from the
+#' binomial boundary condition, under which the threshold locations for m
+#' thresholds (m + 1 categories) are
+#'
+#'     tau_k = ln( k / (m + 1 - k) ),        k = 1 .. m
+#'
+#' so the minimum required advance between adjacent thresholds is
+#'
+#'     Delta_k = ln( (k + 1)(m + 1 - k) / (k (m - k)) ),   k = 1 .. m - 1
+#'
+#' For 3 categories this gives ln(2) - ln(1/2) = 2 ln 2 = 1.386 ~ 1.4; for more
+#' categories the required advance is smaller (and Linacre's rule of thumb in
+#' RMT 2006, 20:1, p. 1052 is "thresholds must advance by one logit").
+#'
+#' @param m number of thresholds (= number of categories - 1)
+#' @return numeric vector of length m - 1 (empty when m < 2)
+#' @references Linacre, J. M. (2006). Rasch Measurement Transactions, 20(1), 1052.
+threshold_advance_min <- function(m) {
+  if (!is.finite(m) || m < 2) return(numeric(0))
+  k <- seq_len(m - 1)
+  log((k + 1) * (m + 1 - k) / (k * (m - k)))
+}
+
+#' Linacre's (1999, 2002, 2006) rating-scale quality guidelines.
+#'
+#' NOTE: this deliberately overrides `category_diagnostics()` from
+#' rasch_engine.R, which tested every threshold advance against a flat 1.4
+#' logits. That is only correct for three categories. Everything else in this
+#' function is unchanged from the engine version. The engine file is left
+#' byte-identical to R-Winsteps; the fix lives here.
+category_diagnostics <- function(ct) {
+  out <- list()
+  for (g in unique(ct$Group)) {
+    d <- ct[ct$Group == g, ]
+    m <- nrow(d) - 1                      # number of thresholds
+    tau <- d$Andrich_Threshold[-1]
+    chk <- function(name, ok, detail) data.frame(Group = g, Guideline = name,
+                                                 Status = ifelse(ok, "OK", "REVIEW"),
+                                                 Detail = detail, stringsAsFactors = FALSE)
+    out[[length(out) + 1]] <- chk(
+      "At least 10 observations per category",
+      all(d$Count >= 10),
+      paste0("min count = ", min(d$Count)))
+    out[[length(out) + 1]] <- chk(
+      "Regular / uniform category distribution",
+      all(d$Percent > 0),
+      paste0("percentages: ", paste(sprintf("%.1f", d$Percent), collapse = ", ")))
+    oa <- d$Obsvd_Avrge
+    out[[length(out) + 1]] <- chk(
+      "Observed average measures advance with category",
+      all(diff(oa[!is.na(oa)]) > 0),
+      paste0("observed averages: ", paste(sprintf("%.2f", oa), collapse = ", ")))
+    out[[length(out) + 1]] <- chk(
+      "Category outfit mean-squares < 2.0",
+      all(d$Outfit_MNSQ < 2, na.rm = TRUE),
+      paste0("max outfit = ", sprintf("%.2f", max(d$Outfit_MNSQ, na.rm = TRUE))))
+    if (m >= 2) {
+      out[[length(out) + 1]] <- chk(
+        "Andrich thresholds advance (ordered)",
+        all(diff(tau) > 0),
+        paste0("thresholds: ", paste(sprintf("%.2f", tau), collapse = ", ")))
+      dif <- diff(tau)
+      req <- threshold_advance_min(m)
+      out[[length(out) + 1]] <- chk(
+        sprintf("Threshold advances >= binomial minimum (%d categories: %s logits)",
+                m + 1, paste(sprintf("%.2f", req), collapse = ", ")),
+        all(dif >= req, na.rm = TRUE),
+        paste0("advances: ", paste(sprintf("%.2f", dif), collapse = ", "),
+               "  |  required: ", paste(sprintf("%.2f", req), collapse = ", "),
+               "  |  shortfall: ",
+               paste(sprintf("%+.2f", dif - req), collapse = ", ")))
+      out[[length(out) + 1]] <- chk(
+        "Threshold advances <= 5.0 logits (no gaps in the variable)",
+        all(dif <= 5),
+        paste0("advances: ", paste(sprintf("%.2f", dif), collapse = ", ")))
+    }
+    out[[length(out) + 1]] <- chk(
+      "Coherence M->C >= 40% (Linacre 2002)",
+      all(d$Coherence_M_to_C >= 40, na.rm = TRUE),
+      paste0("M->C: ", paste(sprintf("%.0f%%", d$Coherence_M_to_C), collapse = ", ")))
+  }
+  do.call(rbind, out)
+}
 
 # ---------------------------------------------------------------------------
 # Table 2.2 : General keyform
@@ -54,8 +148,12 @@ keyform_data <- function(fit, kind = c("expected", "thurstone", "modal"),
 
 #' WINSTEPS Table 2.2 general keyform. Items are rows ordered by measure; the
 #' category numbers are placed along the shared logit axis where they "key".
+#'
+#' @param show_persons if TRUE, a person-measure histogram is drawn underneath,
+#'   on exactly the same logit axis (so the person distribution can be read
+#'   against the category keys).
 plot_keyform <- function(fit, style = ws_style(), kind = c("expected", "thurstone", "modal"),
-                         max_items = 80, main = NULL) {
+                         max_items = 80, show_persons = TRUE, main = NULL) {
   kind <- match.arg(kind)
   kf <- keyform_data(fit, kind)
   if (!nrow(kf)) { graphics::plot.new(); graphics::text(0.5, 0.5, "No non-extreme items to plot."); return(invisible(NULL)) }
@@ -65,15 +163,26 @@ plot_keyform <- function(fit, style = ws_style(), kind = c("expected", "thurston
     items <- items[round(seq(1, length(items), length.out = max_items))]
   kf <- kf[kf$Item %in% items, , drop = FALSE]
   yof <- match(kf$Item, items)
-  xr <- range(kf$Measure, na.rm = TRUE); xr <- xr + c(-1, 1) * max(diff(xr) / 15, 0.3)
 
-  op <- graphics::par(mar = c(4.5, 8, 3.5, 1)); on.exit(graphics::par(op))
+  pm <- fit$theta[fit$keep_p & !is.na(fit$theta)]
+  # One shared logit axis across both panels (cf. the Wright map convention).
+  xr <- range(c(kf$Measure, if (show_persons) pm), na.rm = TRUE)
+  xr <- xr + c(-1, 1) * max(diff(xr) / 15, 0.3)
+
+  op <- graphics::par(no.readonly = TRUE)
+  on.exit({ graphics::layout(1); graphics::par(op) })
+  if (show_persons && length(pm) > 1)
+    graphics::layout(matrix(1:2, nrow = 2), heights = c(3.2, 1))
+  else show_persons <- FALSE
+
   ttl <- main %||% sprintf("General keyform - %s",
                            c(expected = "expected score (Table 2.2)",
                              thurstone = "Rasch-Thurstone 50% (Table 2.3)",
                              modal = "most probable / modal (Table 2.1)")[kind])
+  graphics::par(mar = c(if (show_persons) 0.6 else 4.5, 8, 3.5, 1))
   graphics::plot(NA, xlim = xr, ylim = c(0.5, length(items) + 0.5), yaxt = "n",
-                 xlab = "Measure (logits)", ylab = "", main = ttl,
+                 xaxt = if (show_persons) "n" else "s",
+                 xlab = if (show_persons) "" else "Measure (logits)", ylab = "", main = ttl,
                  cex.lab = style$cex_label + 0.1, cex.main = style$cex_label + 0.2)
   if (isTRUE(style$show_grid))
     graphics::abline(v = pretty(xr, 10), col = style$col_ref, lty = 3)
@@ -88,9 +197,34 @@ plot_keyform <- function(fit, style = ws_style(), kind = c("expected", "thurston
     graphics::text(seg$Measure, rep(j, nrow(seg)), seg$Label, pos = 3,
                    cex = style$cex_label * 0.75, offset = 0.3)
   }
-  graphics::abline(v = mean(fit$delta, na.rm = TRUE), col = style$col_line, lty = 2, lwd = style$lwd)
-  graphics::mtext("item difficulty mean", side = 3, line = -1,
-                  at = mean(fit$delta, na.rm = TRUE), cex = style$cex_label * 0.7)
+  dm <- mean(fit$delta, na.rm = TRUE)
+  graphics::abline(v = dm, col = style$col_line, lty = 2, lwd = style$lwd)
+  graphics::mtext("item difficulty mean", side = 3, line = -1, at = dm,
+                  cex = style$cex_label * 0.7)
+
+  ## --- bottom panel: person distribution on the same axis ------------------
+  if (show_persons) {
+    graphics::par(mar = c(4.5, 8, 0.6, 1))
+    brks <- seq(xr[1], xr[2], length.out = max(style$bins, 5) + 1)
+    h <- graphics::hist(pm[pm >= xr[1] & pm <= xr[2]], breaks = brks, plot = FALSE)
+    graphics::plot(NA, xlim = xr, ylim = c(0, max(h$counts, 1) * 1.08),
+                   xlab = "Measure (logits)", ylab = "Persons", yaxs = "i",
+                   cex.lab = style$cex_label + 0.1, las = 1,
+                   cex.axis = style$cex_label * 0.9)
+    if (isTRUE(style$show_grid))
+      graphics::abline(v = pretty(xr, 10), col = style$col_ref, lty = 3)
+    graphics::rect(h$breaks[-length(h$breaks)], 0, h$breaks[-1], h$counts,
+                   col = style$col_person, border = style$col_border)
+    if (isTRUE(style$show_msT)) {
+      mm <- mean(pm); ss <- stats::sd(pm)
+      graphics::abline(v = mm, col = style$col_line, lwd = style$lwd)
+      graphics::abline(v = c(mm - ss, mm + ss), col = style$col_line, lty = 2)
+      graphics::mtext(c("S", "M", "S"), side = 1, line = -1.1,
+                      at = c(mm - ss, mm, mm + ss), cex = style$cex_label * 0.75)
+    }
+    graphics::mtext(sprintf("n = %d non-extreme persons", length(pm)), side = 3,
+                    line = -1.2, adj = 0.99, cex = style$cex_label * 0.7)
+  }
   invisible(NULL)
 }
 

@@ -42,9 +42,35 @@ rating-scale structures (WINSTEPS `ISGROUPS=`) while others stay partial-credit.
 ### Keyform (Table 2.2) and DGF (Table 33)
 
 - **Keyform** (Results ▸ Keyform): the general expected-score keyform (Table 2.2),
-  with Rasch-Thurstone (2.3) and modal (2.1) variants.
+  with Rasch-Thurstone (2.3) and modal (2.1) variants, and an optional person
+  histogram underneath sharing the same logit axis.
 - **DGF** (Advanced ▸ DGF): Differential Group Functioning — the interaction of
   the item scales with a person classification, alongside item-level DIF.
+
+### Dropping misfitting persons
+
+On the Persons tab you can flag persons by a fit statistic (Outfit/Infit
+MNSQ or ZSTD above a cut), edit the exclusion list by hand, then press
+**Re-estimate without excluded persons**. The model is recalibrated from
+scratch without them, so item difficulties, thresholds and every downstream
+table update. The exclusions are written into the exported script.
+
+Report this honestly: removing misfitting persons improves fit almost by
+construction. State how many were removed, on what criterion, and what changed.
+
+### Threshold advance criterion
+
+The category-quality check uses the **category-count-dependent** minimum
+threshold advance, `ln((k+1)(m+1−k) / (k(m−k)))`, not a flat 1.4 logits — 1.4 is
+only the three-category case (2 ln 2 = 1.386). For 4 categories the requirement
+is 1.10/1.10, for 5 it is 0.98/0.81/0.98, and so on (Linacre, *Rasch Measurement
+Transactions* 2006, 20:1, p. 1052).
+
+### Interface font size
+
+Settings ▸ Figure style ▸ **App appearance** scales the whole interface
+(root `html` font size; Bootstrap sizing is rem-based) and the table/console
+font separately. Figure text has its own size sliders.
 
 ## Files
 

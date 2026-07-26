@@ -38,15 +38,40 @@ BootSON / Dagger / PsychoNetrix work in the repo.
   per-scale editor: assign items to each scale via a `pickerInput` and give each
   scale its own `CODES` / `NEWSCORE` (blank = use the global defaults). This
   builds the `groups` vector passed to `rasch_prep()`.
+- **Category-count-aware threshold advance.** `threshold_advance_min(m)` in
+  `winstepper_extras.R` returns `ln((k+1)(m+1-k) / (k(m-k)))` for k = 1..m-1.
+  The familiar "advance by 1.4 logits" is only the **three-category** case
+  (2 ln 2 = 1.386); with more categories the requirement is smaller (4 cats:
+  1.10, 1.10; 5 cats: 0.98, 0.81, 0.98; …). Verified against Linacre's table
+  (RMT 2006, 20:1, p. 1052) for 3–10 categories.
+  `winstepper_extras.R` **deliberately overrides** the engine's
+  `category_diagnostics()` to use this (the engine tested a flat 1.4). Since
+  extras is sourced last, the override wins — do not "fix" this by editing
+  `rasch_engine.R`, which is kept byte-identical to R-Winsteps.
 - **General keyform (Table 2.2)** — `keyform_data()` / `plot_keyform()` in
   `winstepper_extras.R`, with expected-score (2.2), Rasch-Thurstone (2.3) and
-  modal (2.1) variants. Records a `keyform` step.
+  modal (2.1) variants, and an optional **person-measure histogram** drawn
+  underneath on the *same* logit axis (`show_persons`). Records a `keyform` step.
+- **Person include/exclude + re-estimation.** `input$excl_persons` holds the
+  exclusion list; `prep()` drops those rows and stores `keep_rows` / `excluded`
+  on the prep object. **Anything that pairs a column of `wide_data()` with the
+  fit must subset by `prep()$keep_rows`** — DIF and DGF do; add the same to any
+  new person-level covariate analysis or the lengths will silently mismatch.
+- **Interface font size.** `input$ui_font` / `input$table_font` render into
+  `output$font_css`, which sets the root `html{font-size}` (Bootstrap is
+  rem-based, so the whole UI scales together).
 - **DGF (Table 33)** — `dgf_analysis()` / `plot_dgf()`. Item classes come from
   the model scales (`fit$groups`); one uniform difficulty shift is estimated per
   item-class × person-class cell and contrasted across person classes with the
   ETS A/B/C rule. Records a `dgf` step. Sits alongside DIF under **Advanced**.
 
 New step ids `keyform` and `dgf` are already in `STEP_ORDER`.
+
+**Estimation is driven by a `refit` counter**, not by `input$run` directly: both
+"Estimate" and "Re-estimate without excluded persons" bump it, and `prep()` /
+`fit()` are `eventReactive(refit(), ignoreInit = TRUE, ...)`. `ignoreInit` is
+required — a plain `reactiveVal(0)` is *not* a "null event" (only `NULL` and an
+actionButton at 0 are), so without it both would evaluate at startup.
 
 Everything below the UI — the engine API, the recorder discipline, the input IDs
 the server binds to — is deliberately identical to R-Winsteps so the numbers and

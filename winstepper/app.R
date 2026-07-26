@@ -355,6 +355,33 @@ panel_persons <- bslib::nav_panel(
                          "Outfit MNSQ" = "outfit", "Infit MNSQ" = "infit")),
     DT::DTOutput("tbl_persons"), full_screen = TRUE),
   bslib::card(
+    bslib::card_header("Include / exclude persons and re-estimate"),
+    shiny::helpText(shiny::HTML(
+      "Drop misfitting persons and recalibrate. Excluded persons are removed ",
+      "before estimation, so item difficulties, thresholds and all downstream ",
+      "tables are re-estimated without them. <b>Report this:</b> removing ",
+      "misfitting persons improves fit almost by construction &mdash; say how many ",
+      "were removed, on what criterion, and what it changed.")),
+    bslib::layout_columns(
+      col_widths = c(4, 4, 4),
+      shiny::selectInput("excl_stat", "Flag persons by",
+                         c("Outfit MNSQ" = "outfit_mnsq", "Infit MNSQ" = "infit_mnsq",
+                           "Outfit ZSTD" = "outfit_zstd", "Infit ZSTD" = "infit_zstd")),
+      shiny::numericInput("excl_cut", "Greater than", 2, 0, 100, 0.1),
+      shiny::div(shiny::br(),
+                 shiny::actionButton("excl_flag", "Add flagged to exclusion list",
+                                     class = "btn-warning w-100"))),
+    shinyWidgets::pickerInput("excl_persons", "Excluded persons",
+                              choices = NULL, multiple = TRUE,
+                              options = list(`live-search` = TRUE, `actions-box` = TRUE,
+                                             `selected-text-format` = "count > 3")),
+    shiny::verbatimTextOutput("excl_note"),
+    bslib::layout_columns(
+      col_widths = c(6, 6),
+      shiny::actionButton("reestimate", "Re-estimate without excluded persons",
+                          class = "btn-primary w-100", icon = shiny::icon("rotate")),
+      shiny::actionButton("excl_clear", "Clear exclusions", class = "btn-secondary w-100"))),
+  bslib::card(
     bslib::card_header("Most unexpected responses (Table 6.6)"),
     shiny::sliderInput("unexp_cut", "|standardized residual| at least", 1.5, 5, 2, 0.1),
     DT::DTOutput("tbl_unexp"), full_screen = TRUE))
@@ -447,14 +474,17 @@ panel_dif <- bslib::nav_panel(
 panel_keyform <- bslib::nav_panel(
   "Keyform", icon = shiny::icon("table-cells"),
   bslib::layout_columns(
-    col_widths = c(6, 6),
+    col_widths = c(5, 3, 4),
     shiny::selectInput("keyform_kind", "Keyform type",
                        c("Expected score (Table 2.2)" = "expected",
                          "Rasch-Thurstone 50% (Table 2.3)" = "thurstone",
                          "Most probable / modal (Table 2.1)" = "modal")),
-    shiny::numericInput("keyform_maxitems", "Max items to show", 80, 5, 400)),
-  fig_card("General keyform (Table 2.2)", "fig_keyform", "720px",
-           "Items are rows ordered by measure; each category number sits on the shared logit axis where it keys."),
+    shiny::numericInput("keyform_maxitems", "Max items to show", 80, 5, 400),
+    shiny::div(shiny::br(),
+               shiny::checkboxInput("keyform_persons",
+                                    "Show person distribution underneath", TRUE))),
+  fig_card("General keyform (Table 2.2)", "fig_keyform", "760px",
+           "Items are rows ordered by measure; each category number sits on the shared logit axis where it keys. The person histogram below shares that same axis."),
   bslib::card(bslib::card_header("Keyform coordinates"),
               DT::DTOutput("tbl_keyform"), full_screen = TRUE))
 
@@ -477,6 +507,16 @@ panel_dgf <- bslib::nav_panel(
 
 panel_style <- bslib::nav_panel(
   "Figure style", icon = shiny::icon("palette"),
+  bslib::card(
+    bslib::card_header("App appearance"),
+    bslib::layout_columns(
+      col_widths = c(6, 6),
+      shiny::sliderInput("ui_font", "Interface font size (px)", 9, 20, 13, 0.5),
+      shiny::sliderInput("table_font", "Table / console font size (rem)", 0.6, 1.4, 0.85, 0.05)),
+    shiny::helpText(shiny::HTML(
+      "Scales the whole interface (Bootstrap sizes are rem-based, so headings, ",
+      "inputs and spacing scale together). The browser default is 16px. Figure ",
+      "text is controlled separately by the size sliders below."))),
   bslib::card(
     bslib::card_header("Colours (rule 4) - pastel defaults (rule 9)"),
     bslib::layout_columns(
@@ -521,10 +561,11 @@ ui <- bslib::page_navbar(
                       sprintf("WINSTEPPER %s", APP_VERSION)),
   id = "nav", theme = ws_theme, fillable = FALSE, collapsible = TRUE,
   window_title = "WINSTEPPER",
-  header = shiny::tags$head(shiny::tags$style(shiny::HTML(
-    ".shiny-notification{position:fixed;top:60px;right:20px;width:340px}
-     pre{font-size:11.5px}
-     .card{margin-bottom:14px}"))),
+  header = shiny::tagList(
+    shiny::tags$head(shiny::tags$style(shiny::HTML(
+      ".shiny-notification{position:fixed;top:60px;right:20px;width:340px}
+       .card{margin-bottom:14px}"))),
+    shiny::uiOutput("font_css")),
   panel_data,
   panel_estimate,
   bslib::nav_menu(
@@ -564,8 +605,9 @@ server <- function(input, output, session) {
                    clear = function(...) invisible(NULL),
                    reset = function() invisible(NULL),
                    steps = shiny::reactiveVal(list()))
-  record_step("setup", "Loaded the Rasch engine and plotting helpers",
-             c('source("rasch_engine.R")', 'source("winsteps_plots.R")'))
+  record_step("setup", "Loaded the Rasch engine, plotting helpers and WINSTEPPER extras",
+             c('source("rasch_engine.R")', 'source("winsteps_plots.R")',
+               'source("winstepper_extras.R")   # keyform, DGF, corrected category diagnostics'))
 
   ## ---- data (rules 1 + 2) --------------------------------------------------
   demo <- shiny::reactiveVal(NULL)
@@ -625,13 +667,34 @@ server <- function(input, output, session) {
   })
 
   ## ---- preparation --------------------------------------------------------
-  prep <- shiny::eventReactive(input$run, {
+  # Person labels, computed identically to prep() so the exclusion picker and
+  # the estimation agree on what a person is called.
+  person_labels <- shiny::reactive({
+    d <- wide_data()
+    rn <- if (!is.null(input$person_id) && input$person_id %in% names(d))
+      as.character(d[[input$person_id]]) else sprintf("P%04d", seq_len(nrow(d)))
+    make.unique(rn)
+  })
+
+  # Both "Estimate" and "Re-estimate" drive the same trigger. ignoreInit keeps
+  # it from firing before the user has chosen anything.
+  refit <- shiny::reactiveVal(0)
+  shiny::observeEvent(input$run,        refit(refit() + 1))
+  shiny::observeEvent(input$reestimate, refit(refit() + 1))
+
+  prep <- shiny::eventReactive(refit(), ignoreInit = TRUE, {
     d <- wide_data(); iv <- item_vars(); model <- input$model
     shiny::validate(shiny::need(length(iv) >= 3, "Select at least three item columns on the Estimate tab."))
     X <- as.matrix(d[, iv, drop = FALSE]); storage.mode(X) <- "numeric"
-    rn <- if (!is.null(input$person_id) && input$person_id %in% names(d))
-      as.character(d[[input$person_id]]) else sprintf("P%04d", seq_len(nrow(d)))
-    rownames(X) <- make.unique(rn); colnames(X) <- iv
+    rownames(X) <- person_labels(); colnames(X) <- iv
+
+    ## ---- person exclusions (re-estimation without misfitting persons) ----
+    excl <- intersect(input$excl_persons %||% character(0), rownames(X))
+    keep_rows <- which(!(rownames(X) %in% excl))
+    shiny::validate(shiny::need(
+      length(keep_rows) >= 10,
+      "Fewer than 10 persons would remain after exclusions. Clear some exclusions."))
+    X <- X[keep_rows, , drop = FALSE]
 
     global_codes <- parse_codes(input$codes)
     global_ns    <- parse_newscore(input$newscore)
@@ -680,6 +743,12 @@ server <- function(input, output, session) {
     }
 
     p <- rasch_prep(X, groups = grp, recode = input$recode)
+    p$keep_rows <- keep_rows          # rows of wide_data() that entered the fit
+    p$excluded  <- excl
+    if (length(excl))
+      codes_notes <- c(sprintf("Excluded %d person(s) before estimation: %s%s",
+                               length(excl), paste(utils::head(excl, 15), collapse = ", "),
+                               if (length(excl) > 15) ", ..." else ""), codes_notes)
     p$notes <- c(codes_notes, p$notes)
 
     ## ---- reproducible code fragment -------------------------------------
@@ -705,14 +774,20 @@ server <- function(input, output, session) {
     else gen_cr(global_codes, global_ns)
 
     record_step("prep",
-               sprintf("Selected %d items; model = %s; recode = %s; scales = %s",
+               sprintf("Selected %d items; model = %s; recode = %s; scales = %s; persons excluded = %d",
                        length(iv), toupper(model), input$recode,
-                       paste(sort(unique(grp)), collapse = ",")),
+                       paste(sort(unique(grp)), collapse = ","), length(excl)),
                c(sprintf('items <- c(%s)', paste(sprintf('"%s"', iv), collapse = ", ")),
                  sprintf('X <- as.matrix(data[, items]); rownames(X) <- %s',
                          if (input$person_id %in% names(d))
                            sprintf('make.unique(as.character(data$`%s`))', input$person_id)
                          else 'sprintf("P%04d", seq_len(nrow(data)))'),
+                 if (length(excl))
+                   c(sprintf('excluded <- c(%s)   # persons dropped in the app',
+                             paste(sprintf('"%s"', excl), collapse = ", ")),
+                     'keep <- !(rownames(X) %in% excluded)',
+                     'X <- X[keep, , drop = FALSE]')
+                 else 'keep <- rep(TRUE, nrow(X))   # no persons excluded',
                  sprintf('groups <- c(%s)', paste(sprintf('"%s"', grp), collapse = ", ")),
                  cr_lines,
                  sprintf('prep <- rasch_prep(X, groups = groups, recode = "%s")', input$recode)))
@@ -720,7 +795,7 @@ server <- function(input, output, session) {
   })
 
   ## ---- estimation ---------------------------------------------------------
-  fit <- shiny::eventReactive(input$run, {
+  fit <- shiny::eventReactive(refit(), ignoreInit = TRUE, {
     p <- prep()
     shiny::withProgress(message = "Running JMLE...", value = 0.3, {
       f <- rasch_jmle(p, maxit = input$maxit, conv = input$lconv, rconv = input$rconv,
@@ -807,6 +882,8 @@ server <- function(input, output, session) {
     paste(
       sprintf("Persons: %d (%d extreme)   Items: %d (%d extreme)",
               nrow(f$X), length(f$extreme_persons), ncol(f$X), length(f$extreme_items)),
+      sprintf("Persons excluded before estimation: %d",
+              length(tryCatch(prep()$excluded, error = function(e) character(0)))),
       sprintf("Observations: %d   Missing: %.1f%%", sum(f$mask), 100 * mean(!f$mask)),
       sprintf("Rating-scale groups: %d   Max categories: %s",
               length(f$tau), paste(f$max_cat, collapse = ", ")),
@@ -846,6 +923,21 @@ server <- function(input, output, session) {
                       if (length(excl) > 20) " ..." else "")
     }
     msg
+  })
+
+  ## ---- interface font size -------------------------------------------------
+  # Bootstrap 5 sizes are rem-based, so scaling the root font size scales the
+  # whole interface proportionally (browser default = 16px).
+  output$font_css <- shiny::renderUI({
+    px <- input$ui_font %||% 13
+    rem <- input$table_font %||% 0.85
+    shiny::tags$style(shiny::HTML(sprintf(
+      "html{font-size:%.1fpx !important}
+       .dataTables_wrapper, table.dataTable{font-size:%.2frem}
+       pre, .shiny-text-output{font-size:%.2frem}
+       .form-control, .form-select, .btn, label, .help-block{font-size:%.2frem}
+       .bslib-value-box .value-box-value{font-size:1.6rem}",
+      px, rem, rem, max(rem, 0.75))))
   })
 
   ## ---- shared figure style (rules 4, 5, 9) --------------------------------
@@ -957,6 +1049,47 @@ server <- function(input, output, session) {
     dt(utils::head(unexpected_responses(fit(), input$unexp_cut), 500), 2, "35vh")
   })
 
+  ## ---- person include / exclude + re-estimation ---------------------------
+  # Choices come from the full data, not from the current fit, so a person that
+  # has been excluded can still be found in the list and put back.
+  shiny::observeEvent(person_labels(), {
+    shinyWidgets::updatePickerInput(session, "excl_persons",
+                                    choices = person_labels(),
+                                    selected = intersect(input$excl_persons %||% character(0),
+                                                         person_labels()))
+  })
+  shiny::observeEvent(input$excl_flag, {
+    shiny::req(fit())
+    d <- person_table(fit())
+    v <- switch(input$excl_stat,
+                outfit_mnsq = d$Outfit_MNSQ, infit_mnsq = d$Infit_MNSQ,
+                outfit_zstd = d$Outfit_ZSTD, infit_zstd = d$Infit_ZSTD)
+    hit <- d$Person[is.finite(v) & v > input$excl_cut & fit()$keep_p]
+    new <- union(input$excl_persons %||% character(0), hit)
+    shinyWidgets::updatePickerInput(session, "excl_persons",
+                                    choices = person_labels(), selected = new)
+    shiny::showNotification(
+      sprintf("%d person(s) flagged (%s > %g); %d now on the exclusion list. Press Re-estimate to apply.",
+              length(hit), input$excl_stat, input$excl_cut, length(new)),
+      type = "message")
+  })
+  shiny::observeEvent(input$excl_clear, {
+    shinyWidgets::updatePickerInput(session, "excl_persons",
+                                    choices = person_labels(), selected = character(0))
+    shiny::showNotification("Exclusion list cleared. Press Re-estimate to apply.", type = "message")
+  })
+  output$excl_note <- shiny::renderText({
+    sel <- input$excl_persons %||% character(0)
+    n <- length(person_labels())
+    applied <- tryCatch(length(prep()$excluded), error = function(e) NA_integer_)
+    paste0(
+      sprintf("%d of %d persons on the exclusion list (%.1f%%).", length(sel), n,
+              100 * length(sel) / max(n, 1)),
+      if (!is.na(applied)) sprintf("\nCurrently estimated model excludes %d.", applied) else "",
+      if (!is.na(applied) && applied != length(sel))
+        "\nThe list has changed since the last estimation - press 'Re-estimate'." else "")
+  })
+
   ## ---- Wright map ----------------------------------------------------------
   mod_fig_server("fig_wright", function() {
     shiny::req(fit())
@@ -973,17 +1106,20 @@ server <- function(input, output, session) {
   mod_fig_server("fig_keyform", function() {
     shiny::req(fit())
     plot_keyform(fit(), style(), kind = input$keyform_kind,
-                 max_items = input$keyform_maxitems)
+                 max_items = input$keyform_maxitems,
+                 show_persons = isTRUE(input$keyform_persons))
   }, "keyform")
   output$tbl_keyform <- DT::renderDT({
     shiny::req(fit())
     dt(rescale_cols(keyform_data(fit(), input$keyform_kind), input$umean, input$uscale,
                     meas = c("Measure", "Item_Measure")), 3, "35vh")
   })
-  shiny::observeEvent(list(fit(), input$keyform_kind, input$keyform_maxitems), {
+  shiny::observeEvent(list(fit(), input$keyform_kind, input$keyform_maxitems,
+                           input$keyform_persons), {
     record_step("keyform", sprintf("Drew the general keyform (Table 2.2, %s)", input$keyform_kind),
-               sprintf('plot_keyform(fit, style, kind = "%s", max_items = %d)',
-                       input$keyform_kind, input$keyform_maxitems))
+               sprintf('plot_keyform(fit, style, kind = "%s", max_items = %d, show_persons = %s)',
+                       input$keyform_kind, input$keyform_maxitems,
+                       isTRUE(input$keyform_persons)))
   })
 
   ## ---- graphs --------------------------------------------------------------
@@ -1075,7 +1211,8 @@ server <- function(input, output, session) {
   ## ---- Table 30 DIF --------------------------------------------------------
   dif_res <- shiny::eventReactive(input$run_dif, {
     d <- wide_data(); shiny::req(input$dif_var)
-    cls <- d[[input$dif_var]]
+    # Subset to the rows that actually entered the fit (person exclusions).
+    cls <- d[[input$dif_var]][prep()$keep_rows]
     shiny::validate(shiny::need(length(unique(stats::na.omit(cls))) >= 2,
                                 "The DIF classification needs at least two groups."))
     shiny::withProgress(message = "DIF analysis...", value = .4,
@@ -1084,7 +1221,7 @@ server <- function(input, output, session) {
   shiny::observeEvent(dif_res(), {
     record_step("dif", sprintf("Ran DIF for '%s' (Rasch-Welch + Mantel-Haenszel, MHSLICE = %g)",
                               input$dif_var, input$mhslice),
-               sprintf('dif <- dif_analysis(fit, data$`%s`, mhslice = %g, min_n = %d)',
+               sprintf('dif <- dif_analysis(fit, data$`%s`[keep], mhslice = %g, min_n = %d)',
                        input$dif_var, input$mhslice, input$dif_minn))
   })
   output$tbl_dif <- DT::renderDT({
@@ -1097,7 +1234,7 @@ server <- function(input, output, session) {
   ## ---- Table 33 DGF --------------------------------------------------------
   dgf_res <- shiny::eventReactive(input$run_dgf, {
     d <- wide_data(); shiny::req(input$dgf_var)
-    cls <- d[[input$dgf_var]]
+    cls <- d[[input$dgf_var]][prep()$keep_rows]
     shiny::validate(shiny::need(length(unique(stats::na.omit(cls))) >= 2,
                                 "The DGF person classification needs at least two groups."))
     f <- fit()
@@ -1108,7 +1245,7 @@ server <- function(input, output, session) {
   })
   shiny::observeEvent(dgf_res(), {
     record_step("dgf", sprintf("Ran DGF for '%s' by item scale (Table 33)", input$dgf_var),
-               sprintf('dgf <- dgf_analysis(fit, data$`%s`, item_group = fit$groups, min_n = %d)',
+               sprintf('dgf <- dgf_analysis(fit, data$`%s`[keep], item_group = fit$groups, min_n = %d)',
                        input$dgf_var, input$dgf_minn))
   })
   output$tbl_dgf <- DT::renderDT({
@@ -1170,6 +1307,12 @@ or barely-converged data sets.</li>
 <li><b>Category INFIT MNSQ.</b> Reported as the information-weighted mean squared
 residual within the category. Unlike the category OUTFIT it is not centred on 1.0
 in the extreme categories; Linacre&#39;s &lt; 2.0 guideline applies to the OUTFIT column.</li>
+<li><b>Threshold advance criterion.</b> The category-quality check uses the
+category-count-dependent minimum advance
+ln((k+1)(m+1&minus;k)/(k(m&minus;k))), not the flat &ldquo;1.4 logits&rdquo; often
+quoted &mdash; 1.4 is only the three-category case (2&nbsp;ln&nbsp;2 = 1.386).
+For 4 categories the requirement is 1.10, for 5 it is 0.98/0.81/0.98
+(Linacre, <i>RMT</i> 2006, 20:1, p. 1052).</li>
 <li><b>PCA clusters</b> are tertiles of the first-contrast loadings, an
 approximation to the WINSTEPS three-cluster split.</li>
 <li><b>Keyform (Table 2.2)</b> is the general expected-score keyform, with
