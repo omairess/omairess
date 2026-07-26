@@ -21,6 +21,7 @@
 source("house_modules.R")
 source("rasch_engine.R")
 source("winsteps_plots.R")
+source("winstepper_extras.R")
 
 PKGS <- c("shiny", "bslib", "shinyWidgets", "colourpicker", "DT", "readr",
           "readxl", "haven", "tidyr", "tidyselect", "RColorBrewer")
@@ -81,6 +82,50 @@ apply_codes <- function(X, codes) {
   if (!length(codes)) return(X)
   X[!(X %in% codes)] <- NA
   X
+}
+
+#' Parse a WINSTEPS-style NEWSCORE= string (positional recode aligned to CODES=).
+#' e.g. CODES="0,1,2,3" NEWSCORE="0,1,1,2" collapses categories 1 and 2.
+parse_newscore <- function(txt) {
+  if (is.null(txt)) return(NULL)
+  txt <- trimws(txt)
+  if (!nzchar(txt)) return(NULL)
+  parts <- strsplit(txt, "[[:space:],;]+")[[1]]
+  parts <- parts[nzchar(parts)]
+  v <- suppressWarnings(as.numeric(parts))
+  if (any(is.na(v))) return(NULL)
+  v
+}
+
+#' Apply CODES= then (optionally) NEWSCORE= to a matrix / sub-matrix.
+#' Returns a list(X, note): note is a human-readable summary of what happened.
+#' Order (as in WINSTEPS): invalidate out-of-CODES values, then recode.
+apply_codes_recode <- function(X, codes, newscore = NULL, label = "") {
+  note <- character(0)
+  if (length(codes)) {
+    before <- sum(!is.na(X))
+    X <- apply_codes(X, codes)
+    dropped <- before - sum(!is.na(X))
+    note <- c(note, sprintf("%sCODES = %s (%d responses set to missing).",
+                            if (nzchar(label)) paste0(label, ": ") else "",
+                            paste(codes, collapse = ","), dropped))
+    if (length(newscore)) {
+      if (length(newscore) != length(codes)) {
+        note <- c(note, sprintf("%sNEWSCORE ignored: it has %d values but CODES has %d.",
+                                if (nzchar(label)) paste0(label, ": ") else "",
+                                length(newscore), length(codes)))
+      } else if (!identical(as.numeric(newscore), as.numeric(codes))) {
+        X[] <- newscore[match(X, codes)]   # NA -> NA
+        note <- c(note, sprintf("%sNEWSCORE = %s (recoded from %s).",
+                                if (nzchar(label)) paste0(label, ": ") else "",
+                                paste(newscore, collapse = ","),
+                                paste(codes, collapse = ",")))
+      }
+    }
+  } else if (length(newscore)) {
+    note <- c(note, "NEWSCORE ignored: it requires CODES to be set.")
+  }
+  list(X = X, note = note)
 }
 
 # ---------------------------------------------------------------------------
@@ -183,20 +228,31 @@ panel_estimate <- bslib::nav_panel(
       shiny::hr(),
       shiny::strong("Model"),
       shiny::radioButtons("model", NULL, inline = FALSE,
-                          c("Rating Scale Model - one shared structure (ISGROUPS=0)" = "rsm",
-                            "Partial Credit Model - one structure per item" = "pcm",
-                            "Grouped - structure by a grouping string" = "grp")),
+                          c("Rating Scale Model - all items share one structure" = "rsm",
+                            "Partial Credit Model - every item its own structure" = "pcm",
+                            "Grouped / mixed - assign items to scales below" = "grp")),
       shiny::conditionalPanel(
         "input.model == 'grp'",
-        shiny::textInput("groups_txt", "Group code per item (comma separated, recycled)", "A,A,B,B")),
+        shiny::numericInput("n_scales", "Number of scales", 2, 1, 26),
+        shiny::helpText(shiny::HTML(
+          "Define each scale: pick its items and, if needed, its own ",
+          "<code>CODES</code> / <code>NEWSCORE</code>. Items left unassigned go ",
+          "to the first scale; an item picked in two scales takes the later one.")),
+        shiny::uiOutput("scale_editor")),
       shiny::hr(),
       shiny::strong("Valid category codes (CODES=)"),
       shiny::textInput("codes", NULL, "", placeholder = "e.g. 0,1,2,3  (blank = keep all observed)"),
       shiny::helpText(shiny::HTML(
-        "As in WINSTEPS <code>CODES=</code>: list the response codes that are ",
-        "valid categories in the analysis. Any value <b>not</b> in this list is ",
-        "treated as missing / not administered. Leave blank to keep every ",
-        "observed value. Applied before recoding.")),
+        "As in WINSTEPS <code>CODES=</code>: the response codes that are valid ",
+        "categories. Any value <b>not</b> listed is treated as missing / not ",
+        "administered. Applied before recoding. For the grouped model these are ",
+        "the defaults; a scale's own CODES override them.")),
+      shiny::strong("Recode categories (NEWSCORE=)"),
+      shiny::textInput("newscore", NULL, "", placeholder = "e.g. 0,1,1,2  (align to CODES; blank = none)"),
+      shiny::helpText(shiny::HTML(
+        "Positional recode aligned to <code>CODES=</code>, e.g. CODES ",
+        "<code>0,1,2,3</code> with NEWSCORE <code>0,1,1,2</code> collapses ",
+        "categories 1 and 2.")),
       shiny::verbatimTextOutput("codes_note"),
       shiny::selectInput("recode", "Category recoding",
                          c("Shift so categories start at 0" = "shift",
@@ -388,6 +444,37 @@ panel_dif <- bslib::nav_panel(
   fig_card("DIF measures by class", "fig_dif", "520px"),
   fig_card("DIF contrast with ETS reference lines", "fig_difc", "520px"))
 
+panel_keyform <- bslib::nav_panel(
+  "Keyform", icon = shiny::icon("table-cells"),
+  bslib::layout_columns(
+    col_widths = c(6, 6),
+    shiny::selectInput("keyform_kind", "Keyform type",
+                       c("Expected score (Table 2.2)" = "expected",
+                         "Rasch-Thurstone 50% (Table 2.3)" = "thurstone",
+                         "Most probable / modal (Table 2.1)" = "modal")),
+    shiny::numericInput("keyform_maxitems", "Max items to show", 80, 5, 400)),
+  fig_card("General keyform (Table 2.2)", "fig_keyform", "720px",
+           "Items are rows ordered by measure; each category number sits on the shared logit axis where it keys."),
+  bslib::card(bslib::card_header("Keyform coordinates"),
+              DT::DTOutput("tbl_keyform"), full_screen = TRUE))
+
+panel_dgf <- bslib::nav_panel(
+  "DGF", icon = shiny::icon("object-group"),
+  bslib::layout_columns(
+    col_widths = c(4, 3, 5),
+    shiny::selectInput("dgf_var", "Person classification (DIF=)", NULL),
+    shiny::numericInput("dgf_minn", "Min N per cell", 5, 2, 500),
+    shiny::div(shiny::br(), shiny::actionButton("run_dgf", "Run DGF", class = "btn-primary w-100"))),
+  shiny::helpText(shiny::HTML(
+    "Differential Group Functioning (Table 33): the interaction between the ",
+    "<b>item scales</b> defined on the Estimate tab and a <b>person classification</b>. ",
+    "Each item-class &times; person-class cell gets one uniform difficulty shift on top of ",
+    "the baseline calibration; the DGF contrast is the difference across person classes ",
+    "(ETS A/B/C as for DIF). Use a grouped model for meaningful item classes.")),
+  bslib::card(bslib::card_header("DGF table (Table 33)"),
+              DT::DTOutput("tbl_dgf"), full_screen = TRUE),
+  fig_card("DGF: item class x person class", "fig_dgf", "520px"))
+
 panel_style <- bslib::nav_panel(
   "Figure style", icon = shiny::icon("palette"),
   bslib::card(
@@ -442,11 +529,11 @@ ui <- bslib::page_navbar(
   panel_estimate,
   bslib::nav_menu(
     "Results", icon = shiny::icon("chart-column"),
-    panel_summary, panel_wright, panel_items, panel_persons,
+    panel_summary, panel_wright, panel_keyform, panel_items, panel_persons,
     panel_ratingscale, panel_score),
   bslib::nav_menu(
     "Advanced", icon = shiny::icon("flask-vial"),
-    panel_graphs, panel_dim, panel_dif),
+    panel_graphs, panel_dim, panel_dif, panel_dgf),
   bslib::nav_spacer(),
   bslib::nav_menu(
     "Settings", icon = shiny::icon("gear"), align = "right",
@@ -463,7 +550,7 @@ server <- function(input, output, session) {
   # guaranteed in Shiny, so every recorded step is re-sorted into this order;
   # otherwise the exported script could plot before it estimates.
   STEP_ORDER <- c("setup", "data_load", "reshape", "prep", "estimate", "style",
-                  "tables", "wright", "pca", "parallel", "dif")
+                  "tables", "wright", "keyform", "pca", "parallel", "dif", "dgf")
 
   rec <- new_recorder()
   record_step <- function(id, description, code) {
@@ -513,42 +600,121 @@ server <- function(input, output, session) {
     nm <- names(wide_data())
     shiny::updateSelectInput(session, "person_id", choices = c("(row number)", nm))
     shiny::updateSelectInput(session, "dif_var", choices = nm)
+    shiny::updateSelectInput(session, "dgf_var", choices = nm)
+  })
+
+  ## ---- grouped-model scale editor (feature: assign items to scales) --------
+  output$scale_editor <- shiny::renderUI({
+    ns_n <- max(1, as.integer(input$n_scales %||% 1))
+    iv <- item_vars()
+    shiny::req(length(iv) >= 1)
+    lapply(seq_len(ns_n), function(s) {
+      # default split: deal items round-robin across scales for a sensible start
+      def <- iv[seq_along(iv) %% ns_n == (s %% ns_n)]
+      shiny::wellPanel(
+        style = "padding:8px;margin-bottom:8px;",
+        shiny::strong(sprintf("Scale %d", s)),
+        shiny::textInput(paste0("scale_name_", s), "Label", sprintf("S%d", s)),
+        shinyWidgets::pickerInput(paste0("scale_items_", s), "Items in this scale",
+                                  choices = iv, selected = def, multiple = TRUE,
+                                  options = list(`live-search` = TRUE, `actions-box` = TRUE,
+                                                 `selected-text-format` = "count > 3")),
+        shiny::textInput(paste0("scale_codes_", s), "CODES for this scale (blank = global)", ""),
+        shiny::textInput(paste0("scale_newscore_", s), "NEWSCORE for this scale (blank = global)", ""))
+    })
   })
 
   ## ---- preparation --------------------------------------------------------
   prep <- shiny::eventReactive(input$run, {
-    d <- wide_data(); iv <- item_vars()
+    d <- wide_data(); iv <- item_vars(); model <- input$model
     shiny::validate(shiny::need(length(iv) >= 3, "Select at least three item columns on the Estimate tab."))
-    X <- as.matrix(d[, iv, drop = FALSE])
+    X <- as.matrix(d[, iv, drop = FALSE]); storage.mode(X) <- "numeric"
     rn <- if (!is.null(input$person_id) && input$person_id %in% names(d))
       as.character(d[[input$person_id]]) else sprintf("P%04d", seq_len(nrow(d)))
     rownames(X) <- make.unique(rn); colnames(X) <- iv
-    codes <- parse_codes(input$codes)
-    X <- apply_codes(X, codes)
-    grp <- switch(input$model,
-                  rsm = rep("R1", length(iv)),
-                  pcm = iv,
-                  grp = rep(trimws(strsplit(input$groups_txt, ",")[[1]]), length.out = length(iv)))
+
+    global_codes <- parse_codes(input$codes)
+    global_ns    <- parse_newscore(input$newscore)
+    codes_notes  <- character(0)
+
+    ## ---- build the item->group (scale) mapping --------------------------
+    scale_codes <- scale_ns <- list()
+    if (model == "rsm") {
+      grp <- rep("R1", length(iv))
+    } else if (model == "pcm") {
+      grp <- iv
+    } else {                                   # grouped / mixed
+      ns_n <- max(1, as.integer(input$n_scales %||% 1))
+      grp <- rep(NA_character_, length(iv))
+      for (s in seq_len(ns_n)) {
+        lab <- trimws(input[[paste0("scale_name_", s)]] %||% sprintf("S%d", s))
+        if (!nzchar(lab)) lab <- sprintf("S%d", s)
+        its <- input[[paste0("scale_items_", s)]]
+        idx <- match(its, iv); idx <- idx[!is.na(idx)]
+        if (length(idx)) grp[idx] <- lab       # a later scale wins on overlap
+        sc <- parse_codes(input[[paste0("scale_codes_", s)]])
+        sn <- parse_newscore(input[[paste0("scale_newscore_", s)]])
+        scale_codes[[lab]] <- if (length(sc)) sc else global_codes
+        scale_ns[[lab]]    <- if (length(sn)) sn else global_ns
+      }
+      first_lab <- trimws(input[["scale_name_1"]] %||% "S1")
+      if (!nzchar(first_lab)) first_lab <- "S1"
+      if (any(is.na(grp))) {
+        codes_notes <- c(codes_notes, sprintf(
+          "%d item(s) were unassigned and placed in scale '%s'.", sum(is.na(grp)), first_lab))
+        grp[is.na(grp)] <- first_lab
+      }
+    }
+
+    ## ---- apply CODES= / NEWSCORE= (per scale, or global) ----------------
+    if (model == "grp") {
+      for (g in unique(grp)) {
+        cols <- which(grp == g)
+        res <- apply_codes_recode(X[, cols, drop = FALSE], scale_codes[[g]],
+                                  scale_ns[[g]], label = sprintf("Scale '%s'", g))
+        X[, cols] <- res$X; codes_notes <- c(codes_notes, res$note)
+      }
+    } else {
+      res <- apply_codes_recode(X, global_codes, global_ns)
+      X <- res$X; codes_notes <- c(codes_notes, res$note)
+    }
+
     p <- rasch_prep(X, groups = grp, recode = input$recode)
-    record_step("prep", sprintf("Selected %d items, CODES = %s, model = %s, recode = %s",
-                               length(iv),
-                               if (length(codes)) paste(codes, collapse = ",") else "(all observed)",
-                               toupper(input$model), input$recode),
+    p$notes <- c(codes_notes, p$notes)
+
+    ## ---- reproducible code fragment -------------------------------------
+    gen_cr <- function(codes, ns, colsexpr = NULL) {
+      if (!length(codes)) return(character(0))
+      recode <- length(ns) && length(ns) == length(codes) &&
+        !identical(as.numeric(ns), as.numeric(codes))
+      if (is.null(colsexpr)) {
+        c(sprintf('X[!(X %%in%% c(%s))] <- NA   # CODES=', paste(codes, collapse = ", ")),
+          if (recode) sprintf('X[] <- c(%s)[match(X, c(%s))]   # NEWSCORE=',
+                              paste(ns, collapse = ", "), paste(codes, collapse = ", ")))
+      } else {
+        c(sprintf('.cols <- %s; .sub <- X[, .cols, drop = FALSE]', colsexpr),
+          sprintf('.sub[!(.sub %%in%% c(%s))] <- NA   # CODES=', paste(codes, collapse = ", ")),
+          if (recode) sprintf('.sub[] <- c(%s)[match(.sub, c(%s))]   # NEWSCORE=',
+                              paste(ns, collapse = ", "), paste(codes, collapse = ", ")),
+          'X[, .cols] <- .sub')
+      }
+    }
+    cr_lines <- if (model == "grp")
+      unlist(lapply(unique(grp), function(g)
+        gen_cr(scale_codes[[g]], scale_ns[[g]], sprintf('which(groups == "%s")', g))))
+    else gen_cr(global_codes, global_ns)
+
+    record_step("prep",
+               sprintf("Selected %d items; model = %s; recode = %s; scales = %s",
+                       length(iv), toupper(model), input$recode,
+                       paste(sort(unique(grp)), collapse = ",")),
                c(sprintf('items <- c(%s)', paste(sprintf('"%s"', iv), collapse = ", ")),
                  sprintf('X <- as.matrix(data[, items]); rownames(X) <- %s',
                          if (input$person_id %in% names(d))
                            sprintf('make.unique(as.character(data$`%s`))', input$person_id)
                          else 'sprintf("P%04d", seq_len(nrow(data)))'),
-                 if (length(codes))
-                   paste0('codes <- c(', paste(codes, collapse = ", "),
-                          '); X[!(X %in% codes)] <- NA   # WINSTEPS CODES=')
-                 else '# CODES=: all observed values kept',
-                 sprintf('groups <- %s', switch(input$model,
-                                                rsm = 'rep("R1", length(items))',
-                                                pcm = 'items',
-                                                sprintf('rep(c(%s), length.out = length(items))',
-                                                        paste(sprintf('"%s"', trimws(strsplit(input$groups_txt, ",")[[1]])),
-                                                              collapse = ", ")))),
+                 sprintf('groups <- c(%s)', paste(sprintf('"%s"', grp), collapse = ", ")),
+                 cr_lines,
                  sprintf('prep <- rasch_prep(X, groups = groups, recode = "%s")', input$recode)))
     p
   })
@@ -803,6 +969,23 @@ server <- function(input, output, session) {
                        input$wright_what, input$wright_maxlab))
   })
 
+  ## ---- Keyform (Table 2.2) -------------------------------------------------
+  mod_fig_server("fig_keyform", function() {
+    shiny::req(fit())
+    plot_keyform(fit(), style(), kind = input$keyform_kind,
+                 max_items = input$keyform_maxitems)
+  }, "keyform")
+  output$tbl_keyform <- DT::renderDT({
+    shiny::req(fit())
+    dt(rescale_cols(keyform_data(fit(), input$keyform_kind), input$umean, input$uscale,
+                    meas = c("Measure", "Item_Measure")), 3, "35vh")
+  })
+  shiny::observeEvent(list(fit(), input$keyform_kind, input$keyform_maxitems), {
+    record_step("keyform", sprintf("Drew the general keyform (Table 2.2, %s)", input$keyform_kind),
+               sprintf('plot_keyform(fit, style, kind = "%s", max_items = %d)',
+                       input$keyform_kind, input$keyform_maxitems))
+  })
+
   ## ---- graphs --------------------------------------------------------------
   info_items <- mod_varselect_server("info_items", shiny::reactive({
     f <- fit(); as.data.frame(f$X)
@@ -911,6 +1094,30 @@ server <- function(input, output, session) {
   mod_fig_server("fig_dif", function() { shiny::req(dif_res()); plot_dif(dif_res(), style()) }, "dif_measures")
   mod_fig_server("fig_difc", function() { shiny::req(dif_res()); plot_dif_contrast(dif_res(), style()) }, "dif_contrast")
 
+  ## ---- Table 33 DGF --------------------------------------------------------
+  dgf_res <- shiny::eventReactive(input$run_dgf, {
+    d <- wide_data(); shiny::req(input$dgf_var)
+    cls <- d[[input$dgf_var]]
+    shiny::validate(shiny::need(length(unique(stats::na.omit(cls))) >= 2,
+                                "The DGF person classification needs at least two groups."))
+    f <- fit()
+    shiny::validate(shiny::need(length(unique(f$groups[f$keep_i])) >= 2,
+                                "DGF needs at least two item classes; estimate a grouped model on the Estimate tab."))
+    shiny::withProgress(message = "DGF analysis...", value = .4,
+      dgf_analysis(f, cls, item_group = f$groups, min_n = input$dgf_minn))
+  })
+  shiny::observeEvent(dgf_res(), {
+    record_step("dgf", sprintf("Ran DGF for '%s' by item scale (Table 33)", input$dgf_var),
+               sprintf('dgf <- dgf_analysis(fit, data$`%s`, item_group = fit$groups, min_n = %d)',
+                       input$dgf_var, input$dgf_minn))
+  })
+  output$tbl_dgf <- DT::renderDT({
+    dt(rescale_cols(dgf_res(), input$umean, input$uscale,
+                    meas = character(0),
+                    sds = c("Shift_A", "Shift_B", "SE_A", "SE_B", "Joint_SE", "DGF_Contrast")), 3, "45vh")
+  })
+  mod_fig_server("fig_dgf", function() { shiny::req(dgf_res()); plot_dgf(dgf_res(), style()) }, "dgf")
+
   ## ---- exports (rules 6, 7, 8) --------------------------------------------
   results <- shiny::reactive({
     f <- tryCatch(fit(), error = function(e) NULL)
@@ -922,6 +1129,8 @@ server <- function(input, output, session) {
          categories = tryCatch(category_table(f), error = function(e) NULL),
          pca = tryCatch(pca(), error = function(e) NULL),
          dif = tryCatch(dif_res(), error = function(e) NULL),
+         dgf = tryCatch(dgf_res(), error = function(e) NULL),
+         keyform = tryCatch(keyform_data(f, "expected"), error = function(e) NULL),
          session = utils::sessionInfo())
   })
   mod_exports_server("exports", rec, PKGS, wide_data, results)
@@ -963,8 +1172,15 @@ residual within the category. Unlike the category OUTFIT it is not centred on 1.
 in the extreme categories; Linacre&#39;s &lt; 2.0 guideline applies to the OUTFIT column.</li>
 <li><b>PCA clusters</b> are tertiles of the first-contrast loadings, an
 approximation to the WINSTEPS three-cluster split.</li>
+<li><b>Keyform (Table 2.2)</b> is the general expected-score keyform, with
+Rasch-Thurstone (2.3) and modal (2.1) variants; the scalogram/keyform data-entry
+forms are not reproduced.</li>
+<li><b>DGF (Table 33)</b> estimates one uniform difficulty shift per
+item-class &times; person-class cell (item classes come from the model scales) and
+contrasts them across person classes with the ETS A/B/C rule &mdash; a Rasch-Welch
+style summary, not WINSTEPS&#39; exact log-linear DGF.</li>
 <li><b>Anchoring</b> (IAFILE=, PAFILE=, SAFILE=), CUTLO/CUTHI, subset detection
-and the keyform/scalogram tables are not implemented.</li>
+and the scalogram table are not implemented.</li>
 <li>This is independent software. It is not affiliated with, endorsed by, or
 derived from WINSTEPS&reg;, which is John M. Linacre&#39;s software. Cite the engine
 you actually ran.</li>

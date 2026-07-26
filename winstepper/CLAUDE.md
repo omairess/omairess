@@ -13,6 +13,7 @@ BootSON / Dagger / PsychoNetrix work in the repo.
 | `rasch_engine.R` | JMLE estimation, fit statistics, category structure, DIF, PCA of residuals. **No Shiny dependency** — must stay usable from the command line. **Reused unchanged from R-Winsteps.** |
 | `winsteps_plots.R` | All figures, base graphics, every one driven by a `style` list. **Reused unchanged.** |
 | `house_modules.R` | Shared house-style modules (data load, reshape, varselect, step recorder, exports). **Reused unchanged.** |
+| `winstepper_extras.R` | WINSTEPPER-only additions kept out of the audited files: general keyform (Table 2.2) and DGF (Table 33). Depends on engine + plot internals; source it **after** them. |
 | `app.R` | The WINSTEPPER Shiny app — a redesigned `bslib` UI (grouped nav menus, value-box dashboard, cards) over the engine above. |
 
 ## What is "fresh" about WINSTEPPER vs R-Winsteps
@@ -25,6 +26,27 @@ BootSON / Dagger / PsychoNetrix work in the repo.
 - A value-box dashboard surfaces persons/items/iterations/convergence on the
   Estimate tab and person/item reliability + separation on the Summary tab.
 - Panels use `bslib::card` / `layout_columns` / `layout_sidebar`.
+
+## WINSTEPPER-only features (not in R-Winsteps)
+
+- **CODES= / NEWSCORE=** on the Estimate tab. `CODES=` declares which response
+  codes are valid categories (others → missing); `NEWSCORE=` positionally
+  recodes them (e.g. `0,1,2,3` → `0,1,1,2` collapses categories 1 and 2).
+  Applied before recoding; both are written into the reproducible script
+  (`apply_codes` / `parse_newscore` / `apply_codes_recode` in app.R).
+- **Grouped / mixed model scale editor.** Choosing the grouped model shows a
+  per-scale editor: assign items to each scale via a `pickerInput` and give each
+  scale its own `CODES` / `NEWSCORE` (blank = use the global defaults). This
+  builds the `groups` vector passed to `rasch_prep()`.
+- **General keyform (Table 2.2)** — `keyform_data()` / `plot_keyform()` in
+  `winstepper_extras.R`, with expected-score (2.2), Rasch-Thurstone (2.3) and
+  modal (2.1) variants. Records a `keyform` step.
+- **DGF (Table 33)** — `dgf_analysis()` / `plot_dgf()`. Item classes come from
+  the model scales (`fit$groups`); one uniform difficulty shift is estimated per
+  item-class × person-class cell and contrasted across person classes with the
+  ETS A/B/C rule. Records a `dgf` step. Sits alongside DIF under **Advanced**.
+
+New step ids `keyform` and `dgf` are already in `STEP_ORDER`.
 
 Everything below the UI — the engine API, the recorder discipline, the input IDs
 the server binds to — is deliberately identical to R-Winsteps so the numbers and
@@ -100,8 +122,10 @@ over the *combined* person+item range, not from `hist()` defaults.
   "< 2.0" guideline applies to the OUTFIT column.
 - PCA clusters are tertiles of first-contrast loadings — an approximation to the
   WINSTEPS three-cluster split.
+- DGF (Table 33) is a Rasch-Welch-style summary (one uniform shift per cell),
+  not WINSTEPS' exact log-linear DGF; treat it as an effect-size indicator.
 - Not implemented: anchoring (`IAFILE=`/`PAFILE=`/`SAFILE=`), `CUTLO=`/`CUTHI=`,
-  subset/connectivity detection, keyform and scalogram tables, DPF (Table 31),
+  subset/connectivity detection, scalogram table, DPF (Table 31),
   non-uniform DIF, multi-facet models.
 - Independent software; not affiliated with or derived from WINSTEPS®.
 
