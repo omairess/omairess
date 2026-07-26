@@ -61,6 +61,28 @@ dt <- function(d, digits = 2, scrollY = "58vh", ...) {
                                lengthMenu = c(10, 25, 50, 100, 500)), ...)
 }
 
+#' Parse a WINSTEPS-style CODES= string into a numeric vector of valid codes.
+#' Accepts comma-, space- or semicolon-separated values, e.g. "0,1,2,3" or
+#' "0 1 2 3". Returns NULL when blank (meaning: keep every observed value).
+parse_codes <- function(txt) {
+  if (is.null(txt)) return(NULL)
+  txt <- trimws(txt)
+  if (!nzchar(txt)) return(NULL)
+  parts <- strsplit(txt, "[[:space:],;]+")[[1]]
+  parts <- parts[nzchar(parts)]
+  v <- suppressWarnings(as.numeric(parts))
+  v <- v[!is.na(v)]
+  if (!length(v)) NULL else sort(unique(v))
+}
+
+#' Apply CODES=: any response not among `codes` becomes NA (not administered).
+#' Existing NA stays NA. NULL/empty codes = keep the matrix unchanged.
+apply_codes <- function(X, codes) {
+  if (!length(codes)) return(X)
+  X[!(X %in% codes)] <- NA
+  X
+}
+
 # ---------------------------------------------------------------------------
 # Reusable figure module (house rules 5 + honesty note about clipboard)
 # ---------------------------------------------------------------------------
@@ -167,6 +189,15 @@ panel_estimate <- bslib::nav_panel(
       shiny::conditionalPanel(
         "input.model == 'grp'",
         shiny::textInput("groups_txt", "Group code per item (comma separated, recycled)", "A,A,B,B")),
+      shiny::hr(),
+      shiny::strong("Valid category codes (CODES=)"),
+      shiny::textInput("codes", NULL, "", placeholder = "e.g. 0,1,2,3  (blank = keep all observed)"),
+      shiny::helpText(shiny::HTML(
+        "As in WINSTEPS <code>CODES=</code>: list the response codes that are ",
+        "valid categories in the analysis. Any value <b>not</b> in this list is ",
+        "treated as missing / not administered. Leave blank to keep every ",
+        "observed value. Applied before recoding.")),
+      shiny::verbatimTextOutput("codes_note"),
       shiny::selectInput("recode", "Category recoding",
                          c("Shift so categories start at 0" = "shift",
                            "Collapse to consecutive observed categories" = "collapse",
@@ -492,18 +523,26 @@ server <- function(input, output, session) {
     rn <- if (!is.null(input$person_id) && input$person_id %in% names(d))
       as.character(d[[input$person_id]]) else sprintf("P%04d", seq_len(nrow(d)))
     rownames(X) <- make.unique(rn); colnames(X) <- iv
+    codes <- parse_codes(input$codes)
+    X <- apply_codes(X, codes)
     grp <- switch(input$model,
                   rsm = rep("R1", length(iv)),
                   pcm = iv,
                   grp = rep(trimws(strsplit(input$groups_txt, ",")[[1]]), length.out = length(iv)))
     p <- rasch_prep(X, groups = grp, recode = input$recode)
-    record_step("prep", sprintf("Selected %d items, model = %s, recode = %s",
-                               length(iv), toupper(input$model), input$recode),
+    record_step("prep", sprintf("Selected %d items, CODES = %s, model = %s, recode = %s",
+                               length(iv),
+                               if (length(codes)) paste(codes, collapse = ",") else "(all observed)",
+                               toupper(input$model), input$recode),
                c(sprintf('items <- c(%s)', paste(sprintf('"%s"', iv), collapse = ", ")),
                  sprintf('X <- as.matrix(data[, items]); rownames(X) <- %s',
                          if (input$person_id %in% names(d))
                            sprintf('make.unique(as.character(data$`%s`))', input$person_id)
                          else 'sprintf("P%04d", seq_len(nrow(data)))'),
+                 if (length(codes))
+                   paste0('codes <- c(', paste(codes, collapse = ", "),
+                          '); X[!(X %in% codes)] <- NA   # WINSTEPS CODES=')
+                 else '# CODES=: all observed values kept',
                  sprintf('groups <- %s', switch(input$model,
                                                 rsm = 'rep("R1", length(items))',
                                                 pcm = 'items',
@@ -618,6 +657,29 @@ server <- function(input, output, session) {
   output$prep_notes <- shiny::renderText({
     n <- prep()$notes
     if (!length(n)) "No recoding was necessary." else paste("-", n, collapse = "\n")
+  })
+
+  # Live preview of the CODES= filter (does not require pressing Estimate).
+  output$codes_note <- shiny::renderText({
+    codes <- parse_codes(input$codes)
+    if (!length(codes)) return("All observed values kept as valid categories.")
+    iv <- tryCatch(item_vars(), error = function(e) NULL)
+    d  <- tryCatch(wide_data(), error = function(e) NULL)
+    msg <- sprintf("Valid codes: %s", paste(codes, collapse = ", "))
+    if (!is.null(d) && length(iv) && all(iv %in% names(d))) {
+      X <- suppressWarnings(as.matrix(d[, iv, drop = FALSE]))
+      storage.mode(X) <- "numeric"
+      obs <- !is.na(X)
+      outside <- obs & !(X %in% codes)
+      msg <- paste0(msg, sprintf(
+        "\n%d of %d observed responses (%.1f%%) fall outside CODES= and become missing.",
+        sum(outside), sum(obs), 100 * sum(outside) / max(sum(obs), 1)))
+      excl <- sort(unique(X[outside]))
+      if (length(excl))
+        msg <- paste0(msg, "\nExcluded values: ", paste(utils::head(excl, 20), collapse = ", "),
+                      if (length(excl) > 20) " ..." else "")
+    }
+    msg
   })
 
   ## ---- shared figure style (rules 4, 5, 9) --------------------------------

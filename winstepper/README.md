@@ -20,6 +20,15 @@ ones). Then either upload a wide data file (`.csv/.txt/.xls/.xlsx/.sav/.rds/.RDa
 or click **Load built-in demo data** on the Data tab, select your item columns
 and a model on the Estimate tab, and press **Estimate**.
 
+### Valid category codes (`CODES=`)
+
+On the Estimate tab you can list the response codes that count as valid
+categories, exactly like WINSTEPS `CODES=` (e.g. `0,1,2,3`). Any value **not**
+in the list is treated as missing / not administered before estimation. Leave
+it blank to keep every observed value. The sidebar shows a live count of how
+many responses fall outside the codes, and the filter is written into the
+exported reproducible R script.
+
 ## Files
 
 - `app.R` — the WINSTEPPER Shiny UI/server (bslib).
