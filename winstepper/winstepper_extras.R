@@ -109,6 +109,132 @@ category_diagnostics <- function(ct) {
 }
 
 # ---------------------------------------------------------------------------
+# Table 3.2 : NA-robust category structure
+# ---------------------------------------------------------------------------
+
+#' Category structure table, tolerant of NA measures and unbounded zones.
+#'
+#' DELIBERATELY OVERRIDES `category_table()` from rasch_engine.R, which has two
+#' `if (<NA>)` faults that abort with "missing value where TRUE/FALSE needed":
+#'
+#'  * line 683, `if (sum(w) > 0)` with `w <- P[[k+1]] * selg`. In R
+#'    `NA * FALSE` is `NA`, not 0, so multiplying by the logical mask does NOT
+#'    zero out the NA probabilities belonging to persons with no estimable
+#'    measure -- `sum(w)` becomes NA. Same for `sum(bd * w)`.
+#'  * line 705, `if (sum(inzone) > 0)`. The zone bounds come from
+#'    `.score_to_measure()`, which returns NA when the expected score cannot be
+#'    bracketed in [-25, 25]. `TRUE & NA` is NA, so `inzone` is poisoned. Long
+#'    rating scales (0-10) hit this because the thresholds spread far enough
+#'    that the half-score points fall outside the bracket, especially when some
+#'    categories are sparsely observed.
+#'
+#' Here the mask is applied by assignment rather than multiplication, and a
+#' category whose zone is not computable reports NA coherence instead of
+#' failing. The root-search bracket is also widened from +/-25 to +/-60 logits
+#' (see .sm_wide): the expected score is strictly monotone in the measure, so
+#' the root is unique and widening can only turn an NA into the value that was
+#' always there -- it cannot change a number the engine already produced.
+#' Everything else matches the engine.
+#' Wider-bracket wrappers. The expected score / cumulative probability are
+#' strictly monotone in the measure, so the root is unique; widening the search
+#' interval only recovers roots that lie outside the engine's +/-25 default,
+#' which happens on long rating scales with widely spread thresholds.
+.sm_wide <- function(target, tau) .score_to_measure(target, tau, lo = -60, hi = 60)
+.th_wide <- function(k, tau)      .thurstone(k, tau, lo = -60, hi = 60)
+
+#' Rasch-Thurstone item thresholds, using the wider bracket (overrides the
+#' engine's threshold_data(), which is what the Wright map's "thresholds" view
+#' plots).
+threshold_data <- function(fit) {
+  out <- list()
+  for (i in seq_along(fit$delta)) {
+    g <- fit$groups[i]; tau <- fit$tau[[g]]; m <- fit$max_cat[[g]]
+    if (is.na(fit$delta[i])) next
+    th <- vapply(1:m, function(k) .th_wide(k, tau), numeric(1))
+    out[[length(out) + 1]] <- data.frame(
+      item = fit$item_id[i], threshold = 1:m,
+      measure = fit$delta[i] + th,
+      label = paste0(fit$item_id[i], ".", 1:m), stringsAsFactors = FALSE)
+  }
+  if (!length(out)) return(data.frame(item = character(0), threshold = integer(0),
+                                      measure = numeric(0), label = character(0)))
+  do.call(rbind, out)
+}
+
+category_table <- function(fit, group = NULL, cat_extreme = 0.25) {
+  gl <- if (is.null(group)) names(fit$tau) else group
+  res <- list()
+  for (g in gl) {
+    cols <- which(fit$groups == g)
+    m <- fit$max_cat[[g]]
+    tau <- fit$tau[[g]]
+    sel <- fit$mask
+    sel[!fit$keep_p, ] <- FALSE
+    sel[, !fit$keep_i] <- FALSE
+    selg <- sel[, cols, drop = FALSE]
+    xg   <- fit$X[, cols, drop = FALSE]
+    bd   <- outer(fit$theta, fit$delta[cols], "-")   # Bn - Di
+    Eg   <- fit$E[, cols, drop = FALSE]
+    Wg   <- fit$W[, cols, drop = FALSE]
+    P    <- .probs_group(fit$theta, fit$delta[cols], tau)
+    # bd is NA exactly where theta/delta are non-estimable; those cells are
+    # always outside selg, so zeroing them cannot bias a weighted mean.
+    bdz <- bd; bdz[is.na(bdz)] <- 0
+
+    cnt <- oa <- ea <- outms <- infms <- numeric(m + 1)
+    for (k in 0:m) {
+      inc <- selg & !is.na(xg) & xg == k
+      cnt[k + 1] <- sum(inc)
+      oa[k + 1]  <- if (cnt[k + 1] > 0) mean(bd[inc]) else NA_real_
+      w <- P[[k + 1]]
+      w[is.na(w)] <- 0
+      w[!selg] <- 0                       # mask by assignment, not by NA * FALSE
+      sw <- sum(w)
+      ea[k + 1] <- if (isTRUE(sw > 0)) sum(bdz * w) / sw else NA_real_
+      if (cnt[k + 1] > 0) {
+        y <- (xg - Eg)[inc]; wv <- Wg[inc]
+        outms[k + 1] <- mean(y^2 / wv)
+        infms[k + 1] <- sum(y^2) / sum(wv)
+      } else { outms[k + 1] <- NA_real_; infms[k + 1] <- NA_real_ }
+    }
+    andrich <- c(NA_real_, tau)
+    se_and  <- c(NA_real_, fit$se_tau[[g]])
+    catmeas <- vapply(0:m, function(k) {
+      tgt <- if (k == 0) cat_extreme else if (k == m) m - cat_extreme else k
+      .sm_wide(tgt, tau)
+    }, numeric(1))
+    thur <- c(NA_real_, vapply(1:m, function(k) .th_wide(k, tau), numeric(1)))
+    zlo <- vapply(0:m, function(k) if (k == 0) -Inf else .sm_wide(k - 0.5, tau), numeric(1))
+    zhi <- vapply(0:m, function(k) if (k == m)  Inf else .sm_wide(k + 0.5, tau), numeric(1))
+
+    mc <- cm <- rep(NA_real_, m + 1)
+    for (k in 0:m) {
+      lo <- zlo[k + 1]; hi <- zhi[k + 1]
+      if (is.na(lo) || is.na(hi)) next    # zone not computable -> coherence NA
+      inzone <- selg & !is.na(xg) & bd >= lo & bd < hi
+      inzone[is.na(inzone)] <- FALSE
+      incat  <- selg & !is.na(xg) & xg == k
+      both <- sum(inzone & incat)
+      mc[k + 1] <- if (sum(inzone) > 0) 100 * both / sum(inzone) else NA_real_
+      cm[k + 1] <- if (sum(incat)  > 0) 100 * both / sum(incat)  else NA_real_
+    }
+    tot <- sum(cnt)
+    res[[g]] <- data.frame(
+      Group = g, Category = 0:m, Score = 0:m, Count = cnt,
+      Percent = 100 * cnt / max(tot, 1),
+      Obsvd_Avrge = oa, Sample_Expect = ea,
+      Infit_MNSQ = infms, Outfit_MNSQ = outms,
+      Andrich_Threshold = andrich, Threshold_SE = se_and,
+      Category_Measure = catmeas,
+      Thurstone_50pct = thur,
+      Zone_Lo = zlo, Zone_Hi = zhi,
+      Coherence_M_to_C = mc, Coherence_C_to_M = cm,
+      stringsAsFactors = FALSE)
+  }
+  do.call(rbind, res)
+}
+
+# ---------------------------------------------------------------------------
 # Table 3.1 : NA-robust summary blocks
 # ---------------------------------------------------------------------------
 
@@ -232,7 +358,16 @@ plot_keyform <- function(fit, style = ws_style(), kind = c("expected", "thurston
                          max_items = 80, show_persons = TRUE, main = NULL) {
   kind <- match.arg(kind)
   kf <- keyform_data(fit, kind)
-  if (!nrow(kf)) { graphics::plot.new(); graphics::text(0.5, 0.5, "No non-extreme items to plot."); return(invisible(NULL)) }
+  if (!nrow(kf)) {
+    graphics::plot.new()
+    graphics::text(0.5, 0.58, "No keyform coordinates could be computed.", font = 2)
+    graphics::text(0.5, 0.42, paste(
+      "Every item's category measures are undefined for this keyform type.",
+      "Try the 'most probable / modal' type, which uses the Andrich thresholds",
+      "directly, and check the category structure on the Rating scale tab.",
+      sep = "\n"), cex = 0.9)
+    return(invisible(NULL))
+  }
   im <- tapply(kf$Item_Measure, kf$Item, function(v) v[1])
   items <- names(im)[order(im)]
   if (length(items) > max_items)

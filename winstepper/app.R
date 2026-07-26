@@ -346,7 +346,7 @@ panel_items <- bslib::nav_panel(
         "ZSTD is only interpretable when MNSQ is also deviant."))),
     DT::DTOutput("tbl_items"), full_screen = TRUE),
   bslib::layout_columns(
-    col_widths = c(3, 3, 6),
+    col_widths = c(3, 3),
     shiny::selectInput("path_margin", "Pathway margin", c("items", "persons")),
     shiny::selectInput("path_stat", "Fit statistic",
                        c("Infit ZSTD" = "infit_zstd", "Outfit ZSTD" = "outfit_zstd",
@@ -1147,7 +1147,13 @@ server <- function(input, output, session) {
   }, "keyform")
   output$tbl_keyform <- DT::renderDT({
     shiny::req(fit())
-    dt(rescale_cols(keyform_data(fit(), input$keyform_kind), input$umean, input$uscale,
+    k <- keyform_data(fit(), input$keyform_kind)
+    shiny::validate(shiny::need(
+      nrow(k) > 0,
+      paste("No keyform coordinates could be computed for this type. Try",
+            "'Most probable / modal', which uses the Andrich thresholds directly,",
+            "and review the category structure on the Rating scale tab.")))
+    dt(rescale_cols(k, input$umean, input$uscale,
                     meas = c("Measure", "Item_Measure")), 3, "35vh")
   })
   shiny::observeEvent(list(fit(), input$keyform_kind, input$keyform_maxitems,

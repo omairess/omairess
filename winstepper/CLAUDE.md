@@ -115,6 +115,23 @@ computations.
 
 ## Traps that have already bitten — do not reintroduce
 
+**`NA * FALSE` is `NA` in R — masking by multiplication does not zero out NAs.**
+`rasch_engine.R:683` does `w <- P[[k+1]] * selg; if (sum(w) > 0)`. `P` contains
+NA for persons with no estimable measure, and multiplying by the logical mask
+leaves those NAs in place, so `sum(w)` is NA and the `if` aborts. Mask by
+**assignment** (`w[!selg] <- 0`), never by multiplication, whenever the operand
+can contain NA.
+
+**Zone bounds can be NA.** `rasch_engine.R:705` does `if (sum(inzone) > 0)` where
+`inzone` depends on `.score_to_measure()`, which returns NA when the root is not
+bracketed in ±25 logits. `TRUE & NA` is NA, so `inzone` is poisoned. Long rating
+scales (0–10) hit this because the thresholds spread far enough that the
+half-score points fall outside the bracket. `winstepper_extras.R` overrides
+`category_table()` (and `threshold_data()`) with the mask-by-assignment fix, an
+NA-zone guard, and a widened ±60 bracket via `.sm_wide()` / `.th_wide()` —
+widening is safe because the expected score is strictly monotone, so the root is
+unique and only NAs can change.
+
 **`if (<NA>)` in the engine's summary block.** `rasch_engine.R:579` does
 `sep_m <- if (rmse_m > 0) ...`, which throws *"missing value where TRUE/FALSE
 needed"* the moment any measure or S.E. in the block is `NA` — killing every
