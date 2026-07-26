@@ -109,6 +109,82 @@ category_diagnostics <- function(ct) {
 }
 
 # ---------------------------------------------------------------------------
+# Table 3.1 : NA-robust summary blocks
+# ---------------------------------------------------------------------------
+
+#' Summary block for Table 3.1, tolerant of non-estimable measures.
+#'
+#' DELIBERATELY OVERRIDES `.summary_block()` from rasch_engine.R. The engine
+#' version does `sep <- if (rmse > 0) ...`, which throws
+#' "missing value where TRUE/FALSE needed" as soon as any element of the block
+#' is NA. That happens routinely on real data: an extreme person whose observed
+#' responses all fall on extreme items never receives a measure (in
+#' rasch_jmle() the extreme-person loop runs before the extreme-item loop, so
+#' those item difficulties are still NA and the person is skipped), and the
+#' "(all)" rows of Table 3.1 include exactly those cases. Long rating scales
+#' (e.g. 0-10) hit this often because floor/ceiling items are common.
+#'
+#' This version summarises the estimable cases and reports how many were
+#' dropped, instead of failing. `summary_table()` from the engine picks it up
+#' automatically (both live in the global environment; extras is sourced last).
+.summary_block <- function(meas, se_model, se_real, infit, outfit, score, count, label) {
+  n_all <- length(meas)
+  ok <- is.finite(meas) & is.finite(se_model) & is.finite(se_real)
+  ok[is.na(ok)] <- FALSE
+  meas <- meas[ok]; se_model <- se_model[ok]; se_real <- se_real[ok]
+  infit <- infit[ok]; outfit <- outfit[ok]; score <- score[ok]; count <- count[ok]
+  n <- length(meas)
+  if (n < 2) return(NULL)
+
+  sd_pop <- function(v) stats::sd(v) * sqrt((length(v) - 1) / length(v))
+  sdm <- sd_pop(meas)
+  rmse_m <- sqrt(mean(se_model^2)); rmse_r <- sqrt(mean(se_real^2))
+  tsd_m <- sqrt(max(sdm^2 - rmse_m^2, 0)); tsd_r <- sqrt(max(sdm^2 - rmse_r^2, 0))
+  # isTRUE() so an NA that slips through yields NA rather than an error.
+  sep_m <- if (isTRUE(rmse_m > 0)) tsd_m / rmse_m else NA_real_
+  sep_r <- if (isTRUE(rmse_r > 0)) tsd_r / rmse_r else NA_real_
+  rel_m <- if (isTRUE(is.finite(sep_m))) sep_m^2 / (1 + sep_m^2) else NA_real_
+  rel_r <- if (isTRUE(is.finite(sep_r))) sep_r^2 / (1 + sep_r^2) else NA_real_
+  data.frame(
+    Statistic = label, N = n, N_Not_Estimable = n_all - n,
+    Mean_Score = mean(score), Mean_Count = mean(count),
+    Mean_Measure = mean(meas), SD_Measure = sdm,
+    Mean_Model_SE = mean(se_model), Mean_Real_SE = mean(se_real),
+    Mean_Infit_MNSQ = mean(infit, na.rm = TRUE),
+    Mean_Outfit_MNSQ = mean(outfit, na.rm = TRUE),
+    Model_RMSE = rmse_m, Real_RMSE = rmse_r,
+    True_SD_Model = tsd_m, True_SD_Real = tsd_r,
+    Separation_Model = sep_m, Separation_Real = sep_r,
+    Reliability_Model = rel_m, Reliability_Real = rel_r,
+    Strata_Model = (4 * sep_m + 1) / 3, Strata_Real = (4 * sep_r + 1) / 3,
+    stringsAsFactors = FALSE
+  )
+}
+
+#' Which persons / items could not be measured, and why. Use this to explain a
+#' non-zero `N_Not_Estimable` in Table 3.1.
+measure_health <- function(fit) {
+  bad_p <- which(!is.finite(fit$theta))
+  bad_i <- which(!is.finite(fit$delta))
+  n_resp_p <- rowSums(fit$mask)
+  n_resp_i <- colSums(fit$mask)
+  data.frame(
+    Quantity = c("Persons", "  extreme (min/max score)", "  measure not estimable",
+                 "Items", "  extreme (min/max score)", "  measure not estimable"),
+    N = c(nrow(fit$X), length(fit$extreme_persons), length(bad_p),
+          ncol(fit$X), length(fit$extreme_items), length(bad_i)),
+    Detail = c("", "", if (length(bad_p))
+      paste0(paste(utils::head(fit$person_id[bad_p], 10), collapse = ", "),
+             if (length(bad_p) > 10) ", ..." else "",
+             sprintf("  (median responses = %g)", stats::median(n_resp_p[bad_p]))) else "",
+      "", "", if (length(bad_i))
+        paste0(paste(utils::head(fit$item_id[bad_i], 10), collapse = ", "),
+               if (length(bad_i) > 10) ", ..." else "",
+               sprintf("  (median responses = %g)", stats::median(n_resp_i[bad_i]))) else ""),
+    stringsAsFactors = FALSE)
+}
+
+# ---------------------------------------------------------------------------
 # Table 2.2 : General keyform
 # ---------------------------------------------------------------------------
 

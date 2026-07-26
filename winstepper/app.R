@@ -308,6 +308,13 @@ panel_summary <- bslib::nav_panel(
       "'non-extreme' rows, as in WINSTEPS.")),
     DT::DTOutput("tbl_summary"), full_screen = TRUE),
   bslib::card(
+    bslib::card_header("Estimability check"),
+    shiny::helpText(shiny::HTML(
+      "Persons and items with no estimable measure are excluded from Table 3.1 ",
+      "and counted in its <b>N_Not_Estimable</b> column.")),
+    DT::DTOutput("tbl_health"),
+    shiny::verbatimTextOutput("health_note")),
+  bslib::card(
     bslib::card_header("Raw-score internal consistency (for comparison)"),
     shiny::verbatimTextOutput("alpha")))
 
@@ -851,30 +858,60 @@ server <- function(input, output, session) {
        if (f$converged) "success" else "warning")
   })
 
-  summ <- shiny::reactive({ shiny::req(fit()); summary_table(fit()) })
+  summ <- shiny::reactive({
+    shiny::req(fit())
+    s <- summary_table(fit())
+    shiny::validate(shiny::need(
+      !is.null(s) && nrow(s) > 0,
+      "No summary could be computed: fewer than two estimable persons or items."))
+    s
+  })
   pick <- function(tab, stat, label) {
+    if (is.null(tab) || !nrow(tab) || !stat %in% names(tab)) return(NA_real_)
     v <- tab[tab$Statistic == label, stat]
-    if (!length(v) || is.na(v)) NA_real_ else v
+    if (!length(v) || !is.finite(v[1])) NA_real_ else v[1]
   }
+  fmt2 <- function(x) if (is.finite(x)) sprintf("%.2f", x) else "n/a"
   output$vb_prel <- shiny::renderUI({
     s <- summ()
-    vb("Person reliability (Real)", sprintf("%.2f", pick(s, "Reliability_Real", "PERSON (non-extreme)")),
+    vb("Person reliability (Real)", fmt2(pick(s, "Reliability_Real", "PERSON (non-extreme)")),
        "user-check", "primary")
   })
   output$vb_irel <- shiny::renderUI({
     s <- summ()
-    vb("Item reliability (Real)", sprintf("%.2f", pick(s, "Reliability_Real", "ITEM (non-extreme)")),
+    vb("Item reliability (Real)", fmt2(pick(s, "Reliability_Real", "ITEM (non-extreme)")),
        "square-check", "primary")
   })
   output$vb_psep <- shiny::renderUI({
     s <- summ()
-    vb("Person separation", sprintf("%.2f", pick(s, "Separation_Real", "PERSON (non-extreme)")),
+    vb("Person separation", fmt2(pick(s, "Separation_Real", "PERSON (non-extreme)")),
        "arrows-left-right-to-line", "secondary")
   })
   output$vb_isep <- shiny::renderUI({
     s <- summ()
-    vb("Item separation", sprintf("%.2f", pick(s, "Separation_Real", "ITEM (non-extreme)")),
+    vb("Item separation", fmt2(pick(s, "Separation_Real", "ITEM (non-extreme)")),
        "arrows-left-right-to-line", "secondary")
+  })
+
+  ## ---- estimability diagnostics (explains N_Not_Estimable) ----------------
+  output$tbl_health <- DT::renderDT({
+    shiny::req(fit())
+    dt(measure_health(fit()), 0, "22vh")
+  })
+  output$health_note <- shiny::renderText({
+    shiny::req(fit()); f <- fit()
+    nb_p <- sum(!is.finite(f$theta)); nb_i <- sum(!is.finite(f$delta))
+    if (nb_p == 0 && nb_i == 0)
+      return("Every person and item received a measure. The 'N Not Estimable' column in Table 3.1 is 0.")
+    paste0(
+      sprintf("%d person(s) and %d item(s) could not be measured, so they are excluded from Table 3.1.\n",
+              nb_p, nb_i),
+      "This happens when a case has no responses left on the other margin once ",
+      "extreme (minimum- or maximum-possible) rows and columns are set aside.\n",
+      "Usual remedies: check the CODES= list on the Estimate tab (a mistyped code ",
+      "silently turns responses into missing data); with a long rating scale, ",
+      "collapse sparse categories via NEWSCORE= or recode = 'collapse'; ",
+      "or drop the offending items/persons and re-estimate.")
   })
 
   output$est_report <- shiny::renderText({
@@ -976,8 +1013,7 @@ server <- function(input, output, session) {
 
   ## ---- Table 3.1 -----------------------------------------------------------
   output$tbl_summary <- DT::renderDT({
-    shiny::req(fit())
-    d <- rescale_cols(summary_table(fit()), input$umean, input$uscale,
+    d <- rescale_cols(summ(), input$umean, input$uscale,
                       meas = c("Mean_Measure"), sds = c("SD_Measure", "Mean_Model_SE",
                                                         "Mean_Real_SE", "Model_RMSE", "Real_RMSE",
                                                         "True_SD_Model", "True_SD_Real"))

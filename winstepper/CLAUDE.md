@@ -115,6 +115,19 @@ computations.
 
 ## Traps that have already bitten — do not reintroduce
 
+**`if (<NA>)` in the engine's summary block.** `rasch_engine.R:579` does
+`sep_m <- if (rmse_m > 0) ...`, which throws *"missing value where TRUE/FALSE
+needed"* the moment any measure or S.E. in the block is `NA` — killing every
+output on the Summary tab at once. This is not rare: `rasch_jmle()` runs its
+extreme-**person** loop before the extreme-**item** loop, so a person whose
+observed responses all fall on extreme items is skipped (`if (!any(obs)) next`)
+and keeps `theta = NA`; the "(all)" rows of Table 3.1 include those cases. Long
+rating scales (0–10) trigger it often because floor/ceiling items are common.
+`winstepper_extras.R` overrides `.summary_block()` with an NA-tolerant version
+that summarises the estimable cases and reports `N_Not_Estimable`;
+`measure_health()` + the Summary tab's "Estimability check" card explain who was
+dropped. Prefer `isTRUE(x > 0)` over `x > 0` in any new scalar `if`.
+
 **The recorder is not reentrant.** `new_recorder()$record()` reads the `steps`
 reactiveVal before writing it. Calling it from a plain `observe()`, `reactive()`
 or any `render*()` body creates a reactive dependency on the value it writes →
