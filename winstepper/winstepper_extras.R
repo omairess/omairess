@@ -109,6 +109,102 @@ category_diagnostics <- function(ct) {
 }
 
 # ---------------------------------------------------------------------------
+# Suggested rescore: propose a NEWSCORE= collapse for a misbehaving scale
+# ---------------------------------------------------------------------------
+
+#' Format a numeric vector the way the CODES= / NEWSCORE= boxes expect.
+fmt_codes <- function(v) paste(v, collapse = ",")
+
+#' Suggest a category collapse for one item group.
+#'
+#' Purely a suggestion: it returns the CODES= and NEWSCORE= strings and a
+#' plain-language reason for each merge. Nothing is applied and nothing is
+#' re-estimated -- the user confirms or edits it.
+#'
+#' Two passes over the group's rows of `category_table()`, each stopping before
+#' the scale would drop below `min_cat` categories:
+#'
+#'  1. Sparse categories: while any block has fewer than `min_count`
+#'     observations, merge the sparsest into whichever neighbour has the smaller
+#'     count (at either end, merge inward). Counts are exactly additive under
+#'     merging, so this pass needs no re-estimation and is exact.
+#'  2. Narrow / disordered thresholds: a block whose entry and exit thresholds
+#'     advance by less than `threshold_advance_min()` allows -- including the
+#'     disordered case, where the advance is negative -- is merged into its
+#'     smaller neighbour.
+#'
+#' Pass 2 necessarily reasons from the CURRENT calibration: thresholds are
+#' re-estimated once categories change, so treat the result as a starting point
+#' and re-read the diagnostics after applying it.
+#'
+#' @param ct output of `category_table(fit)`
+#' @param group item group to work on (defaults to the first)
+#' @param min_count minimum observations per category (Linacre 1999: 10)
+#' @param min_cat never propose fewer than this many categories
+#' @return list(codes, newscore, codes_txt, newscore_txt, reasons, n_cat, changed)
+suggest_collapse <- function(ct, group = NULL, min_count = 10, min_cat = 3) {
+  if (is.null(ct) || !nrow(ct)) return(NULL)
+  if (is.null(group) || !group %in% ct$Group) group <- ct$Group[1]
+  d <- ct[ct$Group == group, , drop = FALSE]
+  d <- d[order(d$Category), , drop = FALSE]
+  cats <- d$Category; counts <- d$Count; tau <- d$Andrich_Threshold
+  n <- nrow(d)
+  blocks <- as.list(seq_len(n))          # each block = indices of merged categories
+  reasons <- character(0)
+  lab <- function(b) paste(cats[b], collapse = "+")
+  bcount <- function(b) sum(counts[b], na.rm = TRUE)
+
+  ## --- pass 1: sparse categories (exact; counts add under merging) ---------
+  repeat {
+    if (length(blocks) <= min_cat) break
+    bc <- vapply(blocks, bcount, numeric(1))
+    if (all(bc >= min_count)) break
+    j <- which.min(bc)
+    k <- if (j == 1) 2L else if (j == length(blocks)) length(blocks) - 1L else
+      if (bc[j - 1] <= bc[j + 1]) j - 1L else j + 1L
+    reasons <- c(reasons, sprintf(
+      "Category %s has %d observation%s (fewer than %d); merged with category %s.",
+      lab(blocks[[j]]), bc[j], if (bc[j] == 1) "" else "s", min_count, lab(blocks[[k]])))
+    lo <- min(j, k); hi <- max(j, k)
+    blocks[[lo]] <- sort(c(blocks[[lo]], blocks[[hi]]))
+    blocks[[hi]] <- NULL
+  }
+
+  ## --- pass 2: narrow or disordered thresholds (from the current solution) --
+  repeat {
+    if (length(blocks) <= max(min_cat, 3)) break
+    # entry threshold of each block after the first = tau of its first category
+    bnd <- vapply(blocks[-1], function(b) tau[b[1]], numeric(1))
+    if (!all(is.finite(bnd))) break                 # cannot judge; stop quietly
+    adv <- diff(bnd)                                # width of blocks 2..(k-1)
+    req <- threshold_advance_min(length(bnd))       # category-count dependent
+    if (!length(adv) || !length(req)) break
+    short <- adv - req
+    bad <- which(short < 0)
+    if (!length(bad)) break
+    i <- bad[which.min(short[bad])]                 # worst offender
+    j <- i + 1L                                     # the too-narrow block
+    bc <- vapply(blocks, bcount, numeric(1))
+    k <- if (j == 1) 2L else if (j == length(blocks)) length(blocks) - 1L else
+      if (bc[j - 1] <= bc[j + 1]) j - 1L else j + 1L
+    reasons <- c(reasons, sprintf(
+      "Category %s spans only %.2f logits where %.2f is required for %d categories%s; merged with category %s.",
+      lab(blocks[[j]]), adv[i], req[i], length(bnd) + 1L,
+      if (adv[i] <= 0) " (thresholds disordered)" else "", lab(blocks[[k]])))
+    lo <- min(j, k); hi <- max(j, k)
+    blocks[[lo]] <- sort(c(blocks[[lo]], blocks[[hi]]))
+    blocks[[hi]] <- NULL
+  }
+
+  newscore <- integer(n)
+  for (i in seq_along(blocks)) newscore[blocks[[i]]] <- i - 1L
+  list(codes = cats, newscore = newscore,
+       codes_txt = fmt_codes(cats), newscore_txt = fmt_codes(newscore),
+       reasons = reasons, n_cat = length(blocks),
+       changed = length(blocks) < n, group = group)
+}
+
+# ---------------------------------------------------------------------------
 # Table 3.2 : NA-robust category structure
 # ---------------------------------------------------------------------------
 

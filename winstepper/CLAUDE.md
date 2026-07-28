@@ -60,6 +60,21 @@ BootSON / Dagger / PsychoNetrix work in the repo.
 - **Interface font size.** `input$ui_font` / `input$table_font` render into
   `output$font_css`, which sets the root `html{font-size}` (Bootstrap is
   rem-based, so the whole UI scales together).
+- **Suggested rescore.** `suggest_collapse()` in `winstepper_extras.R` proposes a
+  `NEWSCORE=` collapse for one item group and returns comma-separated strings
+  plus one plain-language reason per merge. Pass 1 merges categories below
+  `min_count` (exact — counts are additive under merging); pass 2 merges blocks
+  whose threshold advance falls short of `threshold_advance_min()`, which
+  includes the disordered case. **It is a suggestion only**: the button on the
+  Rating scale tab fills the boxes and navigates to the Estimate tab, but never
+  re-estimates — the user confirms or edits and presses Estimate. Deliberately
+  no LLM/API: it must be free, offline, deterministic and reproducible.
+  Pass 2 reasons from the *current* calibration (thresholds move once categories
+  change), so the intended loop is suggest → apply → re-estimate → re-read.
+  Covered by `test_collapse.R`.
+  **When filling the boxes, always write CODES too** — `apply_codes_recode()`
+  ignores NEWSCORE when CODES is blank, so writing NEWSCORE alone silently does
+  nothing.
 - **DGF (Table 33)** — `dgf_analysis()` / `plot_dgf()`. Item classes come from
   the model scales (`fit$groups`); one uniform difficulty shift is estimated per
   item-class × person-class cell and contrasted across person classes with the

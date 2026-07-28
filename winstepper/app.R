@@ -406,6 +406,28 @@ panel_ratingscale <- bslib::nav_panel(
                 DT::DTOutput("tbl_cat"), full_screen = TRUE),
     bslib::card(bslib::card_header("Category-quality guidelines (Linacre 1999, 2002)"),
                 DT::DTOutput("tbl_catdiag"), full_screen = TRUE)),
+  bslib::card(
+    bslib::card_header("Suggested rescore"),
+    shiny::helpText(shiny::HTML(
+      "A suggestion only &mdash; nothing is applied and nothing is re-estimated. ",
+      "Copy the strings, or use the button to put them in the boxes on the Estimate ",
+      "tab, then edit them however you like and press <b>Estimate</b> yourself.")),
+    bslib::layout_columns(
+      col_widths = c(3, 3, 6),
+      shiny::numericInput("sug_mincount", "Min observations per category", 10, 1, 1000),
+      shiny::numericInput("sug_mincat", "Never go below this many categories", 3, 2, 20),
+      shiny::div(shiny::br(),
+                 shiny::actionButton("apply_suggestion",
+                                     "Put this in the CODES / NEWSCORE boxes",
+                                     class = "btn-warning w-100",
+                                     icon = shiny::icon("arrow-right")))),
+    shiny::verbatimTextOutput("collapse_suggestion"),
+    shiny::helpText(shiny::HTML(
+      "Collapsing categories is a post-hoc decision that improves fit almost by ",
+      "construction. Prefer the fewest merges that fix a real problem, only merge ",
+      "categories that are semantically adjacent, and report what you did and why. ",
+      "Thresholds are re-estimated once categories change, so re-read this tab after ",
+      "applying a collapse."))),
   fig_card("Category probability curves", "fig_catprob", "520px"),
   fig_card("Cumulative probabilities and Rasch-Thurstone 50% thresholds", "fig_cumul", "520px"),
   fig_card("Observed vs expected average measures; threshold ordering", "fig_catdiag", "460px"))
@@ -1050,6 +1072,59 @@ server <- function(input, output, session) {
     shiny::req(fit(), input$cat_group)
     plot_category_diagnostics(cat_tab(), input$cat_group, style())
   }, "category_diagnostics")
+
+  ## ---- suggested rescore (suggestion only; never auto-applied) ------------
+  collapse_sug <- shiny::reactive({
+    shiny::req(fit(), input$cat_group)
+    suggest_collapse(cat_tab(), input$cat_group,
+                     min_count = input$sug_mincount %||% 10,
+                     min_cat   = input$sug_mincat %||% 3)
+  })
+
+  output$collapse_suggestion <- shiny::renderText({
+    s <- collapse_sug()
+    shiny::validate(shiny::need(!is.null(s), "Estimate a model to see a suggestion."))
+    if (!isTRUE(s$changed))
+      return(paste0(
+        "No collapse suggested for group '", s$group, "'.\n",
+        "Every category has at least ", input$sug_mincount %||% 10,
+        " observations and the thresholds advance far enough.\n\n",
+        "CODES:    ", s$codes_txt, "\n",
+        "NEWSCORE: ", s$newscore_txt, "   (unchanged)"))
+    paste0(
+      "Suggested collapse for group '", s$group, "': ",
+      length(s$codes), " categories -> ", s$n_cat, "\n\n",
+      "CODES:    ", s$codes_txt, "\n",
+      "NEWSCORE: ", s$newscore_txt, "\n\n",
+      "Why:\n", paste0("  - ", s$reasons, collapse = "\n"))
+  })
+
+  # Fills the boxes and takes the user to them. Does NOT re-estimate:
+  # they confirm (or edit) and press Estimate themselves.
+  shiny::observeEvent(input$apply_suggestion, {
+    s <- collapse_sug()
+    shiny::req(s)
+    # NEWSCORE is ignored unless CODES is set, so always write both.
+    tgt_codes <- "codes"; tgt_ns <- "newscore"
+    if (identical(input$model, "grp")) {
+      ns_n <- max(1, as.integer(input$n_scales %||% 1))
+      labs <- vapply(seq_len(ns_n), function(i) {
+        l <- trimws(input[[paste0("scale_name_", i)]] %||% sprintf("S%d", i))
+        if (nzchar(l)) l else sprintf("S%d", i)
+      }, character(1))
+      hit <- match(s$group, labs)
+      if (!is.na(hit)) {
+        tgt_codes <- paste0("scale_codes_", hit); tgt_ns <- paste0("scale_newscore_", hit)
+      }
+    }
+    shiny::updateTextInput(session, tgt_codes, value = s$codes_txt)
+    shiny::updateTextInput(session, tgt_ns,    value = s$newscore_txt)
+    bslib::nav_select("nav", "Estimate", session = session)
+    shiny::showNotification(
+      sprintf("CODES and NEWSCORE filled for group '%s' (%d -> %d categories). Edit if you like, then press Estimate.",
+              s$group, length(s$codes), s$n_cat),
+      type = "warning", duration = 10)
+  })
 
   ## ---- items ---------------------------------------------------------------
   item_tab <- shiny::reactive({

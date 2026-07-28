@@ -58,6 +58,30 @@ table update. The exclusions are written into the exported script.
 Report this honestly: removing misfitting persons improves fit almost by
 construction. State how many were removed, on what criterion, and what changed.
 
+### Suggested rescore
+
+When a rating scale misbehaves, the **Rating scale** tab shows a *Suggested rescore*
+card: a proposed collapse in the same comma-separated format the rescore box expects,
+for example
+
+```
+CODES:    0,1,2,3,4,5,6,7,8,9,10
+NEWSCORE: 0,1,1,1,1,2,2,2,3,3,3
+```
+
+together with one plain-language line per merge ("category 7 has 4 observations
+(fewer than 10); merged with category 8"). It merges categories that fall below the
+minimum count, and blocks whose thresholds advance by less than the
+category-count-dependent minimum allows — including disordered thresholds.
+
+**It is only a suggestion.** Nothing is applied and nothing is re-estimated. The button
+copies the strings into the CODES / NEWSCORE boxes on the Estimate tab and takes you
+there; edit them however you like, then press **Estimate** yourself. Since thresholds are
+re-estimated once categories change, the intended loop is suggest → apply → re-estimate →
+re-read this tab.
+
+There is no AI service behind this: it is plain R, works offline, and costs nothing.
+
 ### Threshold advance criterion
 
 The category-quality check uses the **category-count-dependent** minimum
