@@ -327,7 +327,31 @@ panel_wright <- bslib::nav_panel(
     shiny::sliderInput("wright_bins", "Histogram bins", 5, 80, 30),
     shiny::numericInput("wright_maxlab", "Max item labels", 60, 5, 400),
     shiny::checkboxInput("wright_msT", "Show M / S / T markers", TRUE)),
-  fig_card("Wright map (Table 1)", "fig_wright", "760px"))
+  fig_card("Wright map (Table 1)", "fig_wright", "760px"),
+  bslib::card(
+    bslib::card_header("Person-item barchart"),
+    shiny::helpText(shiny::HTML(
+      "Person-measure histograms (whole sample, plus one panel per level of a ",
+      "classification) beside every item drawn as a vertical string of numbered ",
+      "thresholds &mdash; all on one shared logit axis.")),
+    bslib::layout_columns(
+      col_widths = c(3, 3, 3, 3),
+      shiny::selectInput("pim_class", "Split persons by", NULL),
+      shiny::selectInput("pim_what", "Measure-relative values",
+                         c("Andrich thresholds" = "andrich",
+                           "Thurstonian thresholds" = "thurstone",
+                           "Half-point thresholds" = "halfpoint",
+                           "Maximum probability: full-point" = "fullpoint")),
+      shiny::selectInput("pim_sort", "Sort items by",
+                         c("Entry" = "entry", "Measure" = "measure", "Alpha" = "alpha")),
+      shiny::textInput("pim_title", "Right-side title", "ITEMS")),
+    bslib::layout_columns(
+      col_widths = c(4, 3, 3, 2),
+      shiny::sliderInput("pim_frac", "Right-side size 0.0 to 1.0", 0.15, 0.85, 0.5, 0.05),
+      shiny::numericInput("pim_maxitems", "Max items to show", 60, 3, 400),
+      shiny::checkboxInput("pim_measures", "Add item measures", TRUE),
+      shiny::checkboxInput("pim_desc", "Descending", FALSE)),
+    mod_fig_ui("fig_pimap", "780px"), full_screen = TRUE))
 
 panel_items <- bslib::nav_panel(
   "Items", icon = shiny::icon("list-ol"),
@@ -626,7 +650,8 @@ server <- function(input, output, session) {
   # guaranteed in Shiny, so every recorded step is re-sorted into this order;
   # otherwise the exported script could plot before it estimates.
   STEP_ORDER <- c("setup", "data_load", "reshape", "prep", "estimate", "style",
-                  "tables", "wright", "keyform", "pca", "parallel", "dif", "dgf")
+                  "tables", "wright", "pimap", "keyform", "pca", "parallel",
+                  "dif", "dgf")
 
   rec <- new_recorder()
   record_step <- function(id, description, code) {
@@ -678,6 +703,7 @@ server <- function(input, output, session) {
     shiny::updateSelectInput(session, "person_id", choices = c("(row number)", nm))
     shiny::updateSelectInput(session, "dif_var", choices = nm)
     shiny::updateSelectInput(session, "dgf_var", choices = nm)
+    shiny::updateSelectInput(session, "pim_class", choices = c("(none)", nm))
   })
 
   ## ---- grouped-model scale editor (feature: assign items to scales) --------
@@ -1229,6 +1255,41 @@ server <- function(input, output, session) {
     record_step("wright", "Drew the Wright (person-item) map",
                sprintf('plot_wright(fit, style, what = "%s", max_labels = %d)',
                        input$wright_what, input$wright_maxlab))
+  })
+
+  ## ---- Person-item barchart ------------------------------------------------
+  # The class vector must be subset to the rows that entered the fit, exactly
+  # as for DIF/DGF, or the lengths silently disagree.
+  pim_class <- shiny::reactive({
+    v <- input$pim_class
+    if (is.null(v) || identical(v, "(none)")) return(NULL)
+    d <- wide_data()
+    if (!v %in% names(d)) return(NULL)
+    d[[v]][prep()$keep_rows]
+  })
+
+  mod_fig_server("fig_pimap", function() {
+    shiny::req(fit())
+    plot_pi_map(fit(), style(), person_class = pim_class(),
+                what = input$pim_what %||% "andrich",
+                sort_by = input$pim_sort %||% "entry",
+                descending = isTRUE(input$pim_desc),
+                right_frac = input$pim_frac %||% 0.5,
+                right_title = input$pim_title %||% "ITEMS",
+                add_measures = isTRUE(input$pim_measures),
+                max_items = input$pim_maxitems %||% 60)
+  }, "person_item_barchart")
+
+  shiny::observeEvent(list(fit(), input$pim_what, input$pim_sort, input$pim_desc,
+                           input$pim_class, input$pim_frac, input$pim_measures), {
+    record_step("pimap", sprintf("Drew the person-item barchart (%s, items by %s)",
+                                input$pim_what, input$pim_sort),
+               sprintf('plot_pi_map(fit, style, person_class = %s,\n  what = "%s", sort_by = "%s", descending = %s, right_frac = %s,\n  right_title = "%s", add_measures = %s, max_items = %d)',
+                       if (is.null(input$pim_class) || identical(input$pim_class, "(none)"))
+                         "NULL" else sprintf('data$`%s`[keep]', input$pim_class),
+                       input$pim_what, input$pim_sort, isTRUE(input$pim_desc),
+                       input$pim_frac, input$pim_title, isTRUE(input$pim_measures),
+                       as.integer(input$pim_maxitems %||% 60)))
   })
 
   ## ---- Keyform (Table 2.2) -------------------------------------------------

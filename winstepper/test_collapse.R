@@ -1,5 +1,6 @@
 # =============================================================================
-# test_collapse.R  --  checks for suggest_collapse() and threshold_advance_min()
+# test_collapse.R  --  checks for suggest_collapse(), threshold_advance_min()
+#                      and the person-item barchart (pi_threshold_data/plot_pi_map)
 #
 # Run from inside the winstepper folder:   Rscript test_collapse.R
 # No Shiny, no network, no API. Pure R.
@@ -95,6 +96,31 @@ check("does not fall below min_cat = 3", !is.null(f) && f$n_cat >= 3,
 check("explains that the count floor is unreachable",
       !is.null(f) && any(grepl("in total", f$notes)),
       if (is.null(f)) "" else sprintf("(notes: %s)", paste(f$notes, collapse = " | ")))
+
+cat("\n7. Person-item barchart threshold data (all four WINSTEPS types)\n")
+set.seed(1)
+dat  <- demo_data(n = 250, k = 8, m = 3)
+prep <- rasch_prep(as.matrix(dat[, grep("^Item", names(dat))]), recode = "shift")
+fit  <- rasch_jmle(prep, maxit = 150, conv = 1e-3, rconv = 1e-2)
+nI   <- sum(fit$keep_i)
+for (w in c("andrich", "thurstone", "halfpoint", "fullpoint")) {
+  td <- pi_threshold_data(fit, w)
+  check(sprintf("%-10s returns m thresholds for every non-extreme item", w),
+        nrow(td) == nI * 3 && all(is.finite(td$Measure)),
+        sprintf("(rows = %d, expected %d; %d non-finite)",
+                nrow(td), nI * 3, sum(!is.finite(td$Measure))))
+}
+td <- pi_threshold_data(fit, "thurstone")
+check("thresholds ascend within each item",
+      all(tapply(td$Measure, td$Item, function(v) all(diff(v) > 0))))
+check("plot_pi_map() runs and produces a plot", {
+  pf <- tempfile(fileext = ".png")
+  grDevices::png(pf, width = 1400, height = 900, res = 110)
+  r2 <- try(plot_pi_map(fit, ws_style(), person_class = dat$Sex,
+                        what = "andrich", sort_by = "measure"), silent = TRUE)
+  grDevices::dev.off()
+  !inherits(r2, "try-error") && file.exists(pf) && file.info(pf)$size > 5000
+})
 
 cat(sprintf("\n%d passed, %d failed\n", ok, bad))
 if (bad > 0) quit(status = 1)

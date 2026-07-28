@@ -58,6 +58,18 @@ table update. The exclusions are written into the exported script.
 Report this honestly: removing misfitting persons improves fit almost by
 construction. State how many were removed, on what criterion, and what changed.
 
+### Person–item barchart
+
+On the **Wright map** tab, beneath the Wright map itself: person-measure
+histograms — the whole sample plus one panel per level of a classification you
+choose (sex, group, …) — beside every item drawn as a vertical string of
+numbered thresholds, all sharing one logit axis, so a person's location reads
+straight across into the item thresholds. It mirrors the WINSTEPS Plots options:
+measure-relative values (Andrich, Thurstonian, half-point, or
+maximum-probability full-point thresholds), sort order (entry / measure / alpha,
+ascending or descending), right-side size and title, and whether to mark each
+item's own measure.
+
 ### Suggested rescore
 
 When a rating scale misbehaves, the **Rating scale** tab shows a *Suggested rescore*

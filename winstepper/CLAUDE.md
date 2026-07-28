@@ -60,6 +60,17 @@ BootSON / Dagger / PsychoNetrix work in the repo.
 - **Interface font size.** `input$ui_font` / `input$table_font` render into
   `output$font_css`, which sets the root `html{font-size}` (Bootstrap is
   rem-based, so the whole UI scales together).
+- **Person-item barchart.** `pi_threshold_data()` / `plot_pi_map()` in
+  `winstepper_extras.R` — the WINSTEPS Plots-menu chart: person-measure
+  histograms (whole sample plus one panel per level of a classification) beside
+  every item drawn as a vertical string of numbered thresholds, all on one
+  shared logit axis. Exposes the WINSTEPS options: measure-relative values
+  (Andrich / Thurstonian / half-point / maximum-probability full-point), sort
+  order (entry / measure / alpha, ascending or descending), right-side size and
+  title, and "add item measures". Lives on the Wright map tab; records a `pimap`
+  step. **Its `person_class` must be subset by `prep()$keep_rows`**, like DIF and
+  DGF, or the lengths silently disagree. All panels must keep identical top and
+  bottom margins or the boxes stop lining up under `layout()`.
 - **Suggested rescore.** `suggest_collapse()` in `winstepper_extras.R` proposes a
   `NEWSCORE=` collapse for one item group. **It is a suggestion only**: the button
   on the Rating scale tab fills the boxes and navigates to the Estimate tab, but

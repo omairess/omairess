@@ -7,6 +7,8 @@
 #   * threshold_advance_min() / category_diagnostics()  -- category-count-aware
 #     minimum threshold advance. DELIBERATELY OVERRIDES the engine's
 #     category_diagnostics() (see note below).
+#   * pi_threshold_data() / plot_pi_map()  -- WINSTEPS Plots-menu person-item
+#     barchart: subgroup person histograms beside item threshold columns.
 #   * keyform_data() / plot_keyform()  -- WINSTEPS Table 2.2 general keyform
 #     (expected-score), with Rasch-Thurstone (2.3) and modal (2.1) variants.
 #   * dgf_analysis() / plot_dgf()      -- WINSTEPS Table 33 Differential Group
@@ -511,6 +513,190 @@ measure_health <- function(fit) {
                if (length(bad_i) > 10) ", ..." else "",
                sprintf("  (median responses = %g)", stats::median(n_resp_i[bad_i]))) else ""),
     stringsAsFactors = FALSE)
+}
+
+# ---------------------------------------------------------------------------
+# Person-item barchart (WINSTEPS Plots menu): subgroup histograms + item
+# threshold columns on one shared logit axis
+# ---------------------------------------------------------------------------
+
+#' Measure-relative threshold locations for every non-extreme item.
+#'
+#' Mirrors the WINSTEPS "Measure-relative values" choice:
+#'  * "andrich"   Rasch-Andrich thresholds (step calibrations), delta_i + tau_k.
+#'  * "thurstone" Rasch-Thurstone thresholds: where P(X >= k) = 0.5.
+#'  * "halfpoint" half-point thresholds: where the expected score = k - 0.5.
+#'  * "fullpoint" maximum-probability / full-point: where the expected score = k.
+#'    The top category's expected score m is an asymptote, so m - 0.25 is used,
+#'    the same convention as the Table 3.2 category measures.
+#'
+#' @return data.frame(Entry, Item, Item_Measure, Threshold, Measure)
+pi_threshold_data <- function(fit, what = c("andrich", "thurstone", "halfpoint", "fullpoint"),
+                              include_extreme = FALSE) {
+  what <- match.arg(what)
+  keep <- if (include_extreme) rep(TRUE, length(fit$delta)) else fit$keep_i
+  rows <- list()
+  for (i in seq_along(fit$delta)) {
+    if (!keep[i] || is.na(fit$delta[i])) next
+    g <- fit$groups[i]; tau <- fit$tau[[g]]; m <- fit$max_cat[[g]]
+    if (!is.finite(m) || m < 1) next
+    rel <- switch(
+      what,
+      andrich   = if (m == 1) 0 else tau,
+      thurstone = vapply(seq_len(m), function(k) .th_wide(k, tau), numeric(1)),
+      halfpoint = vapply(seq_len(m), function(k) .sm_wide(k - 0.5, tau), numeric(1)),
+      fullpoint = vapply(seq_len(m), function(k)
+        .sm_wide(if (k >= m) m - 0.25 else k, tau), numeric(1)))
+    rel <- rep(as.numeric(rel), length.out = m)
+    rows[[length(rows) + 1]] <- data.frame(
+      Entry = i, Item = fit$item_id[i], Item_Measure = fit$delta[i],
+      Threshold = seq_len(m), Measure = fit$delta[i] + rel,
+      stringsAsFactors = FALSE)
+  }
+  if (!length(rows)) return(data.frame())
+  out <- do.call(rbind, rows)
+  attr(out, "what") <- what
+  out
+}
+
+#' WINSTEPS-style person-item barchart.
+#'
+#' Left: one person-measure histogram for the whole sample, plus one per level
+#' of `person_class`. Right: every item as a vertical string of numbered
+#' thresholds. All panels share a single logit axis, so a person's location can
+#' be read straight across into the item thresholds.
+#'
+#' @param person_class optional vector, one entry per person in `fit` (i.e.
+#'   already subset to the rows that entered the fit), used to split the
+#'   histograms.
+#' @param what threshold type, see `pi_threshold_data()`.
+#' @param sort_by order items by entry number, measure, or name.
+#' @param right_frac share of the width given to the item panel (0-1), the
+#'   WINSTEPS "Right-side size" control.
+#' @param add_measures also mark each item's own difficulty.
+plot_pi_map <- function(fit, style = ws_style(), person_class = NULL,
+                        what = c("andrich", "thurstone", "halfpoint", "fullpoint"),
+                        sort_by = c("entry", "measure", "alpha"), descending = FALSE,
+                        right_frac = 0.5, right_title = NULL, left_title = "PERSONS",
+                        add_measures = TRUE, max_items = 60, main = NULL) {
+  what <- match.arg(what); sort_by <- match.arg(sort_by)
+  td <- pi_threshold_data(fit, what)
+  if (!nrow(td)) {
+    graphics::plot.new(); graphics::text(0.5, 0.5, "No non-extreme items to plot.")
+    return(invisible(NULL))
+  }
+
+  ## ---- person panels ------------------------------------------------------
+  sel <- fit$keep_p & is.finite(fit$theta)
+  pm  <- fit$theta[sel]
+  panels <- list(pm); names(panels) <- left_title
+  if (!is.null(person_class) && length(person_class) == length(fit$theta)) {
+    pc <- as.factor(person_class)[sel]
+    for (lv in levels(droplevels(pc))) {
+      v <- pm[!is.na(pc) & pc == lv]
+      if (length(v)) panels[[as.character(lv)]] <- v
+    }
+  }
+  nL <- length(panels)
+
+  ## ---- item ordering ------------------------------------------------------
+  items <- unique(td[, c("Entry", "Item", "Item_Measure")])
+  ord <- switch(sort_by,
+                entry   = order(items$Entry),
+                measure = order(items$Item_Measure, items$Entry),
+                alpha   = order(items$Item, items$Entry))
+  items <- items[ord, , drop = FALSE]
+  if (isTRUE(descending)) items <- items[rev(seq_len(nrow(items))), , drop = FALSE]
+  if (is.finite(max_items) && nrow(items) > max_items)
+    items <- items[round(seq(1, nrow(items), length.out = max_items)), , drop = FALSE]
+  td <- td[td$Entry %in% items$Entry, , drop = FALSE]
+  xpos <- match(td$Entry, items$Entry)
+
+  ## ---- one shared logit axis ---------------------------------------------
+  yv <- c(unlist(panels, use.names = FALSE), td$Measure,
+          if (add_measures) items$Item_Measure)
+  yr <- range(yv[is.finite(yv)], na.rm = TRUE)
+  yr <- yr + c(-1, 1) * max(diff(yr) / 25, 0.2)
+  ticks <- pretty(yr, 8)
+
+  right_frac <- min(max(right_frac, 0.15), 0.85)
+  op <- graphics::par(no.readonly = TRUE)
+  on.exit({ graphics::layout(1); graphics::par(op) })
+  graphics::layout(matrix(seq_len(nL + 1L), nrow = 1),
+                   widths = c(rep((1 - right_frac) / nL, nL), right_frac))
+  # Every panel needs the same top/bottom margin or the boxes will not line up.
+  botm <- max(4.5, min(12, 0.55 * max(nchar(as.character(items$Item)))))
+  graphics::par(oma = c(0, 0, 2.8, 0))
+
+  ## ---- left: person histograms (bars grow leftward from the baseline) -----
+  brks <- seq(yr[1], yr[2], length.out = max(style$bins, 5) + 1)
+  pcols <- .pal(max(nL, 3), style$palette)
+  for (j in seq_len(nL)) {
+    v <- panels[[j]]
+    graphics::par(mar = c(botm, if (j == 1) 3.6 else 0.4, 2.4, 0.4))
+    h <- graphics::hist(v[v >= yr[1] & v <= yr[2]], breaks = brks, plot = FALSE)
+    xmax <- max(h$counts, 1) * 1.06
+    graphics::plot(NA, xlim = c(xmax, 0), ylim = yr, axes = FALSE, xaxs = "i",
+                   xlab = "", ylab = "", main = names(panels)[j],
+                   cex.main = style$cex_label + 0.1)
+    if (isTRUE(style$show_grid))
+      graphics::abline(h = ticks, col = style$col_ref, lty = 3)
+    graphics::rect(0, h$breaks[-length(h$breaks)], h$counts, h$breaks[-1],
+                   col = if (j == 1) style$col_person else pcols[j],
+                   border = style$col_border)
+    if (j == 1) {
+      graphics::axis(2, at = ticks, las = 1, cex.axis = style$cex_label)
+      graphics::mtext("Person measure (logits)", side = 2, line = 2.5,
+                      cex = style$cex_label)
+    }
+    graphics::axis(1, at = pretty(c(0, xmax), 3), cex.axis = style$cex_label * 0.8)
+    if (isTRUE(style$show_msT) && length(v) > 1)
+      graphics::abline(h = mean(v), col = style$col_line, lwd = style$lwd)
+    graphics::mtext(sprintf("n = %d", length(v)), side = 1, line = 2.4,
+                    cex = style$cex_label * 0.75)
+    graphics::box(col = style$col_border)
+  }
+
+  ## ---- right: item threshold columns --------------------------------------
+  graphics::par(mar = c(botm, 0.4, 2.4, 4.2))
+  ni <- nrow(items)
+  graphics::plot(NA, xlim = c(0.4, ni + 0.6), ylim = yr, axes = FALSE,
+                 xlab = "", ylab = "",
+                 main = right_title %||% "ITEMS", cex.main = style$cex_label + 0.1)
+  if (isTRUE(style$show_grid))
+    graphics::abline(h = ticks, col = style$col_ref, lty = 3)
+  cols <- .pal(max(min(ni, 8), 3), style$palette)
+  for (j in seq_len(ni)) {
+    k <- which(xpos == j)
+    if (!length(k)) next
+    yy <- td$Measure[k]
+    if (!any(is.finite(yy))) next
+    graphics::segments(j, min(yy, na.rm = TRUE), j, max(yy, na.rm = TRUE),
+                       col = style$col_ref, lwd = style$lwd)
+    cl <- cols[(j - 1) %% length(cols) + 1]
+    graphics::points(rep(j, length(yy)), yy, pch = 23, bg = "white", col = cl,
+                     cex = style$cex_point, lwd = style$lwd)
+    graphics::text(rep(j, length(yy)) - 0.24, yy, td$Threshold[k], col = cl,
+                   cex = style$cex_label * 0.8)
+    if (isTRUE(add_measures))
+      graphics::points(j, items$Item_Measure[j], pch = 3, col = style$col_line,
+                       cex = style$cex_point * 0.9, lwd = style$lwd)
+  }
+  graphics::axis(4, at = ticks, las = 1, cex.axis = style$cex_label)
+  graphics::mtext(sprintf("Item measure (%s)",
+                          c(andrich = "Andrich thresholds",
+                            thurstone = "Thurstone thresholds",
+                            halfpoint = "half-point thresholds",
+                            fullpoint = "full-point / max probability")[[what]]),
+                  side = 4, line = 2.8, cex = style$cex_label)
+  graphics::axis(1, at = seq_len(ni), labels = items$Item, las = 2,
+                 cex.axis = style$cex_label * 0.75, tick = FALSE)
+  graphics::box(col = style$col_border)
+  graphics::mtext(main %||% sprintf("Person-item barchart (items in %s order, %s)",
+                                    sort_by, if (isTRUE(descending)) "descending" else "ascending"),
+                  side = 3, line = 0.4, outer = TRUE,
+                  cex = style$cex_label + 0.3, font = 2)
+  invisible(NULL)
 }
 
 # ---------------------------------------------------------------------------
