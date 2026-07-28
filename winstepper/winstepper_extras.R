@@ -115,93 +115,200 @@ category_diagnostics <- function(ct) {
 #' Format a numeric vector the way the CODES= / NEWSCORE= boxes expect.
 fmt_codes <- function(v) paste(v, collapse = ",")
 
+#' Observed cumulative threshold locations from a category count vector.
+#'
+#' Location of the boundary into category k is -logit(P(X >= k)). These are
+#' Rasch-Thurstone-like: they are the points on the latent continuum where a
+#' respondent is equally likely to be at or above category k as below it.
+#'
+#' The property that makes them the right basis for collapsing: under an
+#' adjacent-category merge, P(X >= k) for the collapsed scale is EXACTLY
+#' P(original X >= first original category of that band). So the thresholds of
+#' any candidate collapse are simply a SUBSET of these, computable with no
+#' re-estimation and no approximation.
+cum_threshold_locations <- function(counts) {
+  C <- length(counts); N <- sum(counts, na.rm = TRUE)
+  if (C < 2 || !is.finite(N) || N <= 0) return(numeric(0))
+  vapply(seq_len(C - 1), function(k) {
+    p <- sum(counts[(k + 1):C], na.rm = TRUE) / N
+    p <- min(max(p, 1e-9), 1 - 1e-9)
+    -log(p / (1 - p))
+  }, numeric(1))
+}
+
 #' Suggest a category collapse for one item group.
 #'
-#' Purely a suggestion: it returns the CODES= and NEWSCORE= strings and a
-#' plain-language reason for each merge. Nothing is applied and nothing is
-#' re-estimated -- the user confirms or edits it.
+#' Purely a suggestion: it returns CODES= and NEWSCORE= strings plus a
+#' plain-language rationale. Nothing is applied and nothing is re-estimated.
 #'
-#' Two passes over the group's rows of `category_table()`, each stopping before
-#' the scale would drop below `min_cat` categories:
+#' ## What it optimises, and why that matters
 #'
-#'  1. Sparse categories: while any block has fewer than `min_count`
-#'     observations, merge the sparsest into whichever neighbour has the smaller
-#'     count (at either end, merge inward). Counts are exactly additive under
-#'     merging, so this pass needs no re-estimation and is exact.
-#'  2. Narrow / disordered thresholds: a block whose entry and exit thresholds
-#'     advance by less than `threshold_advance_min()` allows -- including the
-#'     disordered case, where the advance is negative -- is merged into its
-#'     smaller neighbour.
+#' The obvious objective -- "merge until the threshold-advance guideline is
+#' satisfied" -- is WRONG, and dangerously so. On a long scale whose categories
+#' are genuinely compressed (e.g. ten categories whose thresholds span about one
+#' logit), no collapse can satisfy that guideline, so a merge-until-satisfied
+#' rule simply runs to the floor and proposes something like `0 | 1-8 | 9`: two
+#' extreme categories and one enormous middle. That destroys the information
+#' function and person separation and discards the substantive content of the
+#' scale. An earlier version of this function did exactly that on real data.
 #'
-#' Pass 2 necessarily reasons from the CURRENT calibration: thresholds are
-#' re-estimated once categories change, so treat the result as a starting point
-#' and re-read the diagnostics after applying it.
+#' So the objective is inverted: **keep as MANY categories as possible, subject
+#' to their thresholds still being far enough apart to be distinguishable.**
+#' Among the partitions that tie on the number of categories, prefer the one
+#' with the most even threshold spacing, which yields balanced, defensible bands
+#' rather than arbitrary lopsided ones. Extreme categories that genuinely
+#' dominate their end of the continuum survive as their own level automatically,
+#' because the boundaries next to them are the widely separated ones.
+#'
+#' Because categories are ordinal only adjacent merges are legitimate, so the
+#' candidate set is every way of cutting 0..m into contiguous bands: 2^m
+#' partitions (1024 for an 11-category scale). That is small enough to search
+#' exhaustively, which is why this needs no heuristic search and no AI service.
 #'
 #' @param ct output of `category_table(fit)`
 #' @param group item group to work on (defaults to the first)
-#' @param min_count minimum observations per category (Linacre 1999: 10)
+#' @param min_count minimum observations per collapsed category (Linacre 1999: 10)
+#' @param min_share minimum share of responses per collapsed category
+#' @param min_sep minimum separation between retained thresholds, in logits
 #' @param min_cat never propose fewer than this many categories
-#' @return list(codes, newscore, codes_txt, newscore_txt, reasons, n_cat, changed)
-suggest_collapse <- function(ct, group = NULL, min_count = 10, min_cat = 3) {
+#' @param max_enum_cat above this many categories, fall back to a greedy scan
+#' @return list with codes/newscore vectors and strings, bands, separations,
+#'   notes, and an alternative one category coarser (or NULL)
+suggest_collapse <- function(ct, group = NULL, min_count = 10, min_share = 0.01,
+                             min_sep = 1.0, min_cat = 3, max_enum_cat = 14) {
   if (is.null(ct) || !nrow(ct)) return(NULL)
   if (is.null(group) || !group %in% ct$Group) group <- ct$Group[1]
   d <- ct[ct$Group == group, , drop = FALSE]
   d <- d[order(d$Category), , drop = FALSE]
-  cats <- d$Category; counts <- d$Count; tau <- d$Andrich_Threshold
-  n <- nrow(d)
-  blocks <- as.list(seq_len(n))          # each block = indices of merged categories
-  reasons <- character(0)
-  lab <- function(b) paste(cats[b], collapse = "+")
-  bcount <- function(b) sum(counts[b], na.rm = TRUE)
+  cats <- d$Category; counts <- d$Count
+  C <- length(cats); N <- sum(counts, na.rm = TRUE)
+  if (C < 3 || !is.finite(N) || N <= 0) return(NULL)
+  min_cat <- max(2L, min(as.integer(min_cat), C))
 
-  ## --- pass 1: sparse categories (exact; counts add under merging) ---------
-  repeat {
-    if (length(blocks) <= min_cat) break
-    bc <- vapply(blocks, bcount, numeric(1))
-    if (all(bc >= min_count)) break
-    j <- which.min(bc)
-    k <- if (j == 1) 2L else if (j == length(blocks)) length(blocks) - 1L else
-      if (bc[j - 1] <= bc[j + 1]) j - 1L else j + 1L
-    reasons <- c(reasons, sprintf(
-      "Category %s has %d observation%s (fewer than %d); merged with category %s.",
-      lab(blocks[[j]]), bc[j], if (bc[j] == 1) "" else "s", min_count, lab(blocks[[k]])))
-    lo <- min(j, k); hi <- max(j, k)
-    blocks[[lo]] <- sort(c(blocks[[lo]], blocks[[hi]]))
-    blocks[[hi]] <- NULL
+  loc <- cum_threshold_locations(counts)
+  cur_sep <- if (length(loc) > 1) diff(loc) else numeric(0)
+
+  ## ---- describe a partition given the kept boundary indices --------------
+  describe <- function(keep) {
+    starts <- c(1L, keep + 1L); ends <- c(keep, C)
+    K <- length(starts)
+    bn <- vapply(seq_len(K), function(i) sum(counts[starts[i]:ends[i]]), numeric(1))
+    labs <- vapply(seq_len(K), function(i)
+      if (starts[i] == ends[i]) as.character(cats[starts[i]])
+      else paste0(cats[starts[i]], "-", cats[ends[i]]), character(1))
+    ns <- integer(C)
+    for (i in seq_len(K)) ns[starts[i]:ends[i]] <- i - 1L
+    sp <- if (length(keep) > 1) diff(loc[keep]) else numeric(0)
+    list(keep = keep, n_cat = K, newscore = ns, sep = sp,
+         bands = data.frame(Band = seq_len(K), Categories = labs, N = bn,
+                            Pct = 100 * bn / N, stringsAsFactors = FALSE))
+  }
+  feasible_counts <- function(keep) {
+    starts <- c(1L, keep + 1L); ends <- c(keep, C)
+    bn <- vapply(seq_along(starts), function(i) sum(counts[starts[i]:ends[i]]), numeric(1))
+    all(bn >= min_count) && all(bn / N >= min_share)
   }
 
-  ## --- pass 2: narrow or disordered thresholds (from the current solution) --
-  repeat {
-    if (length(blocks) <= max(min_cat, 3)) break
-    # entry threshold of each block after the first = tau of its first category
-    bnd <- vapply(blocks[-1], function(b) tau[b[1]], numeric(1))
-    if (!all(is.finite(bnd))) break                 # cannot judge; stop quietly
-    adv <- diff(bnd)                                # width of blocks 2..(k-1)
-    req <- threshold_advance_min(length(bnd))       # category-count dependent
-    if (!length(adv) || !length(req)) break
-    short <- adv - req
-    bad <- which(short < 0)
-    if (!length(bad)) break
-    i <- bad[which.min(short[bad])]                 # worst offender
-    j <- i + 1L                                     # the too-narrow block
-    bc <- vapply(blocks, bcount, numeric(1))
-    k <- if (j == 1) 2L else if (j == length(blocks)) length(blocks) - 1L else
-      if (bc[j - 1] <= bc[j + 1]) j - 1L else j + 1L
-    reasons <- c(reasons, sprintf(
-      "Category %s spans only %.2f logits where %.2f is required for %d categories%s; merged with category %s.",
-      lab(blocks[[j]]), adv[i], req[i], length(bnd) + 1L,
-      if (adv[i] <= 0) " (thresholds disordered)" else "", lab(blocks[[k]])))
-    lo <- min(j, k); hi <- max(j, k)
-    blocks[[lo]] <- sort(c(blocks[[lo]], blocks[[hi]]))
-    blocks[[hi]] <- NULL
+  ## ---- candidate search ---------------------------------------------------
+  # best[[K]] = most evenly spaced partition with K categories that meets the
+  # count constraints; also track the best achievable minimum separation.
+  best <- list(); best_relaxed <- NULL
+  better <- function(a, b) {          # lexicographic, larger is better
+    for (i in seq_along(a)) {
+      if (a[i] > b[i]) return(TRUE)
+      if (a[i] < b[i]) return(FALSE)
+    }
+    FALSE
+  }
+  consider <- function(keep) {
+    K <- length(keep) + 1L
+    if (K < min_cat || K > C) return(invisible(NULL))
+    starts <- c(1L, keep + 1L); ends <- c(keep, C)
+    bn <- vapply(seq_len(K), function(i) sum(counts[starts[i]:ends[i]]), numeric(1))
+    feas <- all(bn >= min_count) && all(bn / N >= min_share)
+    sp <- if (length(keep) > 1) diff(loc[keep]) else numeric(0)
+    # Inf for the constraint (a 2-category scale has no spacing to violate), but
+    # 0 for ranking, so it cannot dominate the fallback search.
+    msep_pass <- if (length(sp)) min(sp) else Inf
+    msep_rank <- if (length(sp)) min(sp) else 0
+    # Fallback ranking: feasible partitions always beat infeasible ones; among
+    # feasible prefer the widest separation then more categories; among
+    # infeasible prefer the one whose smallest band is largest.
+    key <- c(as.numeric(feas), if (feas) msep_rank else min(bn) / N, K)
+    if (is.null(best_relaxed) || better(key, best_relaxed$key))
+      best_relaxed <<- list(keep = keep, key = key, msep = msep_pass, feas = feas)
+    if (!feas || msep_pass < min_sep) return(invisible(NULL))
+    even <- if (length(sp)) max(sp) - min(sp) else 0
+    k <- as.character(K)
+    if (is.null(best[[k]]) || even < best[[k]]$even)
+      best[[k]] <<- list(keep = keep, even = even)
+    invisible(NULL)
   }
 
-  newscore <- integer(n)
-  for (i in seq_along(blocks)) newscore[blocks[[i]]] <- i - 1L
-  list(codes = cats, newscore = newscore,
-       codes_txt = fmt_codes(cats), newscore_txt = fmt_codes(newscore),
-       reasons = reasons, n_cat = length(blocks),
-       changed = length(blocks) < n, group = group)
+  if (C <= max_enum_cat) {
+    nb <- C - 1L
+    for (mask in 0:(2^nb - 1L)) {
+      bits <- as.logical(intToBits(mask))[seq_len(nb)]
+      consider(which(bits))
+    }
+  } else {
+    # Greedy left-to-right scan: keeping every boundary that is at least
+    # min_sep from the last one kept is optimal for maximising the count.
+    keep <- integer(0); last <- -Inf
+    for (k in seq_along(loc)) if (loc[k] - last >= min_sep) { keep <- c(keep, k); last <- loc[k] }
+    consider(keep)
+    while (length(keep) + 1L > min_cat && !feasible_counts(keep)) {
+      keep <- keep[-length(keep)]; consider(keep)
+    }
+  }
+
+  notes <- character(0)
+  ks <- suppressWarnings(as.integer(names(best)))
+  if (!length(ks)) {
+    # Nothing satisfied the constraints. Report the best available and say why.
+    if (is.null(best_relaxed)) return(NULL)
+    res <- describe(best_relaxed$keep)
+    notes <- c(notes, if (!isTRUE(best_relaxed$feas)) sprintf(
+      paste("No collapse can give every category at least %d observations: the group has",
+            "only %d in total. Showing the most balanced %d-category split available."),
+      as.integer(min_count), as.integer(N), res$n_cat) else sprintf(
+      paste("No collapse reaches the requested %.2f-logit separation. The best available",
+            "keeps %d categories with a minimum separation of %.2f logits. Consider whether",
+            "this scale can support ordered categories at all, or lower the requirement."),
+      min_sep, res$n_cat, if (length(res$sep)) min(res$sep) else Inf))
+    alt <- NULL
+  } else {
+    kbest <- max(ks)
+    res <- describe(best[[as.character(kbest)]]$keep)
+    alt <- if (kbest - 1L >= min_cat && !is.null(best[[as.character(kbest - 1L)]]))
+      describe(best[[as.character(kbest - 1L)]]$keep) else NULL
+  }
+
+  changed <- res$n_cat < C
+  if (changed) {
+    notes <- c(notes, sprintf(
+      paste("The %d current thresholds span %.2f logits, so adjacent categories sit only",
+            "%.2f-%.2f logits apart and respondents cannot use them as distinct levels."),
+      length(loc), diff(range(loc)),
+      if (length(cur_sep)) min(cur_sep) else 0, if (length(cur_sep)) max(cur_sep) else 0))
+    notes <- c(notes, sprintf(
+      "This keeps the most categories (%d) whose thresholds stay at least %.2f logits apart; the retained thresholds separate by %.2f-%.2f logits.",
+      res$n_cat, min_sep,
+      if (length(res$sep)) min(res$sep) else Inf, if (length(res$sep)) max(res$sep) else Inf))
+    small <- res$bands$Categories[res$bands$N < min_count]
+    if (length(small))
+      notes <- c(notes, sprintf("Categories %s remain below %d observations.",
+                               paste(small, collapse = ", "), min_count))
+  }
+
+  list(codes = cats, newscore = res$newscore,
+       codes_txt = fmt_codes(cats), newscore_txt = fmt_codes(res$newscore),
+       n_cat = res$n_cat, changed = changed, group = group,
+       bands = res$bands, sep = res$sep, cur_sep = cur_sep, loc = loc,
+       notes = notes,
+       alt_newscore_txt = if (!is.null(alt)) fmt_codes(alt$newscore) else NULL,
+       alt_n_cat = if (!is.null(alt)) alt$n_cat else NULL,
+       alt_bands = if (!is.null(alt)) alt$bands else NULL)
 }
 
 # ---------------------------------------------------------------------------

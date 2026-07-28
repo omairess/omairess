@@ -413,14 +413,20 @@ panel_ratingscale <- bslib::nav_panel(
       "Copy the strings, or use the button to put them in the boxes on the Estimate ",
       "tab, then edit them however you like and press <b>Estimate</b> yourself.")),
     bslib::layout_columns(
-      col_widths = c(3, 3, 6),
-      shiny::numericInput("sug_mincount", "Min observations per category", 10, 1, 1000),
+      col_widths = c(3, 3, 3, 3),
+      shiny::numericInput("sug_minsep", "Min threshold separation (logits)", 1.0, 0.1, 3, 0.1),
+      shiny::numericInput("sug_mincount", "Min observations per category", 10, 1, 100000),
       shiny::numericInput("sug_mincat", "Never go below this many categories", 3, 2, 20),
       shiny::div(shiny::br(),
                  shiny::actionButton("apply_suggestion",
                                      "Put this in the CODES / NEWSCORE boxes",
                                      class = "btn-warning w-100",
                                      icon = shiny::icon("arrow-right")))),
+    shiny::helpText(shiny::HTML(
+      "It keeps <b>as many categories as possible</b> whose thresholds are still at ",
+      "least this far apart, preferring evenly spaced bands. Raise the separation for ",
+      "a coarser scale, lower it to retain more categories. It will not merge everything ",
+      "into one large middle band.")),
     shiny::verbatimTextOutput("collapse_suggestion"),
     shiny::helpText(shiny::HTML(
       "Collapsing categories is a post-hoc decision that improves fit almost by ",
@@ -1078,17 +1084,21 @@ server <- function(input, output, session) {
     shiny::req(fit(), input$cat_group)
     suggest_collapse(cat_tab(), input$cat_group,
                      min_count = input$sug_mincount %||% 10,
+                     min_sep   = input$sug_minsep %||% 1.0,
                      min_cat   = input$sug_mincat %||% 3)
   })
 
   output$collapse_suggestion <- shiny::renderText({
     s <- collapse_sug()
     shiny::validate(shiny::need(!is.null(s), "Estimate a model to see a suggestion."))
+    bandtxt <- paste(sprintf("%s (n=%d, %.1f%%)", s$bands$Categories,
+                             as.integer(s$bands$N), s$bands$Pct), collapse = "  |  ")
     if (!isTRUE(s$changed))
       return(paste0(
         "No collapse suggested for group '", s$group, "'.\n",
-        "Every category has at least ", input$sug_mincount %||% 10,
-        " observations and the thresholds advance far enough.\n\n",
+        "All ", length(s$codes), " categories clear the minimum count and their ",
+        "thresholds are at least ", sprintf("%.2f", input$sug_minsep %||% 1.0),
+        " logits apart.\n\n",
         "CODES:    ", s$codes_txt, "\n",
         "NEWSCORE: ", s$newscore_txt, "   (unchanged)"))
     paste0(
@@ -1096,7 +1106,15 @@ server <- function(input, output, session) {
       length(s$codes), " categories -> ", s$n_cat, "\n\n",
       "CODES:    ", s$codes_txt, "\n",
       "NEWSCORE: ", s$newscore_txt, "\n\n",
-      "Why:\n", paste0("  - ", s$reasons, collapse = "\n"))
+      "Bands:    ", bandtxt, "\n\n",
+      "Why:\n", paste0("  - ", s$notes, collapse = "\n"),
+      if (!is.null(s$alt_newscore_txt)) paste0(
+        "\n\nAlternative (", s$alt_n_cat, " categories):  ", s$alt_newscore_txt,
+        "\n           ", paste(s$alt_bands$Categories, collapse = "  |  ")) else "",
+      "\n\nSubstantive check: only merge categories that mean similar things. ",
+      "If the scale has a conventional banding (none / mild / moderate / severe), ",
+      "prefer a collapse that respects it - a statistically clean but substantively ",
+      "arbitrary collapse is hard to defend.")
   })
 
   # Fills the boxes and takes the user to them. Does NOT re-estimate:

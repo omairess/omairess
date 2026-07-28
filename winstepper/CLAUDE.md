@@ -61,20 +61,33 @@ BootSON / Dagger / PsychoNetrix work in the repo.
   `output$font_css`, which sets the root `html{font-size}` (Bootstrap is
   rem-based, so the whole UI scales together).
 - **Suggested rescore.** `suggest_collapse()` in `winstepper_extras.R` proposes a
-  `NEWSCORE=` collapse for one item group and returns comma-separated strings
-  plus one plain-language reason per merge. Pass 1 merges categories below
-  `min_count` (exact — counts are additive under merging); pass 2 merges blocks
-  whose threshold advance falls short of `threshold_advance_min()`, which
-  includes the disordered case. **It is a suggestion only**: the button on the
-  Rating scale tab fills the boxes and navigates to the Estimate tab, but never
-  re-estimates — the user confirms or edits and presses Estimate. Deliberately
-  no LLM/API: it must be free, offline, deterministic and reproducible.
-  Pass 2 reasons from the *current* calibration (thresholds move once categories
-  change), so the intended loop is suggest → apply → re-estimate → re-read.
-  Covered by `test_collapse.R`.
+  `NEWSCORE=` collapse for one item group. **It is a suggestion only**: the button
+  on the Rating scale tab fills the boxes and navigates to the Estimate tab, but
+  never re-estimates — the user confirms or edits and presses Estimate.
+  Deliberately no LLM/API: it must be free, offline, deterministic and
+  reproducible. Covered by `test_collapse.R`.
   **When filling the boxes, always write CODES too** — `apply_codes_recode()`
   ignores NEWSCORE when CODES is blank, so writing NEWSCORE alone silently does
   nothing.
+
+  **Do not re-introduce a "merge until the advance guideline is satisfied" rule.**
+  The first version did that and it failed badly on real data
+  (`NSGGMgameCONT.xlsx`, 17 items × 1025 persons, 10 categories, none sparse):
+  when the thresholds are genuinely compressed no collapse can ever satisfy the
+  guideline, so the rule ran to the `min_cat` floor and proposed `0 | 1-3 | 4-9`
+  — two poles and one enormous middle, which guts the information function and
+  person separation. The objective is **inverted**: keep as MANY categories as
+  possible subject to their thresholds staying `min_sep` logits apart, tie-broken
+  by even spacing. On that dataset the corrected version returns
+  `0 | 1-3 | 4-6 | 7-8 | 9`, matching independent expert judgement.
+
+  The basis is `cum_threshold_locations()`: `-logit(P(X >= k))` from the observed
+  counts. These have an exact subset property under adjacent merging — the
+  thresholds of any candidate collapse are literally a subset of these — so every
+  candidate can be scored with **no re-estimation and no approximation**. The
+  search is exhaustive (2^m partitions, 1024 for 11 categories), with a greedy
+  fallback above `max_enum_cat`. `min_sep` is exposed in the UI: raise it for a
+  coarser scale, lower it to retain more categories.
 - **DGF (Table 33)** — `dgf_analysis()` / `plot_dgf()`. Item classes come from
   the model scales (`fit$groups`); one uniform difficulty shift is estimated per
   item-class × person-class cell and contrasted across person classes with the

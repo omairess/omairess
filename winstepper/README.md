@@ -69,10 +69,21 @@ CODES:    0,1,2,3,4,5,6,7,8,9,10
 NEWSCORE: 0,1,1,1,1,2,2,2,3,3,3
 ```
 
-together with one plain-language line per merge ("category 7 has 4 observations
-(fewer than 10); merged with category 8"). It merges categories that fall below the
-minimum count, and blocks whose thresholds advance by less than the
-category-count-dependent minimum allows — including disordered thresholds.
+together with the resulting bands, their sizes, and why it proposes them — plus an
+alternative one category coarser.
+
+**What it optimises.** It keeps **as many categories as possible** whose thresholds are
+still at least `min separation` logits apart (default 1.0), preferring evenly spaced
+bands. That is deliberately the opposite of "merge until the threshold-advance guideline
+is satisfied": on a scale whose categories are genuinely compressed, no collapse can ever
+satisfy that guideline, so such a rule collapses everything into two poles and one huge
+middle — which destroys the information function and person separation. Raise the
+separation for a coarser scale, lower it to retain more categories.
+
+The basis is the observed cumulative thresholds, `-logit(P(X ≥ k))`. Under an adjacent
+merge these are exactly a subset of the originals, so every candidate collapse is scored
+without any re-estimation, and the search over all 2^m partitions is exhaustive rather
+than heuristic.
 
 **It is only a suggestion.** Nothing is applied and nothing is re-estimated. The button
 copies the strings into the CODES / NEWSCORE boxes on the Estimate tab and takes you

@@ -39,7 +39,6 @@ counts <- c(50, 3, 2, 40, 60, 55, 4, 30, 20, 2, 1)
 s <- suggest_collapse(mk(counts, seq(-3, 3, length.out = 10)), min_count = 10, min_cat = 3)
 cat(sprintf("     CODES:    %s\n     NEWSCORE: %s\n     %d -> %d categories\n",
             s$codes_txt, s$newscore_txt, length(s$codes), s$n_cat))
-for (r in s$reasons) cat("       - ", r, "\n", sep = "")
 check("newscore has one entry per code", length(s$newscore) == length(s$codes))
 check("newscore starts at 0", s$newscore[1] == 0)
 check("newscore is monotone non-decreasing", all(diff(s$newscore) >= 0))
@@ -50,29 +49,52 @@ check("collapsed categories all reach the minimum count",
       all(tapply(counts, s$newscore, sum) >= 10),
       sprintf("(got %s)", paste(tapply(counts, s$newscore, sum), collapse = ", ")))
 check("never drops below min_cat", s$n_cat >= 3)
-check("a reason is given for every merge", length(s$reasons) == length(s$codes) - s$n_cat)
 
 cat("\n3. A healthy scale is left alone\n")
-h <- suggest_collapse(mk(c(80, 70, 75, 90), c(-1.5, 0, 1.5)), min_count = 10, min_cat = 3)
+h <- suggest_collapse(mk(c(80, 70, 75, 90), c(-1.5, 0, 1.5)),
+                      min_count = 10, min_sep = 0.5, min_cat = 3)
 check("changed flag is FALSE", !isTRUE(h$changed))
 check("newscore equals codes", identical(as.integer(h$newscore), as.integer(h$codes)))
-check("no reasons", length(h$reasons) == 0)
 
-cat("\n4. Disordered thresholds trigger a merge\n")
-d <- suggest_collapse(mk(c(60, 55, 50, 65, 70), c(-1.0, -1.2, 0.5, 1.4)),
-                      min_count = 10, min_cat = 3)
-check("a merge was proposed", isTRUE(d$changed))
-check("reason mentions the threshold problem",
-      any(grepl("logits|disordered", d$reasons)),
-      sprintf("(reasons: %s)", paste(d$reasons, collapse = " | ")))
+cat("\n4. REGRESSION: a compressed 10-category scale must NOT collapse to a\n")
+cat("   two-poles-and-one-huge-middle solution (the 0 | 1-8 | 9 failure).\n")
+# Real marginal distribution from NSGGMgameCONT.xlsx, 17 items x 1025 persons,
+# 1-10 shifted to 0-9. No category is sparse; the problem is compression.
+real <- c(3802, 1886, 1959, 1413, 1565, 1489, 1675, 1601, 988, 1047)
+r <- suggest_collapse(mk(real, seq(-0.55, 0.55, length.out = 9)),
+                      min_count = 10, min_sep = 1.0, min_cat = 3)
+cat(sprintf("     NEWSCORE: %s   (%d -> %d categories)\n",
+            r$newscore_txt, length(r$codes), r$n_cat))
+cat(sprintf("     bands:    %s\n", paste(r$bands$Categories, collapse = " | ")))
+check("keeps more than 3 categories", r$n_cat > 3, sprintf("(got %d)", r$n_cat))
+widest <- max(r$bands$Pct)
+check("no band swallows more than half the responses", widest <= 50,
+      sprintf("(widest band = %.1f%%)", widest))
+check("the floor category stays its own level",
+      identical(r$bands$Categories[1], "0"),
+      sprintf("(first band = %s)", r$bands$Categories[1]))
+check("retained thresholds meet the requested separation",
+      length(r$sep) == 0 || min(r$sep) >= 1.0,
+      sprintf("(min separation = %.2f)", if (length(r$sep)) min(r$sep) else Inf))
+check("an alternative is offered", !is.null(r$alt_newscore_txt))
 
-cat("\n5. min_cat floor is respected even when everything is sparse\n")
+cat("\n5. Raising the separation requirement yields a coarser scale\n")
+coarse <- suggest_collapse(mk(real, seq(-0.55, 0.55, length.out = 9)),
+                           min_count = 10, min_sep = 1.4, min_cat = 3)
+cat(sprintf("     min_sep 1.4 -> %s  (%d categories)\n",
+            coarse$newscore_txt, coarse$n_cat))
+check("coarser than the 1.0-logit solution", coarse$n_cat <= r$n_cat)
+check("still above the floor", coarse$n_cat >= 3)
+
+cat("\n6. Degenerate: no collapse can reach min_count (group too small)\n")
 f <- suggest_collapse(mk(c(1, 1, 1, 1, 1, 1), seq(-2, 2, length.out = 5)),
                       min_count = 10, min_cat = 3)
-check("stops at min_cat = 3", f$n_cat == 3, sprintf("(got %d)", f$n_cat))
-f2 <- suggest_collapse(mk(c(1, 1, 1, 1, 1, 1), seq(-2, 2, length.out = 5)),
-                       min_count = 10, min_cat = 2)
-check("honours min_cat = 2", f2$n_cat == 2, sprintf("(got %d)", f2$n_cat))
+check("still returns a suggestion rather than nothing", !is.null(f))
+check("does not fall below min_cat = 3", !is.null(f) && f$n_cat >= 3,
+      if (is.null(f)) "(returned NULL)" else sprintf("(got %d)", f$n_cat))
+check("explains that the count floor is unreachable",
+      !is.null(f) && any(grepl("in total", f$notes)),
+      if (is.null(f)) "" else sprintf("(notes: %s)", paste(f$notes, collapse = " | ")))
 
 cat(sprintf("\n%d passed, %d failed\n", ok, bad))
 if (bad > 0) quit(status = 1)
