@@ -10,8 +10,9 @@ BootSON / Dagger / PsychoNetrix work in the repo.
 
 | File | Role |
 |---|---|
-| `rasch_engine.R` | JMLE estimation, fit statistics, category structure, DIF, PCA of residuals. **No Shiny dependency** — must stay usable from the command line. **Reused unchanged from R-Winsteps.** |
-| `winsteps_plots.R` | All figures, base graphics, every one driven by a `style` list. **Reused unchanged.** |
+| `rasch_engine.R` | JMLE estimation, fit statistics, category structure, DIF, PCA of residuals. **No Shiny dependency** — must stay usable from the command line. **Byte-identical to R-Winsteps; do not edit it.** |
+| `winstepper_cmle.R` | Conditional maximum likelihood (CMLE): elementary symmetric functions, conditional likelihood + analytic gradient, `rasch_cmle()`. **No Shiny dependency.** WINSTEPPER-only; source it **after** the engine. |
+| `winsteps_plots.R` | All figures, base graphics, every one driven by a `style` list. Originally from R-Winsteps; now also holds the label-fitting helpers. |
 | `house_modules.R` | Shared house-style modules (data load, reshape, varselect, step recorder, exports). **Reused unchanged.** |
 | `winstepper_extras.R` | WINSTEPPER-only additions kept out of the audited files: general keyform (Table 2.2) and DGF (Table 33). Depends on engine + plot internals; source it **after** them. |
 | `app.R` | The WINSTEPPER Shiny app — a redesigned `bslib` UI (grouped nav menus, value-box dashboard, cards) over the engine above. |
@@ -99,6 +100,31 @@ BootSON / Dagger / PsychoNetrix work in the repo.
   search is exhaustive (2^m partitions, 1024 for 11 categories), with a greedy
   fallback above `max_enum_cat`. `min_sep` is exposed in the UI: raise it for a
   coarser scale, lower it to retain more categories.
+- **CMLE** — `rasch_cmle()` in `winstepper_cmle.R`, selected by `input$method`
+  on the Estimate tab (JMLE stays the default). Conditions each response pattern
+  on its person raw score, so the person parameters leave the likelihood and the
+  item estimates are consistent — no `STBIAS=`-style correction needed. Returns
+  the **same `raschfit` structure** `rasch_jmle()` does, plus a `cml` sub-list
+  and `settings$method`, so every downstream table and figure works untouched.
+  Points that are easy to get wrong, and are the reason `test_cmle.R` exists:
+  - The elementary symmetric functions **must** be computed in the log domain.
+    On the NSGGM data (17 items × 10 categories, raw scores to 153) the raw
+    gammas span hundreds of orders of magnitude and overflow instantly.
+  - `G^(-i)` is obtained by **re-running the convolution without item i**, never
+    by the difference/deconvolution algorithm — that is faster but numerically
+    unstable, and at these test lengths the safe route is free.
+  - Missing data conditions **within each missingness pattern**: a person's
+    conditioning set is the items they actually answered, so each pattern needs
+    its own gamma. This is the main cost driver on sparse data.
+  - Parameterised as the engine is (`b_ik = k·delta_i + cumsum(tau_g)[k]`) with
+    sum-to-zero imposed *by construction*, not by projection, so BFGS has no
+    flat direction to wander along.
+  - BFGS stops on the function value and leaves the score residual near 1e-4.
+    Convergence is judged on the CML equations (observed = conditionally
+    expected sufficient statistic) and finished with Newton steps using the
+    Hessian that the standard errors need anyway.
+  - **Read `fit$settings$method`, never `input$method`**, anywhere that describes
+    a result — the radio can be changed without pressing Estimate.
 - **DGF (Table 33)** — `dgf_analysis()` / `plot_dgf()`. Item classes come from
   the model scales (`fit$groups`); one uniform difficulty shift is estimated per
   item-class × person-class cell and contrasted across person classes with the
@@ -115,6 +141,19 @@ actionButton at 0 are), so without it both would evaluate at startup.
 Everything below the UI — the engine API, the recorder discipline, the input IDs
 the server binds to — is deliberately identical to R-Winsteps so the numbers and
 the reproducible export stay the audited ones.
+
+## The "reused unchanged" rule, narrowed
+
+`rasch_engine.R` stays **byte-identical** to R-Winsteps. That is what protects
+the audited numbers, and it is why `winstepper_extras.R` *overrides* the
+engine's `category_diagnostics()` / `category_table()` / `.summary_block()`
+rather than fixing them in place.
+
+`winsteps_plots.R` is no longer under that rule. It contains no estimation
+logic, and the label-fitting work had to touch four functions in it; copying
+them into extras as overrides would have duplicated ~160 lines that then have to
+be kept in sync. Changes there must still be justified and covered by
+`test_collapse.R`.
 
 ## Running
 
@@ -203,6 +242,21 @@ step records the item selection non-destructively instead.
 **Wright map panels must share one logit axis.** Compute the histogram breaks
 over the *combined* person+item range, not from `hist()` defaults.
 
+**Never hard-code a margin width.** `plot_keyform()` used `par(mar = c(., 8, ., .))`
+and clipped `GamingObsession_prob` down to `gObsession_prob`; raising the Figure
+style label size made every such figure worse. Size margins with `.fit_labels()`
+and pad in-region labels with `.pad_range()` (both in `winsteps_plots.R`).
+Two traps in doing so:
+- `strwidth()` needs an established plot region, but `mar` must be set *before*
+  `plot()`. Hence the `par("cin")`-based estimate, which is deliberately biased
+  high — over-estimating wastes margin, under-estimating clips. `par("cin")[1]`
+  is **not** the widest glyph (devices set it to 0.9 × pointsize), so weights
+  above 1.0 are correct for `W`/`@`/`m`, not a bug.
+- Under `layout()`, `par("fin")` and `par("pin")` still describe the *previous*
+  panel until the next frame starts. `plot_wright()` therefore passes `fig=` and
+  `pin=` computed from the layout widths it set itself. Anything new under
+  `layout()` must do the same.
+
 **Model-expected correlations are not `cor(E, θ)`.** Under the model
 `Var(X) = Var(E) + mean(W)`, so the expected point-measure correlation is
 `cov(E, θ) / sqrt((Var(E) + mean(W)) * Var(θ))`.
@@ -211,7 +265,11 @@ over the *combined* person+item range, not from `hist()` defaults.
 
 - Not byte-identical to WINSTEPS 5.11. Agreement ≈ 2 decimals on well-behaved data.
 - No `STBIAS=` JMLE bias correction, so the usual spread inflation (~L/(L−1)) is
-  present. WINSTEPS shows it too by default.
+  present in a JMLE fit. WINSTEPS shows it too by default. **CMLE** does not have
+  it — but our CML is an independent implementation and will not match WINSTEPS'
+  CMLE to the last decimal either. Its item S.E.s come from the observed
+  information of the *conditional* likelihood, so they do not carry
+  person-estimation uncertainty.
 - Per-category INFIT MNSQ is not centred on 1.0 in extreme categories. Linacre's
   "< 2.0" guideline applies to the OUTFIT column.
 - PCA clusters are tertiles of first-contrast loadings — an approximation to the
@@ -226,11 +284,22 @@ over the *combined* person+item range, not from `hist()` defaults.
 Never loosen a statistical claim to make a test pass. If a result cannot be
 reproduced by the exported script, that is a blocking bug in the recorder wiring.
 
+## Tests
+
+```r
+Rscript test_collapse.R   # rescore suggestions, barchart, label fitting
+Rscript test_cmle.R       # conditional maximum likelihood
+```
+Run **both** before declaring any change done. `test_cmle.R` sections 1–3 are
+exact checks against brute-force enumeration, a closed form, and a numerically
+differentiated likelihood; if CML is edited, those are the ones that catch it.
+
 ## Likely next work
 
 1. Anchoring (`IAFILE=`/`PAFILE=`/`SAFILE=`) — the biggest gap; needed for equating
    across forms or waves.
-2. `STBIAS=`-style bias correction as an opt-in.
+2. `STBIAS=`-style bias correction as an opt-in for JMLE (CMLE now covers the
+   case where the bias is what matters).
 3. DPF (Table 31) and non-uniform DIF.
 4. Subset/connectivity detection — currently a silent failure mode on sparse data.
 5. Port the R-Winsteps test suites into this folder and wire them to `app.R`.

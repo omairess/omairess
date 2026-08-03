@@ -122,5 +122,90 @@ check("plot_pi_map() runs and produces a plot", {
   !inherits(r2, "try-error") && file.exists(pf) && file.info(pf)$size > 5000
 })
 
+cat("\n8. Labels always fit the space reserved for them\n")
+# The figures size their margins from .str_in(), which estimates text width from
+# par("cin") because strwidth() cannot be called before par(mar=) is set. If that
+# estimate ever under-shoots the real rendered width, labels get clipped - which
+# is exactly the bug the helpers were added to fix. So: measure both.
+labs <- c("a", "Item01", "GamingObsession_prob", "WWWWWWWWWWWW", "@@@@@@@@@@",
+          "mmmmmmmmmmmm", "OOOOOOOOOO", strrep("i", 30),
+          "Mixed Case With Spaces 123", "Item_04 (reverse-scored)")
+lo <- Inf; hi <- 0
+pf <- tempfile(fileext = ".png")
+grDevices::png(pf, width = 1200, height = 800, res = 110)
+graphics::plot.new()
+for (cx in c(0.5, 0.75, 1, 1.5, 2.5)) for (l in labs) {
+  r <- .str_in(l, cx) / graphics::strwidth(l, units = "inches", cex = cx)
+  lo <- min(lo, r); hi <- max(hi, r)
+}
+lh <- graphics::par("csi"); fw <- graphics::par("fin")[1L]
+fl_ok <- .fit_labels(labs, 1)
+enough <- (fl_ok$lines - 1.1) * lh >= max(graphics::strwidth(fl_ok$labels, "inches", cex = 1))
+long <- strrep("W", 200)
+fl_tr <- .fit_labels(long, 1, side = 2L, max_frac = 0.30)
+capped <- (fl_tr$lines - 1.1) * lh <= 0.30 * fw + 1e-9
+trunc_fits <- graphics::strwidth(fl_tr$labels, "inches", cex = 1) <= 0.30 * fw
+grDevices::dev.off()
+
+check("estimated width never under-shoots the rendered width", lo >= 1,
+      sprintf("(worst estimate/actual ratio = %.3f)", lo))
+check("and is not wastefully generous", hi < 2.2,
+      sprintf("(largest estimate/actual ratio = %.3f)", hi))
+check(".fit_labels() reserves enough margin for the longest label", enough)
+check("a pathological label is truncated with an ellipsis",
+      nchar(fl_tr$labels) < 200L && grepl("…$", fl_tr$labels) &&
+        isTRUE(fl_tr$truncated))
+check("the truncated label really fits the cap", isTRUE(trunc_fits))
+check("the margin is capped at max_frac of the figure", isTRUE(capped),
+      sprintf("(%.3f in vs cap %.3f in)", (fl_tr$lines - 1.1) * lh, 0.30 * fw))
+check("margin grows with the label size", {
+  a <- .fit_labels("GamingObsession_prob", 0.6)$lines
+  b <- .fit_labels("GamingObsession_prob", 1.8)$lines
+  b > a * 1.5
+})
+
+cat("\n9. REGRESSION: long item names are not clipped in the keyform\n")
+# The reported failure: plot_keyform() hard-coded an 8-line left margin, so
+# 'GamingObsession_prob' rendered as 'gObsession_prob'.
+long_names <- c("GamingObsession_prob", "GamingWithdrawal_prob",
+                "GamingToleranceIncrease_prob", "Mood", "Conflict_prob",
+                "SalienceOfGamingActivity_prob", "RelapseAfterAbstinence_prob",
+                "ProblemsAtWorkOrSchool_prob")
+fit2 <- fit
+colnames(fit2$X) <- fit2$item_id <- long_names
+check("plot_keyform() runs with long names at a large label size", {
+  kf <- tempfile(fileext = ".png")
+  grDevices::png(kf, width = 1400, height = 900, res = 110)
+  r3 <- try(plot_keyform(fit2, ws_style(cex_label = 2.0), kind = "expected"),
+            silent = TRUE)
+  grDevices::dev.off()
+  !inherits(r3, "try-error") && file.exists(kf) && file.info(kf)$size > 5000
+})
+check("the left margin scales with the names and the label size", {
+  kf <- tempfile(fileext = ".png")
+  grDevices::png(kf, width = 1400, height = 900, res = 110)
+  graphics::plot.new()
+  small <- .fit_labels(long_names, 0.85 * 0.8, side = 2L)$lines
+  big   <- .fit_labels(long_names, 2.00 * 0.8, side = 2L)$lines
+  grDevices::dev.off()
+  small > 8 && big > small          # 8 = the old hard-coded value that clipped
+})
+
+cat("\n10. Every figure survives an extreme label size\n")
+for (nm in c("plot_wright", "plot_pathway", "plot_dif_contrast", "plot_pi_map")) {
+  check(sprintf("%s() at cex_label = 2.5", nm), {
+    ff <- tempfile(fileext = ".png")
+    grDevices::png(ff, width = 1400, height = 900, res = 110)
+    st <- ws_style(cex_label = 2.5)
+    rr <- try(switch(nm,
+      plot_wright       = plot_wright(fit2, st),
+      plot_pathway      = plot_pathway(fit2, st),
+      plot_dif_contrast = plot_dif_contrast(dif_analysis(fit2, dat$Sex), st),
+      plot_pi_map       = plot_pi_map(fit2, st, what = "andrich")), silent = TRUE)
+    grDevices::dev.off()
+    !inherits(rr, "try-error") && file.exists(ff) && file.info(ff)$size > 5000
+  })
+}
+
 cat(sprintf("\n%d passed, %d failed\n", ok, bad))
 if (bad > 0) quit(status = 1)

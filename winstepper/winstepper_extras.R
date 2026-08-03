@@ -625,7 +625,11 @@ plot_pi_map <- function(fit, style = ws_style(), person_class = NULL,
   graphics::layout(matrix(seq_len(nL + 1L), nrow = 1),
                    widths = c(rep((1 - right_frac) / nL, nL), right_frac))
   # Every panel needs the same top/bottom margin or the boxes will not line up.
-  botm <- max(4.5, min(12, 0.55 * max(nchar(as.character(items$Item)))))
+  # Item names are rotated into the bottom margin, so its depth comes from how
+  # wide the longest name is at the current label size.
+  icex <- style$cex_label * 0.75
+  ifl  <- .fit_labels(items$Item, icex, side = 1L, extra = 1.6)
+  botm <- max(4.5, ifl$lines)
   graphics::par(oma = c(0, 0, 2.8, 0))
 
   ## ---- left: person histograms (bars grow leftward from the baseline) -----
@@ -689,8 +693,8 @@ plot_pi_map <- function(fit, style = ws_style(), person_class = NULL,
                             halfpoint = "half-point thresholds",
                             fullpoint = "full-point / max probability")[[what]]),
                   side = 4, line = 2.8, cex = style$cex_label)
-  graphics::axis(1, at = seq_len(ni), labels = items$Item, las = 2,
-                 cex.axis = style$cex_label * 0.75, tick = FALSE)
+  graphics::axis(1, at = seq_len(ni), labels = ifl$labels, las = 2,
+                 cex.axis = icex, tick = FALSE)
   graphics::box(col = style$col_border)
   graphics::mtext(main %||% sprintf("Person-item barchart (items in %s order, %s)",
                                     sort_by, if (isTRUE(descending)) "descending" else "ascending"),
@@ -779,15 +783,21 @@ plot_keyform <- function(fit, style = ws_style(), kind = c("expected", "thurston
                            c(expected = "expected score (Table 2.2)",
                              thurstone = "Rasch-Thurstone 50% (Table 2.3)",
                              modal = "most probable / modal (Table 2.1)")[kind])
-  graphics::par(mar = c(if (show_persons) 0.6 else 4.5, 8, 3.5, 1))
+  # Item names are written into the left margin, so size that margin from the
+  # names themselves at the current label size - a fixed 8 lines clipped them.
+  # Both panels must use the same value or the two x axes stop lining up.
+  lcex <- style$cex_label * 0.8
+  fl   <- .fit_labels(items, lcex, side = 2L)
+  lmar <- fl$lines
+  graphics::par(mar = c(if (show_persons) 0.6 else 4.5, lmar, 3.5, 1))
   graphics::plot(NA, xlim = xr, ylim = c(0.5, length(items) + 0.5), yaxt = "n",
                  xaxt = if (show_persons) "n" else "s",
                  xlab = if (show_persons) "" else "Measure (logits)", ylab = "", main = ttl,
                  cex.lab = style$cex_label + 0.1, cex.main = style$cex_label + 0.2)
   if (isTRUE(style$show_grid))
     graphics::abline(v = pretty(xr, 10), col = style$col_ref, lty = 3)
-  graphics::axis(2, at = seq_along(items), labels = items, las = 1,
-                 cex.axis = style$cex_label * 0.8)
+  graphics::axis(2, at = seq_along(items), labels = fl$labels, las = 1,
+                 cex.axis = lcex)
   for (j in seq_along(items)) {
     seg <- kf[yof == j, , drop = FALSE]
     graphics::segments(min(seg$Measure), j, max(seg$Measure), j,
@@ -804,7 +814,7 @@ plot_keyform <- function(fit, style = ws_style(), kind = c("expected", "thurston
 
   ## --- bottom panel: person distribution on the same axis ------------------
   if (show_persons) {
-    graphics::par(mar = c(4.5, 8, 0.6, 1))
+    graphics::par(mar = c(4.5, lmar, 0.6, 1))
     brks <- seq(xr[1], xr[2], length.out = max(style$bins, 5) + 1)
     h <- graphics::hist(pm[pm >= xr[1] & pm <= xr[2]], breaks = brks, plot = FALSE)
     graphics::plot(NA, xlim = xr, ylim = c(0, max(h$counts, 1) * 1.08),
@@ -945,7 +955,9 @@ plot_dgf <- function(dgf, style = ws_style(), errbars = TRUE) {
   sh <- attr(dgf, "shift"); se <- attr(dgf, "se")
   cls <- colnames(sh); ic <- rownames(sh)
   cols <- .pal(max(length(cls), 3), style$palette)[seq_along(cls)]
-  op <- graphics::par(mar = c(7, 4.5, 3.5, 1)); on.exit(graphics::par(op))
+  lcex <- style$cex_label * 0.85
+  fl   <- .fit_labels(ic, lcex, side = 1L)
+  op <- graphics::par(mar = c(fl$lines, 4.5, 3.5, 1)); on.exit(graphics::par(op))
   yl <- range(c(sh - 2 * se, sh + 2 * se), na.rm = TRUE)
   if (!all(is.finite(yl))) yl <- c(-1, 1)
   graphics::plot(NA, xlim = c(0.5, nrow(sh) + 0.5), ylim = yl, xaxt = "n",
@@ -954,8 +966,8 @@ plot_dgf <- function(dgf, style = ws_style(), errbars = TRUE) {
                  cex.lab = style$cex_label + 0.1, cex.main = style$cex_label + 0.2)
   if (isTRUE(style$show_grid))
     graphics::abline(h = pretty(yl, 8), col = style$col_ref, lty = 3)
-  graphics::axis(1, at = seq_len(nrow(sh)), labels = ic, las = 2,
-                 cex.axis = style$cex_label * 0.85)
+  graphics::axis(1, at = seq_len(nrow(sh)), labels = fl$labels, las = 2,
+                 cex.axis = lcex)
   for (j in seq_along(cls)) {
     x <- seq_len(nrow(sh)) + (j - (length(cls) + 1) / 2) * 0.14
     if (errbars)

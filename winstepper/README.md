@@ -113,6 +113,38 @@ only the three-category case (2 ln 2 = 1.386). For 4 categories the requirement
 is 1.10/1.10, for 5 it is 0.98/0.81/0.98, and so on (Linacre, *Rasch Measurement
 Transactions* 2006, 20:1, p. 1052).
 
+### CMLE alongside JMLE
+
+Estimate ▸ **Estimation method** offers conditional maximum likelihood as well
+as the default JMLE. CML conditions each response pattern on its person raw
+score, which is sufficient for θ under the Rasch model, so the person parameters
+drop out of the likelihood entirely. The item estimates are then consistent as
+N grows with the test length fixed — JMLE's ~L/(L−1) spread inflation, which
+this project has no `STBIAS=` correction for, is absent by construction.
+Persons are measured afterwards by ML with the items anchored, so every fit
+statistic, reliability and residual table downstream is unchanged.
+
+Covers dichotomous, RSM and PCM data, and mixed item groups. Slower than JMLE,
+and proportionally slower again when the data contain many distinct
+missing-data patterns — each pattern conditions on its own item set and so
+needs its own elementary symmetric functions.
+
+Verified by `test_cmle.R`: the symmetric functions match brute-force
+enumeration of every response pattern to 1e-10; a two-item test matches the
+closed form; the analytic gradient matches a numerically differentiated
+brute-force likelihood; the CML equations (observed = conditionally expected
+sufficient statistic) hold at the solution; parameters are recovered from
+simulated data; and the JMLE/CML spread ratio comes out near L/(L−1).
+
+### Labels always fit
+
+Figures size their margins from the labels they actually have to draw, at the
+label size currently set on the Figure style tab, rather than from a fixed
+number of margin lines. Text that cannot fit even a capped share of the figure
+is truncated with an ellipsis rather than clipped. `test_collapse.R` section 8
+checks the width estimate against `strwidth()` and fails if it ever
+under-shoots.
+
 ### Interface font size
 
 Settings ▸ Figure style ▸ **App appearance** scales the whole interface
@@ -122,15 +154,20 @@ font separately. Figure text has its own size sliders.
 ## Files
 
 - `app.R` — the WINSTEPPER Shiny UI/server (bslib).
-- `rasch_engine.R` — the Rasch engine (no Shiny dependency; reused unchanged).
-- `winsteps_plots.R` — all figures (base graphics; reused unchanged).
+- `rasch_engine.R` — the JMLE engine (no Shiny dependency; reused unchanged).
+- `winstepper_cmle.R` — conditional maximum likelihood (no Shiny dependency).
+- `winsteps_plots.R` — all figures (base graphics).
+- `winstepper_extras.R` — keyform, DGF, person-item barchart, engine overrides.
 - `house_modules.R` — shared house-style modules (reused unchanged).
+- `test_cmle.R`, `test_collapse.R` — the test suites; run both before shipping.
 - `CLAUDE.md` — project memory and non-negotiable conventions.
 
 ## Honest scope
 
 Not byte-identical to WINSTEPS 5.11 (agreement ≈ 2 decimals on well-behaved
-data). No `STBIAS=` bias correction; no anchoring, `CUTLO/CUTHI`, subset
+data). No `STBIAS=` bias correction for JMLE — use CMLE if that bias matters,
+though our CML is an independent implementation and will not match WINSTEPS'
+to the last decimal either. No anchoring, `CUTLO/CUTHI`, subset
 detection, keyform/scalogram tables, DPF, or non-uniform DIF. Independent
 software; not affiliated with, endorsed by, or derived from WINSTEPS®, which is
 John M. Linacre's software. Cite the engine you actually ran.

@@ -47,6 +47,110 @@ ws_style <- function(...) {
 }
 
 # ---------------------------------------------------------------------------
+# Label fitting
+#
+# Hard-coded margins (par(mar = c(., 8, ., .))) clip long labels, and clip them
+# worse as the Figure-style label-size slider goes up. Every figure that writes
+# text into a margin or next to a point sizes that space with the helpers below,
+# so the text fits whatever cex_label is set to.
+#
+# strwidth() would be exact, but it needs an established plot region and mar
+# must be set *before* plot() is called. So widths are estimated from
+# par("cin")[1] - the device's nominal character width, readable at any time -
+# scaled by a per-character weight table. test_collapse.R section 8 checks the
+# estimate against strwidth() and fails if it ever under-shoots.
+# ---------------------------------------------------------------------------
+
+#' Approximate width of strings in inches at a given cex.
+#'
+#' Weights are glyph advance width divided by par("cin")[1]. That divisor is not
+#' the widest glyph: R's graphics devices set it to 0.9 * pointsize, so a wide
+#' character such as W or @ is genuinely wider than one "cin" and a weight of 1
+#' would under-estimate. The buckets below are the worst case in each class over
+#' Helvetica and DejaVu Sans (the usual defaults on this platform), em width
+#' divided by 0.9, rounded up - then a further 6% because a font this code has
+#' never seen may be wider still.
+#'
+#' Erring high costs a little wasted margin. Erring low clips the text, which is
+#' the bug this exists to prevent, so the bias is deliberate and one-sided.
+.str_in <- function(s, cex = 1) {
+  cw <- graphics::par("cin")[1L]
+  if (!is.finite(cw) || cw <= 0) cw <- 0.15
+  narrow <- c("i", "l", "j", "f", "t", "I", ".", ",", ":", ";", "'", "`",
+              "|", "!", "(", ")", "[", "]", "{", "}", "/", "\\", "-", " ")
+  wide   <- c("m", "w", "M", "W", "@", "%", "&")
+  vapply(as.character(s), function(x) {
+    ch <- strsplit(x, "", fixed = TRUE)[[1L]]
+    if (!length(ch)) return(0)
+    w <- rep(0.72, length(ch))                    # lower case, digits, default
+    w[ch %in% LETTERS] <- 0.95                    # capitals reach ~0.79 em
+    w[ch %in% wide]    <- 1.20                    # up to ~1.02 em ('@')
+    w[ch %in% narrow]  <- 0.45
+    sum(w) * cw * cex * 1.06
+  }, numeric(1), USE.NAMES = FALSE)
+}
+
+#' Shorten one string with an ellipsis until it fits `avail` inches.
+.truncate_in <- function(s, avail, cex) {
+  if (is.na(s) || !nzchar(s) || .str_in(s, cex) <= avail) return(s)
+  lo <- 0L; hi <- nchar(s)
+  while (lo < hi) {                               # largest prefix that still fits
+    mid <- (lo + hi + 1L) %/% 2L
+    if (.str_in(paste0(substr(s, 1L, mid), "…"), cex) <= avail) lo <- mid else hi <- mid - 1L
+  }
+  if (lo == 0L) substr(s, 1L, 1L) else paste0(substr(s, 1L, lo), "…")
+}
+
+#' Margin lines needed to show `labels`, and the labels truncated to fit.
+#'
+#' @param side margin side, as for axis(). Labels in the left/right margin are
+#'   limited by the figure width; labels rotated into the top/bottom margin
+#'   (las = 2) are limited by its height.
+#' @param max_frac never give the labels more than this fraction of the figure -
+#'   without a cap one pathological label could squeeze the plot to nothing.
+#' @param fig size of the figure region in inches along the relevant axis.
+#'   Defaults to par("fin"), which is correct for a single-figure plot. Under
+#'   layout() par("fin") still reports the *previous* panel until the next frame
+#'   is started, so a caller that has already chosen the panel widths must pass
+#'   the right one itself.
+#' @return list(labels, lines, truncated)
+.fit_labels <- function(labels, cex = 1, side = 2L, max_frac = 0.38, extra = 1.1,
+                        fig = NULL) {
+  labels <- as.character(labels)
+  if (!length(labels)) return(list(labels = labels, lines = extra, truncated = FALSE))
+  lh <- graphics::par("csi")
+  if (!is.finite(lh) || lh <= 0) lh <- 0.2
+  if (is.null(fig)) {
+    fin <- graphics::par("fin")
+    if (length(fin) != 2L || !all(is.finite(fin)) || any(fin <= 0)) fin <- graphics::par("din")
+    fig <- fin[if (side %in% c(2L, 4L)) 1L else 2L]
+  }
+  avail <- max_frac * fig
+  out <- vapply(labels, .truncate_in, character(1), avail = avail, cex = cex,
+                USE.NAMES = FALSE)
+  list(labels = out,
+       lines = max(.str_in(out, cex), 0) / lh + extra,
+       truncated = !identical(out, labels))
+}
+
+#' Extend a data range so labels drawn *inside* the plot region still fit.
+#'
+#' Call this after par(mar = ) and before plot(): it needs the width of the plot
+#' region, which mar determines. Defaults to par("pin"); pass `pin` explicitly
+#' under layout(), for the same reason .fit_labels() takes `fig`.
+.pad_range <- function(rng, labels, cex, side = c("right", "left"), gap_chars = 0.5,
+                       pin = NULL) {
+  side <- match.arg(side)
+  if (!length(labels) || !all(is.finite(rng)) || diff(rng) <= 0) return(rng)
+  if (is.null(pin)) pin <- graphics::par("pin")[1L]
+  if (!is.finite(pin) || pin <= 0) return(rng)
+  need <- max(.str_in(labels, cex)) + gap_chars * graphics::par("cin")[1L] * cex
+  f <- min(need / pin, 0.6)                       # never surrender the plot region
+  ext <- diff(rng) * f / (1 - f)
+  if (side == "right") c(rng[1L], rng[2L] + ext) else c(rng[1L] - ext, rng[2L])
+}
+
+# ---------------------------------------------------------------------------
 # Wright map (person-item map; WINSTEPS Tables 1 / 12 / 16)
 # ---------------------------------------------------------------------------
 
@@ -97,13 +201,6 @@ plot_wright <- function(fit, style = ws_style(), what = c("items", "thresholds")
   }
 
   ## --- right: item ladder ---------------------------------------------------
-  graphics::par(mar = c(4, 0.5, 3.5, 2.6))
-  graphics::plot(NA, xlim = c(0, 1), ylim = rng, axes = FALSE, xlab = "", ylab = "",
-                 main = if (what == "items") "ITEMS" else "ITEM THRESHOLDS",
-                 cex.main = style$cex_label + 0.15)
-  graphics::axis(4, at = pretty(rng, 8), las = 1, cex.axis = style$cex_label)
-  if (isTRUE(style$show_grid))
-    graphics::abline(h = pretty(rng, 8), col = style$col_ref, lty = 3)
   ord <- order(im)
   im <- im[ord]; lab <- lab[ord]
   if (length(im) > max_labels) {
@@ -118,9 +215,29 @@ plot_wright <- function(fit, style = ws_style(), what = c("items", "thresholds")
     xoff[j] <- col_i; last <- im[j]
   }
   xpos <- 0.06 + xoff * 0.12
+
+  imar <- c(4, 0.5, 3.5, 2.6)
+  graphics::par(mar = imar)
+  # Item names are drawn inside the panel, so the x range - which is arbitrary
+  # here - is widened until the longest of them fits. par("fin")/par("pin") still
+  # describe the left panel at this point, so this panel's geometry is derived
+  # from the layout widths set above (1 : 1.25) instead.
+  ifig <- graphics::par("din")[1L] * 1.25 / 2.25
+  ipin <- ifig - (imar[2L] + imar[4L]) * graphics::par("csi")
+  lcex <- style$cex_label * 0.9
+  fl   <- .fit_labels(lab, lcex, side = 4L, max_frac = 0.6, extra = 0, fig = ifig)
+  lab  <- fl$labels
+  xlim <- .pad_range(c(0, max(xpos, 0.06) + 0.03), lab, lcex, "right",
+                     gap_chars = 0, pin = ipin)
+  graphics::plot(NA, xlim = xlim, ylim = rng, axes = FALSE, xlab = "", ylab = "",
+                 main = if (what == "items") "ITEMS" else "ITEM THRESHOLDS",
+                 cex.main = style$cex_label + 0.15)
+  graphics::axis(4, at = pretty(rng, 8), las = 1, cex.axis = style$cex_label)
+  if (isTRUE(style$show_grid))
+    graphics::abline(h = pretty(rng, 8), col = style$col_ref, lty = 3)
   graphics::points(xpos, im, pch = 22, bg = style$col_item, col = style$col_border,
                    cex = style$cex_point)
-  graphics::text(xpos + 0.03, im, lab, adj = 0, cex = style$cex_label * 0.9)
+  graphics::text(xpos + 0.03, im, lab, adj = 0, cex = lcex)
   graphics::mtext("logits", side = 4, line = 2.4, cex = style$cex_label)
   graphics::mtext(main, side = 3, line = 0.2, outer = TRUE, cex = style$cex_label + 0.35, font = 2)
   if (isTRUE(style$show_msT)) {
@@ -306,9 +423,17 @@ plot_pathway <- function(fit, style = ws_style(), margin = c("items", "persons")
   cexv <- style$cex_point * (0.6 + 2.2 * (se[ok] - min(se[ok], na.rm = TRUE)) /
                                max(diff(range(se[ok], na.rm = TRUE)), 1e-9))
   graphics::par(mar = c(4.5, 4.5, 3.5, 1))
+  # Point labels are drawn to the right of each bubble; widen x so they fit.
+  lcex <- style$cex_label * 0.75
+  showlab <- sum(ok) <= 80
+  labs <- if (showlab) .fit_labels(lab[ok], lcex, side = 4L, max_frac = 0.45,
+                                  extra = 0)$labels else character(0)
+  xlim <- if (sum(ok) > 1L && diff(range(x[ok])) > 0) grDevices::extendrange(x[ok]) else NULL
+  if (showlab && !is.null(xlim))
+    xlim <- .pad_range(xlim, labs, lcex, "right", gap_chars = 0.4)
   graphics::plot(x[ok], y[ok], pch = 21,
                  bg = if (margin == "items") style$col_item else style$col_person,
-                 col = style$col_border, cex = cexv,
+                 col = style$col_border, cex = cexv, xlim = xlim,
                  xlab = "Measure (logits)",
                  ylab = switch(stat, infit_zstd = "Infit ZSTD", outfit_zstd = "Outfit ZSTD",
                                infit_mnsq = "Infit MNSQ", outfit_mnsq = "Outfit MNSQ"),
@@ -318,8 +443,8 @@ plot_pathway <- function(fit, style = ws_style(), margin = c("items", "persons")
   ref <- if (grepl("zstd", stat)) c(-2, 2) else c(0.5, 1.5)
   graphics::abline(h = ref, col = style$col_line, lty = 2, lwd = style$lwd)
   graphics::abline(h = if (grepl("zstd", stat)) 0 else 1, col = style$col_ref)
-  if (sum(ok) <= 80)
-    graphics::text(x[ok], y[ok], lab[ok], pos = 4, cex = style$cex_label * 0.75, offset = 0.4)
+  if (showlab)
+    graphics::text(x[ok], y[ok], labs, pos = 4, cex = lcex, offset = 0.4)
   invisible(NULL)
 }
 
@@ -363,18 +488,24 @@ plot_pca_contrast <- function(pca, contrast = 1, style = ws_style()) {
   cl <- ld$Cluster
   cols <- .pal(3, style$palette)
   graphics::par(mar = c(4.5, 4.5, 3.5, 1))
+  lcex <- style$cex_label * 0.75
+  ilab <- .fit_labels(ld$Item, lcex, side = 4L, max_frac = 0.45, extra = 0)$labels
+  xlim <- if (length(ld$Measure) > 1L && diff(range(ld$Measure, na.rm = TRUE)) > 0)
+    .pad_range(grDevices::extendrange(ld$Measure), ilab, lcex, "right", gap_chars = 0.4)
+  else NULL
   graphics::plot(ld$Measure, y, pch = 21, bg = cols[cl], col = style$col_border,
                  cex = style$cex_point + 0.3,
                  xlab = "Item measure (logits)",
                  ylab = sprintf("Loading on contrast %d", contrast),
                  main = sprintf("Contrast %d loading plot (eigenvalue %.2f)",
                                 contrast, pca$eigenvalues[contrast]),
+                 xlim = xlim,
                  ylim = range(c(y, -0.6, 0.6)),
                  cex.lab = style$cex_label + 0.1, cex.main = style$cex_label + 0.2)
   .grid(style, h = FALSE); .grid(style, h = TRUE)
   graphics::abline(h = 0, col = style$col_line, lwd = style$lwd)
   graphics::abline(h = c(-0.4, 0.4), col = style$col_ref, lty = 2)
-  graphics::text(ld$Measure, y, ld$Item, pos = 4, cex = style$cex_label * 0.75, offset = 0.4)
+  graphics::text(ld$Measure, y, ilab, pos = 4, cex = lcex, offset = 0.4)
   graphics::legend("bottomright", paste("Cluster", 1:3), pt.bg = cols, pch = 21,
                    bty = "n", cex = style$cex_label * 0.85)
   invisible(NULL)
@@ -391,15 +522,19 @@ plot_dif <- function(dif, style = ws_style(), errbars = TRUE) {
   se  <- attr(dif, "local_se")
   items <- rownames(loc)
   cols <- .pal(max(length(lv), 3), style$palette)[seq_along(lv)]
-  graphics::par(mar = c(7, 4.5, 3.5, 1))
+  # Item names are rotated into the bottom margin (las = 2), so that margin has
+  # to be as deep as the longest name is wide.
+  lcex <- style$cex_label * 0.85
+  fl <- .fit_labels(items, lcex, side = 1L)
+  graphics::par(mar = c(fl$lines, 4.5, 3.5, 1))
   yl <- range(c(loc - 2 * se, loc + 2 * se), na.rm = TRUE)
   graphics::plot(NA, xlim = c(0.5, nrow(loc) + 0.5), ylim = yl, xaxt = "n",
                  xlab = "", ylab = "Local item difficulty (logits)",
                  main = "DIF measures by person class (Rasch-Welch)",
                  cex.lab = style$cex_label + 0.1, cex.main = style$cex_label + 0.2)
   .grid(style, h = TRUE)
-  graphics::axis(1, at = seq_len(nrow(loc)), labels = items, las = 2,
-                 cex.axis = style$cex_label * 0.85)
+  graphics::axis(1, at = seq_len(nrow(loc)), labels = fl$labels, las = 2,
+                 cex.axis = lcex)
   for (j in seq_along(lv)) {
     x <- seq_len(nrow(loc)) + (j - (length(lv) + 1) / 2) * 0.12
     if (errbars)
@@ -419,10 +554,12 @@ plot_dif <- function(dif, style = ws_style(), errbars = TRUE) {
 plot_dif_contrast <- function(dif, style = ws_style()) {
   d <- dif[order(dif$Entry), ]
   cols <- c(A = style$col_ref, B = style$col_person, C = style$col_item)
-  graphics::par(mar = c(7, 4.5, 3.5, 1))
+  lcex <- style$cex_label * 0.85
+  fl <- .fit_labels(d$Item, lcex, side = 1L)
+  graphics::par(mar = c(fl$lines, 4.5, 3.5, 1))
   bp <- graphics::barplot(d$DIF_Contrast, col = cols[d$ETS_Class], border = style$col_border,
-                          ylab = "DIF contrast (logits)", names.arg = d$Item, las = 2,
-                          cex.names = style$cex_label * 0.85,
+                          ylab = "DIF contrast (logits)", names.arg = fl$labels, las = 2,
+                          cex.names = lcex,
                           main = sprintf("DIF contrast: %s minus %s (ETS classification)",
                                          d$Class_A[1], d$Class_B[1]),
                           cex.lab = style$cex_label + 0.1, cex.main = style$cex_label + 0.2,

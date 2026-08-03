@@ -22,6 +22,7 @@ source("house_modules.R")
 source("rasch_engine.R")
 source("winsteps_plots.R")
 source("winstepper_extras.R")
+source("winstepper_cmle.R")
 
 PKGS <- c("shiny", "bslib", "shinyWidgets", "colourpicker", "DT", "readr",
           "readxl", "haven", "tidyr", "tidyselect", "RColorBrewer")
@@ -260,9 +261,29 @@ panel_estimate <- bslib::nav_panel(
                            "None (data already 0..m)" = "none")),
       shiny::hr(),
       shiny::strong("Estimation controls"),
-      shiny::numericInput("maxit", "Max JMLE iterations (MJMLE=)", 400, 10, 5000),
-      shiny::numericInput("lconv", "Convergence: max logit change (LCONV=)", 1e-4),
-      shiny::numericInput("rconv", "Convergence: max score residual (RCONV=)", 1e-3),
+      shiny::radioButtons("method", "Estimation method",
+                          c("JMLE (joint; WINSTEPS default)" = "jmle",
+                            "CMLE (conditional)" = "cmle")),
+      shiny::conditionalPanel(
+        "input.method == 'cmle'",
+        shiny::helpText(shiny::HTML(
+          "CML conditions each response pattern on its person raw score, so the ",
+          "person parameters drop out and the item estimates are consistent &mdash; ",
+          "the ~L/(L&minus;1) spread inflation JMLE carries is absent by ",
+          "construction. Persons are then measured with the items anchored. ",
+          "Slower than JMLE, and proportionally slower again when the data ",
+          "contain many distinct missing-data patterns."))),
+      shiny::numericInput("maxit", "Max iterations (MJMLE=)", 400, 10, 5000),
+      shiny::conditionalPanel(
+        "input.method == 'jmle'",
+        shiny::numericInput("lconv", "Convergence: max logit change (LCONV=)", 1e-4),
+        shiny::numericInput("rconv", "Convergence: max score residual (RCONV=)", 1e-3)),
+      shiny::conditionalPanel(
+        "input.method == 'cmle'",
+        shiny::numericInput("cconv", "Convergence: max score residual", 1e-3),
+        shiny::radioButtons("cstart", "Starting values",
+                            c("Short JMLE run" = "jmle", "PROX" = "prox"), inline = TRUE),
+        shiny::helpText("The conditional likelihood is strictly concave for connected data, so the starting values change only the speed, not the solution.")),
       shiny::numericInput("extrsc", "Extreme score adjustment (EXTRSCORE=)", 0.3, 0.05, 0.5, 0.05),
       shiny::radioButtons("center", "Centring", c("Items (UIMEAN=0)" = "items",
                                                   "Persons (UPMEAN=0)" = "persons"), inline = TRUE),
@@ -288,7 +309,10 @@ panel_estimate <- bslib::nav_panel(
       bslib::card(bslib::card_header("Data notes"),
                   shiny::verbatimTextOutput("prep_notes"))),
     fig_card("Convergence trace", "fig_conv", "300px",
-             "Max |parameter change| per JMLE iteration; dashed line = LCONV=.")
+             paste("JMLE: max |parameter change| per iteration (dashed line = LCONV=).",
+                   "CMLE: max |score residual| per gradient evaluation, which the",
+                   "line search need not make monotone (dashed line = the residual",
+                   "tolerance)."))
   ))
 
 panel_summary <- bslib::nav_panel(
@@ -667,7 +691,8 @@ server <- function(input, output, session) {
                    steps = shiny::reactiveVal(list()))
   record_step("setup", "Loaded the Rasch engine, plotting helpers and WINSTEPPER extras",
              c('source("rasch_engine.R")', 'source("winsteps_plots.R")',
-               'source("winstepper_extras.R")   # keyform, DGF, corrected category diagnostics'))
+               'source("winstepper_extras.R")   # keyform, DGF, corrected category diagnostics',
+               'source("winstepper_cmle.R")     # conditional maximum likelihood'))
 
   ## ---- data (rules 1 + 2) --------------------------------------------------
   demo <- shiny::reactiveVal(NULL)
@@ -858,21 +883,38 @@ server <- function(input, output, session) {
   ## ---- estimation ---------------------------------------------------------
   fit <- shiny::eventReactive(refit(), ignoreInit = TRUE, {
     p <- prep()
-    shiny::withProgress(message = "Running JMLE...", value = 0.3, {
-      f <- rasch_jmle(p, maxit = input$maxit, conv = input$lconv, rconv = input$rconv,
-                      extreme_adj = input$extrsc, center = input$center)
+    cml <- identical(input$method, "cmle")
+    shiny::withProgress(message = if (cml) "Running CMLE..." else "Running JMLE...",
+                        value = 0.3, {
+      f <- if (cml)
+        rasch_cmle(p, maxit = input$maxit, conv = input$cconv %||% 1e-3,
+                   extreme_adj = input$extrsc, start = input$cstart %||% "jmle",
+                   center = input$center)
+      else
+        rasch_jmle(p, maxit = input$maxit, conv = input$lconv, rconv = input$rconv,
+                   extreme_adj = input$extrsc, center = input$center)
       shiny::setProgress(1)
       f
     })
   })
 
+  # The method the CURRENT fit was produced with. Read this, never input$method,
+  # anywhere that describes a result: the radio can be changed without pressing
+  # Estimate, and the report would then describe an estimator that did not run.
+  fit_method <- function() (fit()$settings$method %||% "JMLE")
+
   shiny::observeEvent(fit(), {
     f <- fit()
     record_step("estimate",
-               sprintf("Estimated the Rasch model by JMLE (%d iterations, converged = %s)",
-                       f$iterations, f$converged),
-               sprintf('fit <- rasch_jmle(prep, maxit = %d, conv = %g, rconv = %g,\n  extreme_adj = %g, center = "%s")',
-                       input$maxit, input$lconv, input$rconv, input$extrsc, input$center))
+               sprintf("Estimated the Rasch model by %s (%d iterations, converged = %s)",
+                       fit_method(), f$iterations, f$converged),
+               if (identical(fit_method(), "CMLE"))
+                 sprintf('fit <- rasch_cmle(prep, maxit = %d, conv = %g,\n  extreme_adj = %g, start = "%s", center = "%s")',
+                         input$maxit, input$cconv %||% 1e-3, input$extrsc,
+                         input$cstart %||% "jmle", input$center)
+               else
+                 sprintf('fit <- rasch_jmle(prep, maxit = %d, conv = %g, rconv = %g,\n  extreme_adj = %g, center = "%s")',
+                         input$maxit, input$lconv, input$rconv, input$extrsc, input$center))
     shiny::updateSelectInput(session, "cat_group", choices = names(f$tau))
     shiny::updateSelectInput(session, "cat_item", choices = c("(group average)", f$item_id))
     shiny::updateSelectInput(session, "graph_item", choices = f$item_id)
@@ -904,7 +946,7 @@ server <- function(input, output, session) {
   })
   output$vb_iter <- shiny::renderUI({
     shiny::req(fit()); f <- fit()
-    vb("JMLE iterations", sprintf("%d", f$iterations), "rotate", "primary")
+    vb(sprintf("%s iterations", fit_method()), sprintf("%d", f$iterations), "rotate", "primary")
   })
   output$vb_conv <- shiny::renderUI({
     shiny::req(fit()); f <- fit()
@@ -978,14 +1020,23 @@ server <- function(input, output, session) {
       sprintf("Observations: %d   Missing: %.1f%%", sum(f$mask), 100 * mean(!f$mask)),
       sprintf("Rating-scale groups: %d   Max categories: %s",
               length(f$tau), paste(f$max_cat, collapse = ", ")),
-      sprintf("JMLE iterations: %d   Converged: %s   Final max|change|: %.2e",
-              f$iterations, f$converged, utils::tail(f$change_history, 1)),
+      sprintf("%s iterations: %d   Converged: %s   Final max|residual|: %.2e",
+              fit_method(), f$iterations, f$converged, utils::tail(f$change_history, 1)),
+      if (!is.null(f$cml))
+        sprintf("Conditional log-likelihood: %.4f   Free item parameters: %d   Missing-data patterns: %d",
+                f$cml$logLik, f$cml$n_free, f$cml$n_patterns) else NULL,
       sprintf("Item measure mean/SD: %.3f / %.3f", mean(f$delta, na.rm = TRUE),
               stats::sd(f$delta, na.rm = TRUE)),
       sprintf("Person measure mean/SD: %.3f / %.3f", mean(f$theta, na.rm = TRUE),
               stats::sd(f$theta, na.rm = TRUE)),
       if (!f$converged)
-        "\nWARNING: JMLE did not reach the convergence criteria. Increase MJMLE= or loosen LCONV=/RCONV= and check for sparse or disconnected data." else "",
+        sprintf("\nWARNING: %s did not reach the convergence criteria. %s",
+                fit_method(),
+                if (identical(fit_method(), "CMLE"))
+                  "Raise the iteration cap or loosen the residual tolerance, and check for sparse or disconnected data."
+                else
+                  "Increase MJMLE= or loosen LCONV=/RCONV= and check for sparse or disconnected data.")
+      else "",
       sep = "\n")
   })
   output$prep_notes <- shiny::renderText({
@@ -1057,11 +1108,15 @@ server <- function(input, output, session) {
   mod_fig_server("fig_conv", function() {
     shiny::req(fit()); f <- fit(); s <- style()
     graphics::par(mar = c(4.5, 4.5, 2, 1))
-    graphics::plot(seq_along(f$change_history), f$change_history, type = "b", log = "y",
+    cml <- identical(fit_method(), "CMLE")
+    graphics::plot(seq_along(f$change_history), pmax(f$change_history, 1e-16),
+                   type = "b", log = "y",
                    pch = 21, bg = s$col_item, col = s$col_border, lwd = s$lwd,
-                   xlab = "JMLE iteration", ylab = "max |parameter change| (logits)",
+                   xlab = if (cml) "CMLE gradient evaluation" else "JMLE iteration",
+                   ylab = if (cml) "max |score residual|" else "max |parameter change| (logits)",
                    main = "Convergence", cex.lab = s$cex_label + .1)
-    graphics::abline(h = input$lconv, col = s$col_line, lty = 2, lwd = s$lwd)
+    graphics::abline(h = if (cml) (input$cconv %||% 1e-3) else input$lconv,
+                     col = s$col_line, lty = 2, lwd = s$lwd)
     graphics::grid(col = s$col_ref, lty = 3)
   }, "convergence")
 
@@ -1477,7 +1532,10 @@ This is a redesigned interface built on the same estimation engine
 model, the Andrich Rating Scale Model and the Masters Partial Credit Model, with
 item grouping, extreme-score handling, INFIT/OUTFIT statistics, separation and
 reliability, category structure statistics, DIF, and the WINSTEPS Table 23 variance
-decomposition. The engine is unchanged, so the numbers are the audited ones.</p>
+decomposition. The engine is unchanged, so the numbers are the audited ones.
+<b>CMLE</b> (conditional maximum likelihood, <code>winstepper_cmle.R</code>) is
+offered alongside JMLE as a WINSTEPPER addition; it estimates the item side only,
+after which persons are measured with the items anchored.</p>
 
 <h4>What has been verified (engine)</h4>
 <ul>
@@ -1493,13 +1551,32 @@ the observed and model-expected variance-explained percentages in Table 23 agree
 to within a few hundredths of a percent.</li>
 </ul>
 
+<h4>What has been verified (CMLE)</h4>
+<p>By <code>test_cmle.R</code>, which you should run before trusting a CML result:</p>
+<ul>
+<li>The elementary symmetric functions match brute-force enumeration of every
+response pattern to 1e-10 on a small test.</li>
+<li>On a two-item dichotomous test the estimate matches the closed form
+delta<sub>1</sub>&minus;delta<sub>2</sub> = log(n<sub>10</sub>/n<sub>01</sub>).</li>
+<li>At the solution the CML equations hold: observed item scores and observed
+cumulative category counts equal their conditional expectations.</li>
+<li>Item and threshold parameters are recovered from simulated dichotomous, RSM
+and PCM data, and the JMLE spread exceeds the CML spread by roughly the expected
+L/(L&minus;1) on dichotomous data.</li>
+</ul>
+
 <h4>Where this differs from WINSTEPS 5.11 - please read</h4>
 <ul>
 <li><b>Not byte-identical.</b> WINSTEPS uses proprietary convergence acceleration
 and its own missing-data and extreme-score conventions. Expect agreement to about
 two decimals on well-behaved data, and larger differences on sparse, disconnected
 or barely-converged data sets.</li>
-<li><b>No JMLE bias correction.</b> There is no STBIAS= equivalent here.</li>
+<li><b>No JMLE bias correction.</b> There is no STBIAS= equivalent here. If the
+JMLE spread inflation matters for your purpose, estimate by <b>CMLE</b> instead
+(Estimate tab): conditioning on the person raw score removes the person
+parameters, so the item estimates are consistent as N grows with the test length
+fixed and the bias is absent by construction rather than corrected after the
+fact. Note this is our own CML implementation, not WINSTEPS&#39;.</li>
 <li><b>Category INFIT MNSQ.</b> Reported as the information-weighted mean squared
 residual within the category. Unlike the category OUTFIT it is not centred on 1.0
 in the extreme categories; Linacre&#39;s &lt; 2.0 guideline applies to the OUTFIT column.</li>
@@ -1509,6 +1586,13 @@ ln((k+1)(m+1&minus;k)/(k(m&minus;k))), not the flat &ldquo;1.4 logits&rdquo; oft
 quoted &mdash; 1.4 is only the three-category case (2&nbsp;ln&nbsp;2 = 1.386).
 For 4 categories the requirement is 1.10, for 5 it is 0.98/0.81/0.98
 (Linacre, <i>RMT</i> 2006, 20:1, p. 1052).</li>
+<li><b>CMLE is our own implementation</b>, not WINSTEPS&#39;, and the two will not
+agree to the last decimal. It estimates the item side by conditional maximum
+likelihood; person measures are then ordinary anchored ML estimates from the raw
+score, and every fit statistic, reliability and residual table downstream is
+computed exactly as it is for a JMLE fit. Item standard errors come from the
+observed information of the conditional likelihood, so they are conditionally
+correct and do not carry the person-estimation uncertainty.</li>
 <li><b>PCA clusters</b> are tertiles of the first-contrast loadings, an
 approximation to the WINSTEPS three-cluster split.</li>
 <li><b>Keyform (Table 2.2)</b> is the general expected-score keyform, with
@@ -1526,7 +1610,7 @@ you actually ran.</li>
 </ul>
 
 <h4>Suggested reporting</h4>
-<p>Report the model (RSM/PCM), the estimation method (JMLE), the convergence
+<p>Report the model (RSM/PCM), the estimation method (JMLE or CMLE), the convergence
 criteria, how extreme scores were handled, person and item separation and
 reliability, the fit criteria you applied and the number of misfitting items,
 the category-quality evidence, the first-contrast eigenvalue <em>with</em> a
