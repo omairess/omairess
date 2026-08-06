@@ -289,3 +289,49 @@ label.lang select { width: auto; margin-top: 0; padding: 6px 10px; font-size: 14
   text-shadow: 0 0 30px rgba(255, 60, 40, 0.35);
 }
 .clock.frozen { color: #e8eaf0; text-shadow: none; }
+
+/* ---- persistent sleep-onset alarm ---- */
+/* A class rule with display:flex outranks the UA rule for [hidden], so the
+   hidden state has to be restated explicitly or the bar never goes away. */
+.alarm-bar[hidden] { display: none; }
+.alarm-bar {
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  padding: 14px 20px;
+  background: #7a1f1f;
+  color: #fff;
+  font-size: 16px;
+  font-weight: 600;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+  animation: alarm-flash 1s steps(2, end) infinite;
+}
+@keyframes alarm-flash { 50% { background: #a52a2a; } }
+.alarm-bar button {
+  background: #fff;
+  color: #7a1f1f;
+  border: none;
+  font-weight: 700;
+  padding: 9px 20px;
+  animation: none;
+}
+
+/* ---- floating language control ---- */
+label.lang-fixed {
+  position: fixed;
+  top: 14px;
+  right: 18px;
+  z-index: 500;
+  margin: 0;
+  padding: 6px 10px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+/* Nothing but the task may be on screen while a trial is running. */
+body[data-screen="screen-task"] label.lang-fixed,
+body[data-screen="screen-countdown"] label.lang-fixed { display: none; }

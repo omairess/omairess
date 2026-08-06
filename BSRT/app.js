@@ -42,6 +42,7 @@ var kssAfter = null;
 var kssStage = null;          // 'before' | 'after'
 var clockRaf = null;
 var audioCtx = null;
+var alarmNodes = null;
 
 /* ---------------- helpers ---------------- */
 
@@ -51,6 +52,8 @@ function show(id) {
   var all = document.querySelectorAll('.screen');
   for (var i = 0; i < all.length; i++) all[i].classList.remove('active');
   $(id).classList.add('active');
+  // Lets CSS hide the floating language control on the dark task screens.
+  document.body.setAttribute('data-screen', id);
 }
 
 function intVal(id, fb) { var n = parseInt($(id).value, 10); return isFinite(n) ? n : fb; }
@@ -121,6 +124,7 @@ function saveSession(r) {
   function applyLanguage() {
   L.setLanguage($('language').value);
   L.applyTranslations(document);
+  $('lapseHint').textContent = L.t(intVal('maxMinutes', 40) < 5 ? 'lapse.short' : 'lapse.regular');
   applyMode();
   if (lastResult) renderResult(lastResult);
 }
@@ -130,9 +134,7 @@ function applyMode() {
   document.body.setAttribute('data-mode', mode);
   // A PVT runs for a fixed duration; the sleep-onset criterion is an OSLER idea.
   $('criterionOn').checked = mode !== 'pvt';
-  $('modeNote').textContent = mode === 'pvt'
-    ? 'PVT: intervals vary within each block, drawn so that every block contains one of each. The stimulus is a millisecond counter; the sleep-onset criterion is off by default.'
-    : 'BSRT / OSLER: a fixed interval between stimuli, with sleep onset scored from consecutive misses.';
+  $('modeNote').textContent = L.t(mode === 'pvt' ? 'mode.notePvt' : 'mode.noteBsrt');
   $('instructionsText').textContent = L.t(mode === 'pvt' ? 'instructions.pvt' : 'instructions.bsrt');
   $('taskHint').textContent = L.t(mode === 'pvt' ? 'task.hintPvt' : 'task.hintBsrt');
 }
@@ -159,9 +161,12 @@ function releaseWakeLock() {
 /* ---------------- alarm ---------------- */
 
 /*
- * Synthesised rather than a sound file, so the app stays dependency-free and
- * works offline. The context is created on the Start click, which is the user
- * gesture browsers require before audio may play.
+ * A continuous pulsing alert, not a one-shot beep: it keeps sounding until the
+ * experimenter presses Stop, so a sleep-onset event cannot be missed by someone
+ * who stepped away. Synthesised rather than played from a file, so the app stays
+ * dependency-free and works offline.
+ *
+ * A square carrier gated by a square LFO gives the familiar on/off alarm pulse.
  */
 function initAudio() {
   if (audioCtx) return;
@@ -171,26 +176,45 @@ function initAudio() {
   } catch (e) { audioCtx = null; }
 }
 
-function playAlarm() {
-  if (!cfg || !cfg.alarm || !audioCtx) return;
+function startAlarm() {
+  if (!cfg || !cfg.alarm || !audioCtx || alarmNodes) return;
   try {
     if (audioCtx.state === 'suspended') audioCtx.resume();
-    var t0 = audioCtx.currentTime;
-    for (var i = 0; i < 3; i++) {
-      var start = t0 + i * 0.35;
-      var osc = audioCtx.createOscillator();
-      var gain = audioCtx.createGain();
-      osc.type = 'square';
-      osc.frequency.setValueAtTime(880, start);
-      gain.gain.setValueAtTime(0.0001, start);
-      gain.gain.exponentialRampToValueAtTime(0.25, start + 0.02);
-      gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.30);
-      osc.connect(gain);
-      gain.connect(audioCtx.destination);
-      osc.start(start);
-      osc.stop(start + 0.32);
-    }
-  } catch (e) { /* audio is a convenience, never a reason to lose a trial */ }
+    var carrier = audioCtx.createOscillator();
+    var gate = audioCtx.createGain();
+    var lfo = audioCtx.createOscillator();
+    var lfoDepth = audioCtx.createGain();
+
+    carrier.type = 'square';
+    carrier.frequency.value = 880;
+    lfo.type = 'square';
+    lfo.frequency.value = 4;          // four pulses a second
+    lfoDepth.gain.value = 0.11;
+    gate.gain.value = 0.11;           // swings between silence and ~0.22
+
+    lfo.connect(lfoDepth);
+    lfoDepth.connect(gate.gain);
+    carrier.connect(gate);
+    gate.connect(audioCtx.destination);
+    carrier.start();
+    lfo.start();
+
+    alarmNodes = { carrier: carrier, lfo: lfo, gate: gate };
+    $('alarmBar').hidden = false;
+  } catch (e) { alarmNodes = null; }
+}
+
+function stopAlarm() {
+  if (alarmNodes) {
+    try {
+      alarmNodes.carrier.stop();
+      alarmNodes.lfo.stop();
+      alarmNodes.gate.disconnect();
+    } catch (e) { /* already stopped */ }
+    alarmNodes = null;
+  }
+  var bar = $('alarmBar');
+  if (bar) bar.hidden = true;
 }
 
 /* ---------------- trial ---------------- */
@@ -208,17 +232,17 @@ function validate() {
 
   if (mode === 'pvt') {
     var set = parseIsiSet();
-    if (set.length < 2) return 'Give at least two inter-stimulus intervals, in seconds (e.g. 2, 4, 6, 8, 10).';
-    if (intVal('blockMs', 30) < 1) return 'Block length must be at least 1 second.';
+    if (set.length < 2) return L.t('err.isiSet');
+    if (intVal('blockMs', 30) < 1) return L.t('err.blockMin');
     shortestIsi = Math.min.apply(null, set);
   } else {
     shortestIsi = intVal('isiMs', 3000);
-    if (shortestIsi < 200) return 'Stimulus interval must be at least 200 ms.';
+    if (shortestIsi < 200) return L.t('err.isiMin');
   }
 
-  if (stim >= shortestIsi) return 'Stimulus duration must be shorter than the shortest stimulus interval (' + shortestIsi + ' ms).';
-  if (intVal('maxMinutes', 40) < 1) return 'Maximum duration must be at least 1 minute.';
-  if (intVal('lapseMs', 500) >= stim) return 'The lapse threshold must be below the hit window (stimulus duration).';
+  if (stim >= shortestIsi) return L.t('err.stimShort', { ms: shortestIsi });
+  if (intVal('maxMinutes', 40) < 1) return L.t('err.maxMin');
+  if (intVal('lapseMs', 500) >= stim) return L.t('err.lapseBelow');
   return null;
 }
 
@@ -290,6 +314,7 @@ function beginTrial() {
   kssAfter = null;
 
   initAudio();
+  stopAlarm();
   requestWakeLock();
   if ($('useFullscreen').checked && document.documentElement.requestFullscreen) {
     document.documentElement.requestFullscreen().catch(function () {});
@@ -500,7 +525,7 @@ function endTask(reason) {
   releaseWakeLock();
   if (document.fullscreenElement && document.exitFullscreen) document.exitFullscreen().catch(function () {});
 
-  if (reason === 'sleep_onset') playAlarm();
+  if (reason === 'sleep_onset') startAlarm();
 
   pendingResult = buildResult(reason);
   if (cfg.kssWhen === 'after' || cfg.kssWhen === 'both') showKss('after');
@@ -571,23 +596,23 @@ function renderResult(r) {
   if (r.sleptBeforeMax) {
     $('mLatency').textContent = fmtClock(r.sleepOnsetMs);
     $('mLatencyFoot').textContent =
-      'to the first of ' + r.config.missCriterion + ' consecutive misses (criterion confirmed at ' +
-      fmtClock(r.sleepOnsetCriterionMs) + ')';
-    $('mOutcome').textContent = 'Sleep onset was scored before the ' + r.config.maxMinutes + '-minute ceiling.';
+      L.t('results.latencyFoot', { n: r.config.missCriterion, t: fmtClock(r.sleepOnsetCriterionMs) });
+    $('mOutcome').textContent = L.t('results.outcomeSlept', { n: r.config.maxMinutes });
   } else {
     $('mLatency').textContent = '> ' + fmtClock(r.config.maxMs);
-    $('mLatencyFoot').textContent = 'no sleep onset scored — censored at the maximum duration';
+    $('mLatencyFoot').textContent = L.t('results.censored');
     $('mOutcome').textContent = r.endReason === 'aborted'
-      ? 'The trial was ended early by the experimenter, so this is not a valid latency.'
-      : 'The participant stayed awake for the full ' + r.config.maxMinutes + ' minutes.';
+      ? L.t('results.outcomeAborted')
+      : L.t('results.outcomeFull', { n: r.config.maxMinutes });
   }
 
   $('oTrials').textContent = t.trials;
   $('oHitRatio').textContent = t.hitRatio == null ? '—' : (t.hitRatio * 100).toFixed(1) + '%';
   $('oHits').textContent = t.hits;
-  $('oMisses').textContent = t.misses + (t.lateResponses ? ' (' + t.lateResponses + ' late responses)' : '');
-  $('oLapses').textContent = t.lapses + ' (> ' + r.config.lapseMs + ' ms)';
-  $('oFalseStarts').textContent = t.falseStarts + ' (< ' + r.config.falseStartMs + ' ms)';
+  $('oMisses').textContent = t.lateResponses
+    ? L.t('results.lateSuffix', { n: t.misses, late: t.lateResponses }) : t.misses;
+  $('oLapses').textContent = L.t('results.lapseSuffix', { n: t.lapses, ms: r.config.lapseMs });
+  $('oFalseStarts').textContent = L.t('results.fsSuffix', { n: t.falseStarts, ms: r.config.falseStartMs });
   $('oEp12').textContent = e.ep1_2;
   $('oEp36').textContent = e.ep3_6;
   $('oEp7').textContent = e.ep7plus;
@@ -612,12 +637,10 @@ function renderResult(r) {
   $('rscFast').textContent = n3(t.corrFastest10Rs);
   $('rscSlow').textContent = n3(t.corrSlowest10Rs);
 
-  $('corrNote').textContent =
-    r.config.correction === 'none'
-      ? 'No correction applied — the corrected columns equal the raw ones.'
-      : 'Correction: ' + describeCorrection(r.config) + '. Removed ' +
-        t.nFalseStartsRemoved + ' false starts and ' + t.nOutliersRemoved +
-        ' outliers from ' + t.n + ' hits.';
+  $('corrNote').textContent = r.config.correction === 'none'
+    ? L.t('corr.none')
+    : L.t('corr.applied', { desc: describeCorrection(r.config),
+                            a: t.nFalseStartsRemoved, b: t.nOutliersRemoved, n: t.n });
 
   renderIntegrity(r);
   renderKss(r);
@@ -627,9 +650,11 @@ function renderResult(r) {
 function renderIntegrity(r) {
   var g = r.scored.integrity;
   $('inPresses').textContent = g.totalPresses;
-  $('inExtra').textContent = g.extraPresses + (g.extraRate ? ' (' + (g.extraRate * 100).toFixed(0) + '% of trials)' : '');
-  $('inBurst').textContent = g.burstMax + ' in ' + g.thresholds.burstWindowMs + ' ms';
-  $('inRapid').textContent = g.rapidPairs + ' under ' + g.thresholds.rapidGapMs + ' ms apart';
+  $('inExtra').textContent = g.extraRate
+    ? L.t('results.extraVal', { n: g.extraPresses, pct: (g.extraRate * 100).toFixed(0) })
+    : g.extraPresses;
+  $('inBurst').textContent = L.t('results.burstVal', { n: g.burstMax, ms: g.thresholds.burstWindowMs });
+  $('inRapid').textContent = L.t('results.rapidVal', { n: g.rapidPairs, ms: g.thresholds.rapidGapMs });
 
   var box = $('integrityVerdict');
   if (g.suspected) {
@@ -653,10 +678,10 @@ function renderKss(r) {
 }
 
 function describeCorrection(c) {
-  if (c.correction === 'falseStarts') return 'RT < ' + c.falseStartMs + ' ms removed';
-  if (c.correction === 'outliers') return 'RT beyond ' + c.sdMultiplier + ' SD removed';
-  if (c.correction === 'both') return 'RT < ' + c.falseStartMs + ' ms removed, then RT beyond ' + c.sdMultiplier + ' SD';
-  return 'none';
+  if (c.correction === 'falseStarts') return L.t('corr.descFs', { ms: c.falseStartMs });
+  if (c.correction === 'outliers') return L.t('corr.descOut', { sd: c.sdMultiplier });
+  if (c.correction === 'both') return L.t('corr.descBoth', { ms: c.falseStartMs, sd: c.sdMultiplier });
+  return L.t('corrections.none');
 }
 
 function renderPerMinute(r) {
@@ -685,9 +710,8 @@ function renderPerMinute(r) {
   }
 
   $('pmSlope').textContent = r.scored.dynamicsRs.slope == null
-    ? 'Not enough minutes to fit a trend.'
-    : 'Reaction-speed trend across the test: ' + n3(r.scored.dynamicsRs.slope) +
-      ' units per minute (negative = slowing down).';
+    ? L.t('results.noTrend')
+    : L.t('results.trend', { v: n3(r.scored.dynamicsRs.slope) });
 }
 
 /* ---------------- exports ---------------- */
@@ -797,7 +821,7 @@ function summaryRow(r) {
 
 function allRows(builder, header) {
   var all = loadSessions();
-  if (!all.length) { alert('No saved trials to export.'); return null; }
+  if (!all.length) { alert(L.t('export.none')); return null; }
   var rows = [];
   for (var i = 0; i < all.length; i++) rows = rows.concat(builder(all[i]));
   return toCsv(header, rows);
@@ -807,7 +831,10 @@ function allRows(builder, header) {
 
 $('btnStart').addEventListener('click', beginTrial);
 
+$('btnStopAlarm').addEventListener('click', stopAlarm);
+
 $('btnAgain').addEventListener('click', function () {
+  stopAlarm();
   $('trialNumber').value = intVal('trialNumber', 1) + 1;
   show('screen-setup');
 });
@@ -832,7 +859,7 @@ $('btnExportAllPm').addEventListener('click', function () {
 });
 $('btnExportAllSummary').addEventListener('click', function () {
   var all = loadSessions();
-  if (!all.length) { alert('No saved trials to export.'); return; }
+  if (!all.length) { alert(L.t('export.none')); return; }
   download('bsrt_all_summaries.csv', toCsv(SUMMARY_HEADER, all.map(summaryRow)));
 });
 
@@ -862,14 +889,13 @@ document.addEventListener('visibilitychange', function () {
 /* Suggest the short-protocol lapse threshold when the ceiling drops below 5 min. */
 $('maxMinutes').addEventListener('change', function () {
   var short = intVal('maxMinutes', 40) < 5;
-  $('lapseHint').textContent = short
-    ? 'Short protocol (< 5 min): 355 ms is the conventional lapse threshold.'
-    : 'Regular protocol: 500 ms is the conventional lapse threshold.';
+  $('lapseHint').textContent = L.t(short ? 'lapse.short' : 'lapse.regular');
 });
 
 function applyLanguage() {
   L.setLanguage($('language').value);
   L.applyTranslations(document);
+  $('lapseHint').textContent = L.t(intVal('maxMinutes', 40) < 5 ? 'lapse.short' : 'lapse.regular');
   applyMode();
   if (lastResult) renderResult(lastResult);
 }
@@ -879,9 +905,7 @@ function applyMode() {
   document.body.setAttribute('data-mode', mode);
   // A PVT runs for a fixed duration; the sleep-onset criterion is an OSLER idea.
   $('criterionOn').checked = mode !== 'pvt';
-  $('modeNote').textContent = mode === 'pvt'
-    ? 'PVT: intervals vary within each block, drawn so that every block contains one of each. The stimulus is a millisecond counter; the sleep-onset criterion is off by default.'
-    : 'BSRT / OSLER: a fixed interval between stimuli, with sleep onset scored from consecutive misses.';
+  $('modeNote').textContent = L.t(mode === 'pvt' ? 'mode.notePvt' : 'mode.noteBsrt');
   $('instructionsText').textContent = L.t(mode === 'pvt' ? 'instructions.pvt' : 'instructions.bsrt');
   $('taskHint').textContent = L.t(mode === 'pvt' ? 'task.hintPvt' : 'task.hintBsrt');
 }

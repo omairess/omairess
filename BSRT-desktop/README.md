@@ -53,8 +53,9 @@ the phone is a poor start to a testing session.
 
 ## Languages
 
-The interface runs in **English, French, Dutch and German**, switchable from the
-selector at the top. The language a participant saw is exported as `language`
+The interface runs in **English, French, Dutch and German**, switchable at any
+time from the selector in the top-right corner — including on the results
+screen, which re-renders in the new language. The language a participant saw is exported as `language`
 with every trial.
 
 **Translation status:** English is the source. The other three were produced for
@@ -109,10 +110,15 @@ decision is yours. Thresholds are exported with the data.
 
 ## Alarm
 
-When the sleep-onset criterion is reached, the app sounds a three-tone alarm.
-It is on by default and can be switched off; the setting is exported as
-`alarm_enabled`. The tone is synthesised rather than played from a file, so the
-app stays dependency-free and works offline.
+When the sleep-onset criterion is reached, a **continuous pulsing alert** starts
+and **keeps sounding until someone presses Stop**. A banner appears across the
+top of the window with the stop button, on whatever screen is showing — so a
+sleep-onset event cannot be missed by an experimenter who stepped away. It is on
+by default, can be switched off, and the setting is exported as `alarm_enabled`.
+
+The tone is synthesised (a square carrier gated by a 4 Hz square LFO) rather
+than played from a sound file, so the app stays dependency-free and works
+offline.
 
 ---
 

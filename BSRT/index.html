@@ -8,13 +8,7 @@
 </head>
 <body>
 
-<!-- ============ SETUP ============ -->
-<section id="screen-setup" class="screen active">
-  <div class="wrap">
-    <header>
-      <h1>BSRT</h1>
-      <p class="sub" data-i18n="app.subtitle">Behavioral Sleep Resistance Task and Psychomotor Vigilance Task.</p>
-      <label class="lang"><span data-i18n="lang.label">Language</span>
+<label class="lang lang-fixed"><span data-i18n="lang.label">Language</span>
         <select id="language">
           <option value="en" selected>English</option>
           <option value="fr">Français</option>
@@ -22,6 +16,19 @@
           <option value="de">Deutsch</option>
         </select>
       </label>
+
+<div id="alarmBar" class="alarm-bar" hidden>
+  <span data-i18n="alarm.playing">Sleep-onset alarm</span>
+  <button id="btnStopAlarm" class="danger" data-i18n="alarm.stop">Stop alert</button>
+</div>
+
+
+<!-- ============ SETUP ============ -->
+<section id="screen-setup" class="screen active">
+  <div class="wrap">
+    <header>
+      <h1>BSRT</h1>
+      <p class="sub" data-i18n="app.subtitle">Behavioral Sleep Resistance Task and Psychomotor Vigilance Task.</p>
     </header>
 
     <div class="card">
@@ -148,12 +155,12 @@
 <section id="screen-results" class="screen">
   <div class="wrap">
     <header>
-      <h1>Result</h1>
+      <h1 data-i18n="results.heading">Result</h1>
       <p class="sub" id="resultWho"></p>
     </header>
 
     <div class="card headline">
-      <span class="metric-label">Sleep onset</span>
+      <span class="metric-label" data-i18n="results.sleepOnset">Sleep onset</span>
       <span class="metric-value" id="mLatency">—</span>
       <span class="metric-foot" id="mLatencyFoot"></span>
       <p class="outcome" id="mOutcome"></p>
@@ -174,33 +181,33 @@
           <tr><th data-i18n="results.ep7">Error profile EP7+</th><td id="oEp7">—</td></tr>
         </tbody>
       </table>
-      <p class="note tight">Error profiles count <em>runs</em> of consecutive misses in each band, not individual missed trials.</p>
+      <p class="note tight" data-i18n="results.epNote">Error profiles count runs of consecutive misses in each band, not individual missed trials.</p>
     </div>
 
     <div class="card">
-      <h2>Total test — reaction time (ms)</h2>
+      <h2 data-i18n="results.rt">Total test — reaction time (ms)</h2>
       <table class="metrics two">
-        <thead><tr><th></th><td>Raw</td><td>Corrected</td></tr></thead>
+        <thead><tr><th></th><td data-i18n="results.raw">Raw</td><td data-i18n="results.corrected">Corrected</td></tr></thead>
         <tbody>
-          <tr><th>Average</th><td id="rtAvg">—</td><td id="rtcAvg">—</td></tr>
-          <tr><th>Median</th><td id="rtMedian">—</td><td id="rtcMedian">—</td></tr>
-          <tr><th>SD</th><td id="rtSd">—</td><td>—</td></tr>
-          <tr><th>10% fastest</th><td id="rtFast">—</td><td id="rtcFast">—</td></tr>
-          <tr><th>10% slowest</th><td id="rtSlow">—</td><td id="rtcSlow">—</td></tr>
+          <tr><th data-i18n="results.average">Average</th><td id="rtAvg">—</td><td id="rtcAvg">—</td></tr>
+          <tr><th data-i18n="results.median">Median</th><td id="rtMedian">—</td><td id="rtcMedian">—</td></tr>
+          <tr><th data-i18n="results.sd">SD</th><td id="rtSd">—</td><td>—</td></tr>
+          <tr><th data-i18n="results.fastest">10% fastest</th><td id="rtFast">—</td><td id="rtcFast">—</td></tr>
+          <tr><th data-i18n="results.slowest">10% slowest</th><td id="rtSlow">—</td><td id="rtcSlow">—</td></tr>
         </tbody>
       </table>
     </div>
 
     <div class="card">
-      <h2>Total test — reaction speed (1000/RT)</h2>
+      <h2 data-i18n="results.rs">Total test — reaction speed (1000/RT)</h2>
       <table class="metrics two">
-        <thead><tr><th></th><td>Raw</td><td>Corrected</td></tr></thead>
+        <thead><tr><th></th><td data-i18n="results.raw">Raw</td><td data-i18n="results.corrected">Corrected</td></tr></thead>
         <tbody>
-          <tr><th>Average</th><td id="rsAvg">—</td><td id="rscAvg">—</td></tr>
-          <tr><th>Median</th><td id="rsMedian">—</td><td id="rscMedian">—</td></tr>
-          <tr><th>SD</th><td id="rsSd">—</td><td>—</td></tr>
-          <tr><th>10% fastest</th><td id="rsFast">—</td><td id="rscFast">—</td></tr>
-          <tr><th>10% slowest</th><td id="rsSlow">—</td><td id="rscSlow">—</td></tr>
+          <tr><th data-i18n="results.average">Average</th><td id="rsAvg">—</td><td id="rscAvg">—</td></tr>
+          <tr><th data-i18n="results.median">Median</th><td id="rsMedian">—</td><td id="rscMedian">—</td></tr>
+          <tr><th data-i18n="results.sd">SD</th><td id="rsSd">—</td><td>—</td></tr>
+          <tr><th data-i18n="results.fastest">10% fastest</th><td id="rsFast">—</td><td id="rscFast">—</td></tr>
+          <tr><th data-i18n="results.slowest">10% slowest</th><td id="rsSlow">—</td><td id="rscSlow">—</td></tr>
         </tbody>
       </table>
       <p class="note tight" id="corrNote"></p>
@@ -210,10 +217,10 @@
       <h2 data-i18n="results.integrity">Response integrity</h2>
       <table class="metrics">
         <tbody>
-          <tr><th>Total presses</th><td id="inPresses">—</td></tr>
-          <tr><th>Presses beyond one per stimulus</th><td id="inExtra">—</td></tr>
-          <tr><th>Largest burst</th><td id="inBurst">—</td></tr>
-          <tr><th>Rapid consecutive presses</th><td id="inRapid">—</td></tr>
+          <tr><th data-i18n="results.presses">Total presses</th><td id="inPresses">—</td></tr>
+          <tr><th data-i18n="results.pressesExtra">Presses beyond one per stimulus</th><td id="inExtra">—</td></tr>
+          <tr><th data-i18n="results.burst">Largest burst</th><td id="inBurst">—</td></tr>
+          <tr><th data-i18n="results.rapid">Rapid consecutive presses</th><td id="inRapid">—</td></tr>
         </tbody>
       </table>
       <p id="integrityVerdict" class="note tight"></p>
@@ -235,9 +242,9 @@
         <table class="metrics pm">
           <thead>
             <tr>
-              <th>Min</th><th>Trials</th><th>Miss</th><th>Lapse</th>
-              <th>Avg RT</th><th>Med RT</th><th>SD RT</th><th>10% fast</th><th>10% slow</th>
-              <th>Avg RS</th><th>Med RS</th><th>Vel RS</th><th>Acc RS</th>
+              <th data-i18n="pm.min">Min</th><th data-i18n="pm.trials">Trials</th><th data-i18n="pm.miss">Miss</th><th data-i18n="pm.lapse">Lapse</th>
+              <th data-i18n="pm.avgRt">Avg RT</th><th data-i18n="pm.medRt">Med RT</th><th data-i18n="pm.sdRt">SD RT</th><th data-i18n="pm.fast">10% fast</th><th data-i18n="pm.slow">10% slow</th>
+              <th data-i18n="pm.avgRs">Avg RS</th><th data-i18n="pm.medRs">Med RS</th><th data-i18n="pm.velRs">Vel RS</th><th data-i18n="pm.accRs">Acc RS</th>
             </tr>
           </thead>
           <tbody id="pmBody"></tbody>
