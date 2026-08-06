@@ -51,6 +51,88 @@ the phone is a poor start to a testing session.
 
 ---
 
+## Languages
+
+The interface runs in **English, French, Dutch and German**, switchable from the
+selector at the top. The language a participant saw is exported as `language`
+with every trial.
+
+**Translation status:** English is the source. The other three were produced for
+this app and have **not** been through formal translation verification. The
+Karolinska Sleepiness Scale anchors in particular belong to a validated
+instrument — before publishing, check them against an officially validated
+translation for your language and correct `i18n.js` if they differ. Any string
+missing from a translation falls back to English rather than appearing blank.
+
+---
+
+## Karolinska Sleepiness Scale
+
+Optional, and independently schedulable: **not at all, before the task, after
+the task, or both**. The standard 9-point form is used, with an anchor on every
+step, presented one screen at a time between the setup screen and the countdown
+(and again after the task, before the results).
+
+Answers export as `kss_before` and `kss_after`, with `kss_when` recording what
+was requested. A trial with the KSS off exports empty cells rather than zeros,
+so "not asked" is never confused with "answered 0".
+
+---
+
+## False starts and response integrity
+
+A **false start** is a response between 0 and 100 ms after stimulus onset — too
+fast to be a genuine reaction. It applies to both paradigms, is flagged per
+trial as `false_start`, totalled as `total_false_starts`, and is what the
+"remove false starts" correction removes. The threshold is configurable and
+exported as `false_start_threshold_ms`.
+
+Continuous or repeated pressing is a way to fake alertness: hold or tap
+constantly and every stimulus gets a fast "response". The app measures three
+independent signals and reports all of them, so you can see *why* a trial was
+flagged:
+
+| Column | Meaning |
+|---|---|
+| `total_presses` | every keypress in the trial, including presses outside any stimulus |
+| `extra_presses` | presses beyond the first in an epoch |
+| `burst_max` | the most presses inside any 1-second window |
+| `rapid_pairs` | consecutive presses closer together than 200 ms |
+| `cheating_suspected` | 1 if any signal exceeded its threshold |
+| `cheating_reasons` | plain text naming which, and by how much |
+
+**This flags a trial for human review. It never alters scoring and never
+excludes data by itself** — a startled double-tap is not cheating, and the
+decision is yours. Thresholds are exported with the data.
+
+---
+
+## Alarm
+
+When the sleep-onset criterion is reached, the app sounds a three-tone alarm.
+It is on by default and can be switched off; the setting is exported as
+`alarm_enabled`. The tone is synthesised rather than played from a file, so the
+app stays dependency-free and works offline.
+
+---
+
+## The PVT stimulus
+
+In **PVT mode the stimulus is a millisecond counter**, as on a PVT-192: it
+appears and counts up from 0. Pressing stops it and the achieved reaction time
+stays on screen as feedback before clearing. If no response comes, it stops at
+the hit window.
+
+The counter is **display only** — reaction time is still measured from stimulus
+presentation to the keypress, never read off the digits. On the desktop build
+the counter is redrawn on the frame clock, so it advances in exact frame steps
+(0, 17, 33, 50 ms at 60 Hz) and redrawing cannot disturb epoch scheduling.
+
+**BSRT mode keeps the red dot.** The two paradigms use their conventional
+stimuli.
+
+---
+
 ## Two modes
 
 The task runs either paradigm; the only structural difference is how the

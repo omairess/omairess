@@ -77,22 +77,22 @@
 
   /*
    * Exclusions, applied in this order:
-   *   1. anticipations: RT < anticipationMs (default 100 ms)
+   *   1. false starts: RT < falseStartMs (default 100 ms)
    *   2. outliers: RT outside mean +/- sdMultiplier * SD
    *
-   * Order matters. Anticipations are removed first so they cannot drag the
+   * Order matters. False starts are removed first so they cannot drag the
    * mean and SD that define the outlier bounds. The bounds are computed within
    * whatever set is being summarised, so a per-minute correction uses that
    * minute's own mean and SD, and a whole-test correction uses the whole test's.
    */
   function applyCorrection(rts, opts) {
     var kept = rts.slice();
-    var nAnticipations = 0, nOutliers = 0, lo = null, hi = null;
+    var nFalseStarts = 0, nOutliers = 0, lo = null, hi = null;
 
-    if (opts.removeAnticipations) {
+    if (opts.removeFalseStarts) {
       var before = kept.length;
-      kept = kept.filter(function (v) { return v >= opts.anticipationMs; });
-      nAnticipations = before - kept.length;
+      kept = kept.filter(function (v) { return v >= opts.falseStartMs; });
+      nFalseStarts = before - kept.length;
     }
 
     if (opts.removeOutliers && kept.length >= 3) {
@@ -106,7 +106,7 @@
       }
     }
 
-    return { kept: kept, nAnticipations: nAnticipations, nOutliers: nOutliers, lo: lo, hi: hi };
+    return { kept: kept, nFalseStarts: nFalseStarts, nOutliers: nOutliers, lo: lo, hi: hi };
   }
 
   function toRs(rts) {
@@ -135,7 +135,7 @@
     return {
       n: hitRts.length,
       nCorrected: corr.kept.length,
-      nAnticipationsRemoved: corr.nAnticipations,
+      nFalseStartsRemoved: corr.nFalseStarts,
       nOutliersRemoved: corr.nOutliers,
       outlierLoMs: corr.lo,
       outlierHiMs: corr.hi,
@@ -344,20 +344,96 @@
     };
   }
 
+  /* ---------------- response integrity ---------------- */
+
+  /*
+   * Continuous or repeated pressing is a way to fake alertness: hold the key
+   * down, or tap constantly, and every stimulus gets a fast "response". It is
+   * detectable because genuine responding produces roughly one press per
+   * stimulus, spaced by the interval.
+   *
+   * Three independent signals, all reported so an experimenter can see WHY a
+   * trial was flagged:
+   *   - burstMax    the most presses inside any 1-second window
+   *   - rapidPairs  consecutive presses closer together than rapidGapMs
+   *   - extraPresses presses beyond the first in an epoch
+   *
+   * This flags a trial for human review. It never alters scoring, and it never
+   * excludes data by itself — a startled double-tap is not cheating, and the
+   * decision belongs to the experimenter.
+   */
+  function detectCheating(presses, nTrials, cfg) {
+    var burstWindowMs = cfg.burstWindowMs == null ? 1000 : cfg.burstWindowMs;
+    var burstLimit = cfg.burstLimit == null ? 5 : cfg.burstLimit;
+    var rapidGapMs = cfg.rapidGapMs == null ? 200 : cfg.rapidGapMs;
+    var extraRateLimit = cfg.extraRateLimit == null ? 0.2 : cfg.extraRateLimit;
+
+    var times = presses.map(function (p) { return p.tMs; })
+                       .sort(function (a, b) { return a - b; });
+
+    var burstMax = 0;
+    var lo = 0;
+    for (var hi = 0; hi < times.length; hi++) {
+      while (times[hi] - times[lo] > burstWindowMs) lo += 1;
+      if (hi - lo + 1 > burstMax) burstMax = hi - lo + 1;
+    }
+
+    var rapidPairs = 0;
+    for (var i = 1; i < times.length; i++) {
+      if (times[i] - times[i - 1] < rapidGapMs) rapidPairs += 1;
+    }
+
+    var seen = {}, extraPresses = 0;
+    for (var j = 0; j < presses.length; j++) {
+      var k = presses[j].epochIndex;
+      if (k === null || k === undefined) { extraPresses += 1; continue; }
+      if (seen[k]) extraPresses += 1; else seen[k] = 1;
+    }
+
+    var extraRate = nTrials ? extraPresses / nTrials : 0;
+    var reasons = [];
+    if (burstMax >= burstLimit) {
+      reasons.push(burstMax + ' presses within ' + burstWindowMs + ' ms');
+    }
+    if (nTrials >= 5 && extraRate > extraRateLimit) {
+      reasons.push((extraRate * 100).toFixed(0) + '% more presses than stimuli');
+    }
+    if (times.length > 10 && rapidPairs / times.length > 0.25) {
+      reasons.push(rapidPairs + ' presses under ' + rapidGapMs + ' ms apart');
+    }
+
+    return {
+      totalPresses: times.length,
+      extraPresses: extraPresses,
+      extraRate: extraRate,
+      burstMax: burstMax,
+      rapidPairs: rapidPairs,
+      suspected: reasons.length > 0,
+      reasons: reasons,
+      thresholds: {
+        burstWindowMs: burstWindowMs, burstLimit: burstLimit,
+        rapidGapMs: rapidGapMs, extraRateLimit: extraRateLimit
+      }
+    };
+  }
+
   /* ---------------- main entry point ---------------- */
 
   /*
    * epochs: [{ index, onsetMs, rtMs }] where rtMs is the raw reaction time of
    *         whatever response occurred in that epoch (however late), or null.
    *
+   * presses: every keypress in the trial as { tMs, epochIndex }, used only for
+   *          the response-integrity check. Optional.
+   *
    * cfg:    { hitWindowMs, isiMs, lapseMs, missCriterion,
    *           removeAnticipations, removeOutliers, anticipationMs, sdMultiplier }
    */
-  function score(epochs, cfg) {
+  function score(epochs, cfg, presses) {
     var opts = {
-      removeAnticipations: !!cfg.removeAnticipations,
+      removeFalseStarts: !!cfg.removeFalseStarts,
       removeOutliers: !!cfg.removeOutliers,
-      anticipationMs: cfg.anticipationMs == null ? 100 : cfg.anticipationMs,
+      falseStartMs: cfg.falseStartMs == null ? 100 : cfg.falseStartMs,
       sdMultiplier: cfg.sdMultiplier == null ? 2 : cfg.sdMultiplier
     };
     var hitWindow = cfg.hitWindowMs;
@@ -378,7 +454,7 @@
         outcome: isHit ? 'hit' : 'miss',
         lateResponse: rt !== null && !isHit ? 1 : 0, // responded, but too late
         lapse: isHit && rt > cfg.lapseMs ? 1 : 0,
-        anticipation: rt !== null && rt < opts.anticipationMs ? 1 : 0
+        falseStart: rt !== null && rt < opts.falseStartMs ? 1 : 0
       };
     });
 
@@ -386,6 +462,7 @@
     var misses = trials.filter(function (t) { return t.outcome === 'miss'; });
     var lapses = trials.filter(function (t) { return t.lapse; });
     var late = trials.filter(function (t) { return t.lateResponse; });
+    var falseStarts = trials.filter(function (t) { return t.falseStart; });
 
     /* --- per minute --- */
     var lastMinute = trials.length ? trials[trials.length - 1].minute : -1;
@@ -411,6 +488,7 @@
     totals.misses = misses.length;
     totals.lapses = lapses.length;
     totals.lateResponses = late.length;
+    totals.falseStarts = falseStarts.length;
     totals.hitRatio = trials.length ? hits.length / trials.length : null;
 
     var ep = errorProfiles(trials.map(function (t) { return t.outcome; }), cfg.missCriterion);
@@ -421,15 +499,16 @@
         isiMs: cfg.isiMs,
         lapseMs: cfg.lapseMs,
         missCriterion: cfg.missCriterion,
-        removeAnticipations: opts.removeAnticipations,
+        removeFalseStarts: opts.removeFalseStarts,
         removeOutliers: opts.removeOutliers,
-        anticipationMs: opts.anticipationMs,
+        falseStartMs: opts.falseStartMs,
         sdMultiplier: opts.sdMultiplier
       },
       trials: trials,
       perMinute: perMinute,
       totals: totals,
       errorProfiles: ep,
+      integrity: detectCheating(presses || [], trials.length, cfg),
       dynamicsRs: dynamics(perMinute, 'avgRs'),
       dynamicsRt: dynamics(perMinute, 'avgRt')
     };
@@ -437,6 +516,7 @@
 
   return {
     score: score,
+    detectCheating: detectCheating,
     buildSchedule: buildSchedule,
     makeRng: makeRng,
     shuffle: shuffle,

@@ -15,6 +15,7 @@
  */
 
 var S = window.BSRTScoring;
+var L = window.BSRTi18n;
 
 var LS_KEY = 'bsrt.sessions.v1';
 
@@ -34,6 +35,13 @@ var running = false;
 var wakeLock = null;
 var blurCount = 0;
 var lastResult = null;
+var pendingResult = null;     // held while the post-task KSS is answered
+var presses = [];             // every keypress, for the integrity check
+var kssBefore = null;
+var kssAfter = null;
+var kssStage = null;          // 'before' | 'after'
+var clockRaf = null;
+var audioCtx = null;
 
 /* ---------------- helpers ---------------- */
 
@@ -110,18 +118,28 @@ function saveSession(r) {
   } catch (e) {
     alert('Could not save this trial (storage may be full). Export it now.');
   }
-  function applyMode() {
+  function applyLanguage() {
+  L.setLanguage($('language').value);
+  L.applyTranslations(document);
+  applyMode();
+  if (lastResult) renderResult(lastResult);
+}
+
+function applyMode() {
   var mode = $('mode').value;
   document.body.setAttribute('data-mode', mode);
   // A PVT runs for a fixed duration; the sleep-onset criterion is an OSLER idea.
   $('criterionOn').checked = mode !== 'pvt';
   $('modeNote').textContent = mode === 'pvt'
-    ? 'PVT: intervals vary within each block, drawn so that every block contains one of each. The sleep-onset criterion is off by default — a PVT runs to time.'
+    ? 'PVT: intervals vary within each block, drawn so that every block contains one of each. The stimulus is a millisecond counter; the sleep-onset criterion is off by default.'
     : 'BSRT / OSLER: a fixed interval between stimuli, with sleep onset scored from consecutive misses.';
+  $('instructionsText').textContent = L.t(mode === 'pvt' ? 'instructions.pvt' : 'instructions.bsrt');
+  $('taskHint').textContent = L.t(mode === 'pvt' ? 'task.hintPvt' : 'task.hintBsrt');
 }
 
 $('mode').addEventListener('change', applyMode);
-applyMode();
+$('language').addEventListener('change', applyLanguage);
+applyLanguage();
 refreshCount();
 }
 
@@ -136,6 +154,43 @@ function requestWakeLock() {
 
 function releaseWakeLock() {
   if (wakeLock) { try { wakeLock.release(); } catch (e) {} wakeLock = null; }
+}
+
+/* ---------------- alarm ---------------- */
+
+/*
+ * Synthesised rather than a sound file, so the app stays dependency-free and
+ * works offline. The context is created on the Start click, which is the user
+ * gesture browsers require before audio may play.
+ */
+function initAudio() {
+  if (audioCtx) return;
+  try {
+    var Ctx = window.AudioContext || window.webkitAudioContext;
+    if (Ctx) audioCtx = new Ctx();
+  } catch (e) { audioCtx = null; }
+}
+
+function playAlarm() {
+  if (!cfg || !cfg.alarm || !audioCtx) return;
+  try {
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    var t0 = audioCtx.currentTime;
+    for (var i = 0; i < 3; i++) {
+      var start = t0 + i * 0.35;
+      var osc = audioCtx.createOscillator();
+      var gain = audioCtx.createGain();
+      osc.type = 'square';
+      osc.frequency.setValueAtTime(880, start);
+      gain.gain.setValueAtTime(0.0001, start);
+      gain.gain.exponentialRampToValueAtTime(0.25, start + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.30);
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.start(start);
+      osc.stop(start + 0.32);
+    }
+  } catch (e) { /* audio is a convenience, never a reason to lose a trial */ }
 }
 
 /* ---------------- trial ---------------- */
@@ -172,7 +227,7 @@ function beginTrial() {
   if (err) { $('setupError').textContent = err; $('setupError').hidden = false; return; }
   $('setupError').hidden = true;
 
-  var corr = $('correction').value; // none | anticipations | outliers | both
+  var corr = $('correction').value; // none | falseStarts | outliers | both
   var mode = $('mode').value;
   var now = new Date();
   var seedTyped = parseInt($('seed').value, 10);
@@ -192,10 +247,14 @@ function beginTrial() {
     maxMinutes: intVal('maxMinutes', 40),
     maxMs: intVal('maxMinutes', 40) * 60000,
     correction: corr,
-    removeAnticipations: corr === 'anticipations' || corr === 'both',
+    removeFalseStarts: corr === 'falseStarts' || corr === 'both',
     removeOutliers: corr === 'outliers' || corr === 'both',
-    anticipationMs: numVal('anticipationMs', 100),
-    sdMultiplier: numVal('sdMultiplier', 2)
+    falseStartMs: numVal('falseStartMs', 100),
+    sdMultiplier: numVal('sdMultiplier', 2),
+    alarm: $('alarmOn').checked,
+    kssWhen: $('kssWhen').value,
+    feedbackMs: 1000,
+    language: L.getLanguage()
   };
 
   cfg.schedule = S.buildSchedule({
@@ -221,17 +280,61 @@ function beginTrial() {
   };
 
   epochs = [];
+  presses = [];
   currentEpoch = null;
   consecutiveMisses = 0;
   missRunStartIndex = -1;
   blurCount = 0;
   running = false;
+  kssBefore = null;
+  kssAfter = null;
 
+  initAudio();
   requestWakeLock();
   if ($('useFullscreen').checked && document.documentElement.requestFullscreen) {
     document.documentElement.requestFullscreen().catch(function () {});
   }
-  countdown();
+  // The KSS, when requested, is answered before anything else happens.
+  if (cfg.kssWhen === 'before' || cfg.kssWhen === 'both') showKss('before');
+  else countdown();
+}
+
+/* ---------------- Karolinska Sleepiness Scale ---------------- */
+
+function showKss(stage) {
+  kssStage = stage;
+  $('kssTitle').textContent = L.t(stage === 'before' ? 'kss.beforeTitle' : 'kss.afterTitle');
+  $('kssQuestion').textContent = L.t('kss.question');
+  $('kssInstruction').textContent = L.t('kss.instruction');
+
+  var anchors = L.kssAnchors();
+  var box = $('kssOptions');
+  box.innerHTML = '';
+  anchors.forEach(function (label, i) {
+    var b = document.createElement('button');
+    b.className = 'kss-option';
+    b.type = 'button';
+    var n = document.createElement('span');
+    n.className = 'kss-num';
+    n.textContent = i + 1;
+    var tx = document.createElement('span');
+    tx.textContent = label;
+    b.appendChild(n);
+    b.appendChild(tx);
+    b.addEventListener('click', function () { answerKss(i + 1); });
+    box.appendChild(b);
+  });
+  show('screen-kss');
+}
+
+function answerKss(value) {
+  if (kssStage === 'before') {
+    kssBefore = value;
+    countdown();
+  } else {
+    kssAfter = value;
+    finishResult();
+  }
 }
 
 function countdown() {
@@ -251,6 +354,7 @@ function startTask() {
   running = true;
   startWall = new Date().toISOString();
   startTime = performance.now();
+  startClock();
   runEpoch(0);
 }
 
@@ -285,7 +389,8 @@ function runEpoch(n) {
     isiBeforeMs: n === 0 ? null : cfg.schedule.isis[n - 1],
     responded: false,
     rtMs: null,
-    extra: 0
+    extra: 0,
+    frozen: false
   };
   epochs.push(currentEpoch);
 
@@ -318,30 +423,96 @@ function finalizeEpoch() {
  * scoring time, not here.
  */
 function handleResponse() {
-  if (!running || !currentEpoch) return;
+  if (!running) return;
+  var now = performance.now();
+
+  // Every press is logged, including presses outside any epoch, because the
+  // integrity check needs the full pattern — not just the scored responses.
+  presses.push({ tMs: now - startTime, epochIndex: currentEpoch ? currentEpoch.index : null });
+
+  if (!currentEpoch) return;
   if (currentEpoch.responded) { currentEpoch.extra += 1; return; }
 
   currentEpoch.responded = true;
-  currentEpoch.rtMs = performance.now() - currentEpoch.onsetPerf;
+  currentEpoch.rtMs = now - currentEpoch.onsetPerf;
 
-  // Responding extinguishes the light immediately, but never shortens the
-  // epoch: the next stimulus still starts a fixed interval after this onset.
   clearTimeout(stimTimer);
-  ledOff();
+  if (cfg.mode === 'pvt') {
+    // PVT convention: the counter stops on the response and the achieved
+    // reaction time is shown back as feedback, then clears.
+    currentEpoch.frozen = true;
+    $('clock').textContent = Math.max(0, Math.round(currentEpoch.rtMs));
+    $('clock').classList.add('frozen');
+    stimTimer = setTimeout(ledOff, Math.min(cfg.feedbackMs, cfg.hitWindowMs));
+  } else {
+    // BSRT: responding extinguishes the light immediately. Either way the
+    // epoch clock is untouched.
+    ledOff();
+  }
 }
 
-function ledOn() { $('led').classList.add('on'); }
-function ledOff() { $('led').classList.remove('on'); }
+function ledOn() {
+  if (cfg.mode === 'pvt') {
+    var el = $('clock');
+    el.classList.remove('frozen');
+    el.textContent = '0';
+    el.hidden = false;
+  } else {
+    $('led').classList.add('on');
+  }
+}
+
+function ledOff() {
+  $('led').classList.remove('on');
+  var el = $('clock');
+  el.hidden = true;
+  el.classList.remove('frozen');
+}
+
+/*
+ * The PVT counter is display only — it never feeds the reaction time, which is
+ * still measured from stimulus onset to the keypress. It runs on its own
+ * animation frame so redrawing digits cannot disturb epoch scheduling.
+ */
+function startClock() {
+  if (cfg.mode !== 'pvt') return;
+  function tick() {
+    if (!running) return;
+    clockRaf = requestAnimationFrame(tick);
+    if (!currentEpoch || currentEpoch.frozen) return;
+    var el = $('clock');
+    if (el.hidden) return;
+    var elapsed = performance.now() - currentEpoch.onsetPerf;
+    if (elapsed < 0) elapsed = 0;
+    if (elapsed > cfg.hitWindowMs) elapsed = cfg.hitWindowMs;
+    el.textContent = Math.round(elapsed);
+  }
+  clockRaf = requestAnimationFrame(tick);
+}
 
 function endTask(reason) {
   running = false;
   clearTimeout(epochTimer);
   clearTimeout(stimTimer);
+  if (clockRaf) cancelAnimationFrame(clockRaf);
+  clockRaf = null;
   ledOff();
   releaseWakeLock();
   if (document.fullscreenElement && document.exitFullscreen) document.exitFullscreen().catch(function () {});
 
-  lastResult = buildResult(reason);
+  if (reason === 'sleep_onset') playAlarm();
+
+  pendingResult = buildResult(reason);
+  if (cfg.kssWhen === 'after' || cfg.kssWhen === 'both') showKss('after');
+  else finishResult();
+}
+
+/* Assembled only once the post-task KSS (if any) has been answered. */
+function finishResult() {
+  pendingResult.kssBefore = kssBefore;
+  pendingResult.kssAfter = kssAfter;
+  lastResult = pendingResult;
+  pendingResult = null;
   saveSession(lastResult);
   renderResult(lastResult);
   show('screen-results');
@@ -355,7 +526,7 @@ function buildResult(reason) {
       index: e.index, onsetMs: e.onsetMs, rtMs: e.rtMs,
       block: e.block, epochIsiMs: e.epochIsiMs, isiBeforeMs: e.isiBeforeMs
     };
-  }), cfg);
+  }), cfg, presses);
 
   var sleepOnsetMs = null, sleepOnsetCriterionMs = null;
   if (reason === 'sleep_onset' && missRunStartIndex >= 0) {
@@ -379,6 +550,9 @@ function buildResult(reason) {
     sleepOnsetCriterionMs: sleepOnsetCriterionMs,
     elapsedMs: epochs.length ? epochs[epochs.length - 1].onsetMs + epochs[epochs.length - 1].epochIsiMs : 0,
     extraResponses: epochs.reduce(function (n, e) { return n + e.extra; }, 0),
+    kssBefore: null,
+    kssAfter: null,
+    language: cfg.language,
     extras: epochs.map(function (e) { return e.extra; }),
     blurCount: blurCount,
     scored: scored
@@ -413,6 +587,7 @@ function renderResult(r) {
   $('oHits').textContent = t.hits;
   $('oMisses').textContent = t.misses + (t.lateResponses ? ' (' + t.lateResponses + ' late responses)' : '');
   $('oLapses').textContent = t.lapses + ' (> ' + r.config.lapseMs + ' ms)';
+  $('oFalseStarts').textContent = t.falseStarts + ' (< ' + r.config.falseStartMs + ' ms)';
   $('oEp12').textContent = e.ep1_2;
   $('oEp36').textContent = e.ep3_6;
   $('oEp7').textContent = e.ep7plus;
@@ -441,16 +616,46 @@ function renderResult(r) {
     r.config.correction === 'none'
       ? 'No correction applied — the corrected columns equal the raw ones.'
       : 'Correction: ' + describeCorrection(r.config) + '. Removed ' +
-        t.nAnticipationsRemoved + ' anticipations and ' + t.nOutliersRemoved +
+        t.nFalseStartsRemoved + ' false starts and ' + t.nOutliersRemoved +
         ' outliers from ' + t.n + ' hits.';
 
+  renderIntegrity(r);
+  renderKss(r);
   renderPerMinute(r);
 }
 
+function renderIntegrity(r) {
+  var g = r.scored.integrity;
+  $('inPresses').textContent = g.totalPresses;
+  $('inExtra').textContent = g.extraPresses + (g.extraRate ? ' (' + (g.extraRate * 100).toFixed(0) + '% of trials)' : '');
+  $('inBurst').textContent = g.burstMax + ' in ' + g.thresholds.burstWindowMs + ' ms';
+  $('inRapid').textContent = g.rapidPairs + ' under ' + g.thresholds.rapidGapMs + ' ms apart';
+
+  var box = $('integrityVerdict');
+  if (g.suspected) {
+    box.className = 'note warnbox';
+    box.textContent = L.t('results.integrityFlag') + ' ' + g.reasons.join('; ') + '.';
+  } else {
+    box.className = 'note tight';
+    box.textContent = L.t('results.integrityOk');
+  }
+}
+
+function renderKss(r) {
+  var card = $('kssResult');
+  if (r.kssBefore == null && r.kssAfter == null) { card.hidden = true; return; }
+  card.hidden = false;
+  var anchors = L.kssAnchors(r.language);
+  $('kssBeforeVal').textContent = r.kssBefore == null
+    ? '—' : r.kssBefore + ' — ' + anchors[r.kssBefore - 1];
+  $('kssAfterVal').textContent = r.kssAfter == null
+    ? '—' : r.kssAfter + ' — ' + anchors[r.kssAfter - 1];
+}
+
 function describeCorrection(c) {
-  if (c.correction === 'anticipations') return 'RT < ' + c.anticipationMs + ' ms removed';
+  if (c.correction === 'falseStarts') return 'RT < ' + c.falseStartMs + ' ms removed';
   if (c.correction === 'outliers') return 'RT beyond ' + c.sdMultiplier + ' SD removed';
-  if (c.correction === 'both') return 'RT < ' + c.anticipationMs + ' ms removed, then RT beyond ' + c.sdMultiplier + ' SD';
+  if (c.correction === 'both') return 'RT < ' + c.falseStartMs + ' ms removed, then RT beyond ' + c.sdMultiplier + ' SD';
   return 'none';
 }
 
@@ -487,19 +692,19 @@ function renderPerMinute(r) {
 
 /* ---------------- exports ---------------- */
 
-var PARTICIPANT_COLS = ['run_id', 'date', 'time', 'participant_id', 'name', 'address',
+var PARTICIPANT_COLS = ['run_id', 'date', 'time', 'language', 'participant_id', 'name', 'address',
                         'birth_date', 'educational_level', 'session_label', 'trial_number'];
 
 function participantVals(r) {
   var p = r.participant;
-  return [r.runId, p.date, p.time, p.participantId, p.name, p.address,
+  return [r.runId, p.date, p.time, r.language || 'en', p.participantId, p.name, p.address,
           p.birthDate, p.education, p.sessionLabel, p.trialNumber];
 }
 
 var RAW_HEADER = PARTICIPANT_COLS.concat([
   'epoch_index', 'block', 'minute', 'onset_ms', 'epoch_isi_ms', 'isi_before_ms',
   'responded', 'rt_ms', 'rs_per_sec',
-  'outcome', 'lapse', 'late_response', 'anticipation', 'extra_responses'
+  'outcome', 'lapse', 'late_response', 'false_start', 'extra_responses'
 ]);
 
 function rawRows(r) {
@@ -511,7 +716,7 @@ function rawRows(r) {
       t.epochIsiMs, t.isiBeforeMs,
       t.rtMs === null ? 0 : 1,
       round(t.rtMs, 3), round(t.rsPerSec, 5),
-      t.outcome, t.lapse, t.lateResponse, t.anticipation,
+      t.outcome, t.lapse, t.lateResponse, t.falseStart,
       extras[i] == null ? '' : extras[i]
     ]);
   });
@@ -523,7 +728,7 @@ var PM_HEADER = PARTICIPANT_COLS.concat([
   'corr_avg_rt', 'corr_median_rt', 'corr_stdev_rt', 'corr_fastest10_rt', 'corr_slowest10_rt',
   'avg_rs', 'median_rs', 'stdev_rs', 'fastest10_rs', 'slowest10_rs',
   'corr_avg_rs', 'corr_median_rs', 'corr_stdev_rs', 'corr_fastest10_rs', 'corr_slowest10_rs',
-  'n_rt', 'n_rt_corrected', 'anticipations_removed', 'outliers_removed',
+  'n_rt', 'n_rt_corrected', 'false_starts_removed', 'outliers_removed',
   'velocity_rs', 'acceleration_rs', 'velocity_rt', 'acceleration_rt'
 ]);
 
@@ -537,7 +742,7 @@ function pmRows(r) {
       round(m.corrAvgRt, 2), round(m.corrMedianRt, 2), round(m.corrSdRt, 2), round(m.corrFastest10Rt, 2), round(m.corrSlowest10Rt, 2),
       round(m.avgRs, 5), round(m.medianRs, 5), round(m.sdRs, 5), round(m.fastest10Rs, 5), round(m.slowest10Rs, 5),
       round(m.corrAvgRs, 5), round(m.corrMedianRs, 5), round(m.corrSdRs, 5), round(m.corrFastest10Rs, 5), round(m.corrSlowest10Rs, 5),
-      m.n, m.nCorrected, m.nAnticipationsRemoved, m.nOutliersRemoved,
+      m.n, m.nCorrected, m.nFalseStartsRemoved, m.nOutliersRemoved,
       round(vRs.velocity[i], 5), round(vRs.acceleration[i], 5),
       round(vRt.velocity[i], 3), round(vRt.acceleration[i], 3)
     ]);
@@ -547,38 +752,46 @@ function pmRows(r) {
 var SUMMARY_HEADER = PARTICIPANT_COLS.concat([
   'sleep_onset_ms', 'sleep_onset_criterion_ms', 'slept_before_max', 'end_reason', 'elapsed_ms',
   'total_trialrun', 'hit_ratio', 'total_hits', 'total_miss', 'total_lapse', 'late_responses',
+  'total_false_starts',
   'ep_1_2', 'ep_3_6', 'ep_7plus', 'longest_miss_run',
   'total_avg_rt', 'total_median_rt', 'total_stdev_rt', 'fastest10_rt', 'slowest10_rt',
   'corr_total_avg_rt', 'corr_total_median_rt', 'corr_total_stdev_rt', 'corr_fastest10_rt', 'corr_slowest10_rt',
   'total_avg_rs', 'total_median_rs', 'total_stdev_rs', 'fastest10_rs', 'slowest10_rs',
   'corr_total_avg_rs', 'corr_total_median_rs', 'corr_total_stdev_rs', 'corr_fastest10_rs', 'corr_slowest10_rs',
-  'n_rt', 'n_rt_corrected', 'anticipations_removed', 'outliers_removed', 'rs_undefined',
+  'n_rt', 'n_rt_corrected', 'false_starts_removed', 'outliers_removed', 'rs_undefined',
   'rs_slope_per_min', 'rt_slope_per_min',
   'mode', 'isi_ms', 'isi_set_s', 'block_s', 'schedule_method', 'schedule_seed', 'scheduled_stimuli',
   'stim_ms', 'hit_window_ms', 'lapse_threshold_ms', 'miss_criterion', 'max_minutes',
-  'correction', 'anticipation_threshold_ms', 'sd_multiplier',
-  'extra_responses', 'page_blur_count'
+  'correction', 'false_start_threshold_ms', 'sd_multiplier',
+  'kss_when', 'kss_before', 'kss_after',
+  'total_presses', 'extra_presses', 'burst_max', 'rapid_pairs', 'cheating_suspected', 'cheating_reasons',
+  'alarm_enabled', 'extra_responses', 'page_blur_count'
 ]);
 
 function summaryRow(r) {
   var t = r.scored.totals, e = r.scored.errorProfiles, c = r.config;
+  var g = r.scored.integrity;
   return participantVals(r).concat([
     round(r.sleepOnsetMs, 1), round(r.sleepOnsetCriterionMs, 1), r.sleptBeforeMax ? 1 : 0,
     r.endReason, round(r.elapsedMs, 1),
     t.trials, round(t.hitRatio, 4), t.hits, t.misses, t.lapses, t.lateResponses,
+    t.falseStarts,
     e.ep1_2, e.ep3_6, e.ep7plus, e.longestRun,
     round(t.avgRt, 2), round(t.medianRt, 2), round(t.sdRt, 2), round(t.fastest10Rt, 2), round(t.slowest10Rt, 2),
     round(t.corrAvgRt, 2), round(t.corrMedianRt, 2), round(t.corrSdRt, 2), round(t.corrFastest10Rt, 2), round(t.corrSlowest10Rt, 2),
     round(t.avgRs, 5), round(t.medianRs, 5), round(t.sdRs, 5), round(t.fastest10Rs, 5), round(t.slowest10Rs, 5),
     round(t.corrAvgRs, 5), round(t.corrMedianRs, 5), round(t.corrSdRs, 5), round(t.corrFastest10Rs, 5), round(t.corrSlowest10Rs, 5),
-    t.n, t.nCorrected, t.nAnticipationsRemoved, t.nOutliersRemoved, t.nRsUndefined,
+    t.n, t.nCorrected, t.nFalseStartsRemoved, t.nOutliersRemoved, t.nRsUndefined,
     round(r.scored.dynamicsRs.slope, 5), round(r.scored.dynamicsRt.slope, 3),
     c.mode, c.mode === 'pvt' ? '' : c.isiMs,
     c.isiSetMs ? c.isiSetMs.map(function (v) { return v / 1000; }).join(' ') : '',
     c.blockMs / 1000, c.schedule.method, c.schedule.seed, c.schedule.nStimuli,
     c.stimMs, c.hitWindowMs, c.lapseMs, c.missCriterion, c.maxMinutes,
-    c.correction, c.anticipationMs, c.sdMultiplier,
-    r.extraResponses, r.blurCount
+    c.correction, c.falseStartMs, c.sdMultiplier,
+    c.kssWhen, r.kssBefore, r.kssAfter,
+    g.totalPresses, g.extraPresses, g.burstMax, g.rapidPairs,
+    g.suspected ? 1 : 0, g.reasons.join('; '),
+    c.alarm ? 1 : 0, r.extraResponses, r.blurCount
   ]);
 }
 
@@ -654,16 +867,26 @@ $('maxMinutes').addEventListener('change', function () {
     : 'Regular protocol: 500 ms is the conventional lapse threshold.';
 });
 
+function applyLanguage() {
+  L.setLanguage($('language').value);
+  L.applyTranslations(document);
+  applyMode();
+  if (lastResult) renderResult(lastResult);
+}
+
 function applyMode() {
   var mode = $('mode').value;
   document.body.setAttribute('data-mode', mode);
   // A PVT runs for a fixed duration; the sleep-onset criterion is an OSLER idea.
   $('criterionOn').checked = mode !== 'pvt';
   $('modeNote').textContent = mode === 'pvt'
-    ? 'PVT: intervals vary within each block, drawn so that every block contains one of each. The sleep-onset criterion is off by default — a PVT runs to time.'
+    ? 'PVT: intervals vary within each block, drawn so that every block contains one of each. The stimulus is a millisecond counter; the sleep-onset criterion is off by default.'
     : 'BSRT / OSLER: a fixed interval between stimuli, with sleep onset scored from consecutive misses.';
+  $('instructionsText').textContent = L.t(mode === 'pvt' ? 'instructions.pvt' : 'instructions.bsrt');
+  $('taskHint').textContent = L.t(mode === 'pvt' ? 'task.hintPvt' : 'task.hintBsrt');
 }
 
 $('mode').addEventListener('change', applyMode);
-applyMode();
+$('language').addEventListener('change', applyLanguage);
+applyLanguage();
 refreshCount();

@@ -13,73 +13,90 @@
   <div class="wrap">
     <header>
       <h1>BSRT</h1>
-      <p class="sub">Behavioral Sleep Resistance Task — OSLER paradigm, frame-locked timing.</p>
+      <p class="sub" data-i18n="app.subtitle">Behavioral Sleep Resistance Task and Psychomotor Vigilance Task.</p>
+      <label class="lang"><span data-i18n="lang.label">Language</span>
+        <select id="language">
+          <option value="en" selected>English</option>
+          <option value="fr">Français</option>
+          <option value="nl">Nederlands</option>
+          <option value="de">Deutsch</option>
+        </select>
+      </label>
       <p class="env" id="envInfo">Reading display information…</p>
       <p class="env warn" id="envWarn" hidden></p>
     </header>
 
     <div class="card">
-      <h2>Participant</h2>
+      <h2 data-i18n="participant.heading">Participant</h2>
       <div class="grid">
-        <label>Participant ID<input type="text" id="participantId" placeholder="P001" autocomplete="off"></label>
-        <label>Name<input type="text" id="pName" placeholder="optional" autocomplete="off"></label>
-        <label>Birth date<input type="text" id="pBirth" placeholder="YYYY-MM-DD" autocomplete="off"></label>
-        <label>Educational level<input type="text" id="pEducation" placeholder="optional" autocomplete="off"></label>
-        <label class="wide">Address<input type="text" id="pAddress" placeholder="optional" autocomplete="off"></label>
-        <label>Session / condition<input type="text" id="sessionLabel" placeholder="baseline" autocomplete="off"></label>
-        <label>Trial number<input type="number" id="trialNumber" value="1" min="1" step="1"></label>
+        <label><span data-i18n="participant.id">Participant ID</span><input type="text" id="participantId" placeholder="P001" autocomplete="off"></label>
+        <label><span data-i18n="participant.name">Name</span><input type="text" id="pName" placeholder="optional" autocomplete="off"></label>
+        <label><span data-i18n="participant.birth">Birth date</span><input type="text" id="pBirth" placeholder="YYYY-MM-DD" autocomplete="off"></label>
+        <label><span data-i18n="participant.education">Educational level</span><input type="text" id="pEducation" placeholder="optional" autocomplete="off"></label>
+        <label class="wide"><span data-i18n="participant.address">Address</span><input type="text" id="pAddress" placeholder="optional" autocomplete="off"></label>
+        <label><span data-i18n="participant.session">Session / condition</span><input type="text" id="sessionLabel" placeholder="baseline" autocomplete="off"></label>
+        <label><span data-i18n="participant.trial">Trial number</span><input type="number" id="trialNumber" value="1" min="1" step="1"></label>
       </div>
-      <p class="note warnbox">Name, address and birth date are directly identifying. They are stored on this machine and written into every exported file. For research use, prefer a pseudonymous participant ID and keep the identity key separately under your data-protection plan. Date and time of testing are captured automatically.</p>
+      <p class="note warnbox" data-i18n="participant.privacy">Name, address and birth date are directly identifying. They are stored on this machine and written into every exported file. For research use, prefer a pseudonymous participant ID and keep the identity key separately under your data-protection plan. Date and time of testing are captured automatically.</p>
     </div>
 
     <div class="card">
-      <h2>Task</h2>
+      <h2 data-i18n="task.heading">Task</h2>
       <div class="grid">
-        <label>Mode
+        <label><span data-i18n="task.mode">Mode</span>
           <select id="mode">
-            <option value="bsrt" selected>BSRT / OSLER — fixed interval</option>
-            <option value="pvt">PVT — variable interval</option>
+            <option value="bsrt" selected data-i18n="task.mode.bsrt">BSRT / OSLER — fixed interval</option>
+            <option value="pvt" data-i18n="task.mode.pvt">PVT — variable interval</option>
           </select>
         </label>
-        <label class="only-bsrt">Stimulus interval (ms)<input type="number" id="isiMs" value="3000" min="200" step="100"></label>
-        <label class="only-pvt">Intervals (seconds, comma separated)<input type="text" id="isiSetMs" value="2, 4, 6, 8, 10" autocomplete="off"></label>
-        <label class="only-pvt">Block length (s)<input type="number" id="blockMs" value="30" min="1" step="1"></label>
-        <label class="only-pvt">Schedule seed (blank = random)<input type="text" id="seed" placeholder="random" autocomplete="off"></label>
+        <label class="only-bsrt"><span data-i18n="task.isi">Stimulus interval (ms)</span><input type="number" id="isiMs" value="3000" min="200" step="100"></label>
+        <label class="only-pvt"><span data-i18n="task.isiSet">Intervals (seconds, comma separated)</span><input type="text" id="isiSetMs" value="2, 4, 6, 8, 10" autocomplete="off"></label>
+        <label class="only-pvt"><span data-i18n="task.block">Block length (s)</span><input type="number" id="blockMs" value="30" min="1" step="1"></label>
+        <label class="only-pvt"><span data-i18n="task.seed">Schedule seed (blank = random)</span><input type="text" id="seed" placeholder="random" autocomplete="off"></label>
       </div>
       <p class="note tight" id="modeNote"></p>
     </div>
 
     <div class="card">
-      <h2>Protocol</h2>
+      <h2 data-i18n="protocol.heading">Protocol</h2>
       <p class="note">BSRT defaults reproduce the standard OSLER protocol: a 1&nbsp;s stimulus every 3&nbsp;s, sleep onset at 7 consecutive misses (21&nbsp;s), 40&nbsp;min maximum. The PVT default is a 10&nbsp;min run with 2/4/6/8/10&nbsp;s intervals.</p>
       <div class="grid">
-        <label>Stimulus duration / hit window (ms)<input type="number" id="stimMs" value="1000" min="50" step="50"></label>
-        <label>Maximum duration (min)<input type="number" id="maxMinutes" value="40" min="1" step="1"></label>
-        <label>Lapse threshold (ms)<input type="number" id="lapseMs" value="500" min="50" step="5"></label>
-        <label>Consecutive misses = sleep onset<input type="number" id="missCriterion" value="7" min="1" step="1"></label>
+        <label><span data-i18n="protocol.stim">Stimulus duration / hit window (ms)</span><input type="number" id="stimMs" value="1000" min="50" step="50"></label>
+        <label><span data-i18n="protocol.max">Maximum duration (min)</span><input type="number" id="maxMinutes" value="40" min="1" step="1"></label>
+        <label><span data-i18n="protocol.lapse">Lapse threshold (ms)</span><input type="number" id="lapseMs" value="500" min="50" step="5"></label>
+        <label><span data-i18n="protocol.criterion">Consecutive misses = sleep onset</span><input type="number" id="missCriterion" value="7" min="1" step="1"></label>
       </div>
-      <label class="check"><input type="checkbox" id="criterionOn" checked> End the test early on the sleep-onset criterion</label>
+      <label class="check"><input type="checkbox" id="criterionOn" checked> <span data-i18n="protocol.criterionOn">End the test early on the sleep-onset criterion</span></label>
+      <label class="check"><input type="checkbox" id="alarmOn" checked> <span data-i18n="protocol.alarm">Sound an alarm when the sleep-onset criterion is reached</span></label>
+      <label><span data-i18n="kss.when">Administer the KSS</span>
+        <select id="kssWhen">
+          <option value="none" selected data-i18n="kss.when.none">Not at all</option>
+          <option value="before" data-i18n="kss.when.before">Before the task</option>
+          <option value="after" data-i18n="kss.when.after">After the task</option>
+          <option value="both" data-i18n="kss.when.both">Before and after</option>
+        </select>
+      </label>
       <p class="note tight" id="lapseHint">Regular protocol: 500 ms is the conventional lapse threshold.</p>
-      <p class="note tight">A response within the hit window is a <strong>hit</strong>; a slow hit (beyond the lapse threshold) is a <strong>lapse</strong>. A response later than the hit window is a <strong>miss</strong> — its raw reaction time is still recorded, but it does not reset the consecutive-miss run. Responding extinguishes the light immediately without shortening the epoch.</p>
-      <label class="check"><input type="checkbox" id="useFullscreen" checked> Fullscreen during the task</label>
+      <p class="note tight" data-i18n="protocol.explain">A response within the hit window is a hit; a slow hit is a lapse. A response later than the hit window is a miss. A response under the false-start threshold is a false start.</p>
+      <label class="check"><input type="checkbox" id="useFullscreen" checked> <span data-i18n="protocol.fullscreen">Fullscreen during the task</span></label>
     </div>
 
     <details class="card">
-      <summary><h2>Corrections</h2></summary>
+      <summary><h2 data-i18n="corrections.heading">Corrections</h2></summary>
       <p class="note">Applied to the corrected columns only. Raw values are always exported untouched.</p>
       <div class="grid">
-        <label>Correction
+        <label><span data-i18n="corrections.type">Correction</span>
           <select id="correction">
-            <option value="none" selected>None</option>
-            <option value="anticipations">Remove anticipations only</option>
-            <option value="outliers">Remove outliers only</option>
-            <option value="both">Remove both</option>
+            <option value="none" selected data-i18n="corrections.none">None</option>
+            <option value="falseStarts" data-i18n="corrections.falseStarts">Remove false starts only</option>
+            <option value="outliers" data-i18n="corrections.outliers">Remove outliers only</option>
+            <option value="both" data-i18n="corrections.both">Remove both</option>
           </select>
         </label>
-        <label>Anticipation threshold (ms)<input type="number" id="anticipationMs" value="100" min="0" step="5"></label>
-        <label>Outlier cut-off (SD)<input type="number" id="sdMultiplier" value="2" min="0.5" step="0.5"></label>
+        <label><span data-i18n="corrections.threshold">False-start threshold (ms)</span><input type="number" id="falseStartMs" value="100" min="0" step="5"></label>
+        <label><span data-i18n="corrections.sd">Outlier cut-off (SD)</span><input type="number" id="sdMultiplier" value="2" min="0.5" step="0.5"></label>
       </div>
-      <p class="note tight">Anticipations are removed first, so they cannot inflate the mean and SD that define the outlier bounds. Bounds are computed within each block, so per-minute corrections use that minute's own mean and SD.</p>
+      <p class="note tight">False starts are removed first, so they cannot inflate the mean and SD that define the outlier bounds. Bounds are computed within each block, so per-minute corrections use that minute's own mean and SD.</p>
     </details>
 
     <details class="card">
@@ -95,16 +112,16 @@
     </details>
 
     <div class="card">
-      <h2>Instructions to read to the participant</h2>
-      <p class="quote">“A red light will flash every few seconds. Each time you see it, press the space bar. Please try to stay awake, but do not do anything else to keep yourself awake — no moving about, talking, or singing. Just respond to the light.”</p>
+      <h2 data-i18n="instructions.heading">Instructions to read to the participant</h2>
+      <p class="quote" id="instructionsText"></p>
     </div>
 
     <div class="actions">
-      <button id="btnStart" class="primary">Check display &amp; start</button>
+      <button id="btnStart" class="primary" data-i18n="btn.startCal">Check display &amp; start</button>
       <span class="spacer"></span>
-      <button id="btnExportAllRaw" class="ghost">All raw (<span id="sessionCount">0</span>)</button>
-      <button id="btnExportAllPm" class="ghost">All per-minute</button>
-      <button id="btnExportAllSummary" class="ghost">All summaries</button>
+      <button id="btnExportAllRaw" class="ghost"><span data-i18n="btn.allRaw">All raw</span> (<span id="sessionCount">0</span>)</button>
+      <button id="btnExportAllPm" class="ghost" data-i18n="btn.allPm">All per-minute</button>
+      <button id="btnExportAllSummary" class="ghost" data-i18n="btn.allSummary">All summaries</button>
     </div>
     <p id="setupError" class="error" hidden></p>
   </div>
@@ -140,8 +157,23 @@
     </div>
 
     <div class="actions">
-      <button id="btnBegin" class="primary" hidden>Begin trial</button>
-      <button id="btnCalBack" class="ghost">Back</button>
+      <button id="btnBegin" class="primary" hidden data-i18n="btn.begin">Begin trial</button>
+      <button id="btnCalBack" class="ghost" data-i18n="btn.back">Back</button>
+    </div>
+  </div>
+</section>
+
+<!-- ============ KSS ============ -->
+<section id="screen-kss" class="screen">
+  <div class="wrap narrow">
+    <header>
+      <h1 data-i18n="kss.heading">Karolinska Sleepiness Scale</h1>
+      <p class="sub" id="kssTitle"></p>
+    </header>
+    <div class="card">
+      <h2 id="kssQuestion"></h2>
+      <p class="note" id="kssInstruction"></p>
+      <div id="kssOptions" class="kss-list"></div>
     </div>
   </div>
 </section>
@@ -149,7 +181,7 @@
 <!-- ============ COUNTDOWN ============ -->
 <section id="screen-countdown" class="screen dark">
   <div class="centre">
-    <p class="countdown-hint">Get comfortable. Respond to every flash.</p>
+    <p class="countdown-hint" data-i18n="countdown.hint">Get comfortable. Respond to every stimulus.</p>
     <div id="countdownNum" class="countdown">3</div>
   </div>
 </section>
@@ -158,8 +190,9 @@
 <section id="screen-task" class="screen dark">
   <div id="patch" class="patch" hidden aria-hidden="true"></div>
   <div id="led" class="led" aria-hidden="true"></div>
-  <p class="tap-hint">Press the space bar each time the light appears.</p>
-  <button id="btnAbort" class="abort">End</button>
+  <div id="clock" class="clock" hidden aria-hidden="true">0</div>
+  <p class="tap-hint" id="taskHint"></p>
+  <button id="btnAbort" class="abort" data-i18n="btn.end">End</button>
 </section>
 
 <!-- ============ RESULTS ============ -->
@@ -185,7 +218,8 @@
           <tr><th>Hit ratio</th><td id="oHitRatio">—</td></tr>
           <tr><th>Hits</th><td id="oHits">—</td></tr>
           <tr><th>Misses</th><td id="oMisses">—</td></tr>
-          <tr><th>Lapses</th><td id="oLapses">—</td></tr>
+          <tr><th data-i18n="results.lapses">Lapses</th><td id="oLapses">—</td></tr>
+          <tr><th data-i18n="results.falseStarts">False starts</th><td id="oFalseStarts">—</td></tr>
           <tr><th>Error profile EP1–2</th><td id="oEp12">—</td></tr>
           <tr><th>Error profile EP3–6</th><td id="oEp36">—</td></tr>
           <tr><th>Error profile EP7+</th><td id="oEp7">—</td></tr>
@@ -224,7 +258,30 @@
     </div>
 
     <div class="card">
-      <h2>Per minute</h2>
+      <h2 data-i18n="results.integrity">Response integrity</h2>
+      <table class="metrics">
+        <tbody>
+          <tr><th>Total presses</th><td id="inPresses">—</td></tr>
+          <tr><th>Presses beyond one per stimulus</th><td id="inExtra">—</td></tr>
+          <tr><th>Largest burst</th><td id="inBurst">—</td></tr>
+          <tr><th>Rapid consecutive presses</th><td id="inRapid">—</td></tr>
+        </tbody>
+      </table>
+      <p id="integrityVerdict" class="note tight"></p>
+    </div>
+
+    <div class="card" id="kssResult" hidden>
+      <h2 data-i18n="results.kss">Karolinska Sleepiness Scale</h2>
+      <table class="metrics">
+        <tbody>
+          <tr><th data-i18n="results.kssBefore">Before</th><td id="kssBeforeVal">—</td></tr>
+          <tr><th data-i18n="results.kssAfter">After</th><td id="kssAfterVal">—</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h2 data-i18n="results.perMinute">Per minute</h2>
       <div class="scroll">
         <table class="metrics pm">
           <thead>
@@ -258,14 +315,15 @@
     </div>
 
     <div class="actions">
-      <button id="btnExportRaw" class="primary">Export raw trials (CSV)</button>
-      <button id="btnExportPm" class="ghost">Export per-minute (CSV)</button>
-      <button id="btnExportSummary" class="ghost">Export summary (CSV)</button>
-      <button id="btnAgain" class="ghost">New trial</button>
+      <button id="btnExportRaw" class="primary" data-i18n="btn.exportRaw">Export raw trials (CSV)</button>
+      <button id="btnExportPm" class="ghost" data-i18n="btn.exportPm">Export per-minute (CSV)</button>
+      <button id="btnExportSummary" class="ghost" data-i18n="btn.exportSummary">Export summary (CSV)</button>
+      <button id="btnAgain" class="ghost" data-i18n="btn.again">New trial</button>
     </div>
   </div>
 </section>
 
+<script src="./i18n.js"></script>
 <script src="./scoring.js"></script>
 <script src="./timing.js"></script>
 <script src="./app.js"></script>

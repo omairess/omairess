@@ -10,6 +10,7 @@
 
 const T = window.BSRTTiming;
 const S = window.BSRTScoring;
+const L = window.BSRTi18n;
 const LS_KEY = 'bsrt.desktop.sessions.v1';
 const PROBE_TAPS = 5;
 
@@ -48,6 +49,12 @@ let consecutiveMisses = 0;
 let missRunStartIndex = -1;
 let blurCount = 0;
 let lastResult = null;
+let pendingResult = null;
+let presses = [];
+let kssBefore = null;
+let kssAfter = null;
+let kssStage = null;
+let audioCtx = null;
 
 /* ---------------- helpers ---------------- */
 
@@ -255,6 +262,39 @@ function probeKey(e) {
   $('btnBegin').hidden = false;
 }
 
+/* ---------------- alarm ---------------- */
+
+/* Synthesised, so the app stays dependency-free and works offline. */
+function initAudio() {
+  if (audioCtx) return;
+  try {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (Ctx) audioCtx = new Ctx();
+  } catch (e) { audioCtx = null; }
+}
+
+function playAlarm() {
+  if (!cfg || !cfg.alarm || !audioCtx) return;
+  try {
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    const t0 = audioCtx.currentTime;
+    for (let i = 0; i < 3; i++) {
+      const start = t0 + i * 0.35;
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = 'square';
+      osc.frequency.setValueAtTime(880, start);
+      gain.gain.setValueAtTime(0.0001, start);
+      gain.gain.exponentialRampToValueAtTime(0.25, start + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.30);
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.start(start);
+      osc.stop(start + 0.32);
+    }
+  } catch (e) { /* audio is a convenience, never a reason to lose a trial */ }
+}
+
 /* ---------------- trial ---------------- */
 
 function beginTrial() {
@@ -285,10 +325,14 @@ function beginTrial() {
     maxMinutes: intVal('maxMinutes', 40),
     maxMs: intVal('maxMinutes', 40) * 60000,
     correction: corr,
-    removeAnticipations: corr === 'anticipations' || corr === 'both',
+    removeFalseStarts: corr === 'falseStarts' || corr === 'both',
     removeOutliers: corr === 'outliers' || corr === 'both',
-    anticipationMs: numVal('anticipationMs', 100),
+    falseStartMs: numVal('falseStartMs', 100),
     sdMultiplier: numVal('sdMultiplier', 2),
+    alarm: $('alarmOn').checked,
+    kssWhen: $('kssWhen').value,
+    feedbackMs: 1000,
+    language: L.getLanguage(),
     presentationOffsetFrames: numVal('presOffsetFrames', 1),
     hardwareOffsetMs: numVal('hwOffsetMs', 0),
     photodiode: $('photodiode').checked,
@@ -336,6 +380,9 @@ function beginTrial() {
   };
 
   epochs = [];
+  presses = [];
+  kssBefore = null;
+  kssAfter = null;
   currentEpoch = null;
   consecutiveMisses = 0;
   missRunStartIndex = -1;
@@ -348,9 +395,44 @@ function beginTrial() {
   currentEpochStartFrame = 0;
 
   $('patch').hidden = !cfg.photodiode;
+  initAudio();
   window.bsrt.preventDisplaySleep(true);
   if ($('useFullscreen').checked) window.bsrt.setFullscreen(true);
-  countdown();
+
+  if (cfg.kssWhen === 'before' || cfg.kssWhen === 'both') showKss('before');
+  else countdown();
+}
+
+/* ---------------- Karolinska Sleepiness Scale ---------------- */
+
+function showKss(stage) {
+  kssStage = stage;
+  $('kssTitle').textContent = L.t(stage === 'before' ? 'kss.beforeTitle' : 'kss.afterTitle');
+  $('kssQuestion').textContent = L.t('kss.question');
+  $('kssInstruction').textContent = L.t('kss.instruction');
+
+  const box = $('kssOptions');
+  box.innerHTML = '';
+  L.kssAnchors().forEach((label, i) => {
+    const b = document.createElement('button');
+    b.className = 'kss-option';
+    b.type = 'button';
+    const n = document.createElement('span');
+    n.className = 'kss-num';
+    n.textContent = i + 1;
+    const tx = document.createElement('span');
+    tx.textContent = label;
+    b.appendChild(n);
+    b.appendChild(tx);
+    b.addEventListener('click', () => answerKss(i + 1));
+    box.appendChild(b);
+  });
+  show('screen-kss');
+}
+
+function answerKss(value) {
+  if (kssStage === 'before') { kssBefore = value; countdown(); }
+  else { kssAfter = value; finishResult(); }
 }
 
 function countdown() {
@@ -403,6 +485,15 @@ function frameLoop(ts) {
     return;
   }
 
+  if (currentEpoch && cfg.mode === 'pvt' && !currentEpoch.frozen && !$('clock').hidden) {
+    // Display only — the counter never feeds the reaction time, which is
+    // measured from stimulus presentation to the keypress.
+    let elapsed = ts - currentEpoch.frameTs;
+    if (elapsed < 0) elapsed = 0;
+    if (elapsed > cfg.hitWindowMs) elapsed = cfg.hitWindowMs;
+    $('clock').textContent = Math.round(elapsed);
+  }
+
   if (currentEpoch) {
     if (frameIndex - currentEpochStartFrame === framesStimOn) {
       ledOff();
@@ -430,7 +521,8 @@ function startEpoch(idx, frameTs) {
     responded: false,
     rtRawMs: null,
     extra: 0,
-    extinguished: false
+    extinguished: false,
+    frozen: false
   };
   epochs.push(currentEpoch);
 }
@@ -459,24 +551,50 @@ function finalizeEpoch() {
  * classification happens at scoring time, not here.
  */
 function handleResponse(evt) {
-  if (!running || !currentEpoch) return;
+  if (!running) return;
+  const t = T.eventTime(evt, useEventStamp);
+
+  // Every press is logged, including presses outside any epoch, because the
+  // integrity check needs the full pattern — not just the scored responses.
+  presses.push({
+    tMs: t - (trialStartTs === null ? t : trialStartTs),
+    epochIndex: currentEpoch ? currentEpoch.index : null
+  });
+
+  if (!currentEpoch) return;
   if (currentEpoch.responded) { currentEpoch.extra += 1; return; }
 
-  const t = T.eventTime(evt, useEventStamp);
   currentEpoch.responded = true;
   currentEpoch.rtRawMs = t - currentEpoch.presentationMs;
 
-  // Extinguishes the light, but never shortens the epoch.
-  currentEpoch.extinguished = true;
+  if (cfg.mode === 'pvt') {
+    // PVT convention: the counter stops and shows the achieved reaction time.
+    currentEpoch.frozen = true;
+    $('clock').textContent = Math.max(0, Math.round(currentEpoch.rtRawMs - cfg.hardwareOffsetMs));
+    $('clock').classList.add('frozen');
+  } else {
+    // Extinguishes the light, but never shortens the epoch.
+    currentEpoch.extinguished = true;
+  }
 }
 
 function ledOn() {
-  $('led').classList.add('on');
+  if (cfg.mode === 'pvt') {
+    const el = $('clock');
+    el.classList.remove('frozen');
+    el.textContent = '0';
+    el.hidden = false;
+  } else {
+    $('led').classList.add('on');
+  }
   if (cfg.photodiode) $('patch').classList.add('on');
 }
 
 function ledOff() {
   $('led').classList.remove('on');
+  const el = $('clock');
+  el.hidden = true;
+  el.classList.remove('frozen');
   $('patch').classList.remove('on');
 }
 
@@ -489,7 +607,19 @@ function endTask(reason) {
   window.bsrt.preventDisplaySleep(false);
   window.bsrt.setFullscreen(false);
 
-  lastResult = buildResult(reason);
+  if (reason === 'sleep_onset') playAlarm();
+
+  pendingResult = buildResult(reason);
+  if (cfg.kssWhen === 'after' || cfg.kssWhen === 'both') showKss('after');
+  else finishResult();
+}
+
+/* Assembled only once the post-task KSS (if any) has been answered. */
+function finishResult() {
+  pendingResult.kssBefore = kssBefore;
+  pendingResult.kssAfter = kssAfter;
+  lastResult = pendingResult;
+  pendingResult = null;
   saveSession(lastResult);
   renderResult(lastResult);
   show('screen-results');
@@ -511,7 +641,7 @@ function buildResult(reason) {
     block: e.block,
     epochIsiMs: e.epochIsiMs,
     isiBeforeMs: e.isiBeforeMs
-  })), cfg);
+  })), cfg, presses);
 
   let sleepOnsetMs = null, sleepOnsetCriterionMs = null;
   if (reason === 'sleep_onset' && missRunStartIndex >= 0) {
@@ -540,6 +670,9 @@ function buildResult(reason) {
     sleepOnsetCriterionMs,
     elapsedMs: epochs.length ? epochs[epochs.length - 1].onsetMs + epochs[epochs.length - 1].achievedIsiMs : 0,
     extraResponses: epochs.reduce((n, e) => n + e.extra, 0),
+    kssBefore: null,
+    kssAfter: null,
+    language: cfg.language,
     extras: epochs.map((e) => e.extra),
     rawRts: epochs.map((e) => e.rtRawMs),
     droppedFramesDuringTrial: droppedFrames,
@@ -576,6 +709,7 @@ function renderResult(r) {
   $('oHits').textContent = t.hits;
   $('oMisses').textContent = t.misses + (t.lateResponses ? ' (' + t.lateResponses + ' late responses)' : '');
   $('oLapses').textContent = t.lapses + ' (> ' + r.config.lapseMs + ' ms)';
+  $('oFalseStarts').textContent = t.falseStarts + ' (< ' + r.config.falseStartMs + ' ms)';
   $('oEp12').textContent = e.ep1_2;
   $('oEp36').textContent = e.ep3_6;
   $('oEp7').textContent = e.ep7plus;
@@ -604,9 +738,11 @@ function renderResult(r) {
     r.config.correction === 'none'
       ? 'No correction applied — the corrected columns equal the raw ones.'
       : 'Correction: ' + describeCorrection(r.config) + '. Removed ' +
-        t.nAnticipationsRemoved + ' anticipations and ' + t.nOutliersRemoved +
+        t.nFalseStartsRemoved + ' false starts and ' + t.nOutliersRemoved +
         ' outliers from ' + t.n + ' hits.';
 
+  renderIntegrity(r);
+  renderKss(r);
   renderPerMinute(r);
 
   $('tRefresh').textContent = r.calibration.refreshHz.toFixed(2) + ' Hz';
@@ -625,10 +761,36 @@ function renderResult(r) {
 }
 
 function describeCorrection(c) {
-  if (c.correction === 'anticipations') return 'RT < ' + c.anticipationMs + ' ms removed';
+  if (c.correction === 'falseStarts') return 'RT < ' + c.falseStartMs + ' ms removed';
   if (c.correction === 'outliers') return 'RT beyond ' + c.sdMultiplier + ' SD removed';
-  if (c.correction === 'both') return 'RT < ' + c.anticipationMs + ' ms removed, then RT beyond ' + c.sdMultiplier + ' SD';
+  if (c.correction === 'both') return 'RT < ' + c.falseStartMs + ' ms removed, then RT beyond ' + c.sdMultiplier + ' SD';
   return 'none';
+}
+
+function renderIntegrity(r) {
+  const g = r.scored.integrity;
+  $('inPresses').textContent = g.totalPresses;
+  $('inExtra').textContent = g.extraPresses + (g.extraRate ? ' (' + (g.extraRate * 100).toFixed(0) + '% of trials)' : '');
+  $('inBurst').textContent = g.burstMax + ' in ' + g.thresholds.burstWindowMs + ' ms';
+  $('inRapid').textContent = g.rapidPairs + ' under ' + g.thresholds.rapidGapMs + ' ms apart';
+
+  const box = $('integrityVerdict');
+  if (g.suspected) {
+    box.className = 'note warnbox';
+    box.textContent = L.t('results.integrityFlag') + ' ' + g.reasons.join('; ') + '.';
+  } else {
+    box.className = 'note tight';
+    box.textContent = L.t('results.integrityOk');
+  }
+}
+
+function renderKss(r) {
+  const card = $('kssResult');
+  if (r.kssBefore == null && r.kssAfter == null) { card.hidden = true; return; }
+  card.hidden = false;
+  const anchors = L.kssAnchors(r.language);
+  $('kssBeforeVal').textContent = r.kssBefore == null ? '—' : r.kssBefore + ' — ' + anchors[r.kssBefore - 1];
+  $('kssAfterVal').textContent = r.kssAfter == null ? '—' : r.kssAfter + ' — ' + anchors[r.kssAfter - 1];
 }
 
 function renderPerMinute(r) {
@@ -661,19 +823,19 @@ function renderPerMinute(r) {
 
 /* ---------------- exports ---------------- */
 
-const PARTICIPANT_COLS = ['run_id', 'date', 'time', 'participant_id', 'name', 'address',
+const PARTICIPANT_COLS = ['run_id', 'date', 'time', 'language', 'participant_id', 'name', 'address',
                           'birth_date', 'educational_level', 'session_label', 'trial_number'];
 
 function participantVals(r) {
   const p = r.participant;
-  return [r.runId, p.date, p.time, p.participantId, p.name, p.address,
+  return [r.runId, p.date, p.time, r.language || 'en', p.participantId, p.name, p.address,
           p.birthDate, p.education, p.sessionLabel, p.trialNumber];
 }
 
 const RAW_HEADER = PARTICIPANT_COLS.concat([
   'epoch_index', 'block', 'minute', 'onset_ms', 'epoch_isi_ms', 'isi_before_ms', 'responded',
   'rt_raw_ms', 'rt_ms', 'rs_per_sec',
-  'outcome', 'lapse', 'late_response', 'anticipation', 'extra_responses'
+  'outcome', 'lapse', 'late_response', 'false_start', 'extra_responses'
 ]);
 
 function rawRows(r) {
@@ -687,7 +849,7 @@ function rawRows(r) {
     round(raws[i] == null ? null : raws[i], 3),   // before the hardware offset
     round(t.rtMs, 3),                              // after it — what was scored
     round(t.rsPerSec, 5),
-    t.outcome, t.lapse, t.lateResponse, t.anticipation,
+    t.outcome, t.lapse, t.lateResponse, t.falseStart,
     extras[i] == null ? '' : extras[i]
   ]));
 }
@@ -698,7 +860,7 @@ const PM_HEADER = PARTICIPANT_COLS.concat([
   'corr_avg_rt', 'corr_median_rt', 'corr_stdev_rt', 'corr_fastest10_rt', 'corr_slowest10_rt',
   'avg_rs', 'median_rs', 'stdev_rs', 'fastest10_rs', 'slowest10_rs',
   'corr_avg_rs', 'corr_median_rs', 'corr_stdev_rs', 'corr_fastest10_rs', 'corr_slowest10_rs',
-  'n_rt', 'n_rt_corrected', 'anticipations_removed', 'outliers_removed',
+  'n_rt', 'n_rt_corrected', 'false_starts_removed', 'outliers_removed',
   'velocity_rs', 'acceleration_rs', 'velocity_rt', 'acceleration_rt'
 ]);
 
@@ -711,7 +873,7 @@ function pmRows(r) {
     round(m.corrAvgRt, 2), round(m.corrMedianRt, 2), round(m.corrSdRt, 2), round(m.corrFastest10Rt, 2), round(m.corrSlowest10Rt, 2),
     round(m.avgRs, 5), round(m.medianRs, 5), round(m.sdRs, 5), round(m.fastest10Rs, 5), round(m.slowest10Rs, 5),
     round(m.corrAvgRs, 5), round(m.corrMedianRs, 5), round(m.corrSdRs, 5), round(m.corrFastest10Rs, 5), round(m.corrSlowest10Rs, 5),
-    m.n, m.nCorrected, m.nAnticipationsRemoved, m.nOutliersRemoved,
+    m.n, m.nCorrected, m.nFalseStartsRemoved, m.nOutliersRemoved,
     round(vRs.velocity[i], 5), round(vRs.acceleration[i], 5),
     round(vRt.velocity[i], 3), round(vRt.acceleration[i], 3)
   ]));
@@ -720,18 +882,22 @@ function pmRows(r) {
 const SUMMARY_HEADER = PARTICIPANT_COLS.concat([
   'sleep_onset_ms', 'sleep_onset_criterion_ms', 'slept_before_max', 'end_reason', 'elapsed_ms',
   'total_trialrun', 'hit_ratio', 'total_hits', 'total_miss', 'total_lapse', 'late_responses',
+  'total_false_starts',
   'ep_1_2', 'ep_3_6', 'ep_7plus', 'longest_miss_run',
   'total_avg_rt', 'total_median_rt', 'total_stdev_rt', 'fastest10_rt', 'slowest10_rt',
   'corr_total_avg_rt', 'corr_total_median_rt', 'corr_total_stdev_rt', 'corr_fastest10_rt', 'corr_slowest10_rt',
   'total_avg_rs', 'total_median_rs', 'total_stdev_rs', 'fastest10_rs', 'slowest10_rs',
   'corr_total_avg_rs', 'corr_total_median_rs', 'corr_total_stdev_rs', 'corr_fastest10_rs', 'corr_slowest10_rs',
-  'n_rt', 'n_rt_corrected', 'anticipations_removed', 'outliers_removed', 'rs_undefined',
+  'n_rt', 'n_rt_corrected', 'false_starts_removed', 'outliers_removed', 'rs_undefined',
   'rs_slope_per_min', 'rt_slope_per_min',
   'mode', 'isi_requested_ms', 'isi_achieved_ms', 'isi_set_s', 'block_s',
   'schedule_method', 'schedule_seed', 'scheduled_stimuli',
   'stim_requested_ms', 'stim_achieved_ms',
   'hit_window_ms', 'lapse_threshold_ms', 'miss_criterion', 'max_minutes',
-  'correction', 'anticipation_threshold_ms', 'sd_multiplier',
+  'correction', 'false_start_threshold_ms', 'sd_multiplier',
+  'kss_when', 'kss_before', 'kss_after',
+  'total_presses', 'extra_presses', 'burst_max', 'rapid_pairs', 'cheating_suspected', 'cheating_reasons',
+  'alarm_enabled',
   'refresh_hz_measured', 'refresh_hz_reported', 'frame_interval_ms', 'frame_jitter_mad_ms',
   'onset_quantisation_ms', 'dropped_frames_calibration', 'dropped_frames_trial', 'calibration_grade',
   'input_time_source', 'input_dispatch_median_ms',
@@ -742,24 +908,30 @@ const SUMMARY_HEADER = PARTICIPANT_COLS.concat([
 
 function summaryRow(r) {
   const t = r.scored.totals, e = r.scored.errorProfiles, c = r.config;
+  const g = r.scored.integrity;
   const cal = r.calibration, d = r.display ? r.display.current : {};
   return participantVals(r).concat([
     round(r.sleepOnsetMs, 1), round(r.sleepOnsetCriterionMs, 1), r.sleptBeforeMax ? 1 : 0,
     r.endReason, round(r.elapsedMs, 1),
     t.trials, round(t.hitRatio, 4), t.hits, t.misses, t.lapses, t.lateResponses,
+    t.falseStarts,
     e.ep1_2, e.ep3_6, e.ep7plus, e.longestRun,
     round(t.avgRt, 2), round(t.medianRt, 2), round(t.sdRt, 2), round(t.fastest10Rt, 2), round(t.slowest10Rt, 2),
     round(t.corrAvgRt, 2), round(t.corrMedianRt, 2), round(t.corrSdRt, 2), round(t.corrFastest10Rt, 2), round(t.corrSlowest10Rt, 2),
     round(t.avgRs, 5), round(t.medianRs, 5), round(t.sdRs, 5), round(t.fastest10Rs, 5), round(t.slowest10Rs, 5),
     round(t.corrAvgRs, 5), round(t.corrMedianRs, 5), round(t.corrSdRs, 5), round(t.corrFastest10Rs, 5), round(t.corrSlowest10Rs, 5),
-    t.n, t.nCorrected, t.nAnticipationsRemoved, t.nOutliersRemoved, t.nRsUndefined,
+    t.n, t.nCorrected, t.nFalseStartsRemoved, t.nOutliersRemoved, t.nRsUndefined,
     round(r.scored.dynamicsRs.slope, 5), round(r.scored.dynamicsRt.slope, 3),
     c.mode, c.mode === 'pvt' ? '' : c.isiMs, c.mode === 'pvt' ? '' : round(c.achievedIsiMs, 3),
     c.isiSetMs ? c.isiSetMs.map((v) => v / 1000).join(' ') : '',
     c.blockMs / 1000, c.schedule.method, c.schedule.seed, c.schedule.nStimuli,
     c.stimMs, round(c.achievedStimMs, 3),
     c.hitWindowMs, c.lapseMs, c.missCriterion, c.maxMinutes,
-    c.correction, c.anticipationMs, c.sdMultiplier,
+    c.correction, c.falseStartMs, c.sdMultiplier,
+    c.kssWhen, r.kssBefore, r.kssAfter,
+    g.totalPresses, g.extraPresses, g.burstMax, g.rapidPairs,
+    g.suspected ? 1 : 0, g.reasons.join('; '),
+    c.alarm ? 1 : 0,
     round(cal.refreshHz, 3), d.displayFrequency == null ? null : d.displayFrequency,
     round(cal.frameIntervalMs, 4), round(cal.madIntervalMs, 4),
     round(cal.frameIntervalMs / 2, 3), cal.droppedFrames, r.droppedFramesDuringTrial, r.calibrationGrade,
@@ -835,6 +1007,13 @@ $('maxMinutes').addEventListener('change', () => {
     : 'Regular protocol: 500 ms is the conventional lapse threshold.';
 });
 
+function applyLanguage() {
+  L.setLanguage($('language').value);
+  L.applyTranslations(document);
+  applyMode();
+  if (lastResult) renderResult(lastResult);
+}
+
 function applyMode() {
   const mode = $('mode').value;
   document.body.setAttribute('data-mode', mode);
@@ -843,8 +1022,11 @@ function applyMode() {
   $('modeNote').textContent = mode === 'pvt'
     ? 'PVT: intervals vary within each block, drawn so that every block contains one of each. The sleep-onset criterion is off by default — a PVT runs to time.'
     : 'BSRT / OSLER: a fixed interval between stimuli, with sleep onset scored from consecutive misses.';
+  $('instructionsText').textContent = L.t(mode === 'pvt' ? 'instructions.pvt' : 'instructions.bsrt');
+  $('taskHint').textContent = L.t(mode === 'pvt' ? 'task.hintPvt' : 'task.hintBsrt');
 }
 
 $('mode').addEventListener('change', applyMode);
-applyMode();
+$('language').addEventListener('change', applyLanguage);
+applyLanguage();
 init();
