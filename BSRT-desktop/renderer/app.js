@@ -34,10 +34,15 @@ let trialStartTs = null;
 let startWall = null;
 let droppedFrames = 0;
 
-let framesPerEpoch = 0;
 let framesStimOn = 0;
-let achievedIsiMs = 0;
-let maxEpochs = 0;
+/* With a variable schedule each epoch has its own frame count, so the loop
+ * walks a list of frame boundaries instead of dividing by a constant. */
+let epochStartFrames = [];
+let epochFrameCounts = [];
+let achievedIsis = [];
+let totalFrames = 0;
+let nextEpochIdx = 0;
+let currentEpochStartFrame = 0;
 
 let consecutiveMisses = 0;
 let missRunStartIndex = -1;
@@ -133,11 +138,28 @@ function renderEnvironment() {
 
 /* ---------------- calibration ---------------- */
 
+function parseIsiSet() {
+  return $('isiSetMs').value.split(/[,\s]+/)
+    .map((v) => Math.round(parseFloat(v) * 1000))
+    .filter((v) => isFinite(v) && v > 0);
+}
+
 function validateSetup() {
-  const isi = intVal('isiMs', 3000), stim = intVal('stimMs', 1000);
-  if (isi < 200) return 'Stimulus interval must be at least 200 ms.';
-  if (stim >= isi) return 'Stimulus duration must be shorter than the stimulus interval.';
-  if (intVal('missCriterion', 7) < 1) return 'The miss criterion must be at least 1.';
+  const mode = $('mode').value;
+  const stim = intVal('stimMs', 1000);
+  let shortestIsi;
+
+  if (mode === 'pvt') {
+    const set = parseIsiSet();
+    if (set.length < 2) return 'Give at least two inter-stimulus intervals, in seconds (e.g. 2, 4, 6, 8, 10).';
+    if (intVal('blockMs', 30) < 1) return 'Block length must be at least 1 second.';
+    shortestIsi = Math.min.apply(null, set);
+  } else {
+    shortestIsi = intVal('isiMs', 3000);
+    if (shortestIsi < 200) return 'Stimulus interval must be at least 200 ms.';
+  }
+
+  if (stim >= shortestIsi) return 'Stimulus duration must be shorter than the shortest stimulus interval (' + shortestIsi + ' ms).';
   if (intVal('maxMinutes', 40) < 1) return 'Maximum duration must be at least 1 minute.';
   if (intVal('lapseMs', 500) >= stim) return 'The lapse threshold must be below the hit window (stimulus duration).';
   return null;
@@ -239,22 +261,27 @@ function beginTrial() {
   const isiMs = intVal('isiMs', 3000);
   const stimMs = intVal('stimMs', 1000);
   const corr = $('correction').value;
+  const mode = $('mode').value;
   const now = new Date();
+  const seedTyped = parseInt($('seed').value, 10);
+  const seed = isFinite(seedTyped) ? seedTyped : Math.floor(Math.random() * 2147483647);
 
-  framesPerEpoch = Math.max(1, Math.round(isiMs / calibration.frameIntervalMs));
   framesStimOn = Math.max(1, Math.round(stimMs / calibration.frameIntervalMs));
-  if (framesStimOn >= framesPerEpoch) framesStimOn = framesPerEpoch - 1;
-  achievedIsiMs = framesPerEpoch * calibration.frameIntervalMs;
 
   cfg = {
+    mode,
     isiMs,
+    isiSetMs: mode === 'pvt' ? parseIsiSet() : null,
+    blockMs: intVal('blockMs', 30) * 1000,
+    seed,
     stimMs,
     /* The hit window is the NOMINAL stimulus duration, not the frame-quantised
      * one, so classification is identical across machines with different
      * refresh rates. Only the light's actual duration is quantised. */
     hitWindowMs: stimMs,
     lapseMs: intVal('lapseMs', 500),
-    missCriterion: intVal('missCriterion', 7),
+    /* 0 disables early termination; a PVT runs for its full duration. */
+    missCriterion: $('criterionOn').checked ? intVal('missCriterion', 7) : 0,
     maxMinutes: intVal('maxMinutes', 40),
     maxMs: intVal('maxMinutes', 40) * 60000,
     correction: corr,
@@ -265,12 +292,35 @@ function beginTrial() {
     presentationOffsetFrames: numVal('presOffsetFrames', 1),
     hardwareOffsetMs: numVal('hwOffsetMs', 0),
     photodiode: $('photodiode').checked,
-    framesPerEpoch,
     framesStimOn,
-    achievedIsiMs,
     achievedStimMs: framesStimOn * calibration.frameIntervalMs
   };
-  maxEpochs = Math.floor(cfg.maxMs / achievedIsiMs);
+
+  cfg.schedule = S.buildSchedule({
+    mode: cfg.mode,
+    isiMs: cfg.isiMs,
+    isiSetMs: cfg.isiSetMs,
+    blockMs: cfg.blockMs,
+    maxMs: cfg.maxMs,
+    seed: cfg.seed
+  });
+
+  /*
+   * Convert the schedule into whole frames. Each interval is rounded
+   * independently, then the boundaries accumulate, so a long trial cannot drift
+   * even though individual intervals differ.
+   */
+  epochFrameCounts = cfg.schedule.isis.map(
+    (ms) => Math.max(framesStimOn + 1, Math.round(ms / calibration.frameIntervalMs)));
+  achievedIsis = epochFrameCounts.map((f) => f * calibration.frameIntervalMs);
+  epochStartFrames = [];
+  let acc = 0;
+  for (let i = 0; i < epochFrameCounts.length; i++) {
+    epochStartFrames.push(acc);
+    acc += epochFrameCounts[i];
+  }
+  totalFrames = acc;
+  cfg.achievedIsiMs = mode === 'pvt' ? null : (achievedIsis[0] == null ? null : achievedIsis[0]);
 
   meta = {
     runId: 'bsrt-' + Date.now(),
@@ -293,6 +343,9 @@ function beginTrial() {
   droppedFrames = 0;
   frameIndex = -1;
   lastFrameTs = null;
+
+  nextEpochIdx = 0;
+  currentEpochStartFrame = 0;
 
   $('patch').hidden = !cfg.photodiode;
   window.bsrt.preventDisplaySleep(true);
@@ -333,22 +386,33 @@ function frameLoop(ts) {
   lastFrameTs = ts;
 
   frameIndex += 1;
-  const epochIdx = Math.floor(frameIndex / framesPerEpoch);
-  const phase = frameIndex - epochIdx * framesPerEpoch;
 
-  if (phase === 0) {
+  if (frameIndex >= totalFrames) {
     finalizeEpoch();
     if (!running) return;
-    if (epochIdx >= maxEpochs) { endTask('max_duration'); return; }
-    startEpoch(epochIdx, ts);
-  } else if (phase === framesStimOn) {
-    ledOff();
-  } else if (currentEpoch && currentEpoch.extinguished) {
-    // Extinguish here rather than in the event handler so the offset lands on a
-    // frame boundary like every other transition — keeps a photodiode trace
-    // interpretable.
-    ledOff();
-    currentEpoch.extinguished = false;
+    endTask('max_duration');
+    return;
+  }
+
+  if (nextEpochIdx < epochStartFrames.length && frameIndex === epochStartFrames[nextEpochIdx]) {
+    finalizeEpoch();
+    if (!running) return;
+    startEpoch(nextEpochIdx, ts);
+    currentEpochStartFrame = frameIndex;
+    nextEpochIdx += 1;
+    return;
+  }
+
+  if (currentEpoch) {
+    if (frameIndex - currentEpochStartFrame === framesStimOn) {
+      ledOff();
+    } else if (currentEpoch.extinguished) {
+      // Extinguish here rather than in the event handler so the offset lands on
+      // a frame boundary like every other transition — keeps a photodiode trace
+      // interpretable.
+      ledOff();
+      currentEpoch.extinguished = false;
+    }
   }
 }
 
@@ -359,6 +423,10 @@ function startEpoch(idx, frameTs) {
     frameTs,
     presentationMs: frameTs + cfg.presentationOffsetFrames * calibration.frameIntervalMs,
     onsetMs: frameTs - trialStartTs,
+    block: cfg.schedule.blocks[idx],
+    epochIsiMs: cfg.schedule.isis[idx],
+    isiBeforeMs: idx === 0 ? null : cfg.schedule.isis[idx - 1],
+    achievedIsiMs: achievedIsis[idx],
     responded: false,
     rtRawMs: null,
     extra: 0,
@@ -383,7 +451,7 @@ function finalizeEpoch() {
 
   if (consecutiveMisses === 0) missRunStartIndex = ep.index;
   consecutiveMisses += 1;
-  if (consecutiveMisses >= cfg.missCriterion) endTask('sleep_onset');
+  if (cfg.missCriterion > 0 && consecutiveMisses >= cfg.missCriterion) endTask('sleep_onset');
 }
 
 /*
@@ -439,16 +507,21 @@ function buildResult(reason) {
   const scored = S.score(epochs.map((e) => ({
     index: e.index,
     onsetMs: e.onsetMs,
-    rtMs: e.rtRawMs === null ? null : e.rtRawMs - cfg.hardwareOffsetMs
+    rtMs: e.rtRawMs === null ? null : e.rtRawMs - cfg.hardwareOffsetMs,
+    block: e.block,
+    epochIsiMs: e.epochIsiMs,
+    isiBeforeMs: e.isiBeforeMs
   })), cfg);
 
   let sleepOnsetMs = null, sleepOnsetCriterionMs = null;
   if (reason === 'sleep_onset' && missRunStartIndex >= 0) {
     const first = epochs[missRunStartIndex];
     const last = epochs[missRunStartIndex + cfg.missCriterion - 1];
-    sleepOnsetMs = first ? first.onsetMs : missRunStartIndex * achievedIsiMs;
-    sleepOnsetCriterionMs = last ? last.onsetMs + achievedIsiMs
-                                 : sleepOnsetMs + cfg.missCriterion * achievedIsiMs;
+    sleepOnsetMs = first ? first.onsetMs : cfg.schedule.onsets[missRunStartIndex];
+    // With a variable schedule the criterion is confirmed one INTERVAL after the
+    // last missed stimulus, and that interval differs per epoch.
+    sleepOnsetCriterionMs = last ? last.onsetMs + last.achievedIsiMs
+                                 : sleepOnsetMs + cfg.missCriterion * (achievedIsis[0] || cfg.isiMs);
   }
 
   return {
@@ -465,7 +538,7 @@ function buildResult(reason) {
     sleptBeforeMax: reason === 'sleep_onset',
     sleepOnsetMs,
     sleepOnsetCriterionMs,
-    elapsedMs: epochs.length ? epochs[epochs.length - 1].onsetMs + achievedIsiMs : 0,
+    elapsedMs: epochs.length ? epochs[epochs.length - 1].onsetMs + epochs[epochs.length - 1].achievedIsiMs : 0,
     extraResponses: epochs.reduce((n, e) => n + e.extra, 0),
     extras: epochs.map((e) => e.extra),
     rawRts: epochs.map((e) => e.rtRawMs),
@@ -538,7 +611,10 @@ function renderResult(r) {
 
   $('tRefresh').textContent = r.calibration.refreshHz.toFixed(2) + ' Hz';
   $('tInterval').textContent = n2(r.calibration.frameIntervalMs) + ' ms';
-  $('tAchievedIsi').textContent = n2(r.config.achievedIsiMs) + ' ms (requested ' + r.config.isiMs + ')';
+  $('tAchievedIsi').textContent = r.config.mode === 'pvt'
+    ? 'variable — ' + r.config.isiSetMs.map((v) => v / 1000).join('/') + ' s, ' +
+      r.config.schedule.method.replace(/_/g, ' ')
+    : n2(r.config.achievedIsiMs) + ' ms (requested ' + r.config.isiMs + ')';
   $('tQuant').textContent = '± ' + n2(r.calibration.frameIntervalMs / 2) + ' ms';
   $('tDropped').textContent = r.droppedFramesDuringTrial;
   $('tInputSrc').textContent = r.inputTimeSource === 'os_event_stamp' ? 'OS event stamp' : 'handler time (fallback)';
@@ -595,7 +671,7 @@ function participantVals(r) {
 }
 
 const RAW_HEADER = PARTICIPANT_COLS.concat([
-  'epoch_index', 'minute', 'onset_ms', 'responded',
+  'epoch_index', 'block', 'minute', 'onset_ms', 'epoch_isi_ms', 'isi_before_ms', 'responded',
   'rt_raw_ms', 'rt_ms', 'rs_per_sec',
   'outcome', 'lapse', 'late_response', 'anticipation', 'extra_responses'
 ]);
@@ -605,7 +681,8 @@ function rawRows(r) {
   const extras = r.extras || [];
   const raws = r.rawRts || [];
   return r.scored.trials.map((t, i) => pv.concat([
-    t.index, t.minute + 1, round(t.onsetMs, 2),
+    t.index, t.block === null ? '' : t.block + 1, t.minute + 1, round(t.onsetMs, 2),
+    t.epochIsiMs, t.isiBeforeMs,
     t.rtMs === null ? 0 : 1,
     round(raws[i] == null ? null : raws[i], 3),   // before the hardware offset
     round(t.rtMs, 3),                              // after it — what was scored
@@ -650,7 +727,9 @@ const SUMMARY_HEADER = PARTICIPANT_COLS.concat([
   'corr_total_avg_rs', 'corr_total_median_rs', 'corr_total_stdev_rs', 'corr_fastest10_rs', 'corr_slowest10_rs',
   'n_rt', 'n_rt_corrected', 'anticipations_removed', 'outliers_removed', 'rs_undefined',
   'rs_slope_per_min', 'rt_slope_per_min',
-  'isi_requested_ms', 'isi_achieved_ms', 'stim_requested_ms', 'stim_achieved_ms',
+  'mode', 'isi_requested_ms', 'isi_achieved_ms', 'isi_set_s', 'block_s',
+  'schedule_method', 'schedule_seed', 'scheduled_stimuli',
+  'stim_requested_ms', 'stim_achieved_ms',
   'hit_window_ms', 'lapse_threshold_ms', 'miss_criterion', 'max_minutes',
   'correction', 'anticipation_threshold_ms', 'sd_multiplier',
   'refresh_hz_measured', 'refresh_hz_reported', 'frame_interval_ms', 'frame_jitter_mad_ms',
@@ -675,7 +754,10 @@ function summaryRow(r) {
     round(t.corrAvgRs, 5), round(t.corrMedianRs, 5), round(t.corrSdRs, 5), round(t.corrFastest10Rs, 5), round(t.corrSlowest10Rs, 5),
     t.n, t.nCorrected, t.nAnticipationsRemoved, t.nOutliersRemoved, t.nRsUndefined,
     round(r.scored.dynamicsRs.slope, 5), round(r.scored.dynamicsRt.slope, 3),
-    c.isiMs, round(c.achievedIsiMs, 3), c.stimMs, round(c.achievedStimMs, 3),
+    c.mode, c.mode === 'pvt' ? '' : c.isiMs, c.mode === 'pvt' ? '' : round(c.achievedIsiMs, 3),
+    c.isiSetMs ? c.isiSetMs.map((v) => v / 1000).join(' ') : '',
+    c.blockMs / 1000, c.schedule.method, c.schedule.seed, c.schedule.nStimuli,
+    c.stimMs, round(c.achievedStimMs, 3),
     c.hitWindowMs, c.lapseMs, c.missCriterion, c.maxMinutes,
     c.correction, c.anticipationMs, c.sdMultiplier,
     round(cal.refreshHz, 3), d.displayFrequency == null ? null : d.displayFrequency,
@@ -753,4 +835,16 @@ $('maxMinutes').addEventListener('change', () => {
     : 'Regular protocol: 500 ms is the conventional lapse threshold.';
 });
 
+function applyMode() {
+  const mode = $('mode').value;
+  document.body.setAttribute('data-mode', mode);
+  // A PVT runs for a fixed duration; the sleep-onset criterion is an OSLER idea.
+  $('criterionOn').checked = mode !== 'pvt';
+  $('modeNote').textContent = mode === 'pvt'
+    ? 'PVT: intervals vary within each block, drawn so that every block contains one of each. The sleep-onset criterion is off by default — a PVT runs to time.'
+    : 'BSRT / OSLER: a fixed interval between stimuli, with sleep onset scored from consecutive misses.';
+}
+
+$('mode').addEventListener('change', applyMode);
+applyMode();
 init();

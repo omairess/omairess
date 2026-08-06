@@ -110,7 +110,19 @@ function saveSession(r) {
   } catch (e) {
     alert('Could not save this trial (storage may be full). Export it now.');
   }
-  refreshCount();
+  function applyMode() {
+  var mode = $('mode').value;
+  document.body.setAttribute('data-mode', mode);
+  // A PVT runs for a fixed duration; the sleep-onset criterion is an OSLER idea.
+  $('criterionOn').checked = mode !== 'pvt';
+  $('modeNote').textContent = mode === 'pvt'
+    ? 'PVT: intervals vary within each block, drawn so that every block contains one of each. The sleep-onset criterion is off by default — a PVT runs to time.'
+    : 'BSRT / OSLER: a fixed interval between stimuli, with sleep onset scored from consecutive misses.';
+}
+
+$('mode').addEventListener('change', applyMode);
+applyMode();
+refreshCount();
 }
 
 function refreshCount() { $('sessionCount').textContent = loadSessions().length; }
@@ -128,11 +140,28 @@ function releaseWakeLock() {
 
 /* ---------------- trial ---------------- */
 
+function parseIsiSet() {
+  return $('isiSetMs').value.split(/[,\s]+/)
+    .map(function (v) { return Math.round(parseFloat(v) * 1000); })
+    .filter(function (v) { return isFinite(v) && v > 0; });
+}
+
 function validate() {
-  var isi = intVal('isiMs', 3000), stim = intVal('stimMs', 1000);
-  if (isi < 200) return 'Stimulus interval must be at least 200 ms.';
-  if (stim >= isi) return 'Stimulus duration must be shorter than the stimulus interval.';
-  if (intVal('missCriterion', 7) < 1) return 'The miss criterion must be at least 1.';
+  var mode = $('mode').value;
+  var stim = intVal('stimMs', 1000);
+  var shortestIsi;
+
+  if (mode === 'pvt') {
+    var set = parseIsiSet();
+    if (set.length < 2) return 'Give at least two inter-stimulus intervals, in seconds (e.g. 2, 4, 6, 8, 10).';
+    if (intVal('blockMs', 30) < 1) return 'Block length must be at least 1 second.';
+    shortestIsi = Math.min.apply(null, set);
+  } else {
+    shortestIsi = intVal('isiMs', 3000);
+    if (shortestIsi < 200) return 'Stimulus interval must be at least 200 ms.';
+  }
+
+  if (stim >= shortestIsi) return 'Stimulus duration must be shorter than the shortest stimulus interval (' + shortestIsi + ' ms).';
   if (intVal('maxMinutes', 40) < 1) return 'Maximum duration must be at least 1 minute.';
   if (intVal('lapseMs', 500) >= stim) return 'The lapse threshold must be below the hit window (stimulus duration).';
   return null;
@@ -144,14 +173,22 @@ function beginTrial() {
   $('setupError').hidden = true;
 
   var corr = $('correction').value; // none | anticipations | outliers | both
+  var mode = $('mode').value;
   var now = new Date();
+  var seedTyped = parseInt($('seed').value, 10);
+  var seed = isFinite(seedTyped) ? seedTyped : Math.floor(Math.random() * 2147483647);
 
   cfg = {
+    mode: mode,
+    isiSetMs: mode === 'pvt' ? parseIsiSet() : null,
+    blockMs: intVal('blockMs', 30) * 1000,
+    seed: seed,
     isiMs: intVal('isiMs', 3000),
     stimMs: intVal('stimMs', 1000),
     hitWindowMs: intVal('stimMs', 1000),   // RT <= stimulus duration counts as a hit
     lapseMs: intVal('lapseMs', 500),
-    missCriterion: intVal('missCriterion', 7),
+    /* 0 disables early termination; a PVT runs for its full duration. */
+    missCriterion: $('criterionOn').checked ? intVal('missCriterion', 7) : 0,
     maxMinutes: intVal('maxMinutes', 40),
     maxMs: intVal('maxMinutes', 40) * 60000,
     correction: corr,
@@ -160,6 +197,15 @@ function beginTrial() {
     anticipationMs: numVal('anticipationMs', 100),
     sdMultiplier: numVal('sdMultiplier', 2)
   };
+
+  cfg.schedule = S.buildSchedule({
+    mode: cfg.mode,
+    isiMs: cfg.isiMs,
+    isiSetMs: cfg.isiSetMs,
+    blockMs: cfg.blockMs,
+    maxMs: cfg.maxMs,
+    seed: cfg.seed
+  });
 
   meta = {
     runId: 'bsrt-' + Date.now(),
@@ -208,21 +254,35 @@ function startTask() {
   runEpoch(0);
 }
 
-/* Absolute targets, so presentation does not drift across a long trial. */
+/*
+ * Absolute targets taken from the pre-built schedule, so presentation does not
+ * drift across a long trial and a variable-interval (PVT) schedule is delivered
+ * exactly as generated.
+ */
 function scheduleEpoch(n) {
-  var delay = (startTime + n * cfg.isiMs) - performance.now();
+  var last = cfg.schedule.nStimuli - 1;
+  // Past the final stimulus there is no onset to aim at, but the trial still
+  // has to be ended — so schedule one last call at the end of the last epoch.
+  // Returning here instead would leave the task running with nothing to fire.
+  var target = n < cfg.schedule.nStimuli
+    ? cfg.schedule.onsets[n]
+    : cfg.schedule.onsets[last] + cfg.schedule.isis[last];
+  var delay = (startTime + target) - performance.now();
   epochTimer = setTimeout(function () { runEpoch(n); }, delay > 0 ? delay : 0);
 }
 
 function runEpoch(n) {
   finalizeEpoch();
   if (!running) return;
-  if (n * cfg.isiMs >= cfg.maxMs) { endTask('max_duration'); return; }
+  if (n >= cfg.schedule.nStimuli) { endTask('max_duration'); return; }
 
   currentEpoch = {
     index: n,
     onsetMs: performance.now() - startTime,
     onsetPerf: performance.now(),
+    block: cfg.schedule.blocks[n],
+    epochIsiMs: cfg.schedule.isis[n],
+    isiBeforeMs: n === 0 ? null : cfg.schedule.isis[n - 1],
     responded: false,
     rtMs: null,
     extra: 0
@@ -249,7 +309,7 @@ function finalizeEpoch() {
 
   if (consecutiveMisses === 0) missRunStartIndex = ep.index;
   consecutiveMisses += 1;
-  if (consecutiveMisses >= cfg.missCriterion) endTask('sleep_onset');
+  if (cfg.missCriterion > 0 && consecutiveMisses >= cfg.missCriterion) endTask('sleep_onset');
 }
 
 /*
@@ -291,15 +351,20 @@ function endTask(reason) {
 
 function buildResult(reason) {
   var scored = S.score(epochs.map(function (e) {
-    return { index: e.index, onsetMs: e.onsetMs, rtMs: e.rtMs };
+    return {
+      index: e.index, onsetMs: e.onsetMs, rtMs: e.rtMs,
+      block: e.block, epochIsiMs: e.epochIsiMs, isiBeforeMs: e.isiBeforeMs
+    };
   }), cfg);
 
   var sleepOnsetMs = null, sleepOnsetCriterionMs = null;
   if (reason === 'sleep_onset' && missRunStartIndex >= 0) {
     var first = epochs[missRunStartIndex];
     var last = epochs[missRunStartIndex + cfg.missCriterion - 1];
-    sleepOnsetMs = first ? first.onsetMs : missRunStartIndex * cfg.isiMs;
-    sleepOnsetCriterionMs = last ? last.onsetMs + cfg.isiMs
+    sleepOnsetMs = first ? first.onsetMs : cfg.schedule.onsets[missRunStartIndex];
+    // With a variable schedule the criterion is confirmed one INTERVAL after the
+    // last missed stimulus, and that interval differs per epoch.
+    sleepOnsetCriterionMs = last ? last.onsetMs + last.epochIsiMs
                                  : sleepOnsetMs + cfg.missCriterion * cfg.isiMs;
   }
 
@@ -312,7 +377,7 @@ function buildResult(reason) {
     sleptBeforeMax: reason === 'sleep_onset',
     sleepOnsetMs: sleepOnsetMs,
     sleepOnsetCriterionMs: sleepOnsetCriterionMs,
-    elapsedMs: epochs.length ? epochs[epochs.length - 1].onsetMs + cfg.isiMs : 0,
+    elapsedMs: epochs.length ? epochs[epochs.length - 1].onsetMs + epochs[epochs.length - 1].epochIsiMs : 0,
     extraResponses: epochs.reduce(function (n, e) { return n + e.extra; }, 0),
     extras: epochs.map(function (e) { return e.extra; }),
     blurCount: blurCount,
@@ -432,7 +497,8 @@ function participantVals(r) {
 }
 
 var RAW_HEADER = PARTICIPANT_COLS.concat([
-  'epoch_index', 'minute', 'onset_ms', 'responded', 'rt_ms', 'rs_per_sec',
+  'epoch_index', 'block', 'minute', 'onset_ms', 'epoch_isi_ms', 'isi_before_ms',
+  'responded', 'rt_ms', 'rs_per_sec',
   'outcome', 'lapse', 'late_response', 'anticipation', 'extra_responses'
 ]);
 
@@ -441,7 +507,8 @@ function rawRows(r) {
   var extras = r.extras || [];
   return r.scored.trials.map(function (t, i) {
     return pv.concat([
-      t.index, t.minute + 1, round(t.onsetMs, 2),
+      t.index, t.block === null ? '' : t.block + 1, t.minute + 1, round(t.onsetMs, 2),
+      t.epochIsiMs, t.isiBeforeMs,
       t.rtMs === null ? 0 : 1,
       round(t.rtMs, 3), round(t.rsPerSec, 5),
       t.outcome, t.lapse, t.lateResponse, t.anticipation,
@@ -487,7 +554,8 @@ var SUMMARY_HEADER = PARTICIPANT_COLS.concat([
   'corr_total_avg_rs', 'corr_total_median_rs', 'corr_total_stdev_rs', 'corr_fastest10_rs', 'corr_slowest10_rs',
   'n_rt', 'n_rt_corrected', 'anticipations_removed', 'outliers_removed', 'rs_undefined',
   'rs_slope_per_min', 'rt_slope_per_min',
-  'isi_ms', 'stim_ms', 'hit_window_ms', 'lapse_threshold_ms', 'miss_criterion', 'max_minutes',
+  'mode', 'isi_ms', 'isi_set_s', 'block_s', 'schedule_method', 'schedule_seed', 'scheduled_stimuli',
+  'stim_ms', 'hit_window_ms', 'lapse_threshold_ms', 'miss_criterion', 'max_minutes',
   'correction', 'anticipation_threshold_ms', 'sd_multiplier',
   'extra_responses', 'page_blur_count'
 ]);
@@ -505,7 +573,10 @@ function summaryRow(r) {
     round(t.corrAvgRs, 5), round(t.corrMedianRs, 5), round(t.corrSdRs, 5), round(t.corrFastest10Rs, 5), round(t.corrSlowest10Rs, 5),
     t.n, t.nCorrected, t.nAnticipationsRemoved, t.nOutliersRemoved, t.nRsUndefined,
     round(r.scored.dynamicsRs.slope, 5), round(r.scored.dynamicsRt.slope, 3),
-    c.isiMs, c.stimMs, c.hitWindowMs, c.lapseMs, c.missCriterion, c.maxMinutes,
+    c.mode, c.mode === 'pvt' ? '' : c.isiMs,
+    c.isiSetMs ? c.isiSetMs.map(function (v) { return v / 1000; }).join(' ') : '',
+    c.blockMs / 1000, c.schedule.method, c.schedule.seed, c.schedule.nStimuli,
+    c.stimMs, c.hitWindowMs, c.lapseMs, c.missCriterion, c.maxMinutes,
     c.correction, c.anticipationMs, c.sdMultiplier,
     r.extraResponses, r.blurCount
   ]);
@@ -583,4 +654,16 @@ $('maxMinutes').addEventListener('change', function () {
     : 'Regular protocol: 500 ms is the conventional lapse threshold.';
 });
 
+function applyMode() {
+  var mode = $('mode').value;
+  document.body.setAttribute('data-mode', mode);
+  // A PVT runs for a fixed duration; the sleep-onset criterion is an OSLER idea.
+  $('criterionOn').checked = mode !== 'pvt';
+  $('modeNote').textContent = mode === 'pvt'
+    ? 'PVT: intervals vary within each block, drawn so that every block contains one of each. The sleep-onset criterion is off by default — a PVT runs to time.'
+    : 'BSRT / OSLER: a fixed interval between stimuli, with sleep onset scored from consecutive misses.';
+}
+
+$('mode').addEventListener('change', applyMode);
+applyMode();
 refreshCount();

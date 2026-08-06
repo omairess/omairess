@@ -28,6 +28,63 @@ modified parameters.
 
 ---
 
+## Two modes
+
+The task runs either paradigm; the only structural difference is how the
+inter-stimulus interval is chosen.
+
+| | **BSRT / OSLER** | **PVT** |
+|---|---|---|
+| Interval | fixed (3000 ms) | varies: 2, 4, 6, 8, 10 s |
+| Ends | on the sleep-onset criterion, or at the ceiling | at the ceiling |
+| Sleep-onset criterion | on | off by default |
+
+Everything else — hit window, lapse threshold, scoring, corrections, per-minute
+and total metrics, all three CSV exports — is identical, so the two are directly
+comparable and the same analysis code reads both.
+
+### How the PVT schedule is built
+
+The specified intervals sum to exactly one block: 2 + 4 + 6 + 8 + 10 = **30 s**.
+Each 30-second block is therefore a fresh random **permutation** of the five
+intervals — random in order, balanced in composition. Every block delivers one
+of each wait, so no block can come out all-short or all-long, and the
+interval distribution is identical in every block of the test.
+
+This is an interpretation of "vary randomly within each 30 s block". If you
+intended independent sampling with replacement instead, say so — it is a
+one-line change. The rule actually used is exported as `schedule_method`
+(`block_permutation` or `sampled_with_replacement`), so it is never ambiguous
+after the fact.
+
+A custom interval set that does *not* sum to the block length cannot be
+balanced. The generator says so by falling back to sampling with replacement and
+recording that in `schedule_method`, rather than silently pretending to balance.
+
+### Reproducible schedules
+
+Schedules come from a seeded generator, and the seed is exported as
+`schedule_seed`. Leave the field blank for a random seed per trial, or type one
+to reproduce a schedule exactly — useful for a fixed test order across
+participants, or for reconstructing what a participant actually saw.
+
+### What is recorded per stimulus
+
+The raw CSV carries `block`, `epoch_isi_ms` (this stimulus's interval) and
+`isi_before_ms` (the wait that preceded it). Reaction time depends on the
+preceding interval in a PVT, so that column is what you need to model it.
+
+### A consequence worth knowing
+
+The response window is the whole epoch, so with a 10 s interval a very late
+press is recorded against that stimulus with a reaction time of several
+seconds. It is still scored a **miss** (`late_response = 1`) and never counts as
+a hit, but if you want presses during the dead time treated as false starts
+against the *next* stimulus instead, that is a different rule and would need
+adding deliberately.
+
+---
+
 ## Trial procedure
 
 One epoch, in order:

@@ -33,15 +33,32 @@
     </div>
 
     <div class="card">
-      <h2>Protocol</h2>
-      <p class="note">Defaults reproduce the standard OSLER protocol: a 1&nbsp;s stimulus every 3&nbsp;s, sleep onset at 7 consecutive misses (21&nbsp;s), 40&nbsp;min maximum.</p>
+      <h2>Task</h2>
       <div class="grid">
-        <label>Stimulus interval (ms)<input type="number" id="isiMs" value="3000" min="200" step="100"></label>
+        <label>Mode
+          <select id="mode">
+            <option value="bsrt" selected>BSRT / OSLER — fixed interval</option>
+            <option value="pvt">PVT — variable interval</option>
+          </select>
+        </label>
+        <label class="only-bsrt">Stimulus interval (ms)<input type="number" id="isiMs" value="3000" min="200" step="100"></label>
+        <label class="only-pvt">Intervals (seconds, comma separated)<input type="text" id="isiSetMs" value="2, 4, 6, 8, 10" autocomplete="off"></label>
+        <label class="only-pvt">Block length (s)<input type="number" id="blockMs" value="30" min="1" step="1"></label>
+        <label class="only-pvt">Schedule seed (blank = random)<input type="text" id="seed" placeholder="random" autocomplete="off"></label>
+      </div>
+      <p class="note tight" id="modeNote"></p>
+    </div>
+
+    <div class="card">
+      <h2>Protocol</h2>
+      <p class="note">BSRT defaults reproduce the standard OSLER protocol: a 1&nbsp;s stimulus every 3&nbsp;s, sleep onset at 7 consecutive misses (21&nbsp;s), 40&nbsp;min maximum. The PVT default is a 10&nbsp;min run with 2/4/6/8/10&nbsp;s intervals.</p>
+      <div class="grid">
         <label>Stimulus duration / hit window (ms)<input type="number" id="stimMs" value="1000" min="50" step="50"></label>
-        <label>Consecutive misses = sleep onset<input type="number" id="missCriterion" value="7" min="1" step="1"></label>
         <label>Maximum duration (min)<input type="number" id="maxMinutes" value="40" min="1" step="1"></label>
         <label>Lapse threshold (ms)<input type="number" id="lapseMs" value="500" min="50" step="5"></label>
+        <label>Consecutive misses = sleep onset<input type="number" id="missCriterion" value="7" min="1" step="1"></label>
       </div>
+      <label class="check"><input type="checkbox" id="criterionOn" checked> End the test early on the sleep-onset criterion</label>
       <p class="note tight" id="lapseHint">Regular protocol: 500 ms is the conventional lapse threshold.</p>
       <p class="note tight">A response within the hit window is a <strong>hit</strong>; a slow hit (beyond the lapse threshold) is a <strong>lapse</strong>. A response later than the hit window is a <strong>miss</strong> — its raw reaction time is still recorded, but it does not reset the consecutive-miss run. Responding extinguishes the light immediately without shortening the epoch.</p>
       <label class="check"><input type="checkbox" id="useFullscreen" checked> Fullscreen during the task</label>

@@ -18,6 +18,11 @@
  *
  * Reaction speed is RS = 1000 / RT. It is defined only for RT > 0, so
  * anticipatory responses at or below zero are excluded from RS (and counted).
+ *
+ * Also builds the stimulus schedule, because the two modes differ only in how
+ * the inter-stimulus intervals are generated:
+ *   bsrt — a fixed interval, every epoch the same
+ *   pvt  — intervals drawn from a set (2/4/6/8/10 s) varying within 30 s blocks
  */
 
 (function (root, factory) {
@@ -191,7 +196,8 @@
       else if (r <= 6) ep.ep3_6 += 1;
       else ep.ep7plus += 1;
     }
-    ep.criterionReached = ep.longestRun >= missCriterion;
+    // A criterion of 0 or less means 'no early termination' (PVT runs to time).
+    ep.criterionReached = missCriterion > 0 && ep.longestRun >= missCriterion;
     return ep;
   }
 
@@ -236,6 +242,108 @@
     return den === 0 ? null : num / den;
   }
 
+  /* ---------------- stimulus schedule ---------------- */
+
+  /*
+   * mulberry32. A seeded generator rather than Math.random so a schedule can be
+   * reproduced exactly from the seed recorded with the data — which matters when
+   * a reviewer asks what the participant actually saw.
+   */
+  function makeRng(seed) {
+    let a = seed >>> 0;
+    return function () {
+      a = (a + 0x6D2B79F5) | 0;
+      let t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  /* Fisher-Yates, unbiased, driven by the seeded generator. */
+  function shuffle(arr, rng) {
+    const a = arr.slice();
+    for (let i = a.length - 1; i > 0; i--) {
+      const j = Math.floor(rng() * (i + 1));
+      const t = a[i]; a[i] = a[j]; a[j] = t;
+    }
+    return a;
+  }
+
+  /*
+   * Builds the inter-stimulus intervals for a whole trial.
+   *
+   * PVT mode: the specified set (2, 4, 6, 8, 10 s) sums to exactly 30 s, so a
+   * 30-second block holds precisely one of each interval. The schedule is
+   * therefore a fresh random PERMUTATION per block: random in order, balanced in
+   * composition, so every block delivers the same distribution of waits and no
+   * block can happen to be all-short or all-long. `method` records which rule
+   * was used, because if a custom set does not sum to the block length that
+   * balance is impossible and the generator falls back to sampling with
+   * replacement.
+   *
+   * isis[i] is the interval FROM stimulus i to stimulus i+1, so the wait a
+   * participant experienced before stimulus i is isis[i-1].
+   */
+  function buildSchedule(opts) {
+    const maxMs = opts.maxMs;
+    const isis = [];
+
+    if (opts.mode !== 'pvt') {
+      const n = Math.max(1, Math.ceil(maxMs / opts.isiMs));
+      for (let i = 0; i < n; i++) isis.push(opts.isiMs);
+      return finishSchedule(isis, maxMs, opts.blockMs, 'fixed', opts.seed);
+    }
+
+    const set = opts.isiSetMs.slice();
+    const blockMs = opts.blockMs;
+    const sum = set.reduce(function (a, b) { return a + b; }, 0);
+    const balanced = sum === blockMs;
+    const rng = makeRng(opts.seed);
+
+    let total = 0;
+    let guard = 0;
+    while (total < maxMs && guard++ < 100000) {
+      if (balanced) {
+        const block = shuffle(set, rng);
+        for (let i = 0; i < block.length && total < maxMs; i++) {
+          isis.push(block[i]);
+          total += block[i];
+        }
+      } else {
+        let used = 0;
+        while (used < blockMs && total < maxMs) {
+          const v = set[Math.floor(rng() * set.length)];
+          isis.push(v);
+          used += v;
+          total += v;
+        }
+      }
+    }
+    return finishSchedule(isis, maxMs, blockMs, balanced ? 'block_permutation' : 'sampled_with_replacement', opts.seed);
+  }
+
+  function finishSchedule(isis, maxMs, blockMs, method, seed) {
+    const onsets = [];
+    const kept = [];
+    let t = 0;
+    for (let i = 0; i < isis.length; i++) {
+      if (t >= maxMs) break;
+      onsets.push(t);
+      kept.push(isis[i]);
+      t += isis[i];
+    }
+    return {
+      isis: kept,
+      onsets: onsets,
+      blocks: onsets.map(function (o) { return Math.floor(o / blockMs); }),
+      method: method,
+      seed: seed,
+      blockMs: blockMs,
+      nStimuli: onsets.length,
+      plannedDurationMs: t
+    };
+  }
+
   /* ---------------- main entry point ---------------- */
 
   /*
@@ -262,6 +370,9 @@
         index: e.index,
         onsetMs: e.onsetMs,
         minute: Math.floor(e.onsetMs / 60000),
+        block: e.block === undefined ? null : e.block,
+        epochIsiMs: e.epochIsiMs === undefined ? null : e.epochIsiMs,
+        isiBeforeMs: e.isiBeforeMs === undefined ? null : e.isiBeforeMs,
         rtMs: rt,                                   // raw, always preserved
         rsPerSec: rt !== null && rt > 0 ? 1000 / rt : null,
         outcome: isHit ? 'hit' : 'miss',
@@ -326,6 +437,9 @@
 
   return {
     score: score,
+    buildSchedule: buildSchedule,
+    makeRng: makeRng,
+    shuffle: shuffle,
     blockMetrics: blockMetrics,
     errorProfiles: errorProfiles,
     applyCorrection: applyCorrection,

@@ -277,3 +277,7 @@ table.metrics.two td { padding-left: 16px; }
 table.metrics.pm { min-width: 760px; font-size: 13px; }
 table.metrics.pm th:first-child { text-align: left; }
 table.metrics.pm td { padding: 6px 0 6px 14px; }
+
+/* Mode-dependent fields: only one interval scheme is ever relevant. */
+body[data-mode="bsrt"] .only-pvt,
+body[data-mode="pvt"] .only-bsrt { display: none; }
