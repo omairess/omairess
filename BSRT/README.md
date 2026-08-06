@@ -149,6 +149,27 @@ A custom interval set that does *not* sum to the block length cannot be
 balanced. The generator says so by falling back to sampling with replacement and
 recording that in `schedule_method`, rather than silently pretending to balance.
 
+### The wait comes before the stimulus
+
+Each interval **precedes** its stimulus, so the screen stays blank for one full
+interval after the countdown rather than flashing the instant it ends. In BSRT
+that is 3000 ms; in PVT it is 2, 4, 6, 8 or 10 s, drawn like any other interval,
+so a participant cannot learn when the first one is coming.
+
+Duration is unchanged. A schedule of N intervals yields **N−1 stimuli** and
+lasts exactly the sum of its intervals: the final interval carries no stimulus
+of its own, it is the response window for the last one. So a 40-minute BSRT is
+still exactly 40 minutes, and every PVT lasts exactly its ceiling with the same
+number of stimuli for every participant, whatever order the blocks were
+shuffled into.
+
+Two columns describe each stimulus's timing: `isi_before_ms` is the wait that
+preceded it (defined for the first stimulus too) and `epoch_isi_ms` is its
+response window, the time until the next one.
+
+A stimulus belongs to the block its **preceding interval** started in, so each
+30-second block still holds exactly one stimulus per interval in the set.
+
 ### Reproducible schedules
 
 Schedules come from a seeded generator, and the seed is exported as

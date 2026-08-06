@@ -380,7 +380,9 @@ function startTask() {
   startWall = new Date().toISOString();
   startTime = performance.now();
   startClock();
-  runEpoch(0);
+  // Schedule the first stimulus rather than firing it: onsets[0] is the lead-in,
+  // so the screen stays blank for one interval after the countdown.
+  scheduleEpoch(0);
 }
 
 /*
@@ -389,13 +391,13 @@ function startTask() {
  * exactly as generated.
  */
 function scheduleEpoch(n) {
-  var last = cfg.schedule.nStimuli - 1;
-  // Past the final stimulus there is no onset to aim at, but the trial still
-  // has to be ended — so schedule one last call at the end of the last epoch.
-  // Returning here instead would leave the task running with nothing to fire.
+  // Onsets already include the lead-in, so the first stimulus is one interval
+  // after the countdown rather than the instant it ends. Past the final
+  // stimulus there is no onset to aim at, but the trial still has to be ended,
+  // so the last call is scheduled at the planned end of the trial.
   var target = n < cfg.schedule.nStimuli
     ? cfg.schedule.onsets[n]
-    : cfg.schedule.onsets[last] + cfg.schedule.isis[last];
+    : cfg.schedule.plannedDurationMs;
   var delay = (startTime + target) - performance.now();
   epochTimer = setTimeout(function () { runEpoch(n); }, delay > 0 ? delay : 0);
 }
@@ -410,8 +412,10 @@ function runEpoch(n) {
     onsetMs: performance.now() - startTime,
     onsetPerf: performance.now(),
     block: cfg.schedule.blocks[n],
-    epochIsiMs: cfg.schedule.isis[n],
-    isiBeforeMs: n === 0 ? null : cfg.schedule.isis[n - 1],
+    // epochIsiMs is this stimulus's response window (time to the next one);
+    // isiBeforeMs is the wait that preceded it, defined for the first one too.
+    epochIsiMs: cfg.schedule.epochIsi[n],
+    isiBeforeMs: cfg.schedule.isiBefore[n],
     responded: false,
     rtMs: null,
     extra: 0,

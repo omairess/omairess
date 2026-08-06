@@ -281,8 +281,13 @@
    * balance is impossible and the generator falls back to sampling with
    * replacement.
    *
-   * isis[i] is the interval FROM stimulus i to stimulus i+1, so the wait a
-   * participant experienced before stimulus i is isis[i-1].
+   * Each interval PRECEDES its stimulus, so the participant always waits before
+   * the first one rather than being surprised the instant the countdown ends.
+   * The final interval carries no stimulus of its own — it is the response
+   * window after the last one — so a schedule of N intervals yields N-1 stimuli
+   * and lasts exactly the sum of its intervals. Total duration is therefore
+   * unchanged, and identical for every participant, because each block sums to
+   * the block length whatever order it was shuffled into.
    */
   function buildSchedule(opts) {
     const maxMs = opts.maxMs;
@@ -323,24 +328,47 @@
   }
 
   function finishSchedule(isis, maxMs, blockMs, method, seed) {
-    const onsets = [];
-    const kept = [];
-    let t = 0;
-    for (let i = 0; i < isis.length; i++) {
-      if (t >= maxMs) break;
-      onsets.push(t);
+    // Keep only whole intervals that fit inside the ceiling.
+    var kept = [];
+    var total = 0;
+    for (var i = 0; i < isis.length; i++) {
+      if (total + isis[i] > maxMs) break;
       kept.push(isis[i]);
-      t += isis[i];
+      total += isis[i];
     }
+
+    /*
+     * Interval k spans [start_k, start_k + kept[k]) and its stimulus fires at
+     * the END of it. The last interval has no stimulus: it is the response
+     * window for the one before, which is what keeps the trial from ending the
+     * instant the final stimulus appears.
+     *
+     * A stimulus belongs to the block its PRECEDING interval started in, so
+     * each block holds exactly one stimulus per interval in the set even though
+     * the stimuli themselves sit at block-relative offsets.
+     */
+    var onsets = [], blocks = [], isiBefore = [], epochIsi = [];
+    var acc = 0;
+    for (var k = 0; k + 1 < kept.length; k++) {
+      blocks.push(Math.floor(acc / blockMs));
+      acc += kept[k];
+      onsets.push(acc);
+      isiBefore.push(kept[k]);
+      epochIsi.push(kept[k + 1]);
+    }
+
     return {
       isis: kept,
       onsets: onsets,
-      blocks: onsets.map(function (o) { return Math.floor(o / blockMs); }),
+      blocks: blocks,
+      isiBefore: isiBefore,
+      epochIsi: epochIsi,
       method: method,
       seed: seed,
       blockMs: blockMs,
       nStimuli: onsets.length,
-      plannedDurationMs: t
+      leadInMs: kept.length ? kept[0] : 0,
+      plannedDurationMs: total
     };
   }
 

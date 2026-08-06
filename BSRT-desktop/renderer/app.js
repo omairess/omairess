@@ -38,10 +38,7 @@ let droppedFrames = 0;
 let framesStimOn = 0;
 /* With a variable schedule each epoch has its own frame count, so the loop
  * walks a list of frame boundaries instead of dividing by a constant. */
-let epochStartFrames = [];
-let epochFrameCounts = [];
 let achievedIsis = [];
-let totalFrames = 0;
 let nextEpochIdx = 0;
 let currentEpochStartFrame = 0;
 
@@ -379,21 +376,17 @@ function beginTrial() {
   });
 
   /*
-   * Convert the schedule into whole frames. Each interval is rounded
-   * independently, then the boundaries accumulate, so a long trial cannot drift
-   * even though individual intervals differ.
+   * Stimuli are fired on the first frame at or after their intended time,
+   * compared against the REAL frame clock rather than converted into frame
+   * indices with the calibrated interval. Converting would multiply any error
+   * in that estimate by the elapsed time: a 16.70 ms estimate against a true
+   * 16.667 ms drifts 0.2%, which is ~5 s across a 40-minute trial. Comparing
+   * against measured time keeps presentation on a frame boundary while bounding
+   * the error at half a frame, with nothing accumulating.
    */
-  epochFrameCounts = cfg.schedule.isis.map(
-    (ms) => Math.max(framesStimOn + 1, Math.round(ms / calibration.frameIntervalMs)));
-  achievedIsis = epochFrameCounts.map((f) => f * calibration.frameIntervalMs);
-  epochStartFrames = [];
-  let acc = 0;
-  for (let i = 0; i < epochFrameCounts.length; i++) {
-    epochStartFrames.push(acc);
-    acc += epochFrameCounts[i];
-  }
-  totalFrames = acc;
+  achievedIsis = cfg.schedule.epochIsi.slice();
   cfg.achievedIsiMs = mode === 'pvt' ? null : (achievedIsis[0] == null ? null : achievedIsis[0]);
+  cfg.leadInMs = cfg.schedule.leadInMs;
 
   meta = {
     runId: 'bsrt-' + Date.now(),
@@ -499,14 +492,18 @@ function frameLoop(ts) {
 
   frameIndex += 1;
 
-  if (frameIndex >= totalFrames) {
+  const elapsed = ts - trialStartTs;
+  const halfFrame = calibration.frameIntervalMs / 2;
+
+  if (elapsed >= cfg.schedule.plannedDurationMs - halfFrame) {
     finalizeEpoch();
     if (!running) return;
     endTask('max_duration');
     return;
   }
 
-  if (nextEpochIdx < epochStartFrames.length && frameIndex === epochStartFrames[nextEpochIdx]) {
+  if (nextEpochIdx < cfg.schedule.nStimuli &&
+      elapsed >= cfg.schedule.onsets[nextEpochIdx] - halfFrame) {
     finalizeEpoch();
     if (!running) return;
     startEpoch(nextEpochIdx, ts);
@@ -518,10 +515,10 @@ function frameLoop(ts) {
   if (currentEpoch && cfg.mode === 'pvt' && !currentEpoch.frozen && !$('clock').hidden) {
     // Display only — the counter never feeds the reaction time, which is
     // measured from stimulus presentation to the keypress.
-    let elapsed = ts - currentEpoch.frameTs;
-    if (elapsed < 0) elapsed = 0;
-    if (elapsed > cfg.hitWindowMs) elapsed = cfg.hitWindowMs;
-    $('clock').textContent = Math.round(elapsed);
+    let shown = ts - currentEpoch.frameTs;
+    if (shown < 0) shown = 0;
+    if (shown > cfg.hitWindowMs) shown = cfg.hitWindowMs;
+    $('clock').textContent = Math.round(shown);
   }
 
   if (currentEpoch) {
@@ -545,9 +542,11 @@ function startEpoch(idx, frameTs) {
     presentationMs: frameTs + cfg.presentationOffsetFrames * calibration.frameIntervalMs,
     onsetMs: frameTs - trialStartTs,
     block: cfg.schedule.blocks[idx],
-    epochIsiMs: cfg.schedule.isis[idx],
-    isiBeforeMs: idx === 0 ? null : cfg.schedule.isis[idx - 1],
-    achievedIsiMs: achievedIsis[idx],
+    // epochIsiMs is this stimulus's response window; isiBeforeMs is the wait
+    // that preceded it, defined for the first stimulus too.
+    epochIsiMs: cfg.schedule.epochIsi[idx],
+    isiBeforeMs: cfg.schedule.isiBefore[idx],
+    achievedIsiMs: cfg.schedule.epochIsi[idx],
     responded: false,
     rtRawMs: null,
     extra: 0,
