@@ -1,0 +1,84 @@
+# Builds ready-to-run BSRT desktop apps on real macOS and Windows machines.
+#
+# Why CI rather than a local build: a macOS .dmg can only be produced on macOS,
+# and a Windows installer needs Windows tooling. GitHub's runners provide both,
+# so nobody has to install Node or run a build to get an app.
+#
+# To get the apps:
+#   Actions tab -> "Build BSRT desktop apps" -> Run workflow -> wait ~5 min ->
+#   download the artifacts at the bottom of the run.
+#
+# Pushing a tag like v1.0.0 additionally publishes them to a Releases page,
+# which gives a permanent download link you can send to collaborators.
+
+name: Build BSRT desktop apps
+
+on:
+  workflow_dispatch:        # the "Run workflow" button
+  push:
+    tags: ['v*']
+
+defaults:
+  run:
+    working-directory: BSRT-desktop
+
+jobs:
+  build:
+    name: ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false      # a Windows failure should not hide a good macOS build
+      matrix:
+        include:
+          - os: macos-latest
+            label: macOS (.dmg, Intel + Apple Silicon)
+            target: --mac
+            artifact: BSRT-macOS
+            glob: |
+              BSRT-desktop/dist/*.dmg
+              BSRT-desktop/dist/*.zip
+          - os: windows-latest
+            label: Windows (installer + portable .exe)
+            target: --win
+            artifact: BSRT-Windows
+            glob: |
+              BSRT-desktop/dist/*.exe
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Check the shared scoring module has not diverged
+        run: npm run check:scoring
+
+      - name: Build
+        run: npx electron-builder ${{ matrix.target }} --publish never
+        env:
+          # Unsigned builds. Set CSC_LINK / CSC_KEY_PASSWORD (macOS) or
+          # WIN_CSC_LINK / WIN_CSC_KEY_PASSWORD (Windows) as repository secrets
+          # to sign, which removes the Gatekeeper and SmartScreen warnings.
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.glob }}
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Attach to the release when a version tag was pushed
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" \
+            --notes "BSRT desktop builds. These are unsigned, so macOS asks you to right-click and choose Open on first launch, and Windows asks you to click More info then Run anyway." \
+            || true
+          gh release upload "$GITHUB_REF_NAME" dist/* --clobber
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}

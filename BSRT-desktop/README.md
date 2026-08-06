@@ -11,43 +11,52 @@ measured.
 
 ---
 
-## Building the executables
+## Getting the app
 
-You need [Node.js](https://nodejs.org) 18 or newer. Everything else is fetched
-by `npm install`.
+### Easiest: download a build (no tools needed)
+
+The repository builds ready-to-run apps on real macOS and Windows machines, so
+nobody has to install anything to get one.
+
+1. Open the repository on GitHub → **Actions** tab
+2. Choose **Build BSRT desktop apps** → **Run workflow**
+3. Wait about five minutes
+4. Download **BSRT-macOS** (a `.dmg`) or **BSRT-Windows** (an installer and a
+   portable `.exe`) from the artifacts at the bottom of the run
+
+Pushing a version tag (`git tag v1.0.0 && git push --tags`) also publishes them
+to a **Releases** page, which gives a permanent link you can send to
+collaborators — they just click and download.
+
+### Building it yourself
+
+Only needed if you want to change the app. Requires
+[Node.js](https://nodejs.org) 18 or newer.
 
 ```bash
 cd BSRT-desktop
 npm install
-npm start          # run it without packaging, to check it works
+npm start          # run it without packaging
+npm run dist:mac   # on a Mac  -> dist/*.dmg
+npm run dist:win   # on Windows -> dist/*.exe
 ```
 
-Then build for your platform:
-
-```bash
-npm run dist:mac   # -> dist/BSRT-1.0.0-arm64.dmg, -x64.dmg, and .zip
-npm run dist:win   # -> dist/BSRT Setup 1.0.0.exe and a portable .exe
-```
-
-**You must build macOS apps on a Mac and Windows apps on Windows.** Code signing
-and platform packaging are not portable. If you need both from one machine, run
-the builds in CI (GitHub Actions with a `macos-latest` and a `windows-latest`
-job) rather than trying to cross-compile.
+**macOS apps must be built on a Mac and Windows apps on Windows** — packaging is
+not portable, which is exactly why the CI workflow exists.
 
 ### The unsigned-app warnings
 
-These builds are not code-signed, because signing requires a paid Apple
-Developer account and a Windows code-signing certificate. Participants will
-therefore see a scary dialog on first launch:
+These builds are not code-signed, because signing needs a paid Apple Developer
+account and a Windows code-signing certificate. On first launch:
 
-- **macOS:** right-click the app → *Open* → *Open*. Or once, in Terminal:
-  `xattr -cr /Applications/BSRT.app`
-- **Windows:** SmartScreen shows "Windows protected your PC" → *More info* →
-  *Run anyway*.
+- **macOS:** right-click the app → *Open* → *Open*
+- **Windows:** *More info* → *Run anyway*
 
-If you are distributing to participants rather than running the task yourself,
-budget for signing certificates — talking people through a security warning over
-the phone is a poor start to a testing session.
+Once per computer. If you are distributing to participants rather than running
+the task yourself, budget for certificates — talking someone through a security
+warning by phone is a poor start to a testing session. Set `CSC_LINK` /
+`CSC_KEY_PASSWORD` (macOS) or `WIN_CSC_LINK` / `WIN_CSC_KEY_PASSWORD` (Windows)
+as repository secrets and the CI build will sign automatically.
 
 ---
 
