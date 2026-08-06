@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>BSRT — Behavioral Sleep Resistance Task</title>
+<link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+
+<!-- ============ SETUP ============ -->
+<section id="screen-setup" class="screen active">
+  <div class="wrap">
+    <header>
+      <h1>BSRT</h1>
+      <p class="sub">Behavioral Sleep Resistance Task — an OSLER-style measure of resistance to sleep onset.</p>
+    </header>
+
+    <div class="card">
+      <h2>Session</h2>
+      <div class="grid">
+        <label>Participant ID
+          <input type="text" id="participantId" placeholder="e.g. P001" autocomplete="off">
+        </label>
+        <label>Session / condition
+          <input type="text" id="sessionLabel" placeholder="e.g. baseline" autocomplete="off">
+        </label>
+        <label>Trial number
+          <input type="number" id="trialNumber" value="1" min="1" step="1">
+        </label>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Parameters</h2>
+      <p class="note">Defaults reproduce the standard OSLER protocol: a 1&nbsp;s stimulus every 3&nbsp;s, sleep onset scored at 7 consecutive missed stimuli (21&nbsp;s), 40&nbsp;min maximum.</p>
+      <div class="grid">
+        <label>Stimulus interval (ms)
+          <input type="number" id="isiMs" value="3000" min="500" step="100">
+        </label>
+        <label>Stimulus duration (ms)
+          <input type="number" id="stimMs" value="1000" min="50" step="50">
+        </label>
+        <label>Consecutive misses = sleep onset
+          <input type="number" id="missCriterion" value="7" min="1" step="1">
+        </label>
+        <label>Maximum duration (min)
+          <input type="number" id="maxMinutes" value="40" min="1" step="1">
+        </label>
+      </div>
+      <label class="check"><input type="checkbox" id="useFullscreen" checked> Go fullscreen during the task</label>
+    </div>
+
+    <div class="card">
+      <h2>Instructions to read to the participant</h2>
+      <p class="quote">“A red light will flash every few seconds. Each time you see it, tap the screen or press the spacebar. Please try to stay awake, but do not do anything else to keep yourself awake — no moving about, talking, or singing. Just respond to the light.”</p>
+    </div>
+
+    <div class="actions">
+      <button id="btnStart" class="primary">Start task</button>
+      <button id="btnSessions" class="ghost">Saved sessions (<span id="sessionCount">0</span>)</button>
+    </div>
+    <p id="setupError" class="error" hidden></p>
+  </div>
+</section>
+
+<!-- ============ COUNTDOWN ============ -->
+<section id="screen-countdown" class="screen dark">
+  <div class="centre">
+    <p class="countdown-hint">Get comfortable. Respond to every flash.</p>
+    <div id="countdownNum" class="countdown">3</div>
+  </div>
+</section>
+
+<!-- ============ TASK ============ -->
+<section id="screen-task" class="screen dark">
+  <div id="led" class="led" aria-hidden="true"></div>
+  <p class="tap-hint">Tap anywhere, or press space, each time the light appears.</p>
+  <button id="btnAbort" class="abort" title="Experimenter: end the task early">End</button>
+</section>
+
+<!-- ============ RESULTS ============ -->
+<section id="screen-results" class="screen">
+  <div class="wrap">
+    <header>
+      <h1>Result</h1>
+      <p class="sub" id="resultWho"></p>
+    </header>
+
+    <div class="card headline">
+      <div class="metric-big">
+        <span class="metric-label">Sleep latency</span>
+        <span class="metric-value" id="mLatency">—</span>
+        <span class="metric-foot" id="mLatencyFoot"></span>
+      </div>
+      <p class="outcome" id="mOutcome"></p>
+    </div>
+
+    <div class="card">
+      <h2>Performance</h2>
+      <table class="metrics">
+        <tbody>
+          <tr><th>Stimuli presented</th><td id="mEpochs">—</td></tr>
+          <tr><th>Responses (hits)</th><td id="mHits">—</td></tr>
+          <tr><th>Missed stimuli</th><td id="mMisses">—</td></tr>
+          <tr><th>Response rate</th><td id="mHitRate">—</td></tr>
+          <tr><th>Longest run of misses</th><td id="mLongestRun">—</td></tr>
+          <tr><th>Mean reaction time</th><td id="mMeanRt">—</td></tr>
+          <tr><th>Median reaction time</th><td id="mMedianRt">—</td></tr>
+          <tr><th>SD of reaction time</th><td id="mSdRt">—</td></tr>
+          <tr><th>Slow responses (&gt;1000&nbsp;ms)</th><td id="mLapses">—</td></tr>
+          <tr><th>Extra / spurious taps</th><td id="mExtra">—</td></tr>
+          <tr><th>Left the page during task</th><td id="mBlur">—</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="actions">
+      <button id="btnExportEpochs" class="primary">Export this trial (CSV)</button>
+      <button id="btnExportSummary" class="ghost">Export summary (CSV)</button>
+      <button id="btnAgain" class="ghost">New trial</button>
+    </div>
+  </div>
+</section>
+
+<!-- ============ SESSIONS ============ -->
+<section id="screen-sessions" class="screen">
+  <div class="wrap">
+    <header>
+      <h1>Saved sessions</h1>
+      <p class="sub">Stored in this browser only. Export regularly — clearing site data deletes them.</p>
+    </header>
+    <div class="card">
+      <div id="sessionList" class="session-list"></div>
+    </div>
+    <div class="actions">
+      <button id="btnExportAll" class="primary">Export all trials (CSV)</button>
+      <button id="btnExportAllSummary" class="ghost">Export all summaries (CSV)</button>
+      <button id="btnBack" class="ghost">Back</button>
+      <button id="btnClearAll" class="danger">Delete all</button>
+    </div>
+  </div>
+</section>
+
+<script src="./app.js"></script>
+</body>
+</html>
