@@ -51,6 +51,54 @@ the phone is a poor start to a testing session.
 
 ---
 
+## Trial procedure
+
+One epoch, in order:
+
+1. A new stimulus starts every **3000 ms**, measured from the previous stimulus's
+   onset.
+2. The light stays on for up to **1000 ms**.
+3. **If the participant responds, the light goes out immediately.**
+4. If they do not respond, it goes out by itself at 1000 ms.
+5. The next stimulus still starts at exactly +3000 ms from this one's onset —
+   **never from the response**. The epoch clock is completely independent of
+   behaviour, so a trial lasts the same for a fast responder and a slow one.
+
+Each epoch is scored as one of:
+
+| Outcome | Meaning |
+|---|---|
+| **Hit** | responded within the response window |
+| **Lapse** | a hit whose reaction time exceeded the lapse threshold |
+| **Miss** | no response |
+
+A lapse is a *kind of hit*, not a separate category — lapses are counted inside
+the hit total, and only misses count toward the sleep-onset criterion.
+
+### Two settings this exposes
+
+**Lapse threshold** (default 1000 ms). Conventional PVT work uses 500 ms and
+OSLER work often uses 1000 ms, but short protocols need a tighter cut — 355 ms
+has been used for 3-minute tests. Set it per trial; it is exported as
+`lapse_threshold_ms` so the definition travels with the data.
+
+**Response window** (default: the whole epoch). This decides whether a press
+that arrives *after* the light has gone out still counts as a response to that
+stimulus:
+
+- `epoch` (default) — a response any time in the 3000 ms counts as a hit. A
+  very slow response is a hit with a long reaction time.
+- `stimulus` — only presses while the light is lit count. Later presses are
+  recorded as `late_responses` and the epoch stays a miss.
+
+The published OSLER protocol does not state this explicitly, and the choice
+changes which epochs count toward the sleep-onset criterion. `epoch` is the
+default because it matches the criterion's wording — *failure to respond to the
+flash* — but if your protocol requires responses during the light, switch it and
+report `response_window` with your methods.
+
+---
+
 ## Timing: what this actually fixes
 
 This is the part that matters, so it is stated without marketing.

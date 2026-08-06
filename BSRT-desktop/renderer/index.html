@@ -35,7 +35,15 @@
         <label>Stimulus duration (ms)<input type="number" id="stimMs" value="1000" min="50" step="50"></label>
         <label>Consecutive misses = sleep onset<input type="number" id="missCriterion" value="7" min="1" step="1"></label>
         <label>Maximum duration (min)<input type="number" id="maxMinutes" value="40" min="1" step="1"></label>
+        <label>Lapse threshold (ms)<input type="number" id="lapseMs" value="1000" min="50" step="5"></label>
+        <label>Response window
+          <select id="responseWindow">
+            <option value="epoch" selected>Whole epoch</option>
+            <option value="stimulus">Only while the light is on</option>
+          </select>
+        </label>
       </div>
+      <p class="note tight">A response extinguishes the light immediately but never shortens the epoch — the next stimulus still starts a fixed number of frames after this one’s onset, so the task lasts the same for everyone. The <em>response window</em> decides whether a press after light-off still counts as a response to that stimulus.</p>
       <label class="check"><input type="checkbox" id="useFullscreen" checked> Fullscreen during the task</label>
     </div>
 
@@ -145,7 +153,8 @@
           <tr><th>Mean reaction time</th><td id="mMeanRt">—</td></tr>
           <tr><th>Median reaction time</th><td id="mMedianRt">—</td></tr>
           <tr><th>SD of reaction time</th><td id="mSdRt">—</td></tr>
-          <tr><th>Slow responses (&gt;1000&nbsp;ms)</th><td id="mLapses">—</td></tr>
+          <tr><th id="lapseLabel">Lapses</th><td id="mLapses">—</td></tr>
+          <tr><th>Responses after light-off</th><td id="mLate">—</td></tr>
           <tr><th>Anticipations (&lt;100&nbsp;ms)</th><td id="mAntic">—</td></tr>
           <tr><th>Extra / spurious presses</th><td id="mExtra">—</td></tr>
         </tbody>

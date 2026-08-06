@@ -10,7 +10,10 @@
 
 const T = window.BSRTTiming;
 const LS_KEY = 'bsrt.desktop.sessions.v1';
-const SLOW_RT_MS = 1000;
+/* Conventional PVT lapse thresholds are 500 ms; OSLER work often uses 1000 ms;
+ * short protocols need tighter cuts (355 ms has been used for 3-minute tests).
+ * Per-trial setting rather than a constant. */
+const DEFAULT_LAPSE_MS = 1000;
 const PROBE_TAPS = 5;
 
 /*
@@ -296,6 +299,8 @@ function beginTrial() {
     presentationOffsetFrames: numVal('presOffsetFrames', 1),
     hardwareOffsetMs: numVal('hwOffsetMs', 0),
     photodiode: $('photodiode').checked,
+    lapseMs: intVal('lapseMs', DEFAULT_LAPSE_MS),
+    responseWindow: $('responseWindow').value,
     framesPerEpoch,
     framesStimOn,
     achievedIsiMs,
@@ -383,6 +388,12 @@ function frameLoop(ts) {
     startEpoch(epochIdx, ts);
   } else if (phase === framesStimOn) {
     ledOff();
+  } else if (currentEpoch && currentEpoch.extinguished) {
+    // A response came in since the last frame. Extinguish here rather than in
+    // the event handler so the offset lands on a frame boundary like every
+    // other transition — it keeps the photodiode trace interpretable.
+    ledOff();
+    currentEpoch.extinguished = false;
   }
 }
 
@@ -398,7 +409,9 @@ function startEpoch(idx, frameTs) {
     onsetMs: frameTs - trialStartTs,
     responded: false,
     rtRawMs: null,
-    extra: 0
+    extra: 0,
+    late: 0,
+    extinguished: false
   };
   epochs.push(currentEpoch);
 }
@@ -421,13 +434,28 @@ function finalizeEpoch() {
 
 function handleResponse(evt) {
   if (!running || !currentEpoch) return;
+
+  const t = T.eventTime(evt, useEventStamp);
+  const elapsed = t - currentEpoch.presentationMs;
+
+  // Under the 'stimulus' response window, a press after the light has gone out
+  // is not a response to that stimulus, so the epoch stays a miss.
+  if (cfg.responseWindow === 'stimulus' && elapsed > cfg.achievedStimMs) {
+    currentEpoch.late += 1;
+    return;
+  }
+
   if (currentEpoch.responded) {
     currentEpoch.extra += 1;
     return;
   }
-  const t = T.eventTime(evt, useEventStamp);
   currentEpoch.responded = true;
-  currentEpoch.rtRawMs = t - currentEpoch.presentationMs;
+  currentEpoch.rtRawMs = elapsed;
+
+  // Responding extinguishes the stimulus, but never shortens the epoch: the
+  // next stimulus still starts a fixed number of frames after this one's onset,
+  // so total task duration does not depend on how the participant responds.
+  currentEpoch.extinguished = true;
 }
 
 function ledOn() {
@@ -469,7 +497,8 @@ function buildResult(reason) {
   const valid = rts.filter((v) => v >= ANTICIPATION_MS);
   const anticipations = rts.length - valid.length;
   const corrected = valid.map((v) => v - cfg.hardwareOffsetMs);
-  const slow = valid.filter((v) => v > SLOW_RT_MS).length;
+  const lapses = valid.filter((v) => v > cfg.lapseMs).length;
+  const late = epochs.reduce((n, e) => n + e.late, 0);
 
   /*
    * Latency comes from the frame timestamps we actually observed, not from
@@ -520,7 +549,9 @@ function buildResult(reason) {
     madRtMs: T.stats.mad(valid),
     meanRtCorrectedMs: T.stats.mean(corrected),
     medianRtCorrectedMs: T.stats.median(corrected),
-    slowResponses: slow,
+    lapses,
+    lapseThresholdMs: cfg.lapseMs,
+    lateResponses: late,
     extraResponses: extra,
     droppedFramesDuringTrial: droppedFrames,
     blurCount,
@@ -529,7 +560,9 @@ function buildResult(reason) {
       onsetMs: Math.round(e.onsetMs * 100) / 100,
       responded: e.responded ? 1 : 0,
       rtRawMs: e.rtRawMs == null ? null : Math.round(e.rtRawMs * 100) / 100,
-      extra: e.extra
+      lapse: e.rtRawMs == null ? null : (e.rtRawMs > cfg.lapseMs ? 1 : 0),
+      extra: e.extra,
+      late: e.late
     }))
   };
 }
@@ -562,7 +595,11 @@ function renderResult(r) {
   $('mMeanRt').textContent = fmtMs(r.meanRtMs);
   $('mMedianRt').textContent = fmtMs(r.medianRtMs);
   $('mSdRt').textContent = fmtMs(r.sdRtMs);
-  $('mLapses').textContent = r.slowResponses;
+  $('lapseLabel').textContent = 'Lapses (>' + r.lapseThresholdMs + ' ms)';
+  $('mLapses').textContent = r.lapses;
+  $('mLate').textContent = r.config.responseWindow === 'stimulus'
+    ? r.lateResponses + ' (after light-off — not counted)'
+    : 'n/a (full-epoch window)';
   $('mAntic').textContent = r.anticipations +
     (r.anticipations ? ' (excluded from RT statistics)' : '');
   $('mExtra').textContent = r.extraResponses;
@@ -600,7 +637,8 @@ function renderResult(r) {
 
 const EPOCH_HEADER = [
   'run_id', 'participant_id', 'session_label', 'trial_number', 'started_at',
-  'epoch_index', 'onset_ms', 'responded', 'rt_raw_ms', 'rt_corrected_ms', 'extra_responses'
+  'epoch_index', 'onset_ms', 'responded', 'rt_raw_ms', 'rt_corrected_ms', 'lapse',
+  'extra_responses', 'late_responses'
 ];
 
 const epochRows = (r) => r.epochs.map((e) => [
@@ -608,19 +646,19 @@ const epochRows = (r) => r.epochs.map((e) => [
   e.index, e.onsetMs, e.responded,
   e.rtRawMs,
   e.rtRawMs == null ? null : Math.round((e.rtRawMs - r.config.hardwareOffsetMs) * 100) / 100,
-  e.extra
+  e.lapse, e.extra, e.late
 ]);
 
 const SUMMARY_HEADER = [
   'run_id', 'participant_id', 'session_label', 'trial_number', 'started_at',
   'isi_requested_ms', 'isi_achieved_ms', 'stim_requested_ms', 'stim_achieved_ms',
-  'miss_criterion', 'max_minutes',
+  'miss_criterion', 'max_minutes', 'lapse_threshold_ms', 'response_window',
   'end_reason', 'slept_before_max', 'latency_first_miss_ms', 'latency_criterion_ms', 'elapsed_ms',
   'n_epochs', 'hits', 'misses', 'hit_rate', 'longest_miss_run',
   'mean_rt_ms', 'median_rt_ms', 'sd_rt_ms', 'mad_rt_ms',
   'mean_rt_corrected_ms', 'median_rt_corrected_ms',
   'n_rt_valid', 'anticipations', 'anticipation_threshold_ms',
-  'slow_responses', 'extra_responses',
+  'lapses', 'extra_responses', 'late_responses',
   'refresh_hz_measured', 'refresh_hz_reported', 'frame_interval_ms', 'frame_jitter_mad_ms',
   'onset_quantisation_ms', 'dropped_frames_calibration', 'dropped_frames_trial', 'calibration_grade',
   'input_time_source', 'input_dispatch_median_ms',
@@ -636,14 +674,14 @@ function summaryRow(r) {
   return [
     r.runId, r.participantId, r.sessionLabel, r.trialNumber, r.startedAt,
     r.config.isiMs, round(r.config.achievedIsiMs, 3), r.config.stimMs, round(r.config.achievedStimMs, 3),
-    r.config.missCriterion, r.config.maxMinutes,
+    r.config.missCriterion, r.config.maxMinutes, r.config.lapseMs, r.config.responseWindow,
     r.endReason, r.sleptBeforeMax ? 1 : 0,
     round(r.latencyFirstMissMs, 1), round(r.latencyCriterionMs, 1), round(r.elapsedMs, 1),
     r.nEpochs, r.hits, r.misses, round(r.hitRate, 4), r.longestMissRun,
     round(r.meanRtMs, 2), round(r.medianRtMs, 2), round(r.sdRtMs, 2), round(r.madRtMs, 2),
     round(r.meanRtCorrectedMs, 2), round(r.medianRtCorrectedMs, 2),
     r.nRtValid, r.anticipations, r.anticipationThresholdMs,
-    r.slowResponses, r.extraResponses,
+    r.lapses, r.extraResponses, r.lateResponses,
     round(c.refreshHz, 3), r.display ? d.displayFrequency : null,
     round(c.frameIntervalMs, 4), round(c.madIntervalMs, 4),
     round(c.frameIntervalMs / 2, 3), c.droppedFrames, r.droppedFramesDuringTrial, r.calibrationGrade,

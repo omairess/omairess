@@ -6,7 +6,11 @@
  */
 
 var LS_KEY = 'bsrt.sessions.v1';
-var SLOW_RT_MS = 1000; // threshold for counting a response as "slow"
+/* A "lapse" is a response that arrived, but too slowly to count as alert
+ * responding. The conventional PVT threshold is 500 ms and OSLER work often
+ * uses 1000 ms, but short protocols need a tighter cut (355 ms has been used
+ * for 3-minute tests), so this is a per-trial setting rather than a constant. */
+var DEFAULT_LAPSE_MS = 1000;
 
 /* ---------------- state ---------------- */
 
@@ -181,7 +185,9 @@ function beginTrial() {
     stimMs: stimMs,
     missCriterion: missCriterion,
     maxMinutes: maxMinutes,
-    maxMs: maxMinutes * 60000
+    maxMs: maxMinutes * 60000,
+    lapseMs: intVal('lapseMs', DEFAULT_LAPSE_MS),
+    responseWindow: $('responseWindow').value
   };
   meta = {
     runId: 'bsrt-' + Date.now(),
@@ -252,7 +258,8 @@ function runEpoch(n) {
     onsetPerf: performance.now(),
     responded: false,
     rtMs: null,
-    extra: 0
+    extra: 0,
+    late: 0
   };
   epochs.push(currentEpoch);
 
@@ -283,12 +290,28 @@ function finalizeEpoch() {
 function handleResponse() {
   if (!running) return;
   if (!currentEpoch) return; // response outside any epoch (should not occur)
+
+  var elapsed = performance.now() - currentEpoch.onsetPerf;
+
+  // Under the 'stimulus' response window, a press after the light has gone out
+  // is not a response to that stimulus, so the epoch stays a miss.
+  if (cfg.responseWindow === 'stimulus' && elapsed > cfg.stimMs) {
+    currentEpoch.late += 1;
+    return;
+  }
+
   if (currentEpoch.responded) {
     currentEpoch.extra += 1;
     return;
   }
   currentEpoch.responded = true;
-  currentEpoch.rtMs = performance.now() - currentEpoch.onsetPerf;
+  currentEpoch.rtMs = elapsed;
+
+  // Responding extinguishes the stimulus immediately. The epoch clock is
+  // untouched: the next stimulus still starts at a fixed offset from this
+  // one's onset, so total task duration does not depend on responding.
+  clearTimeout(stimTimer);
+  ledOff();
 }
 
 function ledOn() { $('led').classList.add('on'); }
@@ -319,8 +342,11 @@ function buildResult(reason) {
     if (ep.responded) { hits++; rts.push(ep.rtMs); } else { misses++; }
   }
 
-  var slow = 0;
-  for (var j = 0; j < rts.length; j++) if (rts[j] > SLOW_RT_MS) slow++;
+  var lapses = 0;
+  for (var j = 0; j < rts.length; j++) if (rts[j] > cfg.lapseMs) lapses++;
+
+  var late = 0;
+  for (var k = 0; k < epochs.length; k++) late += epochs[k].late;
 
   // Sleep latency. Primary definition: time from trial start to the onset of the
   // FIRST stimulus in the terminating run of consecutive misses. Also reported:
@@ -356,8 +382,11 @@ function buildResult(reason) {
     meanRtMs: mean(rts),
     medianRtMs: median(rts),
     sdRtMs: sd(rts),
-    slowResponses: slow,
+    lapses: lapses,
+    lapseThresholdMs: cfg.lapseMs,
+    lateResponses: late,
     extraResponses: extra,
+    responseWindowLabel: cfg.responseWindow,
     blurCount: blurCount,
     epochs: epochs.map(function (e) {
       return {
@@ -366,7 +395,9 @@ function buildResult(reason) {
         onsetMs: Math.round(e.onsetMs),
         responded: e.responded ? 1 : 0,
         rtMs: e.rtMs == null ? null : Math.round(e.rtMs),
-        extra: e.extra
+        lapse: e.rtMs == null ? null : (e.rtMs > cfg.lapseMs ? 1 : 0),
+        extra: e.extra,
+        late: e.late
       };
     })
   };
@@ -401,7 +432,11 @@ function renderResult(r) {
   $('mMeanRt').textContent = fmtMs(r.meanRtMs);
   $('mMedianRt').textContent = fmtMs(r.medianRtMs);
   $('mSdRt').textContent = fmtMs(r.sdRtMs);
-  $('mLapses').textContent = r.slowResponses;
+  $('lapseLabel').textContent = 'Lapses (>' + r.lapseThresholdMs + ' ms)';
+  $('mLapses').textContent = r.lapses;
+  $('mLate').textContent = r.responseWindowLabel === 'stimulus'
+    ? r.lateResponses + ' (after the light went out — not counted)'
+    : 'n/a (full-epoch window)';
   $('mExtra').textContent = r.extraResponses;
   $('mBlur').textContent = r.blurCount ? r.blurCount + '×' : 'no';
 }
@@ -410,14 +445,15 @@ function renderResult(r) {
 
 var EPOCH_HEADER = [
   'run_id', 'participant_id', 'session_label', 'trial_number', 'started_at',
-  'epoch_index', 'scheduled_onset_ms', 'actual_onset_ms', 'responded', 'rt_ms', 'extra_responses'
+  'epoch_index', 'scheduled_onset_ms', 'actual_onset_ms', 'responded', 'rt_ms', 'lapse',
+  'extra_responses', 'late_responses'
 ];
 
 function epochRows(r) {
   return r.epochs.map(function (e) {
     return [
       r.runId, r.participantId, r.sessionLabel, r.trialNumber, r.startedAt,
-      e.index, e.scheduledMs, e.onsetMs, e.responded, e.rtMs, e.extra
+      e.index, e.scheduledMs, e.onsetMs, e.responded, e.rtMs, e.lapse, e.extra, e.late
     ];
   });
 }
@@ -425,10 +461,12 @@ function epochRows(r) {
 var SUMMARY_HEADER = [
   'run_id', 'participant_id', 'session_label', 'trial_number', 'started_at',
   'isi_ms', 'stim_ms', 'miss_criterion', 'max_minutes',
+  'lapse_threshold_ms', 'response_window',
   'end_reason', 'slept_before_max',
   'latency_first_miss_ms', 'latency_criterion_ms', 'elapsed_ms',
   'n_epochs', 'hits', 'misses', 'hit_rate', 'longest_miss_run',
-  'mean_rt_ms', 'median_rt_ms', 'sd_rt_ms', 'slow_responses', 'extra_responses', 'page_blur_count'
+  'mean_rt_ms', 'median_rt_ms', 'sd_rt_ms', 'lapses', 'extra_responses', 'late_responses',
+  'page_blur_count'
 ];
 
 function round(v, dp) { return v == null ? null : Number(v.toFixed(dp)); }
@@ -437,11 +475,12 @@ function summaryRow(r) {
   return [
     r.runId, r.participantId, r.sessionLabel, r.trialNumber, r.startedAt,
     r.config.isiMs, r.config.stimMs, r.config.missCriterion, r.config.maxMinutes,
+    r.config.lapseMs, r.config.responseWindow,
     r.endReason, r.sleptBeforeMax ? 1 : 0,
     r.latencyFirstMissMs, r.latencyCriterionMs, Math.round(r.elapsedMs),
     r.nEpochs, r.hits, r.misses, round(r.hitRate, 4), r.longestMissRun,
     round(r.meanRtMs, 1), round(r.medianRtMs, 1), round(r.sdRtMs, 1),
-    r.slowResponses, r.extraResponses, r.blurCount
+    r.lapses, r.extraResponses, r.lateResponses, r.blurCount
   ];
 }
 

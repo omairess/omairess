@@ -57,7 +57,7 @@ label {
   color: var(--muted);
 }
 
-input[type="text"], input[type="number"] {
+input[type="text"], input[type="number"], select {
   display: block;
   width: 100%;
   margin-top: 6px;
@@ -180,3 +180,17 @@ table.metrics tr:last-child th, table.metrics tr:last-child td { border-bottom: 
 .session-row .meta { color: var(--muted); font-size: 13px; }
 .session-row .lat { margin-left: auto; font-variant-numeric: tabular-nums; }
 .empty { color: var(--muted); font-size: 14px; padding: 8px 0; }
+
+select {
+  display: block;
+  width: 100%;
+  margin-top: 6px;
+  padding: 10px 12px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--text);
+  font: inherit;
+  font-size: 15px;
+}
+.note.tight { margin: 12px 0 0; }
