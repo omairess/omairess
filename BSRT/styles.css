@@ -194,3 +194,43 @@ select {
   font-size: 15px;
 }
 .note.tight { margin: 12px 0 0; }
+
+/* ---- spec-metric additions ---- */
+
+label.wide { grid-column: 1 / -1; }
+.spacer { flex: 1; }
+
+details.card > summary { cursor: pointer; list-style: none; }
+details.card > summary::-webkit-details-marker { display: none; }
+details.card > summary h2 { display: inline; }
+details.card > summary::before { content: '▸ '; color: var(--muted); }
+details.card[open] > summary::before { content: '▾ '; }
+details.card > summary + * { margin-top: 14px; }
+
+.warnbox {
+  margin-top: 16px;
+  padding: 12px 14px;
+  border-left: 3px solid #e0b066;
+  background: rgba(224, 176, 102, 0.08);
+  border-radius: 6px;
+  color: #e0b066;
+}
+
+table.metrics.two thead td,
+table.metrics.pm thead th {
+  text-align: right;
+  color: var(--muted);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--line);
+  font-weight: 600;
+}
+table.metrics.two thead td { padding-left: 16px; }
+table.metrics.two td { padding-left: 16px; }
+
+.scroll { overflow-x: auto; }
+table.metrics.pm { min-width: 760px; font-size: 13px; }
+table.metrics.pm th:first-child { text-align: left; }
+table.metrics.pm td { padding: 6px 0 6px 14px; }

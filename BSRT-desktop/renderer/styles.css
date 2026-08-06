@@ -256,3 +256,24 @@ select {
   font: inherit;
   font-size: 15px;
 }
+
+label.wide { grid-column: 1 / -1; }
+
+table.metrics.two thead td,
+table.metrics.pm thead th {
+  text-align: right;
+  color: var(--muted);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--line);
+  font-weight: 600;
+}
+table.metrics.two thead td { padding-left: 16px; }
+table.metrics.two td { padding-left: 16px; }
+
+.scroll { overflow-x: auto; }
+table.metrics.pm { min-width: 760px; font-size: 13px; }
+table.metrics.pm th:first-child { text-align: left; }
+table.metrics.pm td { padding: 6px 0 6px 14px; }

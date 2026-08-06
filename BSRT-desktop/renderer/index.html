@@ -19,33 +19,51 @@
     </header>
 
     <div class="card">
-      <h2>Session</h2>
+      <h2>Participant</h2>
       <div class="grid">
         <label>Participant ID<input type="text" id="participantId" placeholder="P001" autocomplete="off"></label>
+        <label>Name<input type="text" id="pName" placeholder="optional" autocomplete="off"></label>
+        <label>Birth date<input type="text" id="pBirth" placeholder="YYYY-MM-DD" autocomplete="off"></label>
+        <label>Educational level<input type="text" id="pEducation" placeholder="optional" autocomplete="off"></label>
+        <label class="wide">Address<input type="text" id="pAddress" placeholder="optional" autocomplete="off"></label>
         <label>Session / condition<input type="text" id="sessionLabel" placeholder="baseline" autocomplete="off"></label>
         <label>Trial number<input type="number" id="trialNumber" value="1" min="1" step="1"></label>
       </div>
+      <p class="note warnbox">Name, address and birth date are directly identifying. They are stored on this machine and written into every exported file. For research use, prefer a pseudonymous participant ID and keep the identity key separately under your data-protection plan. Date and time of testing are captured automatically.</p>
     </div>
 
     <div class="card">
       <h2>Protocol</h2>
-      <p class="note">Defaults reproduce the standard OSLER protocol: a 1&nbsp;s stimulus every 3&nbsp;s, sleep onset at 7 consecutive missed stimuli (21&nbsp;s), 40&nbsp;min maximum.</p>
+      <p class="note">Defaults reproduce the standard OSLER protocol: a 1&nbsp;s stimulus every 3&nbsp;s, sleep onset at 7 consecutive misses (21&nbsp;s), 40&nbsp;min maximum.</p>
       <div class="grid">
         <label>Stimulus interval (ms)<input type="number" id="isiMs" value="3000" min="200" step="100"></label>
-        <label>Stimulus duration (ms)<input type="number" id="stimMs" value="1000" min="50" step="50"></label>
+        <label>Stimulus duration / hit window (ms)<input type="number" id="stimMs" value="1000" min="50" step="50"></label>
         <label>Consecutive misses = sleep onset<input type="number" id="missCriterion" value="7" min="1" step="1"></label>
         <label>Maximum duration (min)<input type="number" id="maxMinutes" value="40" min="1" step="1"></label>
-        <label>Lapse threshold (ms)<input type="number" id="lapseMs" value="1000" min="50" step="5"></label>
-        <label>Response window
-          <select id="responseWindow">
-            <option value="epoch" selected>Whole epoch</option>
-            <option value="stimulus">Only while the light is on</option>
-          </select>
-        </label>
+        <label>Lapse threshold (ms)<input type="number" id="lapseMs" value="500" min="50" step="5"></label>
       </div>
-      <p class="note tight">A response extinguishes the light immediately but never shortens the epoch — the next stimulus still starts a fixed number of frames after this one’s onset, so the task lasts the same for everyone. The <em>response window</em> decides whether a press after light-off still counts as a response to that stimulus.</p>
+      <p class="note tight" id="lapseHint">Regular protocol: 500 ms is the conventional lapse threshold.</p>
+      <p class="note tight">A response within the hit window is a <strong>hit</strong>; a slow hit (beyond the lapse threshold) is a <strong>lapse</strong>. A response later than the hit window is a <strong>miss</strong> — its raw reaction time is still recorded, but it does not reset the consecutive-miss run. Responding extinguishes the light immediately without shortening the epoch.</p>
       <label class="check"><input type="checkbox" id="useFullscreen" checked> Fullscreen during the task</label>
     </div>
+
+    <details class="card">
+      <summary><h2>Corrections</h2></summary>
+      <p class="note">Applied to the corrected columns only. Raw values are always exported untouched.</p>
+      <div class="grid">
+        <label>Correction
+          <select id="correction">
+            <option value="none" selected>None</option>
+            <option value="anticipations">Remove anticipations only</option>
+            <option value="outliers">Remove outliers only</option>
+            <option value="both">Remove both</option>
+          </select>
+        </label>
+        <label>Anticipation threshold (ms)<input type="number" id="anticipationMs" value="100" min="0" step="5"></label>
+        <label>Outlier cut-off (SD)<input type="number" id="sdMultiplier" value="2" min="0.5" step="0.5"></label>
+      </div>
+      <p class="note tight">Anticipations are removed first, so they cannot inflate the mean and SD that define the outlier bounds. Bounds are computed within each block, so per-minute corrections use that minute's own mean and SD.</p>
+    </details>
 
     <details class="card">
       <summary><h2>Timing &amp; calibration</h2></summary>
@@ -67,8 +85,9 @@
     <div class="actions">
       <button id="btnStart" class="primary">Check display &amp; start</button>
       <span class="spacer"></span>
-      <button id="btnExportAll" class="ghost">Export all trials (<span id="sessionCount">0</span>)</button>
-      <button id="btnExportAllSummary" class="ghost">Export all summaries</button>
+      <button id="btnExportAllRaw" class="ghost">All raw (<span id="sessionCount">0</span>)</button>
+      <button id="btnExportAllPm" class="ghost">All per-minute</button>
+      <button id="btnExportAllSummary" class="ghost">All summaries</button>
     </div>
     <p id="setupError" class="error" hidden></p>
   </div>
@@ -142,24 +161,66 @@
     </div>
 
     <div class="card">
-      <h2>Performance</h2>
+      <h2>Test overview</h2>
       <table class="metrics">
         <tbody>
-          <tr><th>Stimuli presented</th><td id="mEpochs">—</td></tr>
-          <tr><th>Responses (hits)</th><td id="mHits">—</td></tr>
-          <tr><th>Missed stimuli</th><td id="mMisses">—</td></tr>
-          <tr><th>Response rate</th><td id="mHitRate">—</td></tr>
-          <tr><th>Longest run of misses</th><td id="mLongestRun">—</td></tr>
-          <tr><th>Mean reaction time</th><td id="mMeanRt">—</td></tr>
-          <tr><th>Median reaction time</th><td id="mMedianRt">—</td></tr>
-          <tr><th>SD of reaction time</th><td id="mSdRt">—</td></tr>
-          <tr><th id="lapseLabel">Lapses</th><td id="mLapses">—</td></tr>
-          <tr><th>Responses after light-off</th><td id="mLate">—</td></tr>
-          <tr><th>Anticipations (&lt;100&nbsp;ms)</th><td id="mAntic">—</td></tr>
-          <tr><th>Extra / spurious presses</th><td id="mExtra">—</td></tr>
+          <tr><th>Total trial run</th><td id="oTrials">—</td></tr>
+          <tr><th>Hit ratio</th><td id="oHitRatio">—</td></tr>
+          <tr><th>Hits</th><td id="oHits">—</td></tr>
+          <tr><th>Misses</th><td id="oMisses">—</td></tr>
+          <tr><th>Lapses</th><td id="oLapses">—</td></tr>
+          <tr><th>Error profile EP1–2</th><td id="oEp12">—</td></tr>
+          <tr><th>Error profile EP3–6</th><td id="oEp36">—</td></tr>
+          <tr><th>Error profile EP7+</th><td id="oEp7">—</td></tr>
         </tbody>
       </table>
-      <p id="anticFlag" class="note warnbox" hidden></p>
+      <p class="note tight">Error profiles count <em>runs</em> of consecutive misses in each band, not individual missed trials.</p>
+    </div>
+
+    <div class="card">
+      <h2>Total test — reaction time (ms)</h2>
+      <table class="metrics two">
+        <thead><tr><th></th><td>Raw</td><td>Corrected</td></tr></thead>
+        <tbody>
+          <tr><th>Average</th><td id="rtAvg">—</td><td id="rtcAvg">—</td></tr>
+          <tr><th>Median</th><td id="rtMedian">—</td><td id="rtcMedian">—</td></tr>
+          <tr><th>SD</th><td id="rtSd">—</td><td>—</td></tr>
+          <tr><th>10% fastest</th><td id="rtFast">—</td><td id="rtcFast">—</td></tr>
+          <tr><th>10% slowest</th><td id="rtSlow">—</td><td id="rtcSlow">—</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h2>Total test — reaction speed (1000/RT)</h2>
+      <table class="metrics two">
+        <thead><tr><th></th><td>Raw</td><td>Corrected</td></tr></thead>
+        <tbody>
+          <tr><th>Average</th><td id="rsAvg">—</td><td id="rscAvg">—</td></tr>
+          <tr><th>Median</th><td id="rsMedian">—</td><td id="rscMedian">—</td></tr>
+          <tr><th>SD</th><td id="rsSd">—</td><td>—</td></tr>
+          <tr><th>10% fastest</th><td id="rsFast">—</td><td id="rscFast">—</td></tr>
+          <tr><th>10% slowest</th><td id="rsSlow">—</td><td id="rscSlow">—</td></tr>
+        </tbody>
+      </table>
+      <p class="note tight" id="corrNote"></p>
+    </div>
+
+    <div class="card">
+      <h2>Per minute</h2>
+      <div class="scroll">
+        <table class="metrics pm">
+          <thead>
+            <tr>
+              <th>Min</th><th>Trials</th><th>Miss</th><th>Lapse</th>
+              <th>Avg RT</th><th>Med RT</th><th>SD RT</th><th>10% fast</th><th>10% slow</th>
+              <th>Avg RS</th><th>Med RS</th><th>Vel RS</th><th>Acc RS</th>
+            </tr>
+          </thead>
+          <tbody id="pmBody"></tbody>
+        </table>
+      </div>
+      <p class="note tight" id="pmSlope"></p>
     </div>
 
     <div class="card">
@@ -180,13 +241,15 @@
     </div>
 
     <div class="actions">
-      <button id="btnExportEpochs" class="primary">Export this trial (CSV)</button>
+      <button id="btnExportRaw" class="primary">Export raw trials (CSV)</button>
+      <button id="btnExportPm" class="ghost">Export per-minute (CSV)</button>
       <button id="btnExportSummary" class="ghost">Export summary (CSV)</button>
       <button id="btnAgain" class="ghost">New trial</button>
     </div>
   </div>
 </section>
 
+<script src="./scoring.js"></script>
 <script src="./timing.js"></script>
 <script src="./app.js"></script>
 </body>

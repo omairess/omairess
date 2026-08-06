@@ -55,47 +55,99 @@ the phone is a poor start to a testing session.
 
 One epoch, in order:
 
-1. A new stimulus starts every **3000 ms**, measured from the previous stimulus's
-   onset.
-2. The light stays on for up to **1000 ms**.
+1. A new stimulus starts every **3000 ms**, measured from the previous
+   stimulus's onset.
+2. The light stays on for up to **1000 ms** (the *hit window*).
 3. **If the participant responds, the light goes out immediately.**
 4. If they do not respond, it goes out by itself at 1000 ms.
 5. The next stimulus still starts at exactly +3000 ms from this one's onset —
-   **never from the response**. The epoch clock is completely independent of
-   behaviour, so a trial lasts the same for a fast responder and a slow one.
+   **never from the response**. The epoch clock is independent of behaviour, so
+   a trial lasts the same for a fast responder and a slow one.
 
-Each epoch is scored as one of:
+### How each epoch is scored
 
-| Outcome | Meaning |
+| RT | Outcome |
 |---|---|
-| **Hit** | responded within the response window |
-| **Lapse** | a hit whose reaction time exceeded the lapse threshold |
-| **Miss** | no response |
+| `RT <= 1000 ms` | **HIT** |
+| `RT > lapse threshold` (and still a hit) | **LAPSE** — a slow hit |
+| `1000 ms < RT < 3000 ms` | **MISS** — the raw RT is still recorded |
+| no response | **MISS** |
 
-A lapse is a *kind of hit*, not a separate category — lapses are counted inside
-the hit total, and only misses count toward the sleep-onset criterion.
+A response slower than the hit window is a miss even though a key was pressed:
+it does **not** reset the consecutive-miss run, so it counts toward sleep onset
+exactly like a silent epoch. Its reaction time is still stored and exported
+(`late_response = 1`), because raw data is never discarded.
 
-### Two settings this exposes
+A lapse is a *kind of hit*, counted inside the hit total, and never contributes
+to the sleep-onset criterion.
 
-**Lapse threshold** (default 1000 ms). Conventional PVT work uses 500 ms and
-OSLER work often uses 1000 ms, but short protocols need a tighter cut — 355 ms
-has been used for 3-minute tests. Set it per trial; it is exported as
-`lapse_threshold_ms` so the definition travels with the data.
+**Lapse threshold** defaults to **500 ms**. For short protocols (under about
+5 minutes) **355 ms** is conventional; the setup screen says which applies once
+you set the test duration. The value used is exported as `lapse_threshold_ms`
+so the definition travels with the data.
 
-**Response window** (default: the whole epoch). This decides whether a press
-that arrives *after* the light has gone out still counts as a response to that
-stimulus:
+---
 
-- `epoch` (default) — a response any time in the 3000 ms counts as a hit. A
-  very slow response is a hit with a long reaction time.
-- `stimulus` — only presses while the light is lit count. Later presses are
-  recorded as `late_responses` and the epoch stays a miss.
+## Outputs
 
-The published OSLER protocol does not state this explicitly, and the choice
-changes which epochs count toward the sleep-onset criterion. `epoch` is the
-default because it matches the criterion's wording — *failure to respond to the
-flash* — but if your protocol requires responses during the light, switch it and
-report `response_window` with your methods.
+Three CSV files per trial, all long-format with participant, date, time and
+trial keys on every row so files `rbind` cleanly in R.
+
+**1. Raw — one row per stimulus.** Always exported, never filtered.
+`epoch_index`, `minute`, `onset_ms`, `responded`, `rt_ms`, `rs_per_sec`,
+`outcome`, `lapse`, `late_response`, `anticipation`, `extra_responses`.
+
+**2. Per-minute — one row per elapsed minute.**
+`trials`, `hits`, `misses`, `lapses`, `hit_ratio`; average / median / SD /
+10% fastest / 10% slowest for both **RT** and **RS**, each in raw and corrected
+form; plus `velocity_rs`, `acceleration_rs`, `velocity_rt`, `acceleration_rt`.
+
+**3. Summary — one row per trial.**
+Participant information, `sleep_onset_ms`, `total_trialrun`, `hit_ratio`,
+`total_miss`, `total_lapse`, the error profiles `ep_1_2` / `ep_3_6` /
+`ep_7plus`, every whole-test RT and RS metric (raw and corrected), the
+regression slopes, and the full protocol configuration.
+
+### Definitions used
+
+**Reaction speed** is `RS = 1000 / RT`. It is undefined for `RT <= 0`; such
+trials are excluded from RS and counted in `rs_undefined` rather than silently
+dropped.
+
+**10% fastest / slowest** are means of the extreme decile (at least one trial).
+For RT the fastest responses are the *low* tail; for RS they are the *high*
+tail. The two are computed independently from their own distributions.
+
+**Error profiles** count **runs** of consecutive misses, binned by run length —
+EP1–2, EP3–6, EP7+ — not the number of missed trials. A run of 7 ends the test,
+so `ep_7plus` is normally 0 or 1.
+
+**Corrections** are configurable: none, anticipations only (`RT < 100 ms`),
+outliers only (beyond 2 SD from the mean), or both. Anticipations are removed
+**first**, so they cannot inflate the mean and SD that define the outlier
+bounds. Bounds are computed within whichever block is being summarised — a
+per-minute correction uses that minute's own mean and SD, a whole-test
+correction uses the whole test's. Raw columns are never corrected.
+
+**Velocity and acceleration** are the first and second differences of average
+reaction speed across successive minutes. Velocity is undefined for minute 1 and
+acceleration for minutes 1–2; these are reported as empty, not zero. Positive
+velocity means the participant is speeding up. `rs_slope_per_min` is the
+least-squares slope of reaction speed against minute across the whole test.
+
+### Participant identifiers
+
+Name, address and birth date are recorded and written into every export. They
+are directly identifying. For research use, prefer a pseudonymous participant ID
+and hold the identity key separately under your data-protection plan — the app
+warns about this on the setup screen. Date and time of testing are captured
+automatically.
+
+### Scoring code
+
+All derived metrics come from `scoring.js`, which is byte-identical between the
+browser and desktop builds so the two cannot diverge.
+`npm run check:scoring` in `BSRT-desktop` asserts the copies match.
 
 ---
 
