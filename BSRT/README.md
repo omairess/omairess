@@ -76,6 +76,15 @@ instrument, not a diagnostic device.
 
 ---
 
+## A more accurate desktop version exists
+
+If reaction-time precision matters to your study, use `../BSRT-desktop` instead.
+It is the same paradigm packaged as a native macOS/Windows application, with
+frame-locked stimulus presentation, a display calibration routine, and per-trial
+timing provenance exported with the data. This browser version remains the right
+choice when you need participants to run the task on their own devices without
+installing anything.
+
 ## Timing accuracy
 
 Stimuli are scheduled against **absolute targets** (`startTime + n × ISI`) rather

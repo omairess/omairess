@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'">
+<title>BSRT</title>
+<link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+
+<!-- ============ SETUP ============ -->
+<section id="screen-setup" class="screen active">
+  <div class="wrap">
+    <header>
+      <h1>BSRT</h1>
+      <p class="sub">Behavioral Sleep Resistance Task — OSLER paradigm, frame-locked timing.</p>
+      <p class="env" id="envInfo">Reading display information…</p>
+      <p class="env warn" id="envWarn" hidden></p>
+    </header>
+
+    <div class="card">
+      <h2>Session</h2>
+      <div class="grid">
+        <label>Participant ID<input type="text" id="participantId" placeholder="P001" autocomplete="off"></label>
+        <label>Session / condition<input type="text" id="sessionLabel" placeholder="baseline" autocomplete="off"></label>
+        <label>Trial number<input type="number" id="trialNumber" value="1" min="1" step="1"></label>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Protocol</h2>
+      <p class="note">Defaults reproduce the standard OSLER protocol: a 1&nbsp;s stimulus every 3&nbsp;s, sleep onset at 7 consecutive missed stimuli (21&nbsp;s), 40&nbsp;min maximum.</p>
+      <div class="grid">
+        <label>Stimulus interval (ms)<input type="number" id="isiMs" value="3000" min="200" step="100"></label>
+        <label>Stimulus duration (ms)<input type="number" id="stimMs" value="1000" min="50" step="50"></label>
+        <label>Consecutive misses = sleep onset<input type="number" id="missCriterion" value="7" min="1" step="1"></label>
+        <label>Maximum duration (min)<input type="number" id="maxMinutes" value="40" min="1" step="1"></label>
+      </div>
+      <label class="check"><input type="checkbox" id="useFullscreen" checked> Fullscreen during the task</label>
+    </div>
+
+    <details class="card">
+      <summary><h2>Timing &amp; calibration</h2></summary>
+      <p class="note">These affect measurement accuracy, not the protocol. Read the “Timing” section of the README before changing them.</p>
+      <div class="grid">
+        <label>Calibration frames<input type="number" id="calFrames" value="240" min="60" step="60"></label>
+        <label>Presentation pipeline (frames)<input type="number" id="presOffsetFrames" value="1" min="0" max="4" step="0.5"></label>
+        <label>Measured hardware offset (ms)<input type="number" id="hwOffsetMs" value="0" step="0.1"></label>
+      </div>
+      <label class="check"><input type="checkbox" id="photodiode"> Show photodiode patch (top-left) for external validation</label>
+      <p class="note tight">The hardware offset is the constant lag between this app issuing a frame and the participant’s finger reaching the key — display pipeline plus panel response plus input hardware. Software cannot measure it. Leave it at 0 unless you have measured it with a photodiode and response box, in which case raw and corrected reaction times are both exported.</p>
+    </details>
+
+    <div class="card">
+      <h2>Instructions to read to the participant</h2>
+      <p class="quote">“A red light will flash every few seconds. Each time you see it, press the space bar. Please try to stay awake, but do not do anything else to keep yourself awake — no moving about, talking, or singing. Just respond to the light.”</p>
+    </div>
+
+    <div class="actions">
+      <button id="btnStart" class="primary">Check display &amp; start</button>
+      <span class="spacer"></span>
+      <button id="btnExportAll" class="ghost">Export all trials (<span id="sessionCount">0</span>)</button>
+      <button id="btnExportAllSummary" class="ghost">Export all summaries</button>
+    </div>
+    <p id="setupError" class="error" hidden></p>
+  </div>
+</section>
+
+<!-- ============ CALIBRATION ============ -->
+<section id="screen-calibrate" class="screen">
+  <div class="wrap">
+    <header>
+      <h1>Display check</h1>
+      <p class="sub">Measured on this machine, now. Recorded with the data.</p>
+    </header>
+
+    <p id="calStatus" class="status"></p>
+
+    <div class="card" id="calReport" hidden>
+      <h2>Frame timing <span id="calGrade" class="badge"></span></h2>
+      <table class="metrics">
+        <tbody>
+          <tr><th>Measured refresh rate</th><td id="calHz">—</td></tr>
+          <tr><th>Frame interval</th><td id="calInterval">—</td></tr>
+          <tr><th>Jitter (MAD)</th><td id="calJitter">—</td></tr>
+          <tr><th>5th–95th percentile</th><td id="calRange">—</td></tr>
+          <tr><th>Dropped frames</th><td id="calDropped">—</td></tr>
+        </tbody>
+      </table>
+      <ul id="calProblems" class="problems"></ul>
+    </div>
+
+    <div class="card" id="calProbe" hidden>
+      <h2>Input check</h2>
+      <p id="probeStatus" class="status"></p>
+    </div>
+
+    <div class="actions">
+      <button id="btnBegin" class="primary" hidden>Begin trial</button>
+      <button id="btnCalBack" class="ghost">Back</button>
+    </div>
+  </div>
+</section>
+
+<!-- ============ COUNTDOWN ============ -->
+<section id="screen-countdown" class="screen dark">
+  <div class="centre">
+    <p class="countdown-hint">Get comfortable. Respond to every flash.</p>
+    <div id="countdownNum" class="countdown">3</div>
+  </div>
+</section>
+
+<!-- ============ TASK ============ -->
+<section id="screen-task" class="screen dark">
+  <div id="patch" class="patch" hidden aria-hidden="true"></div>
+  <div id="led" class="led" aria-hidden="true"></div>
+  <p class="tap-hint">Press the space bar each time the light appears.</p>
+  <button id="btnAbort" class="abort">End</button>
+</section>
+
+<!-- ============ RESULTS ============ -->
+<section id="screen-results" class="screen">
+  <div class="wrap">
+    <header>
+      <h1>Result</h1>
+      <p class="sub" id="resultWho"></p>
+    </header>
+
+    <div class="card headline">
+      <span class="metric-label">Sleep latency</span>
+      <span class="metric-value" id="mLatency">—</span>
+      <span class="metric-foot" id="mLatencyFoot"></span>
+      <p class="outcome" id="mOutcome"></p>
+    </div>
+
+    <div class="card">
+      <h2>Performance</h2>
+      <table class="metrics">
+        <tbody>
+          <tr><th>Stimuli presented</th><td id="mEpochs">—</td></tr>
+          <tr><th>Responses (hits)</th><td id="mHits">—</td></tr>
+          <tr><th>Missed stimuli</th><td id="mMisses">—</td></tr>
+          <tr><th>Response rate</th><td id="mHitRate">—</td></tr>
+          <tr><th>Longest run of misses</th><td id="mLongestRun">—</td></tr>
+          <tr><th>Mean reaction time</th><td id="mMeanRt">—</td></tr>
+          <tr><th>Median reaction time</th><td id="mMedianRt">—</td></tr>
+          <tr><th>SD of reaction time</th><td id="mSdRt">—</td></tr>
+          <tr><th>Slow responses (&gt;1000&nbsp;ms)</th><td id="mLapses">—</td></tr>
+          <tr><th>Anticipations (&lt;100&nbsp;ms)</th><td id="mAntic">—</td></tr>
+          <tr><th>Extra / spurious presses</th><td id="mExtra">—</td></tr>
+        </tbody>
+      </table>
+      <p id="anticFlag" class="note warnbox" hidden></p>
+    </div>
+
+    <div class="card">
+      <h2>Timing provenance</h2>
+      <p class="note tight">Report these alongside the data. They are what make reaction times comparable across machines.</p>
+      <table class="metrics">
+        <tbody>
+          <tr><th>Refresh rate (measured)</th><td id="tRefresh">—</td></tr>
+          <tr><th>Frame interval</th><td id="tInterval">—</td></tr>
+          <tr><th>Achieved stimulus interval</th><td id="tAchievedIsi">—</td></tr>
+          <tr><th>Onset quantisation</th><td id="tQuant">—</td></tr>
+          <tr><th>Dropped frames during trial</th><td id="tDropped">—</td></tr>
+          <tr><th>Response timed from</th><td id="tInputSrc">—</td></tr>
+          <tr><th>Input dispatch delay</th><td id="tInputDelay">—</td></tr>
+          <tr><th>Hardware offset</th><td id="tHwOffset">—</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="actions">
+      <button id="btnExportEpochs" class="primary">Export this trial (CSV)</button>
+      <button id="btnExportSummary" class="ghost">Export summary (CSV)</button>
+      <button id="btnAgain" class="ghost">New trial</button>
+    </div>
+  </div>
+</section>
+
+<script src="./timing.js"></script>
+<script src="./app.js"></script>
+</body>
+</html>
