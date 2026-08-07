@@ -280,6 +280,63 @@ least-squares slope of reaction speed against minute across the whole test.
 
 ### Participant identifiers
 
+Birth dates are entered from three dropdowns — day, month, year — rather than
+typed. Free text produced `1985-03-07`, `07/03/1985` and `March 1985` from
+different testers on the same study, and the resulting column could not be
+parsed. There is nothing to type, so an out-of-format answer cannot be
+produced; the stored and exported value is always ISO `YYYY-MM-DD`. Month names
+follow the interface language. The day list follows the month, including leap
+years, so 31 February is never on offer. A half-finished date (say a month and
+a year but no day) is refused with an explanation rather than exported as a
+fragment; leaving all three blank stays a valid answer for an anonymised
+participant.
+
+Dropdowns are used in preference to a native calendar popup because a birth
+date sits decades back: picking 1985 from a list is one click, where a calendar
+means paging through hundreds of months.
+
+### Returning participants
+
+Everyone who completes a trial is added to a small local roster, and a second
+visit starts by choosing them from the **Returning participant** dropdown —
+their ID, name, birth date, address and educational level are filled in, and
+the trial number advances to the next one free for that participant and
+session. Typing a known ID has the same effect as you type. Nothing has to be
+entered twice, which is where a `P001`/`POO1` or a transposed birth year
+normally creeps in and quietly splits one participant into two.
+
+The roster is kept separately from the trial data, so clearing stored trials
+does not lose it, and an installation that already holds trials has its roster
+rebuilt from them the first time it starts.
+
+### Protection against accidental overwriting
+
+Recall alone would make overwriting easier, so two checks sit in front of the
+Start button. Neither can be dismissed by clicking past it: the trial does not
+begin until the conflict is resolved.
+
+**Changed identity.** If any identity field no longer matches the saved record,
+the difference is listed field by field — old value struck through, new value
+beside it. Clearing a stored value counts, because losing a birth date by
+accident is as damaging as replacing it with a wrong one. Two ways out:
+*Restore saved details* puts the record back, or a tick box confirms that the
+new details are the correct ones and the record should be updated. The tick
+applies to one decision only — change the details again and it resets, so a
+confirmation can never carry over to a conflict nobody looked at.
+
+**Reused trial number.** If this participant, session label and trial number
+already have data, the existing trial is named with its date and time. *Use the
+next free number* moves on with one click; a tick box allows a deliberate
+repeat. A different session label starts its own numbering.
+
+A participant record is created or updated only once a trial has actually been
+recorded, so an abandoned setup screen never changes the roster. Details filled
+in automatically are also withdrawn automatically if the ID is typed on past a
+match, so a new participant cannot inherit someone else's name and birth date —
+but anything entered by hand is never cleared.
+
+### Privacy
+
 Name, address and birth date are recorded and written into every export. They
 are directly identifying. For research use, prefer a pseudonymous participant ID
 and hold the identity key separately under your data-protection plan — the app
@@ -290,7 +347,9 @@ automatically.
 
 All derived metrics come from `scoring.js`, which is byte-identical between the
 browser and desktop builds so the two cannot diverge.
-`npm run check:scoring` in `BSRT-desktop` asserts the copies match.
+`npm run check:shared` in `BSRT-desktop` asserts that `scoring.js`,
+`i18n.js` and `participants.js` are identical in both builds, and the
+packaging workflow refuses to build if they are not.
 
 ---
 

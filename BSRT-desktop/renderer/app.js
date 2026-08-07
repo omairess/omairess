@@ -115,12 +115,297 @@ function saveSession(r) {
   try { localStorage.setItem(LS_KEY, JSON.stringify(all)); }
   catch (e) { alert('Could not save to local storage. Export this trial now.'); }
   $('sessionCount').textContent = loadSessions().length;
+  // A participant record is created or updated only once a trial has actually
+  // been recorded, so an abandoned setup screen never touches the roster.
+  rememberParticipant(r.participant);
+}
+
+/* ---------------- participant roster ---------------- */
+
+/*
+ * A returning participant is chosen from a list rather than retyped, and the
+ * app refuses to quietly overwrite anything: if the details on screen no
+ * longer match the saved record, or the trial number already has data under
+ * it, the conflict is shown field by field and Start is blocked until someone
+ * decides which version is right.
+ */
+
+const P = window.BSRTParticipants;
+const PROFILE_KEY = 'bsrt.desktop.participants.v1';
+
+let profiles = {};
+let birthEls = null;
+let identityDiff = [];
+let diffSig = null;          // resets the confirmation when the conflict changes
+let dupSig = null;
+let duplicateTrial = null;
+let fillingForm = false;     // stops fillFromProfile re-entering the checker
+let autoFilledFrom = null;   // roster key whose details this app filled in
+
+/* Never write into the field someone is currently typing in: recall is
+ * triggered by blurring the ID box, which happens exactly as the next field
+ * gains focus, and overwriting it there would leave text half typed over. */
+function assignIfIdle(id, value) {
+  const el = $(id);
+  if (document.activeElement === el) return;
+  el.value = value;
+}
+
+function birthSelects() {
+  if (!birthEls) {
+    birthEls = { day: $('pBirthDay'), month: $('pBirthMonth'), year: $('pBirthYear') };
+  }
+  return birthEls;
+}
+
+function renderBirth() {
+  P.renderDateSelects(birthSelects(), {
+    lang: L.getLanguage(),
+    placeholders: {
+      day: L.t('participant.day'),
+      month: L.t('participant.month'),
+      year: L.t('participant.year')
+    }
+  });
+}
+
+/* Year and month first, then re-render so the day list matches that month's
+ * length, then the day — otherwise 29 February is not on offer yet. */
+function setBirth(iso) {
+  const els = birthSelects();
+  P.writeDate(els, iso);
+  renderBirth();
+  P.setDay(els, iso);
+}
+
+function readIdentity() {
+  return {
+    name: txtVal('pName'),
+    birthDate: P.readDate(birthSelects()) || '',
+    address: txtVal('pAddress'),
+    education: txtVal('pEducation')
+  };
+}
+
+function identityIsEmpty() {
+  const e = readIdentity();
+  return !e.name && !e.birthDate && !e.address && !e.education;
+}
+
+function refreshProfiles() {
+  profiles = P.loadProfiles(localStorage, PROFILE_KEY);
+  // First run after upgrading: rebuild the roster from trials already stored,
+  // so an existing installation does not start with an empty list.
+  if (!P.listProfiles(profiles).length) {
+    P.seedFromSessions(profiles, loadSessions());
+    if (P.listProfiles(profiles).length) P.saveProfiles(localStorage, PROFILE_KEY, profiles);
+  }
+  renderRoster();
+}
+
+function profileLabel(p) {
+  const bits = [p.participantId];
+  if (p.name) bits.push(p.name);
+  bits.push(p.birthDate ? L.t('participant.bornOn', { date: p.birthDate })
+                        : L.t('participant.noBirth'));
+  return bits.join(' · ');
+}
+
+function renderRoster() {
+  const sel = $('returning');
+  const keep = sel.value;
+  sel.innerHTML = '';
+  const blank = document.createElement('option');
+  blank.value = '';
+  blank.setAttribute('data-i18n', 'participant.newParticipant');
+  blank.textContent = L.t('participant.newParticipant');
+  sel.appendChild(blank);
+  P.listProfiles(profiles).forEach((p) => {
+    const o = document.createElement('option');
+    o.value = P.keyOf(p.participantId);
+    o.textContent = profileLabel(p);
+    sel.appendChild(o);
+  });
+  sel.value = keep;
+  if (sel.value !== keep) sel.value = '';
+}
+
+function fillFromProfile(p) {
+  fillingForm = true;
+  $('participantId').value = p.participantId || '';
+  $('pName').value = p.name || '';
+  $('pAddress').value = p.address || '';
+  $('pEducation').value = p.education || '';
+  setBirth(p.birthDate || '');
+  // Only offered, never imposed: a session label already typed is left alone.
+  if (p.lastSessionLabel && !txtVal('sessionLabel')) assignIfIdle('sessionLabel', p.lastSessionLabel);
+  $('returning').value = P.keyOf(p.participantId);
+  autoFilledFrom = P.keyOf(p.participantId);
+  fillingForm = false;
+  suggestTrialNumber();
+  checkParticipant();
+}
+
+/* The next number free for this participant and session, so a second visit
+ * does not silently land on top of the first. */
+function suggestTrialNumber() {
+  const id = txtVal('participantId');
+  if (!id) return;
+  assignIfIdle('trialNumber',
+    P.nextTrialNumber(loadSessions(), id, txtVal('sessionLabel') || 'NA'));
+}
+
+function diffLine(d) {
+  const li = document.createElement('li');
+  const name = document.createElement('span');
+  name.className = 'fieldname';
+  name.textContent = L.t('field.' + d.field) + ': ';
+  const was = document.createElement('span');
+  was.className = 'was';
+  was.textContent = d.from || L.t('field.blank');
+  const now = document.createElement('span');
+  now.className = 'now';
+  now.textContent = d.to || L.t('field.blank');
+  li.appendChild(name);
+  li.appendChild(was);
+  li.appendChild(document.createTextNode(' → '));
+  li.appendChild(now);
+  return li;
+}
+
+function checkParticipant() {
+  if (fillingForm) return;
+
+  const id = txtVal('participantId');
+  const stored = id ? (profiles[P.keyOf(id)] || null) : null;
+
+  identityDiff = stored ? P.diffIdentity(stored, readIdentity()) : [];
+  const sig = identityDiff
+    .map((d) => d.field + '\u0001' + d.from + '\u0001' + d.to)
+    .join('\u0002');
+  // A different conflict is a different decision: never carry a tick across.
+  if (sig !== diffSig) { diffSig = sig; $('confirmIdentity').checked = false; }
+
+  const box = $('identityConflict');
+  box.hidden = identityDiff.length === 0;
+  if (identityDiff.length) {
+    const list = $('conflictList');
+    list.innerHTML = '';
+    identityDiff.forEach((d) => list.appendChild(diffLine(d)));
+  }
+
+  duplicateTrial = P.findDuplicate(loadSessions(), id || 'NA',
+                                   txtVal('sessionLabel') || 'NA', intVal('trialNumber', 1));
+  const dsig = duplicateTrial ? duplicateTrial.participant.runId : '';
+  if (dsig !== dupSig) { dupSig = dsig; $('confirmTrial').checked = false; }
+
+  $('trialConflict').hidden = !duplicateTrial;
+  if (duplicateTrial) {
+    const q = duplicateTrial.participant;
+    $('trialConflictDetail').textContent = L.t('conflict.dupDetail', {
+      n: q.trialNumber, session: q.sessionLabel, id: q.participantId,
+      date: q.date + ' ' + q.time
+    });
+  }
+
+  if (!stored) $('returning').value = '';
+}
+
+function rememberParticipant(m) {
+  profiles = P.loadProfiles(localStorage, PROFILE_KEY);
+  P.upsertProfile(profiles, m, new Date().toISOString());
+  P.saveProfiles(localStorage, PROFILE_KEY, profiles);
+  renderRoster();
+}
+
+/* True when the form still holds exactly what was auto-filled from a record —
+ * i.e. nobody has typed over it. Only such untouched values are ever cleared
+ * again; anything a person entered by hand is left alone. */
+function identityMatches(p) {
+  const e = readIdentity();
+  return e.name === (p.name || '') && e.birthDate === (p.birthDate || '') &&
+         e.address === (p.address || '') && e.education === (p.education || '');
+}
+
+function clearIdentity() {
+  $('pName').value = '';
+  $('pAddress').value = '';
+  $('pEducation').value = '';
+  setBirth('');
+}
+
+/* Recall runs as the ID is typed rather than when the field is left. Doing it
+ * on blur meant writing into the next field at the very moment it received
+ * focus, which left whatever was typed there appended to the recalled value. */
+function recallIfMatch() {
+  const key = P.keyOf(txtVal('participantId'));
+  const p = key ? profiles[key] : null;
+  if (p) {
+    const prev = autoFilledFrom ? profiles[autoFilledFrom] : null;
+    if (identityIsEmpty() || (prev && identityMatches(prev))) fillFromProfile(p);
+    return;
+  }
+  // Typed on past a match: take back what was auto-filled, so a new
+  // participant cannot inherit someone else's name and birth date.
+  const last = autoFilledFrom ? profiles[autoFilledFrom] : null;
+  if (last && identityMatches(last)) clearIdentity();
+  autoFilledFrom = null;
+}
+
+function initParticipants() {
+  renderBirth();
+  refreshProfiles();
+
+  $('returning').addEventListener('change', () => {
+    const p = profiles[$('returning').value];
+    if (p) fillFromProfile(p);
+  });
+
+  $('participantId').addEventListener('input', () => {
+    recallIfMatch();
+    suggestTrialNumber();
+    checkParticipant();
+  });
+
+  // Any hand edit ends the link to the auto-filled record, so nothing this
+  // app wrote is ever cleared out from under a person's own typing.
+  ['pName', 'pAddress', 'pEducation'].forEach((id) => {
+    $(id).addEventListener('input', () => {
+      autoFilledFrom = null;
+      checkParticipant();
+    });
+  });
+  ['pBirthDay', 'pBirthMonth', 'pBirthYear'].forEach((id) => {
+    $(id).addEventListener('change', () => {
+      autoFilledFrom = null;
+      renderBirth();          // month or year changed: the day list may shrink
+      checkParticipant();
+    });
+  });
+
+  $('sessionLabel').addEventListener('input', () => {
+    suggestTrialNumber();
+    checkParticipant();
+  });
+  $('trialNumber').addEventListener('input', checkParticipant);
+
+  $('btnRestoreProfile').addEventListener('click', () => {
+    const p = profiles[P.keyOf(txtVal('participantId'))];
+    if (p) fillFromProfile(p);
+  });
+  $('btnNextTrial').addEventListener('click', () => {
+    suggestTrialNumber();
+    checkParticipant();
+  });
+
+  checkParticipant();
 }
 
 /* ---------------- startup ---------------- */
 
 async function init() {
   $('sessionCount').textContent = loadSessions().length;
+  initParticipants();
   try { displayInfo = await window.bsrt.getDisplayInfo(); }
   catch (e) { displayInfo = null; }
   renderEnvironment();
@@ -152,6 +437,13 @@ function parseIsiSet() {
 }
 
 function validateSetup() {
+  // Re-run the identity and duplicate checks here rather than trusting the
+  // last keystroke to have fired an event.
+  checkParticipant();
+  if (P.readDate(birthSelects()) === null) return L.t('err.birthIncomplete');
+  if (identityDiff.length && !$('confirmIdentity').checked) return L.t('err.identityConflict');
+  if (duplicateTrial && !$('confirmTrial').checked) return L.t('err.trialDuplicate');
+
   const mode = $('mode').value;
   const stim = intVal('stimMs', 1000);
   let shortestIsi;
@@ -395,7 +687,7 @@ function beginTrial() {
     participantId: txtVal('participantId') || 'NA',
     name: txtVal('pName'),
     address: txtVal('pAddress'),
-    birthDate: txtVal('pBirth'),
+    birthDate: P.readDate(birthSelects()) || '',
     education: txtVal('pEducation'),
     sessionLabel: txtVal('sessionLabel') || 'NA',
     trialNumber: intVal('trialNumber', 1)
@@ -990,7 +1282,10 @@ $('btnStopAlarm').addEventListener('click', stopAlarm);
 
 $('btnAgain').addEventListener('click', () => {
   stopAlarm();
-  $('trialNumber').value = intVal('trialNumber', 1) + 1;
+  // Straight to the next free number for this participant and session, so a
+  // second run cannot land on a trial number that already holds data.
+  suggestTrialNumber();
+  checkParticipant();
   show('screen-setup');
 });
 
@@ -1041,6 +1336,10 @@ function applyLanguage() {
   L.applyTranslations(document);
   $('lapseHint').textContent = L.t(intVal('maxMinutes', 40) < 5 ? 'lapse.short' : 'lapse.regular');
   applyMode();
+  // Month names and the roster labels are built in code, so they need
+  // rebuilding by hand when the language changes.
+  renderBirth();
+  renderRoster();
   if (lastResult) renderResult(lastResult);
 }
 

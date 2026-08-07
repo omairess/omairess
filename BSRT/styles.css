@@ -335,3 +335,25 @@ label.lang-fixed {
 /* Nothing but the task may be on screen while a trial is running. */
 body[data-screen="screen-task"] label.lang-fixed,
 body[data-screen="screen-countdown"] label.lang-fixed { display: none; }
+
+/* ---- participant roster and birth date ---- */
+
+.roster { max-width: 460px; }
+/* Keeps the roster note from sitting on top of the first field label. */
+.roster + .note { margin-bottom: 20px; }
+
+/* Day / month / year side by side; the month name is the longest, so it gets
+   the widest share. Falls back to stacking on a narrow window. */
+.dob { display: grid; grid-template-columns: 1fr 1.6fr 1.1fr; gap: 8px; }
+@media (max-width: 480px) { .dob { grid-template-columns: 1fr; } }
+
+.warnbox.conflict { color: var(--text); }
+.warnbox.conflict strong { display: block; margin-bottom: 8px; color: #e0b066; }
+.warnbox.conflict ul { margin: 0 0 4px; padding-left: 20px; font-size: 14px; }
+.warnbox.conflict li { margin-bottom: 4px; }
+.warnbox.conflict .was { color: var(--muted); text-decoration: line-through; }
+.warnbox.conflict .now { color: #e0b066; }
+.warnbox.conflict .note { margin: 8px 0 0; }
+
+.actions.tight { margin-top: 12px; align-items: center; gap: 14px; }
+label.check.inline { margin-top: 0; }

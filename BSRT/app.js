@@ -121,31 +121,296 @@ function saveSession(r) {
   } catch (e) {
     alert('Could not save this trial (storage may be full). Export it now.');
   }
-  function applyLanguage() {
-  L.setLanguage($('language').value);
-  L.applyTranslations(document);
-  $('lapseHint').textContent = L.t(intVal('maxMinutes', 40) < 5 ? 'lapse.short' : 'lapse.regular');
-  applyMode();
-  if (lastResult) renderResult(lastResult);
-}
-
-function applyMode() {
-  var mode = $('mode').value;
-  document.body.setAttribute('data-mode', mode);
-  // A PVT runs for a fixed duration; the sleep-onset criterion is an OSLER idea.
-  $('criterionOn').checked = mode !== 'pvt';
-  $('modeNote').textContent = L.t(mode === 'pvt' ? 'mode.notePvt' : 'mode.noteBsrt');
-  $('instructionsText').textContent = L.t(mode === 'pvt' ? 'instructions.pvt' : 'instructions.bsrt');
-  $('taskHint').textContent = L.t(mode === 'pvt' ? 'task.hintPvt' : 'task.hintBsrt');
-}
-
-$('mode').addEventListener('change', applyMode);
-$('language').addEventListener('change', applyLanguage);
-applyLanguage();
-refreshCount();
+  refreshCount();
+  // A participant record is created or updated only once a trial has actually
+  // been recorded, so an abandoned setup screen never touches the roster.
+  rememberParticipant(r.participant);
 }
 
 function refreshCount() { $('sessionCount').textContent = loadSessions().length; }
+
+/* ---------------- participant roster ---------------- */
+
+/*
+ * A returning participant is chosen from a list rather than retyped, and the
+ * app refuses to quietly overwrite anything: if the details on screen no
+ * longer match the saved record, or the trial number already has data under
+ * it, the conflict is shown field by field and Start is blocked until someone
+ * decides which version is right.
+ */
+
+var P = window.BSRTParticipants;
+var PROFILE_KEY = 'bsrt.participants.v1';
+
+var profiles = {};
+var birthEls = null;
+var identityDiff = [];
+var diffSig = null;          // resets the confirmation when the conflict changes
+var dupSig = null;
+var duplicateTrial = null;
+var fillingForm = false;     // stops fillFromProfile re-entering the checker
+var autoFilledFrom = null;   // roster key whose details this app filled in
+
+/* Never write into the field someone is currently typing in: recall is
+ * triggered by blurring the ID box, which happens exactly as the next field
+ * gains focus, and overwriting it there would leave text half typed over. */
+function assignIfIdle(id, value) {
+  var el = $(id);
+  if (document.activeElement === el) return;
+  el.value = value;
+}
+
+function birthSelects() {
+  if (!birthEls) {
+    birthEls = { day: $('pBirthDay'), month: $('pBirthMonth'), year: $('pBirthYear') };
+  }
+  return birthEls;
+}
+
+function renderBirth() {
+  P.renderDateSelects(birthSelects(), {
+    lang: L.getLanguage(),
+    placeholders: {
+      day: L.t('participant.day'),
+      month: L.t('participant.month'),
+      year: L.t('participant.year')
+    }
+  });
+}
+
+/* Year and month first, then re-render so the day list matches that month's
+ * length, then the day — otherwise 29 February is not on offer yet. */
+function setBirth(iso) {
+  var els = birthSelects();
+  P.writeDate(els, iso);
+  renderBirth();
+  P.setDay(els, iso);
+}
+
+function readIdentity() {
+  return {
+    name: txtVal('pName'),
+    birthDate: P.readDate(birthSelects()) || '',
+    address: txtVal('pAddress'),
+    education: txtVal('pEducation')
+  };
+}
+
+function identityIsEmpty() {
+  var e = readIdentity();
+  return !e.name && !e.birthDate && !e.address && !e.education;
+}
+
+function refreshProfiles() {
+  profiles = P.loadProfiles(localStorage, PROFILE_KEY);
+  // First run after upgrading: rebuild the roster from trials already stored,
+  // so an existing installation does not start with an empty list.
+  if (!P.listProfiles(profiles).length) {
+    P.seedFromSessions(profiles, loadSessions());
+    if (P.listProfiles(profiles).length) P.saveProfiles(localStorage, PROFILE_KEY, profiles);
+  }
+  renderRoster();
+}
+
+function profileLabel(p) {
+  var bits = [p.participantId];
+  if (p.name) bits.push(p.name);
+  bits.push(p.birthDate ? L.t('participant.bornOn', { date: p.birthDate })
+                        : L.t('participant.noBirth'));
+  return bits.join(' · ');
+}
+
+function renderRoster() {
+  var sel = $('returning');
+  var keep = sel.value;
+  sel.innerHTML = '';
+  var blank = document.createElement('option');
+  blank.value = '';
+  blank.setAttribute('data-i18n', 'participant.newParticipant');
+  blank.textContent = L.t('participant.newParticipant');
+  sel.appendChild(blank);
+  P.listProfiles(profiles).forEach(function (p) {
+    var o = document.createElement('option');
+    o.value = P.keyOf(p.participantId);
+    o.textContent = profileLabel(p);
+    sel.appendChild(o);
+  });
+  sel.value = keep;
+  if (sel.value !== keep) sel.value = '';
+}
+
+function fillFromProfile(p) {
+  fillingForm = true;
+  $('participantId').value = p.participantId || '';
+  $('pName').value = p.name || '';
+  $('pAddress').value = p.address || '';
+  $('pEducation').value = p.education || '';
+  setBirth(p.birthDate || '');
+  // Only offered, never imposed: a session label already typed is left alone.
+  if (p.lastSessionLabel && !txtVal('sessionLabel')) assignIfIdle('sessionLabel', p.lastSessionLabel);
+  $('returning').value = P.keyOf(p.participantId);
+  autoFilledFrom = P.keyOf(p.participantId);
+  fillingForm = false;
+  suggestTrialNumber();
+  checkParticipant();
+}
+
+/* The next number free for this participant and session, so a second visit
+ * does not silently land on top of the first. */
+function suggestTrialNumber() {
+  var id = txtVal('participantId');
+  if (!id) return;
+  assignIfIdle('trialNumber',
+    P.nextTrialNumber(loadSessions(), id, txtVal('sessionLabel') || 'NA'));
+}
+
+function diffLine(d) {
+  var li = document.createElement('li');
+  var name = document.createElement('span');
+  name.className = 'fieldname';
+  name.textContent = L.t('field.' + d.field) + ': ';
+  var was = document.createElement('span');
+  was.className = 'was';
+  was.textContent = d.from || L.t('field.blank');
+  var now = document.createElement('span');
+  now.className = 'now';
+  now.textContent = d.to || L.t('field.blank');
+  li.appendChild(name);
+  li.appendChild(was);
+  li.appendChild(document.createTextNode(' → '));
+  li.appendChild(now);
+  return li;
+}
+
+function checkParticipant() {
+  if (fillingForm) return;
+
+  var id = txtVal('participantId');
+  var stored = id ? (profiles[P.keyOf(id)] || null) : null;
+
+  identityDiff = stored ? P.diffIdentity(stored, readIdentity()) : [];
+  var sig = identityDiff.map(function (d) {
+    return d.field + '\u0001' + d.from + '\u0001' + d.to;
+  }).join('\u0002');
+  // A different conflict is a different decision: never carry a tick across.
+  if (sig !== diffSig) { diffSig = sig; $('confirmIdentity').checked = false; }
+
+  var box = $('identityConflict');
+  box.hidden = identityDiff.length === 0;
+  if (identityDiff.length) {
+    var list = $('conflictList');
+    list.innerHTML = '';
+    identityDiff.forEach(function (d) { list.appendChild(diffLine(d)); });
+  }
+
+  duplicateTrial = P.findDuplicate(loadSessions(), id || 'NA',
+                                   txtVal('sessionLabel') || 'NA', intVal('trialNumber', 1));
+  var dsig = duplicateTrial ? duplicateTrial.participant.runId : '';
+  if (dsig !== dupSig) { dupSig = dsig; $('confirmTrial').checked = false; }
+
+  $('trialConflict').hidden = !duplicateTrial;
+  if (duplicateTrial) {
+    var q = duplicateTrial.participant;
+    $('trialConflictDetail').textContent = L.t('conflict.dupDetail', {
+      n: q.trialNumber, session: q.sessionLabel, id: q.participantId,
+      date: q.date + ' ' + q.time
+    });
+  }
+
+  if (!stored) $('returning').value = '';
+}
+
+function rememberParticipant(m) {
+  refreshProfilesQuietly();
+  P.upsertProfile(profiles, m, new Date().toISOString());
+  P.saveProfiles(localStorage, PROFILE_KEY, profiles);
+  renderRoster();
+}
+
+function refreshProfilesQuietly() { profiles = P.loadProfiles(localStorage, PROFILE_KEY); }
+
+/* True when the form still holds exactly what was auto-filled from a record —
+ * i.e. nobody has typed over it. Only such untouched values are ever cleared
+ * again; anything a person entered by hand is left alone. */
+function identityMatches(p) {
+  var e = readIdentity();
+  return e.name === (p.name || '') && e.birthDate === (p.birthDate || '') &&
+         e.address === (p.address || '') && e.education === (p.education || '');
+}
+
+function clearIdentity() {
+  $('pName').value = '';
+  $('pAddress').value = '';
+  $('pEducation').value = '';
+  setBirth('');
+}
+
+/* Recall runs as the ID is typed rather than when the field is left. Doing it
+ * on blur meant writing into the next field at the very moment it received
+ * focus, which left whatever was typed there appended to the recalled value. */
+function recallIfMatch() {
+  var key = P.keyOf(txtVal('participantId'));
+  var p = key ? profiles[key] : null;
+  if (p) {
+    var prev = autoFilledFrom ? profiles[autoFilledFrom] : null;
+    if (identityIsEmpty() || (prev && identityMatches(prev))) fillFromProfile(p);
+    return;
+  }
+  // Typed on past a match: take back what was auto-filled, so a new
+  // participant cannot inherit someone else's name and birth date.
+  var last = autoFilledFrom ? profiles[autoFilledFrom] : null;
+  if (last && identityMatches(last)) clearIdentity();
+  autoFilledFrom = null;
+}
+
+function initParticipants() {
+  renderBirth();
+  refreshProfiles();
+
+  $('returning').addEventListener('change', function () {
+    var p = profiles[$('returning').value];
+    if (p) fillFromProfile(p);
+  });
+
+  $('participantId').addEventListener('input', function () {
+    recallIfMatch();
+    suggestTrialNumber();
+    checkParticipant();
+  });
+
+  // Any hand edit ends the link to the auto-filled record, so nothing this
+  // app wrote is ever cleared out from under a person's own typing.
+  ['pName', 'pAddress', 'pEducation'].forEach(function (id) {
+    $(id).addEventListener('input', function () {
+      autoFilledFrom = null;
+      checkParticipant();
+    });
+  });
+  ['pBirthDay', 'pBirthMonth', 'pBirthYear'].forEach(function (id) {
+    $(id).addEventListener('change', function () {
+      autoFilledFrom = null;
+      renderBirth();          // month or year changed: the day list may shrink
+      checkParticipant();
+    });
+  });
+
+  $('sessionLabel').addEventListener('input', function () {
+    suggestTrialNumber();
+    checkParticipant();
+  });
+  $('trialNumber').addEventListener('input', checkParticipant);
+
+  $('btnRestoreProfile').addEventListener('click', function () {
+    var p = profiles[P.keyOf(txtVal('participantId'))];
+    if (p) fillFromProfile(p);
+  });
+  $('btnNextTrial').addEventListener('click', function () {
+    suggestTrialNumber();
+    checkParticipant();
+  });
+
+  checkParticipant();
+}
 
 /* ---------------- wake lock ---------------- */
 
@@ -226,6 +491,13 @@ function parseIsiSet() {
 }
 
 function validate() {
+  // Re-run the identity and duplicate checks here rather than trusting the
+  // last keystroke to have fired an event.
+  checkParticipant();
+  if (P.readDate(birthSelects()) === null) return L.t('err.birthIncomplete');
+  if (identityDiff.length && !$('confirmIdentity').checked) return L.t('err.identityConflict');
+  if (duplicateTrial && !$('confirmTrial').checked) return L.t('err.trialDuplicate');
+
   var mode = $('mode').value;
   var stim = intVal('stimMs', 1000);
   var shortestIsi;
@@ -297,7 +569,7 @@ function beginTrial() {
     participantId: txtVal('participantId') || 'NA',
     name: txtVal('pName'),
     address: txtVal('pAddress'),
-    birthDate: txtVal('pBirth'),
+    birthDate: P.readDate(birthSelects()) || '',
     education: txtVal('pEducation'),
     sessionLabel: txtVal('sessionLabel') || 'NA',
     trialNumber: intVal('trialNumber', 1)
@@ -839,7 +1111,10 @@ $('btnStopAlarm').addEventListener('click', stopAlarm);
 
 $('btnAgain').addEventListener('click', function () {
   stopAlarm();
-  $('trialNumber').value = intVal('trialNumber', 1) + 1;
+  // Straight to the next free number for this participant and session, so a
+  // second run cannot land on a trial number that already holds data.
+  suggestTrialNumber();
+  checkParticipant();
   show('screen-setup');
 });
 
@@ -901,6 +1176,10 @@ function applyLanguage() {
   L.applyTranslations(document);
   $('lapseHint').textContent = L.t(intVal('maxMinutes', 40) < 5 ? 'lapse.short' : 'lapse.regular');
   applyMode();
+  // Month names and the roster labels are built in code, so they need
+  // rebuilding by hand when the language changes.
+  renderBirth();
+  renderRoster();
   if (lastResult) renderResult(lastResult);
 }
 
@@ -918,3 +1197,4 @@ $('mode').addEventListener('change', applyMode);
 $('language').addEventListener('change', applyLanguage);
 applyLanguage();
 refreshCount();
+initParticipants();

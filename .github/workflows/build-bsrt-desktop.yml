@@ -60,8 +60,8 @@ jobs:
       - name: Install dependencies
         run: npm install --no-audit --no-fund
 
-      - name: Check the shared scoring module has not diverged
-        run: npm run check:scoring
+      - name: Check the shared modules have not diverged
+        run: npm run check:shared
 
       - name: Build
         run: npx electron-builder ${{ matrix.target }} --publish never

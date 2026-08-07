@@ -11,7 +11,8 @@
     "dist:mac": "electron-builder --mac",
     "dist:win": "electron-builder --win",
     "dist": "electron-builder --mac --win",
-    "check:scoring": "node -e \"const a=require('fs').readFileSync('renderer/scoring.js');const b=require('fs').readFileSync('../BSRT/scoring.js');if(!a.equals(b)){console.error('scoring.js copies have diverged \u2014 copy one over the other');process.exit(1)}console.log('scoring.js copies identical')\""
+    "check:shared": "node -e \"const fs=require('fs');const files=['scoring.js','i18n.js','participants.js'];let bad=0;for(const f of files){const a=fs.readFileSync('renderer/'+f);const b=fs.readFileSync('../BSRT/'+f);if(a.equals(b))console.log('ok  '+f+' identical in both builds');else{console.error('FAIL '+f+' has diverged \u2014 copy one over the other');bad++}}process.exit(bad?1:0)\"",
+    "check:scoring": "npm run check:shared"
   },
   "devDependencies": {
     "electron": "^43.3.0",

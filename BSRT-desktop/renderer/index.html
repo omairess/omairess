@@ -35,15 +35,49 @@
 
     <div class="card">
       <h2 data-i18n="participant.heading">Participant</h2>
+
+      <label class="roster"><span data-i18n="participant.returning">Returning participant</span>
+        <select id="returning">
+          <option value="" data-i18n="participant.newParticipant">— New participant —</option>
+        </select>
+      </label>
+      <p class="note tight" data-i18n="participant.rosterNote">Pick someone who has been tested before and their details are filled in for you, so an ID or a birth date never has to be typed twice.</p>
+
       <div class="grid">
         <label><span data-i18n="participant.id">Participant ID</span><input type="text" id="participantId" placeholder="P001" autocomplete="off"></label>
         <label><span data-i18n="participant.name">Name</span><input type="text" id="pName" placeholder="optional" autocomplete="off"></label>
-        <label><span data-i18n="participant.birth">Birth date</span><input type="text" id="pBirth" placeholder="YYYY-MM-DD" autocomplete="off"></label>
+        <label class="wide"><span data-i18n="participant.birth">Birth date</span>
+          <div class="dob">
+            <select id="pBirthDay"></select>
+            <select id="pBirthMonth"></select>
+            <select id="pBirthYear"></select>
+          </div>
+        </label>
         <label><span data-i18n="participant.education">Educational level</span><input type="text" id="pEducation" placeholder="optional" autocomplete="off"></label>
         <label class="wide"><span data-i18n="participant.address">Address</span><input type="text" id="pAddress" placeholder="optional" autocomplete="off"></label>
         <label><span data-i18n="participant.session">Session / condition</span><input type="text" id="sessionLabel" placeholder="baseline" autocomplete="off"></label>
         <label><span data-i18n="participant.trial">Trial number</span><input type="number" id="trialNumber" value="1" min="1" step="1"></label>
       </div>
+
+      <div class="warnbox conflict" id="identityConflict" hidden>
+        <strong data-i18n="conflict.heading">These details do not match the saved record</strong>
+        <ul id="conflictList"></ul>
+        <p class="note tight" data-i18n="conflict.explain">Restore the saved details if this was a slip. Only confirm the change if the new details are the correct ones — the saved record is what earlier sessions were filed under.</p>
+        <div class="actions tight">
+          <button id="btnRestoreProfile" class="ghost" data-i18n="conflict.restore">Restore saved details</button>
+          <label class="check inline"><input type="checkbox" id="confirmIdentity"><span data-i18n="conflict.confirm">The new details are correct — update the saved record</span></label>
+        </div>
+      </div>
+
+      <div class="warnbox conflict" id="trialConflict" hidden>
+        <strong data-i18n="conflict.dupHeading">This trial number already has data</strong>
+        <p class="note tight" id="trialConflictDetail"></p>
+        <div class="actions tight">
+          <button id="btnNextTrial" class="ghost" data-i18n="conflict.useNext">Use the next free number</button>
+          <label class="check inline"><input type="checkbox" id="confirmTrial"><span data-i18n="conflict.dupConfirm">Record a second trial under this number anyway</span></label>
+        </div>
+      </div>
+
       <p class="note warnbox" data-i18n="participant.privacy">Name, address and birth date are directly identifying. They are stored on this machine and written into every exported file. For research use, prefer a pseudonymous participant ID and keep the identity key separately under your data-protection plan. Date and time of testing are captured automatically.</p>
     </div>
 
@@ -333,6 +367,7 @@
 <script src="./i18n.js"></script>
 <script src="./scoring.js"></script>
 <script src="./timing.js"></script>
+<script src="./participants.js"></script>
 <script src="./app.js"></script>
 </body>
 </html>
