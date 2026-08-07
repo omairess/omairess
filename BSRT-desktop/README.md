@@ -450,12 +450,31 @@ Each interval is rounded independently to a whole number of frames, and the
 boundaries accumulate, so a variable schedule is delivered as precisely as a
 fixed one — measured deviation was under 0.1 ms per interval in testing.
 
-Because scheduling is by frame count, a **dropped frame shifts everything after
-it** by one frame interval in wall-clock terms while keeping the stimulus
-periodic on screen. That is the deliberate trade: the participant sees a regular
-rhythm, and the drift is bounded by the dropped-frame count, which is measured
-and exported (`dropped_frames_trial`). On a healthy display it is zero. If it is
-not, the display check will already have graded the machine `poor`.
+**Dropped frames cost one stimulus up to one frame interval, and nothing
+after it.** Because each onset is scheduled against its own absolute intended
+time rather than by counting frames forward, a frame lost at one boundary does
+not push the next one late. The delay lands in that epoch's recorded
+`achieved_isi_ms`, and never in the reaction time — RTs are measured from the
+timestamp of the frame on which the stimulus actually appeared, not from when
+it was meant to appear.
+
+What matters is therefore the **rate**, not the count, and the results panel
+now reports both (`dropped_frames_trial`, `frames_trial`, `dropped_rate_trial`
+in the export). A bare count cannot be read: 97 dropped frames is 0.03% of a
+40-minute trial at 120 Hz and 1.3% of a one-minute one. Under about 1% is
+ordinary operating-system scheduling noise and needs no action.
+
+Zero is not the expectation on a real machine, and a 120 Hz display is held to
+a stricter standard than a 60 Hz one — each frame has 8.3 ms of budget instead
+of 16.7, so a hitch invisible at 60 Hz is counted at 120. Drop counts are
+therefore not comparable across machines with different refresh rates; the
+rate is. On Macs with ProMotion, note that macOS varies the panel rate with
+on-screen content, and a task that holds a static screen between stimuli is
+exactly the case adaptive refresh is built to throttle.
+
+To reduce them: run full-screen on a single display, quit other applications,
+turn on Do Not Disturb, and keep the machine on mains power — macOS and Windows
+both throttle harder on battery.
 
 ### What remains, and cannot be fixed in software
 

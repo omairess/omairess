@@ -997,12 +997,29 @@ function buildResult(reason) {
     extras: epochs.map((e) => e.extra),
     rawRts: epochs.map((e) => e.rtRawMs),
     droppedFramesDuringTrial: droppedFrames,
+    framesDuringTrial: frameIndex + 1,
     blurCount,
     scored
   };
 }
 
 /* ---------------- rendering ---------------- */
+
+/* A dropped frame delays a stimulus onset by up to one frame interval. The
+ * onset is measured rather than assumed, so the delay lands in the recorded
+ * ISI and never in the reaction time — which is why the rate, not the raw
+ * count, is what matters. Anything under about 1% is ordinary background
+ * scheduling noise. */
+function formatDropped(r) {
+  const dropped = r.droppedFramesDuringTrial;
+  const shown = r.framesDuringTrial;
+  if (!shown) return String(dropped);
+  const expected = shown + dropped;
+  const pct = (dropped / expected) * 100;
+  const verdict = pct < 1 ? 'negligible' : pct < 5 ? 'noticeable' : 'high — close other applications';
+  return dropped.toLocaleString() + ' of ' + expected.toLocaleString() +
+         ' frames (' + pct.toFixed(2) + '% — ' + verdict + ')';
+}
 
 function renderResult(r) {
   const p = r.participant, t = r.scored.totals, e = r.scored.errorProfiles;
@@ -1071,7 +1088,7 @@ function renderResult(r) {
       r.config.schedule.method.replace(/_/g, ' ')
     : n2(r.config.achievedIsiMs) + ' ms (requested ' + r.config.isiMs + ')';
   $('tQuant').textContent = '± ' + n2(r.calibration.frameIntervalMs / 2) + ' ms';
-  $('tDropped').textContent = r.droppedFramesDuringTrial;
+  $('tDropped').textContent = formatDropped(r);
   $('tInputSrc').textContent = r.inputTimeSource === 'os_event_stamp' ? 'OS event stamp' : 'handler time (fallback)';
   $('tInputDelay').textContent = r.inputProbe && r.inputProbe.usable
     ? n2(r.inputProbe.medianDelayMs) + ' ms (removed)' : '—';
@@ -1219,7 +1236,8 @@ const SUMMARY_HEADER = PARTICIPANT_COLS.concat([
   'total_presses', 'extra_presses', 'burst_max', 'rapid_pairs', 'cheating_suspected', 'cheating_reasons',
   'alarm_enabled',
   'refresh_hz_measured', 'refresh_hz_reported', 'frame_interval_ms', 'frame_jitter_mad_ms',
-  'onset_quantisation_ms', 'dropped_frames_calibration', 'dropped_frames_trial', 'calibration_grade',
+  'onset_quantisation_ms', 'dropped_frames_calibration', 'dropped_frames_trial',
+  'frames_trial', 'dropped_rate_trial', 'calibration_grade',
   'input_time_source', 'input_dispatch_median_ms',
   'presentation_offset_frames', 'hardware_offset_ms',
   'platform', 'os_release', 'electron_version', 'chrome_version', 'display_scale_factor',
@@ -1254,7 +1272,12 @@ function summaryRow(r) {
     c.alarm ? 1 : 0,
     round(cal.refreshHz, 3), d.displayFrequency == null ? null : d.displayFrequency,
     round(cal.frameIntervalMs, 4), round(cal.madIntervalMs, 4),
-    round(cal.frameIntervalMs / 2, 3), cal.droppedFrames, r.droppedFramesDuringTrial, r.calibrationGrade,
+    round(cal.frameIntervalMs / 2, 3), cal.droppedFrames, r.droppedFramesDuringTrial,
+    r.framesDuringTrial,
+    r.framesDuringTrial
+      ? round(r.droppedFramesDuringTrial / (r.framesDuringTrial + r.droppedFramesDuringTrial), 5)
+      : null,
+    r.calibrationGrade,
     r.inputTimeSource, r.inputProbe && r.inputProbe.usable ? round(r.inputProbe.medianDelayMs, 3) : null,
     c.presentationOffsetFrames, c.hardwareOffsetMs,
     r.display ? r.display.platform : null, r.display ? r.display.osRelease : null,
