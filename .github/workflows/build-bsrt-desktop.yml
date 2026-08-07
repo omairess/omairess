@@ -14,9 +14,15 @@
 name: Build BSRT desktop apps
 
 on:
-  workflow_dispatch:        # the "Run workflow" button
+  # A build starts by itself whenever the app changes, on any branch, so a new
+  # .dmg and .exe are simply waiting in the Actions tab afterwards. The path
+  # filter keeps unrelated commits (R scripts, docs) from spending build time.
   push:
-    tags: ['v*']
+    paths:
+      - 'BSRT-desktop/**'
+      - 'BSRT/**'
+      - '.github/workflows/build-bsrt-desktop.yml'
+  workflow_dispatch:        # the "Run workflow" button, for a build on demand
 
 defaults:
   run:
