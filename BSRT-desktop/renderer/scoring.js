@@ -362,10 +362,15 @@
      * happened to be shuffled to the end.
      */
     var trailingMs = Math.max.apply(null, intervalSet);
-    var onsets = [], blocks = [], isiBefore = [], epochIsi = [];
+    var onsets = [], blocks = [], minutes = [], isiBefore = [], epochIsi = [];
     var acc = 0;
     for (var k = 0; k < kept.length; k++) {
       blocks.push(Math.floor(acc / blockMs));
+      // A minute is the same rule with a 60 s window. Both are taken from the
+      // INTENDED schedule, never from a measured onset: presentation jitter of
+      // a millisecond either way would otherwise flip a boundary stimulus into
+      // the neighbouring bucket and unbalance the counts.
+      minutes.push(Math.floor(acc / 60000));
       acc += kept[k];
       onsets.push(acc);
       isiBefore.push(kept[k]);
@@ -376,6 +381,7 @@
       isis: kept,
       onsets: onsets,
       blocks: blocks,
+      minutes: minutes,
       isiBefore: isiBefore,
       epochIsi: epochIsi,
       method: method,
@@ -481,6 +487,28 @@
     };
     var hitWindow = cfg.hitWindowMs;
 
+    /*
+     * The minute comes from the schedule (see finishSchedule), so it is a
+     * planned bucket rather than something re-derived from a measured onset.
+     *
+     * The fallback below is for epochs built without one. It bucket by where
+     * the PRECEDING INTERVAL started, matching the schedule's rule: bucketing
+     * on the onset alone pushes every boundary stimulus a minute late, because
+     * onsets span (0, ceiling] rather than [0, ceiling). In a 2-minute,
+     * 3000 ms BSRT that put the stimuli at 60 s and 120 s into minutes 2 and
+     * 3, reading 19 / 20 / 1 across a two-minute test — a spurious third
+     * minute holding one trial, whose mean, velocity and acceleration were all
+     * meaningless. It is only a fallback because subtracting an intended
+     * interval from a measured onset still lands within a millisecond of the
+     * boundary, and jitter that small is enough to flip the bucket.
+     */
+    function minuteOf(e) {
+      if (e.minute != null) return e.minute;
+      var start = e.isiBeforeMs == null ? e.onsetMs : e.onsetMs - e.isiBeforeMs;
+      if (start < 0) start = 0;
+      return Math.floor(start / 60000);
+    }
+
     /* --- classify every epoch --- */
     var trials = epochs.map(function (e) {
       var rt = (e.rtMs === undefined ? null : e.rtMs);
@@ -488,7 +516,7 @@
       return {
         index: e.index,
         onsetMs: e.onsetMs,
-        minute: Math.floor(e.onsetMs / 60000),
+        minute: minuteOf(e),
         block: e.block === undefined ? null : e.block,
         epochIsiMs: e.epochIsiMs === undefined ? null : e.epochIsiMs,
         isiBeforeMs: e.isiBeforeMs === undefined ? null : e.isiBeforeMs,

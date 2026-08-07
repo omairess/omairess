@@ -834,6 +834,9 @@ function startEpoch(idx, frameTs) {
     presentationMs: frameTs + cfg.presentationOffsetFrames * calibration.frameIntervalMs,
     onsetMs: frameTs - trialStartTs,
     block: cfg.schedule.blocks[idx],
+    // Taken from the schedule, not re-derived from the measured onset: frame
+    // quantisation alone can move an onset several ms off its intended time.
+    minute: cfg.schedule.minutes[idx],
     // epochIsiMs is this stimulus's response window; isiBeforeMs is the wait
     // that preceded it, defined for the first stimulus too.
     epochIsiMs: cfg.schedule.epochIsi[idx],
@@ -960,6 +963,7 @@ function buildResult(reason) {
     onsetMs: e.onsetMs,
     rtMs: e.rtRawMs === null ? null : e.rtRawMs - cfg.hardwareOffsetMs,
     block: e.block,
+    minute: e.minute,
     epochIsiMs: e.epochIsiMs,
     isiBeforeMs: e.isiBeforeMs
   })), cfg, presses);
@@ -1180,7 +1184,9 @@ function rawRows(r) {
   const extras = r.extras || [];
   const raws = r.rawRts || [];
   return r.scored.trials.map((t, i) => pv.concat([
-    t.index, t.block === null ? '' : t.block + 1, t.minute + 1, round(t.onsetMs, 2),
+    // 1-based on the way out, like block and minute: epoch_index was the only
+    // column that still started at zero.
+    t.index + 1, t.block === null ? '' : t.block + 1, t.minute + 1, round(t.onsetMs, 2),
     t.epochIsiMs, t.isiBeforeMs,
     t.rtMs === null ? 0 : 1,
     round(raws[i] == null ? null : raws[i], 3),   // before the hardware offset

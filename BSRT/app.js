@@ -684,6 +684,10 @@ function runEpoch(n) {
     onsetMs: performance.now() - startTime,
     onsetPerf: performance.now(),
     block: cfg.schedule.blocks[n],
+    // Taken from the schedule, not re-derived from the measured onset, so a
+    // stimulus landing a millisecond either side of a boundary cannot slide
+    // into the neighbouring minute.
+    minute: cfg.schedule.minutes[n],
     // epochIsiMs is this stimulus's response window (time to the next one);
     // isiBeforeMs is the wait that preceded it, defined for the first one too.
     epochIsiMs: cfg.schedule.epochIsi[n],
@@ -825,7 +829,7 @@ function buildResult(reason) {
   var scored = S.score(epochs.map(function (e) {
     return {
       index: e.index, onsetMs: e.onsetMs, rtMs: e.rtMs,
-      block: e.block, epochIsiMs: e.epochIsiMs, isiBeforeMs: e.isiBeforeMs
+      block: e.block, minute: e.minute, epochIsiMs: e.epochIsiMs, isiBeforeMs: e.isiBeforeMs
     };
   }), cfg, presses);
 
@@ -1012,7 +1016,9 @@ function rawRows(r) {
   var extras = r.extras || [];
   return r.scored.trials.map(function (t, i) {
     return pv.concat([
-      t.index, t.block === null ? '' : t.block + 1, t.minute + 1, round(t.onsetMs, 2),
+      // 1-based on the way out, like block and minute: epoch_index was the
+      // only column that still started at zero.
+      t.index + 1, t.block === null ? '' : t.block + 1, t.minute + 1, round(t.onsetMs, 2),
       t.epochIsiMs, t.isiBeforeMs,
       t.rtMs === null ? 0 : 1,
       round(t.rtMs, 3), round(t.rsPerSec, 5),

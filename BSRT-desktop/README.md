@@ -273,8 +273,23 @@ Three CSV files per trial, all long-format with participant, date, time and
 trial keys on every row so files `rbind` cleanly in R.
 
 **1. Raw — one row per stimulus.** Always exported, never filtered.
-`epoch_index`, `minute`, `onset_ms`, `responded`, `rt_ms`, `rs_per_sec`,
-`outcome`, `lapse`, `late_response`, `anticipation`, `extra_responses`.
+`epoch_index`, `block`, `minute`, `onset_ms`, `epoch_isi_ms`, `isi_before_ms`,
+`responded`, `rt_ms`, `rs_per_sec`, `outcome`, `lapse`, `late_response`,
+`false_start`, `extra_responses`.
+
+`epoch_index`, `block` and `minute` all start at **1**, not 0.
+
+`block` and `minute` are taken from the planned schedule, not re-derived from
+the measured onset: a stimulus is assigned to the block and minute in which its
+*preceding interval* started. That matters at the boundaries. Bucketing on the
+onset instead puts a stimulus landing exactly on the minute mark into the
+following minute, and since onsets span (0, ceiling] rather than [0, ceiling),
+a 2-minute test came out as 19 / 20 / 1 across *three* minutes — the third
+holding a single trial whose mean, velocity and acceleration meant nothing. It
+also has to come from the schedule rather than the measurement, because
+presentation jitter of a millisecond (or a whole frame, on the desktop build)
+is otherwise enough to tip a boundary stimulus into the wrong bucket. On the
+scheduled rule a 2-minute, 3000 ms test reads exactly 20 / 20.
 
 **2. Per-minute — one row per elapsed minute.**
 `trials`, `hits`, `misses`, `lapses`, `hit_ratio`; average / median / SD /
