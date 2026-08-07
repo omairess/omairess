@@ -132,6 +132,24 @@
     var cRs = toRs(corr.kept);
     var cRsSorted = cRs.slice().sort(function (a, b) { return a - b; });
 
+    /*
+     * Interpercentile range: the spread between the two decile means, as an
+     * absolute distance. It is a within-test stability measure — a participant
+     * whose best and worst tenths sit far apart is performing erratically even
+     * when the average looks intact — and it is what the normative tables
+     * report, so the app has to produce a comparable number.
+     */
+    function ipr(a, b) { return a === null || b === null ? null : Math.abs(a - b); }
+
+    var fastRt = decileMean(sorted, 'low');
+    var slowRt = decileMean(sorted, 'high');
+    var cFastRt = decileMean(cSorted, 'low');
+    var cSlowRt = decileMean(cSorted, 'high');
+    var fastRs = decileMean(rsSorted, 'high');
+    var slowRs = decileMean(rsSorted, 'low');
+    var cFastRs = decileMean(cRsSorted, 'high');
+    var cSlowRs = decileMean(cRsSorted, 'low');
+
     return {
       n: hitRts.length,
       nCorrected: corr.kept.length,
@@ -145,29 +163,33 @@
       avgRt: mean(hitRts),
       medianRt: median(hitRts),
       sdRt: sd(hitRts),
-      fastest10Rt: decileMean(sorted, 'low'),
-      slowest10Rt: decileMean(sorted, 'high'),
+      fastest10Rt: fastRt,
+      slowest10Rt: slowRt,
+      iprRt: ipr(slowRt, fastRt),
 
       /* reaction time, corrected */
       corrAvgRt: mean(corr.kept),
       corrMedianRt: median(corr.kept),
       corrSdRt: sd(corr.kept),
-      corrFastest10Rt: decileMean(cSorted, 'low'),
-      corrSlowest10Rt: decileMean(cSorted, 'high'),
+      corrFastest10Rt: cFastRt,
+      corrSlowest10Rt: cSlowRt,
+      corrIprRt: ipr(cSlowRt, cFastRt),
 
       /* reaction speed, raw — fastest is the HIGH tail */
       avgRs: mean(rs),
       medianRs: median(rs),
       sdRs: sd(rs),
-      fastest10Rs: decileMean(rsSorted, 'high'),
-      slowest10Rs: decileMean(rsSorted, 'low'),
+      fastest10Rs: fastRs,
+      slowest10Rs: slowRs,
+      iprRs: ipr(fastRs, slowRs),
 
       /* reaction speed, corrected */
       corrAvgRs: mean(cRs),
       corrMedianRs: median(cRs),
       corrSdRs: sd(cRs),
-      corrFastest10Rs: decileMean(cRsSorted, 'high'),
-      corrSlowest10Rs: decileMean(cRsSorted, 'low')
+      corrFastest10Rs: cFastRs,
+      corrSlowest10Rs: cSlowRs,
+      corrIprRs: ipr(cFastRs, cSlowRs)
     };
   }
 
@@ -585,8 +607,201 @@
     };
   }
 
+  /* ---------------- normative comparison ---------------- */
+
+  /*
+   * Recomputes a trial's summary the way the normative workbook computed its
+   * reference values, over the first `minutes` minutes only.
+   *
+   * The app's own scoring is NOT reused here, because the two disagree in two
+   * ways that would bias every z-score:
+   *
+   *   - The app treats any response slower than the hit window as a miss and
+   *     drops it from the RT statistics. The norms keep every response that is
+   *     not a timeout, however slow. Across the 291 reference sessions this
+   *     alone moves the RT mean by a median of 4.8 ms.
+   *   - The app sizes a decile with round(10% x n), the norms with ceil. Those
+   *     pick different subset sizes in about one session in ten.
+   *
+   * So the participant is re-scored under the workbook's rules for the purpose
+   * of comparison only. The app's own metrics, which follow the protocol the
+   * user specified, are left untouched and remain what the rest of the results
+   * screen and the raw export report.
+   */
+  function normativeSummary(trials, minutes, opts) {
+    // The same minute buckets the per-minute table uses, so "the first three
+    // minutes" means one thing across the whole app.
+    var inWindow = trials.filter(function (t) {
+      return t.minute != null ? t.minute < minutes : t.onsetMs <= minutes * 60000;
+    });
+    if (!inWindow.length) return null;
+
+    // A response of any latency counts; only a timeout is a miss.
+    var responded = inWindow.filter(function (t) { return t.rtMs !== null; });
+    var misses = inWindow.length - responded.length;
+    var fsMs = opts && opts.falseStartMs != null ? opts.falseStartMs : 100;
+    var falseStarts = responded.filter(function (t) { return t.rtMs < fsMs; }).length;
+    var lapseMs = opts && opts.lapseMs != null ? opts.lapseMs : 500;
+
+    var valid = responded
+      .filter(function (t) { return t.rtMs > fsMs; })
+      .map(function (t) { return t.rtMs; })
+      .sort(function (a, b) { return a - b; });
+
+    var ep = errorProfiles(inWindow.map(function (t) {
+      return t.rtMs === null ? 'miss' : 'hit';
+    }), opts && opts.missCriterion != null ? opts.missCriterion : 0);
+
+    var out = {
+      minutes: minutes,
+      trials: inWindow.length,
+      hits: inWindow.length - misses,
+      misses: misses,
+      hitRatio: inWindow.length ? ((inWindow.length - misses) / inWindow.length) * 100 : null,
+      falseStarts: falseStarts,
+      lapses: valid.filter(function (v) { return v > lapseMs; }).length,
+      ep12: ep.ep1_2,
+      ep36: ep.ep3_6,
+      ep7: ep.ep7plus,
+      nValid: valid.length
+    };
+
+    if (!valid.length) return out;
+
+    var rs = valid.map(function (v) { return 1000 / v; }).sort(function (a, b) { return a - b; });
+    var fastRt = ceilDecile(valid, 'low');
+    var slowRt = ceilDecile(valid, 'high');
+    var fastRs = ceilDecile(rs, 'high');
+    var slowRs = ceilDecile(rs, 'low');
+
+    out.rtMean = mean(valid);
+    out.rtMedian = median(valid);
+    out.rtSd = sd(valid);
+    out.rtFast10 = fastRt;
+    out.rtSlow10 = slowRt;
+    out.rtIpr = Math.abs(slowRt - fastRt);
+    out.rsMean = mean(rs);
+    out.rsMedian = median(rs);
+    out.rsSd = sd(rs);
+    out.rsFast10 = fastRs;
+    out.rsSlow10 = slowRs;
+    out.rsIpr = Math.abs(fastRs - slowRs);
+    return out;
+  }
+
+  /* The workbook's decile size: ceil, not round. */
+  function ceilDecile(sortedAsc, tail) {
+    if (!sortedAsc.length) return null;
+    var k = Math.max(1, Math.ceil(sortedAsc.length * 0.1));
+    var slice = tail === 'low' ? sortedAsc.slice(0, k) : sortedAsc.slice(sortedAsc.length - k);
+    return mean(slice);
+  }
+
+  /*
+   * Position of one value against its reference cell.
+   *
+   * `dir` is +1 when a higher value is better and -1 when it is worse, so
+   * `zWorse` is always signed the same way: positive means worse than the
+   * reference mean, whatever the variable measures. The banding the user asked
+   * for keys off that single number.
+   *
+   * An SD of exactly zero is common in the reference table — every control
+   * session scored 20 hits out of 20 in the first minute, for instance. A
+   * z-score is undefined there, so rather than dividing by zero and reporting
+   * Infinity, the value is flagged as sitting outside a reference range that
+   * had no spread at all, and z stays null.
+   */
+  function compareToNorm(value, norm) {
+    if (value == null || !norm || norm.mean == null) return null;
+    var deltaWorse = norm.dir >= 0 ? norm.mean - value : value - norm.mean;
+    var out = {
+      value: value,
+      mean: norm.mean,
+      sd: norm.sd,
+      n: norm.n,
+      dir: norm.dir,
+      deltaWorse: deltaWorse,
+      z: null,
+      band: 'green',
+      degenerate: false
+    };
+    if (norm.dir === 0) { out.band = 'neutral'; return out; }
+    if (!norm.sd) {
+      out.degenerate = true;
+      // No spread to measure against: worse at all means outside the whole
+      // reference sample, which is worth flagging, but never as a z-score.
+      out.band = deltaWorse > 0 ? 'red' : 'green';
+      return out;
+    }
+    out.z = deltaWorse / norm.sd;
+    out.band = out.z > 2 ? 'red' : out.z > 1 ? 'orange' : 'green';
+    return out;
+  }
+
+  /*
+   * The whole normative comparison for one trial, or a refusal with a reason.
+   *
+   * Eligibility is deliberately strict. The reference sessions are BSRT runs
+   * with a 3000 ms interval, which is 20 stimuli a minute; a PVT averages ten,
+   * and a BSRT at some other interval delivers a different number again. Trial
+   * counts, miss counts and lapse counts would then be measuring different
+   * quantities, and reaction time itself moves with the interval. Rather than
+   * emit a plausible-looking z-score against the wrong reference, the report
+   * says which condition failed.
+   */
+  function normativeReport(o, norms) {
+    var out = {
+      available: false, reason: null, hour: o.hour, mode: o.mode, isiMs: o.isiMs,
+      windowMinutes: null, testMinutes: null, truncated: false,
+      belowProtocol: false, protocolMinutes: norms ? norms.protocolMinutes : null,
+      sessions: norms ? norms.sessions : null,
+      participants: norms ? norms.data.participants : null,
+      source: norms ? norms.data.source : null,
+      n: null, summary: null, rows: []
+    };
+    if (!norms) { out.reason = 'no_norms'; return out; }
+    if (o.mode !== 'bsrt') { out.reason = 'not_bsrt'; return out; }
+    if (o.isiMs !== 3000) { out.reason = 'isi_mismatch'; return out; }
+    if (!(o.hour >= 0 && o.hour < 24)) { out.reason = 'no_hour'; return out; }
+
+    // Whole minutes actually completed, never more than the reference protocol.
+    var completed = Math.floor((o.elapsedMs || 0) / 60000);
+    var buckets = o.minuteBuckets == null ? completed : o.minuteBuckets;
+    var window = Math.min(completed, buckets, norms.maxLength);
+    out.testMinutes = completed;
+    if (window < 1) { out.reason = 'too_short'; return out; }
+    out.windowMinutes = window;
+    out.truncated = completed > norms.maxLength;
+    out.belowProtocol = window < norms.protocolMinutes;
+
+    var summary = normativeSummary(o.trials, window, o);
+    if (!summary) { out.reason = 'too_short'; return out; }
+
+    out.summary = summary;
+    out.n = norms.nFor(o.hour, window);
+    out.available = true;
+
+    for (var i = 0; i < norms.vars.length; i++) {
+      var v = norms.vars[i];
+      var norm = norms.lookup(o.hour, window, v.key);
+      var cmp = compareToNorm(summary[v.key], norm);
+      out.rows.push({
+        key: v.key, label: v.label, section: v.section, unit: v.unit,
+        dir: v.dir, comparison: cmp
+      });
+    }
+
+    // A single headline count, so the panel can say how much stood out.
+    out.nOrange = out.rows.filter(function (r) { return r.comparison && r.comparison.band === 'orange'; }).length;
+    out.nRed = out.rows.filter(function (r) { return r.comparison && r.comparison.band === 'red'; }).length;
+    return out;
+  }
+
   return {
     score: score,
+    normativeSummary: normativeSummary,
+    normativeReport: normativeReport,
+    compareToNorm: compareToNorm,
     detectCheating: detectCheating,
     buildSchedule: buildSchedule,
     makeRng: makeRng,

@@ -854,6 +854,17 @@ function buildResult(reason) {
     sleepOnsetMs: sleepOnsetMs,
     sleepOnsetCriterionMs: sleepOnsetCriterionMs,
     elapsedMs: epochs.length ? epochs[epochs.length - 1].onsetMs + epochs[epochs.length - 1].epochIsiMs : 0,
+    norms: S.normativeReport({
+      trials: scored.trials,
+      elapsedMs: epochs.length ? epochs[epochs.length - 1].onsetMs + epochs[epochs.length - 1].epochIsiMs : 0,
+      minuteBuckets: scored.perMinute.length,
+      mode: cfg.mode,
+      isiMs: cfg.isiMs,
+      hour: parseInt(meta.time.slice(0, 2), 10),
+      lapseMs: cfg.lapseMs,
+      falseStartMs: cfg.falseStartMs,
+      missCriterion: cfg.missCriterion
+    }, window.BSRTNorms),
     extraResponses: epochs.reduce(function (n, e) { return n + e.extra; }, 0),
     kssBefore: null,
     kssAfter: null,
@@ -906,6 +917,8 @@ function renderResult(r) {
   $('rtcMedian').textContent = n1(t.corrMedianRt);
   $('rtcFast').textContent = n1(t.corrFastest10Rt);
   $('rtcSlow').textContent = n1(t.corrSlowest10Rt);
+  $('rtIpr').textContent = n1(t.iprRt);
+  $('rtcIpr').textContent = n1(t.corrIprRt);
 
   $('rsAvg').textContent = n3(t.avgRs);
   $('rsMedian').textContent = n3(t.medianRs);
@@ -916,15 +929,157 @@ function renderResult(r) {
   $('rscMedian').textContent = n3(t.corrMedianRs);
   $('rscFast').textContent = n3(t.corrFastest10Rs);
   $('rscSlow').textContent = n3(t.corrSlowest10Rs);
+  $('rsIpr').textContent = n3(t.iprRs);
+  $('rscIpr').textContent = n3(t.corrIprRs);
 
   $('corrNote').textContent = r.config.correction === 'none'
     ? L.t('corr.none')
     : L.t('corr.applied', { desc: describeCorrection(r.config),
                             a: t.nFalseStartsRemoved, b: t.nOutliersRemoved, n: t.n });
 
+  renderNorms(r);
   renderIntegrity(r);
   renderKss(r);
   renderPerMinute(r);
+}
+
+/* ---------------- normative comparison ---------------- */
+
+/*
+ * Labels reuse the keys the rest of the results screen already uses, so the
+ * panel speaks the interface language without another 84 strings to translate.
+ * The reference table's own English labels stay in norms.js as the data's
+ * documentation.
+ */
+var NORM_LABEL = {
+  trials: 'results.totalTrials', hitRatio: 'results.hitRatio', hits: 'results.hits',
+  misses: 'results.misses', lapses: 'results.lapses', falseStarts: 'results.falseStarts',
+  ep12: 'results.ep12', ep36: 'results.ep36', ep7: 'results.ep7',
+  rtMean: 'results.average', rtMedian: 'results.median', rtSd: 'results.sd',
+  rtFast10: 'results.fastest', rtSlow10: 'results.slowest', rtIpr: 'results.ipr',
+  rsMean: 'results.average', rsMedian: 'results.median', rsSd: 'results.sd',
+  rsFast10: 'results.fastest', rsSlow10: 'results.slowest', rsIpr: 'results.ipr'
+};
+var NORM_SECTION = {
+  'Test overview': 'results.overview',
+  'Reaction time': 'norms.sectRt',
+  'Reaction speed': 'norms.sectRs'
+};
+
+function normFmt(key, v) {
+  if (v == null) return '—';
+  if (key.indexOf('rs') === 0) return v.toFixed(3);
+  if (key === 'hitRatio') return v.toFixed(1) + '%';
+  if (key.indexOf('rt') === 0) return v.toFixed(1);
+  return String(Math.round(v * 100) / 100);
+}
+
+function normReasonText(nm) {
+  if (!nm) return L.t('norms.rNoNorms');
+  switch (nm.reason) {
+    case 'not_bsrt': return L.t('norms.rNotBsrt');
+    case 'isi_mismatch': return L.t('norms.rIsi', { isi: nm.isiMs });
+    case 'no_hour': return L.t('norms.rNoHour');
+    case 'too_short': return L.t('norms.rTooShort');
+    default: return L.t('norms.rNoNorms');
+  }
+}
+
+function renderNorms(r) {
+  var nm = r.norms;
+  var body = $('normsBody');
+  var un = $('normsUnavailable');
+
+  if (!nm || !nm.available) {
+    body.hidden = true;
+    un.hidden = false;
+    un.textContent = L.t('norms.unavailable') + ' ' + normReasonText(nm);
+    $('normsContext').textContent = '';
+    return;
+  }
+
+  un.hidden = true;
+  body.hidden = false;
+
+  var hh = (nm.hour < 10 ? '0' : '') + nm.hour;
+  var summary = (nm.nOrange + nm.nRed) === 0
+    ? L.t('norms.summaryClean')
+    : L.t('norms.summaryFlagged', { orange: nm.nOrange, red: nm.nRed });
+  $('normsContext').textContent =
+    L.t('norms.context', { hour: hh, min: nm.windowMinutes, n: nm.n }) + ' ' + summary;
+
+  var tbody = $('normsTable').getElementsByTagName('tbody')[0];
+  tbody.innerHTML = '';
+  var lastSection = null;
+
+  nm.rows.forEach(function (row) {
+    var c = row.comparison;
+    var tr = document.createElement('tr');
+    if (row.section !== lastSection) { tr.className = 'section-start'; lastSection = row.section; }
+
+    var th = document.createElement('th');
+    if (tr.className === 'section-start') {
+      var sect = document.createElement('span');
+      sect.className = 'sect';
+      sect.textContent = L.t(NORM_SECTION[row.section] || row.section);
+      th.appendChild(sect);
+    }
+    th.appendChild(document.createTextNode(L.t(NORM_LABEL[row.key] || row.label)));
+    tr.appendChild(th);
+
+    var tdVal = document.createElement('td');
+    tdVal.textContent = normFmt(row.key, c ? c.value : null);
+    // The value carries the band as well as the z cell, so the thing being
+    // judged is the thing that looks red.
+    if (c) tdVal.className = 'band-' + c.band;
+    tr.appendChild(tdVal);
+
+    var tdRef = document.createElement('td');
+    tdRef.textContent = c ? normFmt(row.key, c.mean) + ' ± ' + normFmt(row.key, c.sd) : '—';
+    tr.appendChild(tdRef);
+
+    var tdZ = document.createElement('td');
+    if (!c) {
+      tdZ.className = 'band-none';
+      tdZ.textContent = '—';
+    } else if (c.dir === 0) {
+      tdZ.className = 'band-neutral';
+      tdZ.textContent = L.t('norms.notJudged');
+    } else if (c.degenerate) {
+      tdZ.className = 'band-' + c.band;
+      // No spread in the reference, so no z exists — say that rather than
+      // dividing by zero and printing an infinity.
+      tdZ.textContent = c.band === 'red' ? L.t('norms.noSpread') : '—';
+    } else {
+      tdZ.className = 'band-' + c.band;
+      // Signed so that positive always reads "worse", whichever direction is
+      // bad for this variable, and labelled so the sign is never ambiguous.
+      var word = c.z >= 0 ? L.t('norms.worse') : L.t('norms.better');
+      tdZ.textContent = Math.abs(c.z).toFixed(2) + ' SD ' + word;
+    }
+    tr.appendChild(tdZ);
+    tbody.appendChild(tr);
+  });
+
+  var items = [L.t('norms.dPreliminary', { sessions: nm.sessions, participants: nm.participants })];
+  if (nm.belowProtocol) {
+    items.push(L.t('norms.dShort', { protocol: nm.protocolMinutes, min: nm.windowMinutes }));
+  }
+  if (nm.truncated) {
+    items.push(L.t('norms.dTruncated', { test: nm.testMinutes, protocol: nm.protocolMinutes }));
+  }
+  // A reference SD of well under one count turns a two-trial difference into a
+  // double-digit z. Say so when it actually happens rather than always.
+  var extreme = nm.rows.some(function (x) {
+    return x.comparison && x.comparison.z != null && Math.abs(x.comparison.z) > 5;
+  });
+  if (extreme) items.push(L.t('norms.dExtreme'));
+  items.push(L.t('norms.dConvention'));
+  items.push(L.t('norms.dHour', { hour: hh }));
+
+  var html = '<strong>' + L.t('norms.disclaimerHeading') + '</strong><ul>';
+  for (var i = 0; i < items.length; i++) html += '<li>' + items[i] + '</li>';
+  $('normsDisclaimer').innerHTML = html + '</ul>';
 }
 
 function renderIntegrity(r) {
@@ -1055,6 +1210,45 @@ function pmRows(r) {
   });
 }
 
+/*
+ * Normative comparison, long format: one row per variable so files rbind
+ * cleanly, the same shape as the other exports. Values here follow the
+ * REFERENCE workbook's definitions, not the app's own scoring — see
+ * normativeSummary in scoring.js — so norm_value will not always equal the
+ * matching column in the summary export. Both are kept on purpose.
+ */
+var NORMS_HEADER = PARTICIPANT_COLS.concat([
+  'norm_available', 'norm_reason', 'norm_source', 'norm_hour', 'norm_window_min',
+  'norm_test_min', 'norm_protocol_min', 'norm_below_protocol', 'norm_truncated',
+  'norm_ref_sessions', 'norm_ref_n_hour_bin',
+  'section', 'variable', 'unit', 'higher_is',
+  'norm_value', 'norm_ref_mean', 'norm_ref_sd', 'z_worse', 'band', 'zero_variance_reference'
+]);
+
+function normsRows(r) {
+  var pv = participantVals(r);
+  var nm = r.norms;
+  if (!nm || !nm.available) {
+    return [pv.concat([0, nm ? nm.reason : 'no_norms', '', '', '', '', '', '', '', '', '',
+                       '', '', '', '', '', '', '', '', '', ''])];
+  }
+  var ctx = [1, '', nm.source, nm.hour, nm.windowMinutes, nm.testMinutes, nm.protocolMinutes,
+             nm.belowProtocol ? 1 : 0, nm.truncated ? 1 : 0, nm.sessions, nm.n];
+  return nm.rows.map(function (row) {
+    var c = row.comparison;
+    return pv.concat(ctx).concat([
+      row.section, row.label, row.unit,
+      row.dir === 0 ? 'not judged' : (row.dir > 0 ? 'better' : 'worse'),
+      c ? round(c.value, 5) : null,
+      c ? round(c.mean, 5) : null,
+      c ? round(c.sd, 5) : null,
+      c && c.z != null ? round(c.z, 4) : null,
+      c ? c.band : '',
+      c && c.degenerate ? 1 : 0
+    ]);
+  });
+}
+
 var SUMMARY_HEADER = PARTICIPANT_COLS.concat([
   'sleep_onset_ms', 'sleep_onset_criterion_ms', 'slept_before_max', 'end_reason', 'elapsed_ms',
   'total_trialrun', 'hit_ratio', 'total_hits', 'total_miss', 'total_lapse', 'late_responses',
@@ -1132,6 +1326,14 @@ $('btnExportPm').addEventListener('click', function () {
 });
 $('btnExportSummary').addEventListener('click', function () {
   if (lastResult) download(fileStem(lastResult) + '_summary.csv', toCsv(SUMMARY_HEADER, [summaryRow(lastResult)]));
+});
+
+$('btnExportNorms').addEventListener('click', function () {
+  if (lastResult) download(fileStem(lastResult) + '_norms.csv', toCsv(NORMS_HEADER, normsRows(lastResult)));
+});
+$('btnExportAllNorms').addEventListener('click', function () {
+  var csv = allRows(normsRows, NORMS_HEADER);
+  if (csv) download('bsrt_all_norms.csv', csv);
 });
 
 $('btnExportAllRaw').addEventListener('click', function () {

@@ -163,6 +163,7 @@
       <button id="btnExportAllRaw" class="ghost"><span data-i18n="btn.allRaw">All raw</span> (<span id="sessionCount">0</span>)</button>
       <button id="btnExportAllPm" class="ghost" data-i18n="btn.allPm">All per-minute</button>
       <button id="btnExportAllSummary" class="ghost" data-i18n="btn.allSummary">All summaries</button>
+      <button id="btnExportAllNorms" class="ghost" data-i18n="btn.allNorms">All norms comparisons</button>
     </div>
     <p id="setupError" class="error" hidden></p>
   </div>
@@ -279,6 +280,7 @@
           <tr><th data-i18n="results.sd">SD</th><td id="rtSd">—</td><td>—</td></tr>
           <tr><th data-i18n="results.fastest">10% fastest</th><td id="rtFast">—</td><td id="rtcFast">—</td></tr>
           <tr><th data-i18n="results.slowest">10% slowest</th><td id="rtSlow">—</td><td id="rtcSlow">—</td></tr>
+          <tr><th data-i18n="results.ipr">Interpercentile range</th><td id="rtIpr">—</td><td id="rtcIpr">—</td></tr>
         </tbody>
       </table>
     </div>
@@ -293,9 +295,39 @@
           <tr><th data-i18n="results.sd">SD</th><td id="rsSd">—</td><td>—</td></tr>
           <tr><th data-i18n="results.fastest">10% fastest</th><td id="rsFast">—</td><td id="rscFast">—</td></tr>
           <tr><th data-i18n="results.slowest">10% slowest</th><td id="rsSlow">—</td><td id="rscSlow">—</td></tr>
+          <tr><th data-i18n="results.ipr">Interpercentile range</th><td id="rsIpr">—</td><td id="rscIpr">—</td></tr>
         </tbody>
       </table>
+      <p class="note tight" data-i18n="results.iprNote">The interpercentile range is the absolute distance between the 10% fastest and 10% slowest means — a within-test stability measure, wide when best and worst tenths sit far apart.</p>
       <p class="note tight" id="corrNote"></p>
+    </div>
+
+
+    <div class="card" id="normsCard">
+      <h2 data-i18n="norms.heading">Compared with preliminary norms</h2>
+      <p class="note tight" id="normsContext"></p>
+      <div id="normsUnavailable" class="note warnbox" hidden></div>
+      <div id="normsBody" hidden>
+        <div class="scroll">
+          <table class="metrics norms" id="normsTable">
+            <thead>
+              <tr>
+                <th data-i18n="norms.variable">Variable</th>
+                <td data-i18n="norms.yours">This test</td>
+                <td data-i18n="norms.reference">Reference (mean ± SD)</td>
+                <td data-i18n="norms.z">SD from mean</td>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <p class="legend">
+          <span class="band green" data-i18n="norms.legendGreen">within 1 SD, or better than the reference</span>
+          <span class="band orange" data-i18n="norms.legendOrange">more than 1 SD worse</span>
+          <span class="band red" data-i18n="norms.legendRed">more than 2 SD worse</span>
+        </p>
+        <div class="note warnbox" id="normsDisclaimer"></div>
+      </div>
     </div>
 
     <div class="card">
@@ -359,6 +391,7 @@
       <button id="btnExportRaw" class="primary" data-i18n="btn.exportRaw">Export raw trials (CSV)</button>
       <button id="btnExportPm" class="ghost" data-i18n="btn.exportPm">Export per-minute (CSV)</button>
       <button id="btnExportSummary" class="ghost" data-i18n="btn.exportSummary">Export summary (CSV)</button>
+      <button id="btnExportNorms" class="ghost" data-i18n="btn.exportNorms">Export norms comparison (CSV)</button>
       <button id="btnAgain" class="ghost" data-i18n="btn.again">New trial</button>
     </div>
   </div>
@@ -366,6 +399,7 @@
 
 <script src="./i18n.js"></script>
 <script src="./scoring.js"></script>
+<script src="./norms.js"></script>
 <script src="./timing.js"></script>
 <script src="./participants.js"></script>
 <script src="./app.js"></script>

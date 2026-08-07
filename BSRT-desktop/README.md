@@ -404,6 +404,79 @@ packaging workflow refuses to build if they are not.
 
 ---
 
+## Preliminary norms
+
+Results are compared against a **preliminary** control reference of 291 test
+sessions from 12 participants, binned by the **hour the session started** and by
+**cumulative test length**. A 3-minute test is compared against the first 3
+minutes of the normative protocol, not against its whole length — the reference
+was recorded as a single 8-minute test and each length bin is a prefix of it.
+
+Each of 21 variables gets its value, the reference mean ± SD for that hour and
+length, and a signed distance in SDs where **positive always means worse**,
+whichever direction is bad for that variable. Colouring follows that number:
+
+| Band | Meaning |
+|---|---|
+| green | within 1 SD of the reference, or better than it |
+| orange | more than **1 SD worse** |
+| red | more than **2 SD worse** |
+
+Colour is never the only signal — each band also carries a left border and the
+word *worse* or *better*, so the table survives greyscale printing and red/green
+colour blindness.
+
+### When no comparison is offered
+
+The reference sessions are BSRT runs at a 3000 ms interval, which is 20 stimuli
+a minute. The panel refuses, and says which condition failed, when the trial is
+a **PVT** (about ten stimuli a minute), when the **interval is not 3000 ms**,
+when the **start hour** cannot be read, or when the test did not complete a
+**full minute**. Trial, miss and lapse counts would otherwise be compared
+against a reference measuring something else. A test longer than 8 minutes is
+compared over its first 8 minutes only; there are no norms beyond that.
+
+### Limits you should read before quoting a z-score
+
+- **They are preliminary.** Each hour bin holds only **9–15 sessions**, and the
+  same participant contributes to many bins. The observations are not
+  independent, and every SD is itself estimated from about a dozen numbers.
+- **The reference protocol was 8 minutes.** Comparing a 3-minute test against
+  the first 3 minutes is the right window, but the reference participants knew
+  they were settling in for 8 minutes. Someone expecting a short test may pace
+  themselves differently, so **comparisons below 8 minutes can be biased for
+  that reason alone**. The app flags this whenever the window is shorter.
+- **Some reference cells have almost no spread.** Every control session scored
+  20 hits out of 20 in the first minute, so a difference of one or two trials
+  can produce a double-digit SD figure. Where the reference SD is exactly zero
+  no z-score is computed at all; the value is marked as outside the reference
+  range instead of dividing by zero.
+- **The comparison uses the reference workbook's definitions, not the app's.**
+  The workbook counts every response however slow and sizes a decile with
+  `ceil(10%)`; the app treats a response slower than the hit window as a miss
+  and uses `round(10%)`. Across the 291 reference sessions those two differences
+  move the RT mean by a median of 4.8 ms, so the comparison re-scores the trial
+  the workbook's way. **The numbers in the norms panel will not always match the
+  tables above it**, which is deliberate — the export keeps both.
+
+### Verification
+
+The embedded table was checked against the source workbook two ways: all 4032
+published cells (mean and SD) round-trip exactly through `norms.js`, and
+recomputing every published mean from the raw trial values reproduces it, apart
+from one session missing a single trial row that moves eight cells by at most
+0.9 ms. The app's own re-scoring was then checked against an independent
+implementation over 2160 fields with no mismatches.
+
+### Export
+
+A fourth CSV, **norms comparison**, is long-format with one row per variable:
+`norm_value`, `norm_ref_mean`, `norm_ref_sd`, `z_worse`, `band`, plus the hour,
+window, reference n, and the `norm_below_protocol` / `norm_truncated` flags. It
+`rbind`s with the other exports.
+
+---
+
 ## Timing: what this actually fixes
 
 This is the part that matters, so it is stated without marketing.

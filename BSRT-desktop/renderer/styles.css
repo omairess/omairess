@@ -400,3 +400,40 @@ body[data-screen="screen-countdown"] label.lang-fixed { display: none; }
 
 .actions.tight { margin-top: 12px; align-items: center; gap: 14px; }
 label.check.inline { margin-top: 0; }
+
+/* ---- normative comparison ---- */
+
+/*
+ * Bands are keyed to how many SD WORSE a value is, so the colour means the
+ * same thing whether higher or lower is the bad direction for that variable.
+ * Each band also carries a text marker and a left border, so the table stays
+ * readable in greyscale and for red/green colour blindness — colour alone is
+ * never the only signal.
+ */
+table.metrics.norms td { text-align: right; white-space: nowrap; }
+table.metrics.norms th { text-align: left; font-weight: 400; }
+table.metrics.norms tbody tr.section-start th { padding-top: 14px; }
+table.metrics.norms .sect {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  display: block;
+  margin-bottom: 2px;
+}
+
+td.band-green  { color: #6fcf97; border-left: 3px solid #6fcf97; padding-left: 8px; background: rgba(111, 207, 151, 0.07); }
+td.band-orange { color: #e0a066; border-left: 3px solid #e0a066; padding-left: 8px; background: rgba(224, 160, 102, 0.10); }
+td.band-red    { color: #eb6f6f; border-left: 3px solid #eb6f6f; padding-left: 8px; background: rgba(235, 111, 111, 0.10); }
+td.band-neutral { color: var(--muted); }
+td.band-none   { color: var(--muted); }
+
+.legend { display: flex; flex-wrap: wrap; gap: 14px; margin: 14px 0 0; font-size: 12px; }
+.legend .band { padding-left: 8px; }
+.legend .band.green  { color: #6fcf97; border-left: 3px solid #6fcf97; }
+.legend .band.orange { color: #e0a066; border-left: 3px solid #e0a066; }
+.legend .band.red    { color: #eb6f6f; border-left: 3px solid #eb6f6f; }
+
+#normsDisclaimer { margin-top: 16px; }
+#normsDisclaimer ul { margin: 8px 0 0; padding-left: 18px; }
+#normsDisclaimer li { margin-bottom: 5px; }
