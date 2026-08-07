@@ -1,0 +1,380 @@
+:root {
+  --bg: #12141a;
+  --panel: #1b1e26;
+  --panel-2: #232733;
+  --line: #2e3340;
+  --text: #e8eaf0;
+  --muted: #9aa1b1;
+  --accent: #5b8def;
+  --danger: #e06666;
+  --led: #ff3c28;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font: 16px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+.screen { display: none; min-height: 100%; }
+.screen.active { display: block; }
+.screen.dark.active { display: flex; }
+
+.wrap {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 32px 20px 64px;
+}
+
+header { margin-bottom: 24px; }
+h1 { font-size: 28px; margin: 0 0 6px; letter-spacing: -0.01em; }
+h2 { font-size: 15px; margin: 0 0 12px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); font-weight: 600; }
+.sub { margin: 0; color: var(--muted); }
+
+.card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 20px;
+  margin-bottom: 16px;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 14px;
+}
+
+label {
+  display: block;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+input[type="text"], input[type="number"], select {
+  display: block;
+  width: 100%;
+  margin-top: 6px;
+  padding: 10px 12px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--text);
+  font: inherit;
+  font-size: 15px;
+}
+input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+label.check {
+  margin-top: 16px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  color: var(--text);
+}
+label.check input { width: auto; margin: 0; }
+
+.note { font-size: 13px; color: var(--muted); margin: -4px 0 16px; }
+.quote {
+  margin: 0;
+  padding: 14px 16px;
+  background: var(--panel-2);
+  border-left: 3px solid var(--accent);
+  border-radius: 6px;
+  font-size: 15px;
+}
+
+.actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 20px; }
+
+button {
+  font: inherit;
+  font-size: 15px;
+  padding: 11px 18px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  cursor: pointer;
+}
+button.primary { background: var(--accent); color: #fff; }
+button.ghost { background: transparent; color: var(--text); border-color: var(--line); }
+button.danger { background: transparent; color: var(--danger); border-color: var(--danger); margin-left: auto; }
+button:hover { filter: brightness(1.1); }
+
+.error { color: var(--danger); font-size: 14px; }
+
+/* ---- dark task screens ---- */
+.screen.dark {
+  background: #000;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  overflow: hidden;
+  touch-action: manipulation;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.centre { text-align: center; }
+.countdown { font-size: 96px; font-weight: 200; color: #55606f; font-variant-numeric: tabular-nums; }
+.countdown-hint { color: #55606f; font-size: 15px; margin: 0 0 8px; }
+
+.led {
+  width: 90px;
+  height: 90px;
+  border-radius: 50%;
+  background: #140302;
+  transition: none;
+}
+.led.on {
+  background: var(--led);
+  box-shadow: 0 0 40px 8px rgba(255, 60, 40, 0.45);
+}
+
+.tap-hint {
+  position: absolute;
+  bottom: 32px;
+  left: 0;
+  right: 0;
+  text-align: center;
+  color: #3a3f49;
+  font-size: 13px;
+  margin: 0;
+  padding: 0 20px;
+}
+
+.abort {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  background: transparent;
+  color: #333842;
+  border-color: #262b34;
+  font-size: 12px;
+  padding: 6px 12px;
+}
+
+/* ---- results ---- */
+.headline { text-align: center; padding: 28px 20px; }
+.metric-big { display: block; }
+.metric-label { display: block; font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+.metric-value { display: block; font-size: 52px; font-weight: 300; font-variant-numeric: tabular-nums; margin: 4px 0; }
+.metric-foot { display: block; font-size: 13px; color: var(--muted); }
+.outcome { margin: 16px 0 0; font-size: 15px; }
+
+table.metrics { width: 100%; border-collapse: collapse; font-size: 15px; }
+table.metrics th { text-align: left; font-weight: 400; color: var(--muted); padding: 8px 0; border-bottom: 1px solid var(--line); }
+table.metrics td { text-align: right; padding: 8px 0; border-bottom: 1px solid var(--line); font-variant-numeric: tabular-nums; }
+table.metrics tr:last-child th, table.metrics tr:last-child td { border-bottom: none; }
+
+/* ---- sessions ---- */
+.session-list { display: flex; flex-direction: column; gap: 2px; }
+.session-row { display: flex; align-items: baseline; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--line); font-size: 14px; }
+.session-row:last-child { border-bottom: none; }
+.session-row .who { font-weight: 600; }
+.session-row .meta { color: var(--muted); font-size: 13px; }
+.session-row .lat { margin-left: auto; font-variant-numeric: tabular-nums; }
+.empty { color: var(--muted); font-size: 14px; padding: 8px 0; }
+
+/* ---- desktop additions ---- */
+
+.env { margin: 8px 0 0; font-size: 13px; color: var(--muted); }
+.env.warn { color: #e0b066; }
+
+.spacer { flex: 1; }
+
+details.card > summary { cursor: pointer; list-style: none; }
+details.card > summary::-webkit-details-marker { display: none; }
+details.card > summary h2 { display: inline; }
+details.card > summary::before { content: '▸ '; color: var(--muted); }
+details.card[open] > summary::before { content: '▾ '; }
+details.card > summary + * { margin-top: 14px; }
+
+.note.tight { margin: 12px 0 0; }
+
+.status { font-size: 15px; color: var(--muted); margin: 0; }
+.status.ok { color: #7fc08a; }
+.status.warn { color: #e0b066; }
+
+.badge {
+  display: inline-block;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: 3px 9px;
+  border-radius: 999px;
+  vertical-align: middle;
+  margin-left: 8px;
+  font-weight: 600;
+}
+.badge-good { background: #1e4429; color: #8fd6a0; }
+.badge-fair { background: #4a3c1c; color: #e0b066; }
+.badge-poor, .badge-unusable { background: #4d2222; color: #f0918f; }
+
+.problems { margin: 16px 0 0; padding-left: 18px; font-size: 14px; color: var(--muted); }
+.problems li { margin-bottom: 6px; }
+.problems li.warn { color: #e0b066; }
+
+/* Photodiode target: pure white, hard edges, top-left corner. */
+.patch {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 120px;
+  height: 120px;
+  background: #000;
+}
+.patch.on { background: #fff; }
+
+.headline .metric-label,
+.headline .metric-value,
+.headline .metric-foot { display: block; }
+
+.warnbox {
+  margin-top: 16px;
+  padding: 12px 14px;
+  border-left: 3px solid #e0b066;
+  background: rgba(224, 176, 102, 0.08);
+  border-radius: 6px;
+  color: #e0b066;
+}
+
+select {
+  display: block;
+  width: 100%;
+  margin-top: 6px;
+  padding: 10px 12px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--text);
+  font: inherit;
+  font-size: 15px;
+}
+
+label.wide { grid-column: 1 / -1; }
+
+table.metrics.two thead td,
+table.metrics.pm thead th {
+  text-align: right;
+  color: var(--muted);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--line);
+  font-weight: 600;
+}
+table.metrics.two thead td { padding-left: 16px; }
+table.metrics.two td { padding-left: 16px; }
+
+.scroll { overflow-x: auto; }
+table.metrics.pm { min-width: 760px; font-size: 13px; }
+table.metrics.pm th:first-child { text-align: left; }
+table.metrics.pm td { padding: 6px 0 6px 14px; }
+
+/* Mode-dependent fields: only one interval scheme is ever relevant. */
+body[data-mode="bsrt"] .only-pvt,
+body[data-mode="pvt"] .only-bsrt { display: none; }
+
+/* ---- language selector ---- */
+label.lang {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  font-size: 13px;
+}
+label.lang select { width: auto; margin-top: 0; padding: 6px 10px; font-size: 14px; }
+
+.wrap.narrow { max-width: 560px; }
+
+/* ---- Karolinska Sleepiness Scale ---- */
+.kss-list { display: flex; flex-direction: column; gap: 8px; }
+.kss-option {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  text-align: left;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  color: var(--text);
+  padding: 14px 16px;
+  font-size: 15px;
+  border-radius: 8px;
+}
+.kss-option:hover { border-color: var(--accent); background: #262b38; }
+.kss-num {
+  flex: 0 0 32px;
+  height: 32px;
+  line-height: 32px;
+  text-align: center;
+  border-radius: 50%;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+/* ---- PVT counter stimulus ---- */
+.clock {
+  font-size: 96px;
+  font-weight: 300;
+  font-variant-numeric: tabular-nums;
+  color: var(--led);
+  letter-spacing: -0.02em;
+  text-shadow: 0 0 30px rgba(255, 60, 40, 0.35);
+}
+.clock.frozen { color: #e8eaf0; text-shadow: none; }
+
+/* ---- persistent sleep-onset alarm ---- */
+/* A class rule with display:flex outranks the UA rule for [hidden], so the
+   hidden state has to be restated explicitly or the bar never goes away. */
+.alarm-bar[hidden] { display: none; }
+.alarm-bar {
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  padding: 14px 20px;
+  background: #7a1f1f;
+  color: #fff;
+  font-size: 16px;
+  font-weight: 600;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+  animation: alarm-flash 1s steps(2, end) infinite;
+}
+@keyframes alarm-flash { 50% { background: #a52a2a; } }
+.alarm-bar button {
+  background: #fff;
+  color: #7a1f1f;
+  border: none;
+  font-weight: 700;
+  padding: 9px 20px;
+  animation: none;
+}
+
+/* ---- floating language control ---- */
+label.lang-fixed {
+  position: fixed;
+  top: 14px;
+  right: 18px;
+  z-index: 500;
+  margin: 0;
+  padding: 6px 10px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+/* Nothing but the task may be on screen while a trial is running. */
+body[data-screen="screen-task"] label.lang-fixed,
+body[data-screen="screen-countdown"] label.lang-fixed { display: none; }
