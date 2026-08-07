@@ -283,11 +283,12 @@
    *
    * Each interval PRECEDES its stimulus, so the participant always waits before
    * the first one rather than being surprised the instant the countdown ends.
-   * The final interval carries no stimulus of its own — it is the response
-   * window after the last one — so a schedule of N intervals yields N-1 stimuli
-   * and lasts exactly the sum of its intervals. Total duration is therefore
-   * unchanged, and identical for every participant, because each block sums to
-   * the block length whatever order it was shuffled into.
+   * A schedule of N intervals yields N stimuli — the last one gets a response
+   * window as long as the longest interval in the configured set, so the
+   * trial runs a little past the sum of the N intervals rather than cutting
+   * the final stimulus off the instant it appears. That overshoot is a fixed
+   * property of the settings, so it is identical for every participant
+   * regardless of which interval the random schedule happened to draw last.
    */
   function buildSchedule(opts) {
     const maxMs = opts.maxMs;
@@ -296,7 +297,7 @@
     if (opts.mode !== 'pvt') {
       const n = Math.max(1, Math.ceil(maxMs / opts.isiMs));
       for (let i = 0; i < n; i++) isis.push(opts.isiMs);
-      return finishSchedule(isis, maxMs, opts.blockMs, 'fixed', opts.seed);
+      return finishSchedule(isis, maxMs, opts.blockMs, 'fixed', opts.seed, [opts.isiMs]);
     }
 
     const set = opts.isiSetMs.slice();
@@ -324,10 +325,10 @@
         }
       }
     }
-    return finishSchedule(isis, maxMs, blockMs, balanced ? 'block_permutation' : 'sampled_with_replacement', opts.seed);
+    return finishSchedule(isis, maxMs, blockMs, balanced ? 'block_permutation' : 'sampled_with_replacement', opts.seed, set);
   }
 
-  function finishSchedule(isis, maxMs, blockMs, method, seed) {
+  function finishSchedule(isis, maxMs, blockMs, method, seed, intervalSet) {
     // Keep only whole intervals that fit inside the ceiling.
     var kept = [];
     var total = 0;
@@ -339,22 +340,36 @@
 
     /*
      * Interval k spans [start_k, start_k + kept[k]) and its stimulus fires at
-     * the END of it. The last interval has no stimulus: it is the response
-     * window for the one before, which is what keeps the trial from ending the
-     * instant the final stimulus appears.
+     * the END of it — every kept interval gets a stimulus, including the last
+     * one, so an M-interval schedule yields M stimuli, not M-1. (An earlier
+     * version stopped one short, reserving the final interval as a trailing
+     * response window with nothing to respond to: a 3-minute, 3000 ms BSRT
+     * showed 59 flashes instead of 60.)
      *
      * A stimulus belongs to the block its PRECEDING interval started in, so
      * each block holds exactly one stimulus per interval in the set even though
      * the stimuli themselves sit at block-relative offsets.
+     *
+     * epochIsi is this stimulus's own response window — normally the interval
+     * that leads into the NEXT stimulus, so a late response is still within
+     * an active epoch until the next one begins. The last stimulus has no
+     * next interval to borrow, so it gets the longest interval in the
+     * CONFIGURED set instead of whatever happened to be drawn last. That
+     * value is fixed by the settings, not by the random schedule, so trial
+     * length stays identical for every participant regardless of seed — using
+     * the actual last-drawn interval instead once made a 3-minute PVT run
+     * anywhere from 602 to 610 seconds depending on which of 2/4/6/8/10 s
+     * happened to be shuffled to the end.
      */
+    var trailingMs = Math.max.apply(null, intervalSet);
     var onsets = [], blocks = [], isiBefore = [], epochIsi = [];
     var acc = 0;
-    for (var k = 0; k + 1 < kept.length; k++) {
+    for (var k = 0; k < kept.length; k++) {
       blocks.push(Math.floor(acc / blockMs));
       acc += kept[k];
       onsets.push(acc);
       isiBefore.push(kept[k]);
-      epochIsi.push(kept[k + 1]);
+      epochIsi.push(k + 1 < kept.length ? kept[k + 1] : trailingMs);
     }
 
     return {
@@ -368,7 +383,7 @@
       blockMs: blockMs,
       nStimuli: onsets.length,
       leadInMs: kept.length ? kept[0] : 0,
-      plannedDurationMs: total
+      plannedDurationMs: onsets.length ? onsets[onsets.length - 1] + epochIsi[epochIsi.length - 1] : 0
     };
   }
 

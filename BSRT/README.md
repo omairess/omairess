@@ -156,12 +156,16 @@ interval after the countdown rather than flashing the instant it ends. In BSRT
 that is 3000 ms; in PVT it is 2, 4, 6, 8 or 10 s, drawn like any other interval,
 so a participant cannot learn when the first one is coming.
 
-Duration is unchanged. A schedule of N intervals yields **N−1 stimuli** and
-lasts exactly the sum of its intervals: the final interval carries no stimulus
-of its own, it is the response window for the last one. So a 40-minute BSRT is
-still exactly 40 minutes, and every PVT lasts exactly its ceiling with the same
-number of stimuli for every participant, whatever order the blocks were
-shuffled into.
+A schedule of N intervals yields **N stimuli**: a 3-minute, 3000 ms BSRT
+presents 60, and a 3-minute PVT presents 30, matching what the settings imply.
+The last stimulus gets a response window as long as the longest interval in the
+configured set — 3000 ms for BSRT, 10 s for PVT — the same as every other
+stimulus, rather than being cut off the instant it appears. The trial therefore
+runs a little past the requested ceiling: a 40-minute BSRT lasts 40 minutes and
+3 seconds, and a PVT with the default set lasts its ceiling plus 10 s. That
+overshoot is fixed by the settings alone, not by the random schedule, so every
+participant still gets exactly the same duration and the same number of
+stimuli whatever order the blocks were shuffled into.
 
 Two columns describe each stimulus's timing: `isi_before_ms` is the wait that
 preceded it (defined for the first stimulus too) and `epoch_isi_ms` is its
