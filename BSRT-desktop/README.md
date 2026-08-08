@@ -533,13 +533,37 @@ This is the part that matters, so it is stated without marketing.
    frame interval carries a small estimation error, and multiplying it by an
    epoch index would let that error accumulate across a 40-minute trial.
 
-4. **Responses timestamped by the OS.** `event.timeStamp` carries the time the
-   platform delivered the event, on the same clock as `performance.now()`.
-   Reading it instead of calling `performance.now()` in the handler skips the
-   renderer's queuing delay. The app *measures* that delay during calibration,
-   reports it, and verifies the assumption — if a future Chromium changed the
-   timebase, the app detects it, falls back to handler time, and records that it
-   did so rather than silently reporting wrong numbers.
+4. **Responses timestamped by the OS, with both readings kept.**
+   `event.timeStamp` carries the time the platform delivered the event, on the
+   same clock as `performance.now()`. Reading it instead of calling
+   `performance.now()` in the handler skips the renderer's queuing delay. The
+   app measures that delay, reports it, and verifies the assumption — if a
+   future Chromium changed the timebase, the app detects it, falls back to
+   handler time, and records that it did so rather than silently reporting
+   wrong numbers.
+
+   **Both clock readings are recorded for every response, always**, so the
+   correction is never something you have to take on trust:
+
+   | Column | What it is |
+   |---|---|
+   | `rt_event_ms` | the response measured from the OS event stamp — dispatch delay removed |
+   | `rt_handler_ms` | the same response measured from handler time — raw, delay included |
+   | `input_delay_ms` | their difference: the dispatch delay for that one response |
+   | `rt_source` | which of the two was scored |
+
+   `rt_handler_ms − rt_event_ms = input_delay_ms` on every row, so the
+   correction can be reproduced, audited or reversed in analysis. The results
+   screen shows the mean of both alongside the difference, and marks which one
+   was scored.
+
+   **Timing & calibration → Time responses from** chooses which one feeds the
+   scoring: *OS event stamp* (default, delay removed) or *handler time* (raw).
+   The setting changes only which column becomes `rt_raw_ms`; both are exported
+   either way. The probe still overrides the setting — an event clock it judges
+   untrustworthy is never scored, whatever the dropdown says, and
+   `input_time_source` distinguishes *chosen* from *fallback* so the two are
+   never confused in the data.
 
 5. **No throttling.** `backgroundThrottling: false` plus the background-timer
    and renderer-backgrounding switches. Without these, Chromium quietly throttles

@@ -152,7 +152,14 @@
         <label>Calibration frames<input type="number" id="calFrames" value="240" min="60" step="60"></label>
         <label>Presentation pipeline (frames)<input type="number" id="presOffsetFrames" value="1" min="0" max="4" step="0.5"></label>
         <label>Measured hardware offset (ms)<input type="number" id="hwOffsetMs" value="0" step="0.1"></label>
+        <label class="wide">Time responses from
+          <select id="rtSource">
+            <option value="event" selected>OS event stamp — input dispatch delay removed</option>
+            <option value="handler">Handler time — raw, dispatch delay included</option>
+          </select>
+        </label>
       </div>
+      <p class="note tight">This chooses which clock reading becomes the scored reaction time. <strong>Both are always measured and exported either way</strong> (<code>rt_event_ms</code>, <code>rt_handler_ms</code>, <code>input_delay_ms</code>), so the correction can be checked, reproduced or undone in analysis rather than taken on trust.</p>
       <label class="check"><input type="checkbox" id="photodiode"> Show photodiode patch (top-left) for external validation</label>
       <p class="note tight">The hardware offset is the constant lag between this app issuing a frame and the participant’s finger reaching the key — display pipeline plus panel response plus input hardware. Software cannot measure it. Leave it at 0 unless you have measured it with a photodiode and response box, in which case raw and corrected reaction times are both exported.</p>
     </details>
@@ -392,9 +399,13 @@
           <tr><th>Dropped frames during trial</th><td id="tDropped">—</td></tr>
           <tr><th>Response timed from</th><td id="tInputSrc">—</td></tr>
           <tr><th>Input dispatch delay</th><td id="tInputDelay">—</td></tr>
+          <tr class="rt-compare"><th>Mean RT — OS event stamp</th><td id="tRtEvent">—</td></tr>
+          <tr class="rt-compare"><th>Mean RT — handler time (raw)</th><td id="tRtHandler">—</td></tr>
+          <tr class="rt-compare"><th>Difference the correction makes</th><td id="tRtDiff">—</td></tr>
           <tr><th>Hardware offset</th><td id="tHwOffset">—</td></tr>
         </tbody>
       </table>
+      <p class="note tight" id="tRtNote"></p>
     </div>
 
     <div class="actions">

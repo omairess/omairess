@@ -685,6 +685,8 @@ function beginTrial() {
     language: L.getLanguage(),
     presentationOffsetFrames: numVal('presOffsetFrames', 1),
     hardwareOffsetMs: numVal('hwOffsetMs', 0),
+    rtSource: $('rtSource').value,          // 'event' | 'handler'
+
     photodiode: $('photodiode').checked,
     framesStimOn,
     achievedStimMs: framesStimOn * calibration.frameIntervalMs
@@ -876,6 +878,8 @@ function startEpoch(idx, frameTs) {
     achievedIsiMs: cfg.schedule.epochIsi[idx],
     responded: false,
     rtRawMs: null,
+    rtEventMs: null,
+    rtHandlerMs: null,
     extra: 0,
     extinguished: false,
     frozen: false
@@ -908,7 +912,25 @@ function finalizeEpoch() {
  */
 function handleResponse(evt) {
   if (!running) return;
-  const t = T.eventTime(evt, useEventStamp);
+
+  /*
+   * Both clock readings are taken for every response, always.
+   *
+   * The OS event stamp is when the platform delivered the keypress; the
+   * handler time is when this code got to look at it. The gap between them is
+   * the input dispatch delay, and using the stamp is what "removes" it.
+   *
+   * Recording only the corrected value would make the correction impossible to
+   * check: there would be no way to see how large it was on this machine, or
+   * to reproduce the uncorrected number. Both are kept, both are exported, and
+   * the setting only decides which one is scored.
+   */
+  const tHandler = performance.now();
+  const tEvent = (typeof evt.timeStamp === 'number' && evt.timeStamp > 0) ? evt.timeStamp : null;
+  // The probe's verdict still overrides the setting: an untrustworthy event
+  // clock is never used, whatever the dropdown says.
+  const useEvent = cfg.rtSource === 'event' && useEventStamp && tEvent !== null;
+  const t = useEvent ? tEvent : tHandler;
 
   // Every press is logged, including presses outside any epoch, because the
   // integrity check needs the full pattern — not just the scored responses.
@@ -922,6 +944,8 @@ function handleResponse(evt) {
 
   currentEpoch.responded = true;
   currentEpoch.rtRawMs = t - currentEpoch.presentationMs;
+  currentEpoch.rtEventMs = tEvent === null ? null : tEvent - currentEpoch.presentationMs;
+  currentEpoch.rtHandlerMs = tHandler - currentEpoch.presentationMs;
 
   if (cfg.mode === 'pvt') {
     // PVT convention: the counter stops and shows the achieved reaction time.
@@ -1020,7 +1044,10 @@ function buildResult(reason) {
     calibration,
     calibrationGrade: calGrade ? calGrade.grade : null,
     inputProbe: inputProbeResult,
-    inputTimeSource: useEventStamp ? 'os_event_stamp' : 'handler_time',
+    // What was actually used, which is the setting AND the probe's verdict
+    // together — not the verdict alone.
+    inputTimeSource: (cfg.rtSource === 'event' && useEventStamp) ? 'os_event_stamp'
+                   : (cfg.rtSource === 'handler' ? 'handler_time_chosen' : 'handler_time_fallback'),
     endReason: reason,
     sleptBeforeMax: reason === 'sleep_onset',
     sleepOnsetMs,
@@ -1043,6 +1070,8 @@ function buildResult(reason) {
     language: cfg.language,
     extras: epochs.map((e) => e.extra),
     rawRts: epochs.map((e) => e.rtRawMs),
+    rtEventMs: epochs.map((e) => e.rtEventMs),
+    rtHandlerMs: epochs.map((e) => e.rtHandlerMs),
     droppedFramesDuringTrial: droppedFrames,
     framesDuringTrial: frameIndex + 1,
     blurCount,
@@ -1141,11 +1170,49 @@ function renderResult(r) {
     : n2(r.config.achievedIsiMs) + ' ms (requested ' + r.config.isiMs + ')';
   $('tQuant').textContent = '± ' + n2(r.calibration.frameIntervalMs / 2) + ' ms';
   $('tDropped').textContent = formatDropped(r);
-  $('tInputSrc').textContent = r.inputTimeSource === 'os_event_stamp' ? 'OS event stamp' : 'handler time (fallback)';
+  $('tInputSrc').textContent =
+    r.inputTimeSource === 'os_event_stamp' ? 'OS event stamp (dispatch delay removed)'
+    : r.inputTimeSource === 'handler_time_chosen' ? 'handler time (chosen — dispatch delay included)'
+    : 'handler time (fallback — event clock not usable)';
+  // Whether the delay was actually removed depends on which clock was scored,
+  // so the label follows that rather than always claiming a correction.
   $('tInputDelay').textContent = r.inputProbe && r.inputProbe.usable
-    ? n2(r.inputProbe.medianDelayMs) + ' ms (removed)' : '—';
+    ? n2(r.inputProbe.medianDelayMs) + ' ms (' +
+      (r.inputTimeSource === 'os_event_stamp' ? 'removed' : 'included in the scored values') + ')'
+    : '—';
   $('tHwOffset').textContent = r.config.hardwareOffsetMs
     ? r.config.hardwareOffsetMs + ' ms (applied before scoring)' : 'not measured';
+
+  /*
+   * The same responses read off both clocks, side by side, so the size of the
+   * correction is visible rather than taken on trust — and so it can be undone
+   * in analysis from the exported columns.
+   */
+  const ev = (r.rtEventMs || []).filter((v) => v != null);
+  const hd = (r.rtHandlerMs || []).filter((v) => v != null);
+  const pairs = [];
+  (r.rtEventMs || []).forEach((v, i) => {
+    const h = (r.rtHandlerMs || [])[i];
+    if (v != null && h != null) pairs.push(h - v);
+  });
+  const meanOf = (a) => (a.length ? a.reduce((x, y) => x + y, 0) / a.length : null);
+  const scored = (r.config.rtSource || 'event') === 'event' ? 'event' : 'handler';
+
+  $('tRtEvent').textContent = ev.length
+    ? n1(meanOf(ev)) + ' ms' + (scored === 'event' ? '  ← scored' : '')
+    : 'not available';
+  $('tRtHandler').textContent = hd.length
+    ? n1(meanOf(hd)) + ' ms' + (scored === 'handler' ? '  ← scored' : '')
+    : '—';
+  const d = meanOf(pairs);
+  $('tRtDiff').textContent = d == null
+    ? '—'
+    : n2(d) + ' ms  (' + T.stats.median(pairs).toFixed(2) + ' ms median, n = ' + pairs.length + ')';
+  $('tRtNote').textContent = pairs.length
+    ? 'Both readings are exported per response (rt_event_ms, rt_handler_ms, input_delay_ms), so the ' +
+      'correction can be reproduced or reversed in analysis. The difference above is the input ' +
+      'dispatch delay on this machine.'
+    : 'Only one clock reading was available for these responses, so no comparison can be shown.';
 }
 
 function describeCorrection(c) {
@@ -1387,6 +1454,10 @@ function participantVals(r) {
 
 const RAW_HEADER = PARTICIPANT_COLS.concat([
   'epoch_index', 'block', 'minute', 'onset_ms', 'epoch_isi_ms', 'isi_before_ms', 'responded',
+  // rt_event_ms and rt_handler_ms are the same response read off two clocks;
+  // input_delay_ms is their difference. rt_raw_ms is whichever the trial was
+  // set to score, before the hardware offset; rt_ms is after it.
+  'rt_event_ms', 'rt_handler_ms', 'input_delay_ms', 'rt_source',
   'rt_raw_ms', 'rt_ms', 'rs_per_sec',
   'outcome', 'lapse', 'late_response', 'false_start', 'extra_responses'
 ]);
@@ -1395,12 +1466,18 @@ function rawRows(r) {
   const pv = participantVals(r);
   const extras = r.extras || [];
   const raws = r.rawRts || [];
+  const evRts = r.rtEventMs || [];
+  const hdRts = r.rtHandlerMs || [];
   return r.scored.trials.map((t, i) => pv.concat([
     // 1-based on the way out, like block and minute: epoch_index was the only
     // column that still started at zero.
     t.index + 1, t.block === null ? '' : t.block + 1, t.minute + 1, round(t.onsetMs, 2),
     t.epochIsiMs, t.isiBeforeMs,
     t.rtMs === null ? 0 : 1,
+    round(evRts[i] == null ? null : evRts[i], 3),
+    round(hdRts[i] == null ? null : hdRts[i], 3),
+    (evRts[i] == null || hdRts[i] == null) ? null : round(hdRts[i] - evRts[i], 3),
+    r.config.rtSource || 'event',
     round(raws[i] == null ? null : raws[i], 3),   // before the hardware offset
     round(t.rtMs, 3),                              // after it — what was scored
     round(t.rsPerSec, 5),
@@ -1496,10 +1573,31 @@ const SUMMARY_HEADER = PARTICIPANT_COLS.concat([
   'onset_quantisation_ms', 'dropped_frames_calibration', 'dropped_frames_trial',
   'frames_trial', 'dropped_rate_trial', 'calibration_grade',
   'input_time_source', 'input_dispatch_median_ms',
+  'rt_source_setting', 'mean_rt_event_ms', 'mean_rt_handler_ms', 'mean_input_delay_ms',
+  'median_input_delay_ms', 'n_rt_compared',
   'presentation_offset_frames', 'hardware_offset_ms',
   'platform', 'os_release', 'electron_version', 'chrome_version', 'display_scale_factor',
   'extra_responses', 'page_blur_count'
 ]);
+
+/* The two clock readings summarised, so the size of the input-delay correction
+ * is on the same row as the metrics it affected. */
+function rtSourceVals(r) {
+  const ev = (r.rtEventMs || []).filter((v) => v != null);
+  const hd = (r.rtHandlerMs || []).filter((v) => v != null);
+  const pairs = [];
+  (r.rtEventMs || []).forEach((v, i) => {
+    const h = (r.rtHandlerMs || [])[i];
+    if (v != null && h != null) pairs.push(h - v);
+  });
+  const mean = (a) => (a.length ? a.reduce((x, y) => x + y, 0) / a.length : null);
+  return [
+    r.config.rtSource || 'event',
+    round(mean(ev), 3), round(mean(hd), 3), round(mean(pairs), 4),
+    pairs.length ? round(T.stats.median(pairs), 4) : null,
+    pairs.length
+  ];
+}
 
 function summaryRow(r) {
   const t = r.scored.totals, e = r.scored.errorProfiles, c = r.config;
@@ -1536,6 +1634,7 @@ function summaryRow(r) {
       : null,
     r.calibrationGrade,
     r.inputTimeSource, r.inputProbe && r.inputProbe.usable ? round(r.inputProbe.medianDelayMs, 3) : null,
+    ...rtSourceVals(r),
     c.presentationOffsetFrames, c.hardwareOffsetMs,
     r.display ? r.display.platform : null, r.display ? r.display.osRelease : null,
     r.display ? r.display.electron : null, r.display ? r.display.chrome : null,
