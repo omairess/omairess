@@ -29,6 +29,8 @@
     <header>
       <h1>BSRT</h1>
       <p class="sub" data-i18n="app.subtitle">Behavioral Sleep Resistance Task and Psychomotor Vigilance Task.</p>
+      <p class="env" id="envInfo">Reading device information…</p>
+      <p class="env warn" id="envWarn" hidden></p>
     </header>
 
     <div class="card">
@@ -142,6 +144,19 @@
       </div>
       <p class="note tight">False starts are removed first, so they cannot inflate the mean and SD that define the outlier bounds. Bounds are computed within each block, so per-minute corrections use that minute's own mean and SD.</p>
     </details>
+
+    <div class="card">
+      <h2 data-i18n="diag.heading">Device check</h2>
+      <p class="note" data-i18n="diag.intro">Every trial measures the display and the input path automatically and records the result with the data. Run it here first if you want to know whether a machine is fit to test on before you start.</p>
+      <div class="actions tight">
+        <button id="btnDeviceCheck" class="ghost" data-i18n="diag.run">Check this device now</button>
+      </div>
+      <div id="deviceCheckResult" hidden>
+        <table class="metrics diag"><tbody id="deviceCheckTable"></tbody></table>
+        <div class="note" id="deviceCheckVerdict"></div>
+      </div>
+      <p class="note tight warnbox" data-i18n="diag.networkNote">Connection speed does not affect reaction times here. The whole task runs inside this browser: once the page has loaded, every stimulus is drawn by the local display and every keypress is timed by the local clock, so nothing crosses the network between the two. How the page was delivered is recorded as provenance only.</p>
+    </div>
 
     <div class="card">
       <h2 data-i18n="instructions.heading">Instructions to read to the participant</h2>
@@ -289,6 +304,14 @@
       </div>
     </div>
 
+
+    <div class="card">
+      <h2 data-i18n="diag.resultHeading">Recording conditions</h2>
+      <p class="note tight" data-i18n="diag.resultIntro">Measured on this device during this trial. Report these alongside the data — they are what make reaction times comparable between machines.</p>
+      <table class="metrics diag"><tbody id="diagTable"></tbody></table>
+      <div class="note" id="diagVerdict"></div>
+    </div>
+
     <div class="card">
       <h2 data-i18n="results.integrity">Response integrity</h2>
       <table class="metrics">
@@ -342,6 +365,8 @@
 <script src="./i18n.js"></script>
 <script src="./scoring.js"></script>
 <script src="./norms.js"></script>
+<script src="./timing.js"></script>
+<script src="./diagnostics.js"></script>
 <script src="./participants.js"></script>
 <script src="./app.js"></script>
 </body>

@@ -398,6 +398,73 @@ packaging workflow refuses to build if they are not.
 
 ---
 
+## Device check (browser build)
+
+The desktop build asks Electron what machine it is on. A browser cannot, so
+this build measures instead — which matters most when the task is run on
+someone else's laptop for screening and nobody was there to see the conditions.
+
+Two places show it:
+
+- **Before testing.** A **Device check** button on the setup screen measures
+  the display, reads the clock resolution, and fills in the input delay as soon
+  as a key is pressed. It ends with a plain verdict — *fit for testing*,
+  *usable with caveats*, or *not a good device for timing-sensitive data* — and
+  says which measurement drove it.
+- **With every trial, automatically.** The display is calibrated during the
+  three-second countdown, so it costs no extra waiting and describes the
+  display in the state the task actually uses. Frames are counted throughout
+  the trial, and input dispatch delay is measured from the participant's real
+  responses rather than a separate key-tapping ritual.
+
+Everything lands on the results screen under **Recording conditions**, and in
+the summary CSV (`refresh_hz_measured`, `frame_interval_ms`,
+`onset_quantisation_ms`, `frame_mad_ms`, `timer_resolution_ms`,
+`input_dispatch_median_ms`, `dropped_rate_trial`, `ran_fullscreen`,
+`device_grade`, and the rest).
+
+### What it measures, and why each one matters
+
+| Measure | Why it is in the file |
+|---|---|
+| Refresh rate, measured | Sets onset quantisation: a stimulus can only appear on a frame boundary, so 60 Hz means ±8.35 ms |
+| Frame stability (MAD) | An unstable compositor makes onsets irregular even when the schedule is exact |
+| Dropped frames during the trial | Reported as a rate with its denominator, since a bare count cannot be read |
+| **Clock resolution** | Browsers coarsen `performance.now()` as a Spectre mitigation — 0.1 ms in Chromium, **1 ms in Firefox and Safari** unless the page is cross-origin isolated. It is a hard floor on reaction-time resolution and it is measured, not assumed |
+| Input dispatch delay | How long an event took to reach the page. A Bluetooth keyboard can add tens of milliseconds. Measured and reported, **not** subtracted from reaction times |
+| Ran full screen, window focus | A windowed task can be interrupted; focus lost mid-trial can look like sleepiness |
+| Browser, screen, cores, memory | Provenance for comparing across devices |
+
+### Connection latency is deliberately not a timing figure
+
+This is the part people expect to see and it would mislead them.
+
+**The network is not in the loop.** The whole task is client-side: once the
+page has loaded, every stimulus is drawn by the local compositor and every
+keypress is timed by the local clock. Nothing crosses the network between the
+stimulus appearing and the response being stamped, so a participant on
+satellite internet and one on fibre get identical timing. Reporting a ping
+next to the reaction times would invite someone to exclude a participant for a
+slow connection that had no bearing on their data.
+
+What the connection *can* do is fail to deliver the page, deliver it slowly,
+or keep loading assets while the first frames are drawn. So delivery **is**
+recorded — protocol, host, load time, and the browser's own coarse connection
+hint — and labelled as provenance, next to a note on screen saying exactly
+this. A `file://` or `localhost` page is reported as having involved no
+network at all.
+
+### One thing worth knowing about the frame monitor
+
+The browser build schedules stimuli with `setTimeout`, and the frame monitor
+only observes. Measured over repeated runs it does not degrade onset accuracy
+— it slightly *improves* it, because a live `requestAnimationFrame` loop stops
+Chromium coarsening timers on a page it thinks is idle. With the monitor
+running, the worst onset error over a trial was 0.5–0.8 ms; with it disabled,
+the same test drifted to 3.9 and 11.4 ms.
+
+---
+
 ## Preliminary norms
 
 **Off by default.** The results screen shows the plain, uncoloured tables it

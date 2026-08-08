@@ -16,6 +16,8 @@
 
 var S = window.BSRTScoring;
 var L = window.BSRTi18n;
+var T = window.BSRTTiming;
+var D = window.BSRTDiagnostics;
 
 var LS_KEY = 'bsrt.sessions.v1';
 
@@ -43,6 +45,19 @@ var kssStage = null;          // 'before' | 'after'
 var clockRaf = null;
 var audioCtx = null;
 var alarmNodes = null;
+
+/* ---- device diagnostics ---- */
+var env = null;            // passive environment, read once at load
+var deviceCal = null;      // display calibration measured during the countdown
+var inputProbe = null;     // fed by every real response during the trial
+var monitorRaf = null;
+var frameCount = 0;
+var droppedInTrial = 0;
+var lastFrameTs = null;
+var frameIntervals = [];   // bounded sample, enough for a jitter estimate
+var touchUsed = false;
+var wasFullscreen = false;
+var deviceCheckStop = null;
 
 /* ---------------- helpers ---------------- */
 
@@ -443,6 +458,250 @@ function initParticipants() {
   checkParticipant();
 }
 
+/* ---------------- device diagnostics ---------------- */
+
+/*
+ * A browser cannot ask the OS what monitor it is on, so everything here is
+ * either read from the page or measured. See diagnostics.js for why network
+ * latency is recorded as provenance and never as a timing figure.
+ */
+
+function initDiagnostics() {
+  env = D.snapshot();
+  renderEnvLine();
+}
+
+function renderEnvLine() {
+  if (!env) return;
+  var bits = [D.describeBrowser(env.userAgent)];
+  if (env.screenW) bits.push(env.screenW + '×' + env.screenH);
+  if (env.devicePixelRatio) bits.push(L.t('diag.scale', { x: env.devicePixelRatio }));
+  if (deviceCal && deviceCal.refreshHz) {
+    bits.push(deviceCal.refreshHz.toFixed(1) + ' Hz');
+  } else {
+    bits.push(L.t('diag.hzUnmeasured'));
+  }
+  if (env.timerResolutionMs != null) {
+    bits.push(L.t('diag.timer', { res: env.timerResolutionMs.toFixed(2) }));
+  }
+  $('envInfo').textContent = bits.join(' · ');
+
+  // Only the things that would actually spoil a measurement get a warning.
+  var warn = [];
+  if (env.timerResolutionMs != null && env.timerResolutionMs >= 1) {
+    warn.push(L.t('diag.warnTimer', { res: env.timerResolutionMs.toFixed(2) }));
+  }
+  if (env.maxTouchPoints > 0 && /Android|iPhone|iPad/.test(env.userAgent || '')) {
+    warn.push(L.t('diag.warnTouch'));
+  }
+  $('envWarn').hidden = !warn.length;
+  $('envWarn').textContent = warn.join(' ');
+}
+
+/* Frame monitoring during the trial: the same idea as the desktop build's
+ * frame loop, but purely observational — this build still schedules with
+ * setTimeout, and the monitor never touches the epoch clock. */
+function startFrameMonitor() {
+  frameCount = 0;
+  droppedInTrial = 0;
+  lastFrameTs = null;
+  frameIntervals = [];
+  function step(ts) {
+    if (!running) { monitorRaf = null; return; }
+    if (lastFrameTs !== null) {
+      var dt = ts - lastFrameTs;
+      var nominal = deviceCal && deviceCal.frameIntervalMs ? deviceCal.frameIntervalMs : null;
+      if (nominal) {
+        var mult = Math.round(dt / nominal);
+        if (mult >= 2) droppedInTrial += mult - 1;
+      }
+      // Bounded: a 40-minute trial would otherwise hold 144,000 numbers, and
+      // a few thousand is already more than a MAD estimate needs.
+      if (frameIntervals.length < 5000) frameIntervals.push(dt);
+    }
+    lastFrameTs = ts;
+    frameCount += 1;
+    monitorRaf = requestAnimationFrame(step);
+  }
+  monitorRaf = requestAnimationFrame(step);
+}
+
+function stopFrameMonitor() {
+  if (monitorRaf) { cancelAnimationFrame(monitorRaf); monitorRaf = null; }
+}
+
+/* What the trial actually ran under, assembled at the end. */
+function buildConditions() {
+  var trialFrames = frameIntervals.length > 1 ? T.analyseFrames(
+    frameIntervals.reduce(function (acc, dt) {
+      acc.push(acc[acc.length - 1] + dt); return acc;
+    }, [0])
+  ) : null;
+
+  return {
+    environment: env,
+    display: deviceCal,
+    displayGrade: deviceCal ? T.gradeCalibration(deviceCal, null) : null,
+    inputDelay: inputProbe ? inputProbe.result() : null,
+    framesDuringTrial: frameCount,
+    droppedFramesDuringTrial: droppedInTrial,
+    trialFrameMadMs: trialFrames ? trialFrames.madIntervalMs : null,
+    touchUsed: touchUsed,
+    fullscreen: wasFullscreen
+  };
+}
+
+function diagRows(c, opts) {
+  var e = c.environment || {};
+  var cal = c.display;
+  var inp = c.inputDelay;
+  var rows = [];
+
+  rows.push([L.t('diag.rBrowser'), D.describeBrowser(e.userAgent)]);
+  rows.push([L.t('diag.rScreen'),
+    (e.screenW ? e.screenW + '×' + e.screenH : '—') +
+    (e.devicePixelRatio ? '  ·  ' + L.t('diag.scale', { x: e.devicePixelRatio }) : '')]);
+  rows.push([L.t('diag.rRefresh'), cal && cal.refreshHz
+    ? cal.refreshHz.toFixed(2) + ' Hz  (' + cal.frameIntervalMs.toFixed(2) + ' ms)'
+    : L.t('diag.notMeasured')]);
+  rows.push([L.t('diag.rQuant'), cal && cal.frameIntervalMs
+    ? '± ' + (cal.frameIntervalMs / 2).toFixed(2) + ' ms' : '—']);
+  rows.push([L.t('diag.rJitter'), cal && cal.madIntervalMs != null
+    ? cal.madIntervalMs.toFixed(2) + ' ms' : '—']);
+  rows.push([L.t('diag.rTimer'), e.timerResolutionMs != null
+    ? e.timerResolutionMs.toFixed(3) + ' ms' +
+      (e.crossOriginIsolated ? '' : '  ·  ' + L.t('diag.notIsolated'))
+    : '—']);
+  // Three outcomes, and conflating them would mislead: measured, nothing to
+  // measure yet, or a browser whose event clock cannot be trusted.
+  var inputText;
+  if (inp && inp.usable) {
+    inputText = inp.medianDelayMs.toFixed(1) + ' ms  ·  ' + L.t('diag.nSamples', { n: inp.n }) +
+                '  ·  ' + L.t('diag.notRemoved');
+  } else if (inp && inp.reason === 'too few samples') {
+    inputText = L.t('diag.inputWaiting', { n: inp.n });
+  } else if (inp) {
+    inputText = L.t('diag.inputUnusable');
+  } else {
+    inputText = L.t('diag.notMeasured');
+  }
+  rows.push([L.t('diag.rInput'), inputText]);
+
+  if (opts && opts.trial) {
+    rows.push([L.t('diag.rDropped'), formatDroppedWeb(c)]);
+    rows.push([L.t('diag.rFullscreen'), c.fullscreen ? L.t('diag.yes') : L.t('diag.no')]);
+    rows.push([L.t('diag.rFocus'), opts.blurCount
+      ? L.t('diag.focusLost', { n: opts.blurCount }) : L.t('diag.focusKept')]);
+  }
+  rows.push([L.t('diag.rDelivery'), describeDelivery(e.delivery)]);
+  if (e.cores) rows.push([L.t('diag.rMachine'),
+    L.t('diag.cores', { n: e.cores }) + (e.memoryGb ? '  ·  ' + e.memoryGb + ' GB' : '')]);
+  return rows;
+}
+
+/* Dropped frames need their denominator to be readable — the same lesson as
+ * the desktop build's counter. */
+function formatDroppedWeb(c) {
+  if (!c.framesDuringTrial) return '—';
+  var expected = c.framesDuringTrial + c.droppedFramesDuringTrial;
+  var pct = (c.droppedFramesDuringTrial / expected) * 100;
+  var verdict = pct < 1 ? L.t('diag.dropOk')
+              : pct < 5 ? L.t('diag.dropSome') : L.t('diag.dropBad');
+  return c.droppedFramesDuringTrial.toLocaleString() + ' / ' + expected.toLocaleString() +
+         '  (' + pct.toFixed(2) + '% — ' + verdict + ')';
+}
+
+function describeDelivery(d) {
+  if (!d) return '—';
+  if (d.local) return L.t('diag.deliveredLocal', { p: d.protocol });
+  var bits = [d.protocol + '://' + (d.host || '?')];
+  if (d.networkMs != null) bits.push(L.t('diag.loadedIn', { ms: Math.round(d.networkMs) }));
+  if (d.connectionType) bits.push(d.connectionType);
+  return bits.join('  ·  ') + '  ·  ' + L.t('diag.provenanceOnly');
+}
+
+function renderDiagTable(tbodyId, rows) {
+  var tb = $(tbodyId);
+  tb.innerHTML = '';
+  rows.forEach(function (r) {
+    var tr = document.createElement('tr');
+    var th = document.createElement('th');
+    th.textContent = r[0];
+    var td = document.createElement('td');
+    td.textContent = r[1];
+    tr.appendChild(th); tr.appendChild(td);
+    tb.appendChild(tr);
+  });
+}
+
+function renderVerdict(elId, report) {
+  var el = $(elId);
+  el.className = 'note verdict ' + report.grade;
+  var html = '<strong>' + L.t('diag.grade.' + report.grade) + '</strong>';
+  if (report.notes.length) {
+    html += '<ul>';
+    report.notes.forEach(function (n) {
+      html += '<li class="' + n.level + '">' + L.t(n.key, n.vars) + '</li>';
+    });
+    html += '</ul>';
+  } else {
+    html += ' ' + L.t('diag.allClear');
+  }
+  el.innerHTML = html;
+}
+
+/* The on-demand check from the setup screen: same measurement the trial makes,
+ * run now so a machine can be judged before anyone is asked to sit down. */
+function runDeviceCheck() {
+  var btn = $('btnDeviceCheck');
+  btn.disabled = true;
+  var was = btn.textContent;
+  btn.textContent = L.t('diag.running');
+
+  var probe = T.makeInputProbe();
+  function grab(e) { probe.record(e); }
+  document.addEventListener('keydown', grab);
+  document.addEventListener('pointerdown', grab);
+
+  T.calibrateDisplay(80, 10).then(function (cal) {
+    deviceCal = cal;
+    env = D.snapshot();
+
+    function draw() {
+      var c = {
+        environment: env, display: cal,
+        inputDelay: probe.result(),
+        framesDuringTrial: 0, droppedFramesDuringTrial: 0,
+        fullscreen: !!document.fullscreenElement
+      };
+      renderDiagTable('deviceCheckTable', diagRows(c, { trial: false }));
+      renderVerdict('deviceCheckVerdict',
+        D.screeningReport(env, cal, c.inputDelay, { touchUsed: false }));
+    }
+
+    draw();
+    $('deviceCheckResult').hidden = false;
+    renderEnvLine();
+    btn.disabled = false;
+    btn.textContent = was;
+
+    // Input delay needs real presses. Rather than blocking the check behind a
+    // key-tapping ritual, the display results appear at once and the input row
+    // fills itself in as soon as someone taps — and stops listening when the
+    // trial starts, so it cannot compete with the trial's own probe.
+    var redraw = function (e) { probe.record(e); draw(); };
+    document.removeEventListener('keydown', grab);
+    document.removeEventListener('pointerdown', grab);
+    document.addEventListener('keydown', redraw);
+    document.addEventListener('pointerdown', redraw);
+    deviceCheckStop = function () {
+      document.removeEventListener('keydown', redraw);
+      document.removeEventListener('pointerdown', redraw);
+      deviceCheckStop = null;
+    };
+  });
+}
+
 /* ---------------- wake lock ---------------- */
 
 function requestWakeLock() {
@@ -608,6 +867,10 @@ function beginTrial() {
 
   epochs = [];
   presses = [];
+  // A fresh input probe per trial: dispatch delay is measured from the real
+  // responses rather than a separate key-tapping ritual.
+  inputProbe = T.makeInputProbe();
+  touchUsed = false;
   currentEpoch = null;
   consecutiveMisses = 0;
   missRunStartIndex = -1;
@@ -616,6 +879,7 @@ function beginTrial() {
   kssBefore = null;
   kssAfter = null;
 
+  if (deviceCheckStop) deviceCheckStop();
   initAudio();
   stopAlarm();
   requestWakeLock();
@@ -669,10 +933,28 @@ function countdown() {
   show('screen-countdown');
   var n = 3;
   $('countdownNum').textContent = n;
+
+  /*
+   * Measure the display while the countdown runs. Three seconds of otherwise
+   * dead time is enough for ~90 frames at 60 Hz, and measuring here rather
+   * than on the setup screen means the numbers describe the display in the
+   * state the task will actually use — same window, same fullscreen mode.
+   * A slow display can take longer than the countdown, so the task waits for
+   * the measurement rather than starting without it.
+   */
+  var calDone = T.calibrateDisplay(80, 10).then(function (c) {
+    deviceCal = c;
+  }).catch(function () { deviceCal = null; });
+
   var iv = setInterval(function () {
     n -= 1;
-    if (n <= 0) { clearInterval(iv); startTask(); }
-    else $('countdownNum').textContent = n;
+    if (n <= 0) {
+      clearInterval(iv);
+      $('countdownNum').textContent = '';
+      calDone.then(startTask);
+    } else {
+      $('countdownNum').textContent = n;
+    }
   }, 1000);
 }
 
@@ -682,6 +964,7 @@ function startTask() {
   running = true;
   startWall = new Date().toISOString();
   startTime = performance.now();
+  startFrameMonitor();
   startClock();
   // Schedule the first stimulus rather than firing it: onsets[0] is the lead-in,
   // so the screen stays blank for one interval after the countdown.
@@ -758,8 +1041,12 @@ function finalizeEpoch() {
  * survive for downstream analysis. Whether it counts as a hit is decided at
  * scoring time, not here.
  */
-function handleResponse() {
+function handleResponse(evt) {
   if (!running) return;
+  // Measured first, so the delta reflects handler entry rather than whatever
+  // work happens below.
+  if (evt && inputProbe) inputProbe.record(evt);
+  if (evt && evt.pointerType && evt.pointerType !== 'mouse') touchUsed = true;
   var now = performance.now();
 
   // Every press is logged, including presses outside any epoch, because the
@@ -832,6 +1119,10 @@ function endTask(reason) {
   clearTimeout(stimTimer);
   if (clockRaf) cancelAnimationFrame(clockRaf);
   clockRaf = null;
+  stopFrameMonitor();
+  // Read the fullscreen state BEFORE leaving it, or the record would always
+  // say the task ran in a window.
+  wasFullscreen = !!document.fullscreenElement;
   ledOff();
   releaseWakeLock();
   if (document.fullscreenElement && document.exitFullscreen) document.exitFullscreen().catch(function () {});
@@ -885,6 +1176,7 @@ function buildResult(reason) {
     sleepOnsetMs: sleepOnsetMs,
     sleepOnsetCriterionMs: sleepOnsetCriterionMs,
     elapsedMs: epochs.length ? epochs[epochs.length - 1].onsetMs + epochs[epochs.length - 1].epochIsiMs : 0,
+    conditions: buildConditions(),
     norms: S.normativeReport({
       trials: scored.trials,
       elapsedMs: epochs.length ? epochs[epochs.length - 1].onsetMs + epochs[epochs.length - 1].epochIsiMs : 0,
@@ -968,6 +1260,7 @@ function renderResult(r) {
     : L.t('corr.applied', { desc: describeCorrection(r.config),
                             a: t.nFalseStartsRemoved, b: t.nOutliersRemoved, n: t.n });
 
+  renderConditions(r);
   renderNorms(r);
   renderIntegrity(r);
   renderKss(r);
@@ -1039,6 +1332,15 @@ function initNormsToggle() {
   $('showNorms').checked = normsWanted();
   $('normsPanel').hidden = !$('showNorms').checked;
   $('showNorms').addEventListener('change', applyNormsVisibility);
+}
+
+function renderConditions(r) {
+  var c = r.conditions;
+  if (!c) { $('diagTable').innerHTML = ''; $('diagVerdict').textContent = ''; return; }
+  renderDiagTable('diagTable', diagRows(c, { trial: true, blurCount: r.blurCount }));
+  renderVerdict('diagVerdict', D.screeningReport(c.environment, c.display, c.inputDelay, {
+    touchUsed: c.touchUsed, blurCount: r.blurCount, fullscreen: c.fullscreen
+  }));
 }
 
 function renderNorms(r) {
@@ -1321,8 +1623,48 @@ var SUMMARY_HEADER = PARTICIPANT_COLS.concat([
   'correction', 'false_start_threshold_ms', 'sd_multiplier',
   'kss_when', 'kss_before', 'kss_after',
   'total_presses', 'extra_presses', 'burst_max', 'rapid_pairs', 'cheating_suspected', 'cheating_reasons',
-  'alarm_enabled', 'extra_responses', 'page_blur_count'
-]);
+  'alarm_enabled', 'extra_responses', 'page_blur_count',
+
+  'device_browser', 'device_platform', 'screen_w', 'screen_h', 'device_pixel_ratio',
+  'refresh_hz_measured', 'frame_interval_ms', 'onset_quantisation_ms', 'frame_mad_ms',
+  'timer_resolution_ms', 'cross_origin_isolated',
+  'input_dispatch_median_ms', 'input_dispatch_mad_ms', 'input_dispatch_n', 'input_stamp_usable',
+  'frames_trial', 'dropped_frames_trial', 'dropped_rate_trial',
+  'ran_fullscreen', 'touch_used', 'cpu_cores', 'device_memory_gb',
+  'page_protocol', 'page_host', 'page_local', 'page_network_ms', 'connection_type',
+  'device_grade',]);
+
+/* Device conditions for the summary row. Kept in one place so the header and
+ * the values cannot drift apart. */
+function conditionVals(r) {
+  var c = r.conditions || {};
+  var e = c.environment || {};
+  var d = e.delivery || {};
+  var cal = c.display || {};
+  var inp = c.inputDelay || {};
+  var frames = c.framesDuringTrial || 0;
+  var dropped = c.droppedFramesDuringTrial || 0;
+  var expected = frames + dropped;
+  return [
+    D.describeBrowser(e.userAgent), e.platform, e.screenW, e.screenH, e.devicePixelRatio,
+    round(cal.refreshHz, 3), round(cal.frameIntervalMs, 4),
+    cal.frameIntervalMs ? round(cal.frameIntervalMs / 2, 4) : null,
+    round(cal.madIntervalMs, 4),
+    round(e.timerResolutionMs, 5), e.crossOriginIsolated == null ? '' : (e.crossOriginIsolated ? 1 : 0),
+    inp.usable ? round(inp.medianDelayMs, 3) : null,
+    inp.usable ? round(inp.madDelayMs, 3) : null,
+    inp.n == null ? null : inp.n,
+    inp.usable == null ? '' : (inp.usable ? 1 : 0),
+    frames || null, dropped,
+    expected ? round(dropped / expected, 5) : null,
+    c.fullscreen ? 1 : 0, c.touchUsed ? 1 : 0,
+    e.cores, e.memoryGb,
+    d.protocol, d.host, d.local == null ? '' : (d.local ? 1 : 0),
+    round(d.networkMs, 1), d.connectionType,
+    c.environment ? D.screeningReport(c.environment, c.display, c.inputDelay,
+      { touchUsed: c.touchUsed, blurCount: r.blurCount, fullscreen: c.fullscreen }).grade : null
+  ];
+}
 
 function summaryRow(r) {
   var t = r.scored.totals, e = r.scored.errorProfiles, c = r.config;
@@ -1348,7 +1690,7 @@ function summaryRow(r) {
     g.totalPresses, g.extraPresses, g.burstMax, g.rapidPairs,
     g.suspected ? 1 : 0, g.reasons.join('; '),
     c.alarm ? 1 : 0, r.extraResponses, r.blurCount
-  ]);
+  ]).concat(conditionVals(r));
 }
 
 function allRows(builder, header) {
@@ -1413,14 +1755,14 @@ $('btnAbort').addEventListener('click', function (e) {
 
 $('screen-task').addEventListener('pointerdown', function (e) {
   if (e.target && e.target.id === 'btnAbort') return;
-  handleResponse();
+  handleResponse(e);
 });
 
 document.addEventListener('keydown', function (e) {
   if (!running) return;
   if (e.code === 'Space' || e.key === ' ' || e.code === 'Enter' || e.key === 'Enter') {
     e.preventDefault();
-    handleResponse();
+    handleResponse(e);
   }
 });
 
@@ -1463,3 +1805,5 @@ applyLanguage();
 refreshCount();
 initParticipants();
 initNormsToggle();
+initDiagnostics();
+$('btnDeviceCheck').addEventListener('click', runDeviceCheck);

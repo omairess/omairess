@@ -404,3 +404,25 @@ label.check.norms-toggle { margin-top: 0; font-size: 15px; }
 /* Roster maintenance sits directly under the picker it acts on. */
 .roster-actions { margin-top: 10px; margin-bottom: 4px; }
 .roster-actions + .note { margin-bottom: 20px; }
+
+/* ---- device diagnostics ---- */
+
+p.env { font-size: 12px; color: var(--muted); margin: 6px 0 0; }
+p.env.warn { color: #e0b066; }
+
+table.metrics.diag { margin-top: 14px; }
+table.metrics.diag th { text-align: left; font-weight: 400; width: 45%; }
+table.metrics.diag td { text-align: right; color: var(--text); }
+
+.verdict { margin-top: 14px; padding: 12px 14px; border-radius: 6px; border-left: 3px solid var(--line); }
+.verdict.good  { border-left-color: #6fcf97; background: rgba(111, 207, 151, 0.07); }
+.verdict.fair  { border-left-color: #e0a066; background: rgba(224, 160, 102, 0.08); }
+.verdict.poor  { border-left-color: #eb6f6f; background: rgba(235, 111, 111, 0.08); }
+.verdict strong { display: block; margin-bottom: 6px; color: var(--text); }
+.verdict.good strong { color: #6fcf97; }
+.verdict.fair strong { color: #e0a066; }
+.verdict.poor strong { color: #eb6f6f; }
+.verdict ul { margin: 8px 0 0; padding-left: 18px; }
+.verdict li { margin-bottom: 5px; }
+.verdict li.bad { color: #eb6f6f; }
+.verdict li.warn { color: #e0a066; }
