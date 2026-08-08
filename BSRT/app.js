@@ -202,13 +202,9 @@ function identityIsEmpty() {
 }
 
 function refreshProfiles() {
-  profiles = P.loadProfiles(localStorage, PROFILE_KEY);
-  // First run after upgrading: rebuild the roster from trials already stored,
-  // so an existing installation does not start with an empty list.
-  if (!P.listProfiles(profiles).length) {
-    P.seedFromSessions(profiles, loadSessions());
-    if (P.listProfiles(profiles).length) P.saveProfiles(localStorage, PROFILE_KEY, profiles);
-  }
+  // Seeds from stored trials on the first run only. An empty roster is a
+  // choice once someone has cleared it, not a gap to be refilled.
+  profiles = P.loadOrSeed(localStorage, PROFILE_KEY, loadSessions());
   renderRoster();
 }
 
@@ -363,6 +359,39 @@ function recallIfMatch() {
   autoFilledFrom = null;
 }
 
+/*
+ * Removing someone from the list never removes their data. The roster is a
+ * convenience for filling the form in; recorded trials live separately and are
+ * left exactly as they were.
+ */
+function forgetParticipant() {
+  var key = $('returning').value || P.keyOf(txtVal('participantId'));
+  var p = key ? profiles[key] : null;
+  if (!p) { alert(L.t('participant.forgetNone')); return; }
+  var who = p.participantId + (p.name ? ' (' + p.name + ')' : '');
+  if (!confirm(L.t('participant.forgetConfirm', { who: who }))) return;
+  P.forgetProfile(localStorage, PROFILE_KEY, profiles, p.participantId);
+  if (autoFilledFrom === P.keyOf(p.participantId)) {
+    clearIdentity();
+    $('participantId').value = '';
+    autoFilledFrom = null;
+  }
+  $('returning').value = '';
+  renderRoster();
+  checkParticipant();
+}
+
+function forgetAllParticipants() {
+  var n = P.listProfiles(profiles).length;
+  if (!n) { alert(L.t('participant.forgetNone')); return; }
+  if (!confirm(L.t('participant.forgetAllConfirm', { n: n }))) return;
+  profiles = P.forgetAllProfiles(localStorage, PROFILE_KEY);
+  autoFilledFrom = null;
+  $('returning').value = '';
+  renderRoster();
+  checkParticipant();
+}
+
 function initParticipants() {
   renderBirth();
   refreshProfiles();
@@ -409,6 +438,8 @@ function initParticipants() {
     checkParticipant();
   });
 
+  $('btnForgetParticipant').addEventListener('click', forgetParticipant);
+  $('btnForgetAll').addEventListener('click', forgetAllParticipants);
   checkParticipant();
 }
 

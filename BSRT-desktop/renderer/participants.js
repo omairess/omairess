@@ -170,6 +170,52 @@
     return map;
   }
 
+  /*
+   * Seeding is a ONE-TIME migration, not a repair that runs whenever the
+   * roster looks empty.
+   *
+   * The difference matters the moment someone clears the list on purpose:
+   * re-seeding on every empty roster silently resurrects every participant
+   * from the stored trials on the next reload, so "clear" appears to do
+   * nothing. A flag records that the migration has run, and it is also set
+   * when the list is cleared deliberately, so an empty roster stays empty.
+   */
+  function seededKey(key) { return key + '.seeded'; }
+
+  function hasSeeded(storage, key) {
+    try { return storage.getItem(seededKey(key)) === '1'; } catch (e) { return false; }
+  }
+
+  function markSeeded(storage, key) {
+    try { storage.setItem(seededKey(key), '1'); return true; } catch (e) { return false; }
+  }
+
+  /* Returns the roster, seeding it from stored trials only on the first run. */
+  function loadOrSeed(storage, key, sessions) {
+    var map = loadProfiles(storage, key);
+    if (listProfiles(map).length || hasSeeded(storage, key)) return map;
+    seedFromSessions(map, sessions);
+    markSeeded(storage, key);
+    if (listProfiles(map).length) saveProfiles(storage, key, map);
+    return map;
+  }
+
+  /* Forget one participant, or everyone. Neither touches recorded trials. */
+  function forgetProfile(storage, key, map, id) {
+    var k = keyOf(id);
+    if (!k || !map[k]) return false;
+    delete map[k];
+    saveProfiles(storage, key, map);
+    markSeeded(storage, key);   // do not let the migration bring them back
+    return true;
+  }
+
+  function forgetAllProfiles(storage, key) {
+    saveProfiles(storage, key, {});
+    markSeeded(storage, key);
+    return {};
+  }
+
   /* Existing installations already have trials on disk. Derive a roster from
    * them once, so upgrading does not present an empty participant list. */
   function seedFromSessions(map, sessions) {
@@ -260,6 +306,11 @@
     saveProfiles: saveProfiles,
     upsertProfile: upsertProfile,
     seedFromSessions: seedFromSessions,
+    loadOrSeed: loadOrSeed,
+    hasSeeded: hasSeeded,
+    markSeeded: markSeeded,
+    forgetProfile: forgetProfile,
+    forgetAllProfiles: forgetAllProfiles,
     listProfiles: listProfiles,
     diffIdentity: diffIdentity,
     findDuplicate: findDuplicate,

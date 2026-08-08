@@ -40,6 +40,11 @@
         </select>
       </label>
       <p class="note tight" data-i18n="participant.rosterNote">Pick someone who has been tested before and their details are filled in for you, so an ID or a birth date never has to be typed twice.</p>
+      <div class="actions tight roster-actions">
+        <button id="btnForgetParticipant" class="ghost" data-i18n="participant.forget">Remove this participant from the list</button>
+        <button id="btnForgetAll" class="ghost" data-i18n="participant.forgetAll">Clear the whole list</button>
+      </div>
+      <p class="note tight" data-i18n="participant.forgetNote">Removing someone only clears the saved details used to fill this form in. Recorded trials are kept and stay exportable.</p>
 
       <div class="grid">
         <label><span data-i18n="participant.id">Participant ID</span><input type="text" id="participantId" placeholder="P001" autocomplete="off"></label>

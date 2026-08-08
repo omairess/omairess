@@ -336,6 +336,24 @@ The roster is kept separately from the trial data, so clearing stored trials
 does not lose it, and an installation that already holds trials has its roster
 rebuilt from them the first time it starts.
 
+### Clearing the list
+
+Two buttons sit under the picker: **Remove this participant from the list**
+(the one selected, or whose ID is typed) and **Clear the whole list**. Both ask
+for confirmation naming what is about to go.
+
+**Neither deletes any data.** The roster only holds the details used to fill
+the form in; recorded trials live under a separate key, stay exportable, and
+are untouched. Clearing the list is also not permanent in the sense that
+matters — testing someone again simply adds them back.
+
+That first-run rebuild is a **one-time migration**, not a repair that runs
+whenever the list looks empty. The difference is the whole point: refilling an
+empty roster on every load would silently resurrect everyone from the stored
+trials the next time the page opened, so clearing would appear to do nothing.
+A flag (`…participants.v1.seeded`) records that the migration has run, and is
+also set when the list is cleared on purpose, so an empty roster stays empty.
+
 ### Protection against accidental overwriting
 
 Recall alone would make overwriting easier, so two checks sit in front of the

@@ -443,3 +443,7 @@ td.band-none   { color: var(--muted); }
 .norms-card { padding-top: 16px; padding-bottom: 16px; }
 label.check.norms-toggle { margin-top: 0; font-size: 15px; }
 #normsPanel { margin-top: 18px; }
+
+/* Roster maintenance sits directly under the picker it acts on. */
+.roster-actions { margin-top: 10px; margin-bottom: 4px; }
+.roster-actions + .note { margin-bottom: 20px; }
