@@ -469,3 +469,15 @@ table.metrics.diag td { text-align: right; color: var(--text); }
 .verdict li { margin-bottom: 5px; }
 .verdict li.bad { color: #eb6f6f; }
 .verdict li.warn { color: #e0a066; }
+
+/* ---- stored trials ---- */
+.stored-controls { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-end; margin-bottom: 12px; }
+.stored-controls .actions.tight { margin-top: 0; }
+.stored-list { max-height: 320px; overflow-y: auto; }
+table.metrics.trials { width: 100%; }
+table.metrics.trials thead th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); padding-bottom: 6px; border-bottom: 1px solid var(--line); }
+table.metrics.trials td { font-size: 14px; padding: 7px 8px 7px 0; }
+table.metrics.trials th.tick, table.metrics.trials td.tick { width: 28px; padding-right: 4px; }
+table.metrics.trials td.tick input { width: auto; margin: 0; }
+table.metrics.trials tbody tr:hover { background: rgba(255,255,255,0.03); }
+button.danger[disabled] { opacity: .45; cursor: default; }

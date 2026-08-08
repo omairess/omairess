@@ -171,6 +171,41 @@
       <p class="quote" id="instructionsText"></p>
     </div>
 
+    <details class="card" id="storedCard">
+      <summary><h2><span data-i18n="stored.heading">Stored trials</span> (<span id="storedCount">0</span>)</h2></summary>
+      <p class="note" data-i18n="stored.intro">Every completed trial is kept in this browser until it is deleted here. Removing a trial deletes its data permanently — export what you need first.</p>
+
+      <div class="stored-controls">
+        <label class="roster"><span data-i18n="stored.filter">Show</span>
+          <select id="trialFilter">
+            <option value="" data-i18n="stored.allParticipants">All participants</option>
+          </select>
+        </label>
+        <div class="actions tight">
+          <button id="btnSelectAll" class="ghost" data-i18n="stored.selectAll">Select all shown</button>
+          <button id="btnSelectNone" class="ghost" data-i18n="stored.selectNone">Select none</button>
+          <button id="btnDeleteSelected" class="danger" data-i18n="stored.deleteSelected">Delete selected</button>
+        </div>
+      </div>
+
+      <div class="scroll stored-list">
+        <table class="metrics trials">
+          <thead>
+            <tr>
+              <th class="tick"></th>
+              <th data-i18n="stored.colParticipant">Participant</th>
+              <th data-i18n="stored.colSession">Session</th>
+              <th data-i18n="stored.colTrial">Trial</th>
+              <th data-i18n="stored.colWhen">When</th>
+              <th data-i18n="stored.colOutcome">Outcome</th>
+            </tr>
+          </thead>
+          <tbody id="trialList"></tbody>
+        </table>
+      </div>
+      <p class="note tight" id="storedEmpty" hidden data-i18n="stored.empty">No trials are stored in this browser.</p>
+    </details>
+
     <div class="actions">
       <button id="btnStart" class="primary" data-i18n="btn.start">Start task</button>
       <span class="spacer"></span>

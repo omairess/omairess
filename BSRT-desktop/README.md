@@ -378,6 +378,32 @@ trials the next time the page opened, so clearing would appear to do nothing.
 A flag (`…participants.v1.seeded`) records that the migration has run, and is
 also set when the list is cleared on purpose, so an empty roster stays empty.
 
+### Deleting recorded trials
+
+Removing someone from the roster deliberately leaves their data alone. To
+delete the data itself, open **Recorded trials** on the setup screen. Every
+stored trial is listed with the participant, session label, trial number, when
+it was run, and how it ended — enough to tell two trials of the same person
+apart before removing one.
+
+Tick the trials to delete and press **Delete selected**; the button carries the
+count, and is disabled while nothing is ticked. Several trials can go at once,
+and they do not have to be adjacent. A filter narrows the list to one
+participant, and **Select all** then applies to what is actually shown rather
+than to everything stored, so filtering to one person and selecting all cannot
+sweep up somebody else's data.
+
+Deletion asks for confirmation naming the participants affected, warns that it
+cannot be undone, and suggests exporting first. **Export first.** Nothing is
+recoverable afterwards: there is no undo and no copy elsewhere.
+
+Two things deliberately do not happen. Deleting trials does not remove anyone
+from the participant list — someone can be tested again without re-entering
+their details, and forgetting a person is a separate decision made with the
+roster buttons. And the suggested trial number is recomputed only when the
+deletion touched the participant currently in the form, so removing an
+unrelated trial never overwrites a number entered by hand.
+
 ### Protection against accidental overwriting
 
 Recall alone would make overwriting easier, so two checks sit in front of the

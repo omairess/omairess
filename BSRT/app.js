@@ -138,6 +138,7 @@ function saveSession(r) {
     alert('Could not save this trial (storage may be full). Export it now.');
   }
   refreshCount();
+  renderStoredTrials();
   // A participant record is created or updated only once a trial has actually
   // been recorded, so an abandoned setup screen never touches the roster.
   rememberParticipant(r.participant);
@@ -723,6 +724,162 @@ function runDeviceCheck() {
       deviceCheckStop = null;
     };
   });
+}
+
+/* ---------------- stored trials ---------------- */
+
+/*
+ * Deleting recorded data is the one irreversible thing this app does, so the
+ * list is explicit about what is about to go: rows are ticked individually,
+ * the count is in the button, and the confirmation names the participants
+ * affected rather than just a number.
+ *
+ * Rows are keyed by their position in storage, captured at render time and
+ * re-read at delete time, so a filtered or re-sorted view can never delete the
+ * wrong row. Deletion goes highest index first for the same reason.
+ */
+
+function trialLabel(r) {
+  var p = r.participant || {};
+  return (p.participantId || 'NA') + (p.name ? ' · ' + p.name : '');
+}
+
+function trialOutcome(r) {
+  if (r.sleptBeforeMax) return L.t('stored.slept', { t: fmtClock(r.sleepOnsetMs) });
+  if (r.endReason === 'aborted') return L.t('stored.aborted');
+  return L.t('stored.completed', { t: fmtClock(r.elapsedMs) });
+}
+
+function renderStoredTrials() {
+  var all = loadSessions();
+  $('storedCount').textContent = all.length;
+
+  // The filter lists whoever actually has trials, not the whole roster.
+  var sel = $('trialFilter');
+  var keep = sel.value;
+  var ids = [];
+  all.forEach(function (r) {
+    var id = (r.participant && r.participant.participantId) || 'NA';
+    if (ids.indexOf(id) < 0) ids.push(id);
+  });
+  ids.sort(function (a, b) { return String(a).localeCompare(String(b), undefined, { numeric: true }); });
+  sel.innerHTML = '';
+  var blank = document.createElement('option');
+  blank.value = '';
+  blank.setAttribute('data-i18n', 'stored.allParticipants');
+  blank.textContent = L.t('stored.allParticipants');
+  sel.appendChild(blank);
+  ids.forEach(function (id) {
+    var o = document.createElement('option');
+    o.value = id;
+    o.textContent = id;
+    sel.appendChild(o);
+  });
+  sel.value = keep;
+  if (sel.value !== keep) sel.value = '';
+
+  var tb = $('trialList');
+  tb.innerHTML = '';
+  var shown = 0;
+  all.forEach(function (r, index) {
+    var p = r.participant || {};
+    if (sel.value && (p.participantId || 'NA') !== sel.value) return;
+    shown += 1;
+    var tr = document.createElement('tr');
+
+    var tdTick = document.createElement('td');
+    tdTick.className = 'tick';
+    var box = document.createElement('input');
+    box.type = 'checkbox';
+    box.className = 'trial-tick';
+    box.setAttribute('data-index', String(index));
+    box.addEventListener('change', updateDeleteButton);
+    tdTick.appendChild(box);
+    tr.appendChild(tdTick);
+
+    [trialLabel(r), p.sessionLabel || 'NA', String(p.trialNumber == null ? '' : p.trialNumber),
+     (p.date || '') + ' ' + (p.time || ''), trialOutcome(r)].forEach(function (text) {
+      var td = document.createElement('td');
+      td.textContent = text;
+      tr.appendChild(td);
+    });
+    tb.appendChild(tr);
+  });
+
+  $('storedEmpty').hidden = shown > 0;
+  updateDeleteButton();
+}
+
+function selectedTrialIndexes() {
+  var out = [];
+  var boxes = document.querySelectorAll('#trialList .trial-tick');
+  for (var i = 0; i < boxes.length; i++) {
+    if (boxes[i].checked) out.push(parseInt(boxes[i].getAttribute('data-index'), 10));
+  }
+  return out;
+}
+
+function updateDeleteButton() {
+  var n = selectedTrialIndexes().length;
+  var btn = $('btnDeleteSelected');
+  btn.textContent = n ? L.t('stored.deleteSelectedN', { n: n }) : L.t('stored.deleteSelected');
+  btn.disabled = n === 0;
+}
+
+function setAllTicks(on) {
+  var boxes = document.querySelectorAll('#trialList .trial-tick');
+  for (var i = 0; i < boxes.length; i++) boxes[i].checked = on;
+  updateDeleteButton();
+}
+
+function deleteSelectedTrials() {
+  var idx = selectedTrialIndexes();
+  if (!idx.length) return;
+  var all = loadSessions();
+
+  // Name who is affected, so a mis-tick is visible before it is irreversible.
+  var who = [];
+  var current = txtVal('participantId');
+  var hitCurrent = false;
+  idx.forEach(function (i) {
+    var r = all[i];
+    if (!r) return;
+    var label = trialLabel(r);
+    if (who.indexOf(label) < 0) who.push(label);
+    if (current && P.keyOf((r.participant || {}).participantId || '') === P.keyOf(current)) {
+      hitCurrent = true;
+    }
+  });
+  var summary = who.slice(0, 4).join(', ') + (who.length > 4 ? ' …' : '');
+  if (!confirm(L.t('stored.deleteConfirm', { n: idx.length, who: summary }))) return;
+
+  // Highest index first: removing a lower one would shift the rest.
+  idx.sort(function (a, b) { return b - a; });
+  idx.forEach(function (i) { all.splice(i, 1); });
+
+  try {
+    localStorage.setItem(LS_KEY, JSON.stringify(all));
+  } catch (e) {
+    alert(L.t('stored.deleteFailed'));
+    return;
+  }
+  refreshCount();
+  renderStoredTrials();
+  // Trial numbering and the duplicate check both read stored trials, so they
+  // have to be recomputed once some have gone. The suggested number is only
+  // re-derived when the deletion touched the participant now in the form —
+  // otherwise a number the experimenter typed deliberately would be clobbered
+  // by an unrelated deletion.
+  if (hitCurrent) suggestTrialNumber();
+  checkParticipant();
+}
+
+function initStoredTrials() {
+  renderStoredTrials();
+  $('trialFilter').addEventListener('change', renderStoredTrials);
+  $('btnSelectAll').addEventListener('click', function () { setAllTicks(true); });
+  $('btnSelectNone').addEventListener('click', function () { setAllTicks(false); });
+  $('btnDeleteSelected').addEventListener('click', deleteSelectedTrials);
 }
 
 /* ---------------- wake lock ---------------- */
@@ -1902,4 +2059,5 @@ refreshCount();
 initParticipants();
 initNormsToggle();
 initDiagnostics();
+initStoredTrials();
 $('btnDeviceCheck').addEventListener('click', runDeviceCheck);
