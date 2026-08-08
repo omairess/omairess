@@ -454,6 +454,44 @@ hint — and labelled as provenance, next to a note on screen saying exactly
 this. A `file://` or `localhost` page is reported as having involved no
 network at all.
 
+### Correcting for input dispatch delay
+
+The gap between the OS stamping a keypress and this code getting to look at it
+is measured for every response, and **both readings are kept**:
+
+| Column | What it is |
+|---|---|
+| `rt_event_ms` | the response measured from the OS event stamp — dispatch delay removed |
+| `rt_handler_ms` | the same response from handler time — raw, delay included |
+| `input_delay_ms` | their difference, for that one response |
+| `rt_source_used` | which of the two was scored |
+
+`rt_handler_ms − rt_event_ms = input_delay_ms` on every row, so the correction
+can be reproduced, audited or reversed in analysis rather than taken on trust.
+The results panel shows the mean of both with the difference between them and
+marks the one that was scored, and the summary export carries
+`rt_source_setting`, `mean_rt_event_ms`, `mean_rt_handler_ms`,
+`mean_input_delay_ms`, `median_input_delay_ms`, `n_rt_compared` and
+`n_stamp_rejected`.
+
+**Device check → Time responses from** chooses which one feeds the scoring:
+*OS event stamp* (default, delay removed) or *handler time* (raw). The desktop
+build has the same setting and the same default, so the two builds stay
+comparable.
+
+The stamp is validated **per response**, not once per trial: a missing stamp,
+or one implying a delay outside a plausible range, means this browser is not
+putting `event.timeStamp` on the performance clock, so that response falls back
+to handler time and is counted in `n_stamp_rejected`. Nothing is silently
+substituted.
+
+> **This changed the web build's default.** Before, reaction times were handler
+> time with the delay included — the *uncorrected* variant — which meant they
+> were not directly comparable with the desktop's. They now default to the same
+> corrected reading. On a wired keyboard the shift is well under a millisecond;
+> on a Bluetooth one it can be tens. Set **handler time** to reproduce the old
+> behaviour, and note that `rt_handler_ms` reproduces it in any case.
+
 ### One thing worth knowing about the frame monitor
 
 The browser build schedules stimuli with `setTimeout`, and the frame monitor

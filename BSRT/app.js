@@ -57,6 +57,7 @@ var lastFrameTs = null;
 var frameIntervals = [];   // bounded sample, enough for a jitter estimate
 var touchUsed = false;
 var wasFullscreen = false;
+var rtStampRejected = 0;   // responses whose event stamp failed its sanity check
 var deviceCheckStop = null;
 
 /* ---------------- helpers ---------------- */
@@ -588,6 +589,28 @@ function diagRows(c, opts) {
   rows.push([L.t('diag.rInput'), inputText]);
 
   if (opts && opts.trial) {
+    // The same responses read off both clocks, so the size of the correction
+    // is visible rather than assumed.
+    var ev = (opts.rtEventMs || []).filter(function (v) { return v != null; });
+    var hd = (opts.rtHandlerMs || []).filter(function (v) { return v != null; });
+    var pairs = [];
+    (opts.rtEventMs || []).forEach(function (v, i) {
+      var h = (opts.rtHandlerMs || [])[i];
+      if (v != null && h != null) pairs.push(h - v);
+    });
+    var meanOf = function (a) {
+      return a.length ? a.reduce(function (x, y) { return x + y; }, 0) / a.length : null;
+    };
+    var scoredIsEvent = (opts.rtSource || 'event') === 'event';
+    var mark = '  ← ' + L.t('diag.scoredMark');
+    rows.push([L.t('diag.rRtEvent'), ev.length
+      ? n1(meanOf(ev)) + ' ms' + (scoredIsEvent ? mark : '') : L.t('diag.notMeasured')]);
+    rows.push([L.t('diag.rRtHandler'), hd.length
+      ? n1(meanOf(hd)) + ' ms' + (scoredIsEvent ? '' : mark) : '—']);
+    rows.push([L.t('diag.rRtDiff'), pairs.length
+      ? n2(meanOf(pairs)) + ' ms  ·  ' + L.t('diag.nSamples', { n: pairs.length })
+      : '—']);
+
     rows.push([L.t('diag.rDropped'), formatDroppedWeb(c)]);
     rows.push([L.t('diag.rFullscreen'), c.fullscreen ? L.t('diag.yes') : L.t('diag.no')]);
     rows.push([L.t('diag.rFocus'), opts.blurCount
@@ -838,6 +861,7 @@ function beginTrial() {
     falseStartMs: numVal('falseStartMs', 100),
     sdMultiplier: numVal('sdMultiplier', 2),
     alarm: $('alarmOn').checked,
+    rtSource: $('rtSource').value,          // 'event' | 'handler'
     kssWhen: $('kssWhen').value,
     feedbackMs: 1000,
     language: L.getLanguage()
@@ -871,6 +895,7 @@ function beginTrial() {
   // responses rather than a separate key-tapping ritual.
   inputProbe = T.makeInputProbe();
   touchUsed = false;
+  rtStampRejected = 0;
   currentEpoch = null;
   consecutiveMisses = 0;
   missRunStartIndex = -1;
@@ -1008,6 +1033,9 @@ function runEpoch(n) {
     isiBeforeMs: cfg.schedule.isiBefore[n],
     responded: false,
     rtMs: null,
+    rtEventMs: null,
+    rtHandlerMs: null,
+    rtUsed: null,
     extra: 0,
     frozen: false
   };
@@ -1047,7 +1075,29 @@ function handleResponse(evt) {
   // work happens below.
   if (evt && inputProbe) inputProbe.record(evt);
   if (evt && evt.pointerType && evt.pointerType !== 'mouse') touchUsed = true;
-  var now = performance.now();
+
+  /*
+   * Both clock readings, for every response, exactly as the desktop build
+   * does — see its README section on input dispatch.
+   *
+   * evt.timeStamp is when the platform delivered the event; performance.now()
+   * here is when this code got to look at it. The gap is the dispatch delay.
+   * Which one is scored is a setting; both are always recorded so the
+   * correction can be checked, reproduced or undone rather than trusted.
+   *
+   * The stamp is validated per response rather than once per trial: a value
+   * that is missing, or that implies a delay outside a plausible range, means
+   * this browser is not putting event.timeStamp on the performance clock, and
+   * that response silently falls back to handler time — recorded, not hidden.
+   */
+  var tHandler = performance.now();
+  var tEvent = (evt && typeof evt.timeStamp === 'number' && evt.timeStamp > 0)
+    ? evt.timeStamp : null;
+  var delta = tEvent === null ? null : tHandler - tEvent;
+  var stampUsable = delta !== null && delta >= -1 && delta < 150;
+  var useEvent = cfg.rtSource === 'event' && stampUsable;
+  var now = useEvent ? tEvent : tHandler;
+  if (!stampUsable && tEvent !== null) rtStampRejected += 1;
 
   // Every press is logged, including presses outside any epoch, because the
   // integrity check needs the full pattern — not just the scored responses.
@@ -1058,6 +1108,9 @@ function handleResponse(evt) {
 
   currentEpoch.responded = true;
   currentEpoch.rtMs = now - currentEpoch.onsetPerf;
+  currentEpoch.rtEventMs = stampUsable ? tEvent - currentEpoch.onsetPerf : null;
+  currentEpoch.rtHandlerMs = tHandler - currentEpoch.onsetPerf;
+  currentEpoch.rtUsed = useEvent ? 'event' : 'handler';
 
   clearTimeout(stimTimer);
   if (cfg.mode === 'pvt') {
@@ -1176,6 +1229,9 @@ function buildResult(reason) {
     sleepOnsetMs: sleepOnsetMs,
     sleepOnsetCriterionMs: sleepOnsetCriterionMs,
     elapsedMs: epochs.length ? epochs[epochs.length - 1].onsetMs + epochs[epochs.length - 1].epochIsiMs : 0,
+    rtEventMs: epochs.map(function (e) { return e.rtEventMs; }),
+    rtHandlerMs: epochs.map(function (e) { return e.rtHandlerMs; }),
+    rtStampRejected: rtStampRejected,
     conditions: buildConditions(),
     norms: S.normativeReport({
       trials: scored.trials,
@@ -1337,7 +1393,11 @@ function initNormsToggle() {
 function renderConditions(r) {
   var c = r.conditions;
   if (!c) { $('diagTable').innerHTML = ''; $('diagVerdict').textContent = ''; return; }
-  renderDiagTable('diagTable', diagRows(c, { trial: true, blurCount: r.blurCount }));
+  renderDiagTable('diagTable', diagRows(c, {
+    trial: true, blurCount: r.blurCount,
+    rtEventMs: r.rtEventMs, rtHandlerMs: r.rtHandlerMs,
+    rtSource: r.config && r.config.rtSource
+  }));
   renderVerdict('diagVerdict', D.screeningReport(c.environment, c.display, c.inputDelay, {
     touchUsed: c.touchUsed, blurCount: r.blurCount, fullscreen: c.fullscreen
   }));
@@ -1520,13 +1580,22 @@ function participantVals(r) {
 
 var RAW_HEADER = PARTICIPANT_COLS.concat([
   'epoch_index', 'block', 'minute', 'onset_ms', 'epoch_isi_ms', 'isi_before_ms',
-  'responded', 'rt_ms', 'rs_per_sec',
+  // rt_event_ms and rt_handler_ms are the same response read off two clocks;
+  // input_delay_ms is their difference and rt_source_used says which was scored.
+  'responded', 'rt_event_ms', 'rt_handler_ms', 'input_delay_ms', 'rt_source_used',
+  'rt_ms', 'rs_per_sec',
   'outcome', 'lapse', 'late_response', 'false_start', 'extra_responses'
 ]);
 
 function rawRows(r) {
   var pv = participantVals(r);
   var extras = r.extras || [];
+  var evRts = r.rtEventMs || [];
+  var hdRts = r.rtHandlerMs || [];
+  var used = (r.scored.trials || []).map(function (t, i) {
+    if (evRts[i] == null && hdRts[i] == null) return '';
+    return (r.config && r.config.rtSource === 'handler') || evRts[i] == null ? 'handler' : 'event';
+  });
   return r.scored.trials.map(function (t, i) {
     return pv.concat([
       // 1-based on the way out, like block and minute: epoch_index was the
@@ -1534,6 +1603,9 @@ function rawRows(r) {
       t.index + 1, t.block === null ? '' : t.block + 1, t.minute + 1, round(t.onsetMs, 2),
       t.epochIsiMs, t.isiBeforeMs,
       t.rtMs === null ? 0 : 1,
+      round(evRts[i], 3), round(hdRts[i], 3),
+      (evRts[i] == null || hdRts[i] == null) ? null : round(hdRts[i] - evRts[i], 3),
+      used[i] || '',
       round(t.rtMs, 3), round(t.rsPerSec, 5),
       t.outcome, t.lapse, t.lateResponse, t.falseStart,
       extras[i] == null ? '' : extras[i]
@@ -1629,6 +1701,8 @@ var SUMMARY_HEADER = PARTICIPANT_COLS.concat([
   'refresh_hz_measured', 'frame_interval_ms', 'onset_quantisation_ms', 'frame_mad_ms',
   'timer_resolution_ms', 'cross_origin_isolated',
   'input_dispatch_median_ms', 'input_dispatch_mad_ms', 'input_dispatch_n', 'input_stamp_usable',
+  'rt_source_setting', 'mean_rt_event_ms', 'mean_rt_handler_ms', 'mean_input_delay_ms',
+  'median_input_delay_ms', 'n_rt_compared', 'n_stamp_rejected',
   'frames_trial', 'dropped_frames_trial', 'dropped_rate_trial',
   'ran_fullscreen', 'touch_used', 'cpu_cores', 'device_memory_gb',
   'page_protocol', 'page_host', 'page_local', 'page_network_ms', 'connection_type',
@@ -1636,6 +1710,27 @@ var SUMMARY_HEADER = PARTICIPANT_COLS.concat([
 
 /* Device conditions for the summary row. Kept in one place so the header and
  * the values cannot drift apart. */
+/* The two clock readings summarised, so the size of the input-delay
+ * correction sits on the same row as the metrics it affected. */
+function rtSourceVals(r) {
+  var ev = (r.rtEventMs || []).filter(function (v) { return v != null; });
+  var hd = (r.rtHandlerMs || []).filter(function (v) { return v != null; });
+  var pairs = [];
+  (r.rtEventMs || []).forEach(function (v, i) {
+    var h = (r.rtHandlerMs || [])[i];
+    if (v != null && h != null) pairs.push(h - v);
+  });
+  var mean = function (a) {
+    return a.length ? a.reduce(function (x, y) { return x + y; }, 0) / a.length : null;
+  };
+  return [
+    (r.config && r.config.rtSource) || 'event',
+    round(mean(ev), 3), round(mean(hd), 3), round(mean(pairs), 4),
+    pairs.length ? round(T.stats.median(pairs), 4) : null,
+    pairs.length, r.rtStampRejected || 0
+  ];
+}
+
 function conditionVals(r) {
   var c = r.conditions || {};
   var e = c.environment || {};
@@ -1655,6 +1750,7 @@ function conditionVals(r) {
     inp.usable ? round(inp.madDelayMs, 3) : null,
     inp.n == null ? null : inp.n,
     inp.usable == null ? '' : (inp.usable ? 1 : 0),
+    ...rtSourceVals(r),
     frames || null, dropped,
     expected ? round(dropped / expected, 5) : null,
     c.fullscreen ? 1 : 0, c.touchUsed ? 1 : 0,

@@ -148,6 +148,14 @@
     <div class="card">
       <h2 data-i18n="diag.heading">Device check</h2>
       <p class="note" data-i18n="diag.intro">Every trial measures the display and the input path automatically and records the result with the data. Run it here first if you want to know whether a machine is fit to test on before you start.</p>
+      <label class="roster"><span data-i18n="diag.rtSource">Time responses from</span>
+        <select id="rtSource">
+          <option value="event" selected data-i18n="diag.rtSourceEvent">OS event stamp — input dispatch delay removed</option>
+          <option value="handler" data-i18n="diag.rtSourceHandler">Handler time — raw, dispatch delay included</option>
+        </select>
+      </label>
+      <p class="note tight" data-i18n="diag.rtSourceNote">This chooses which clock reading becomes the scored reaction time. Both are always measured and exported either way (rt_event_ms, rt_handler_ms, input_delay_ms), so the correction can be checked, reproduced or undone in analysis rather than taken on trust. The desktop build has the same setting and the same default, so the two stay comparable.</p>
+
       <div class="actions tight">
         <button id="btnDeviceCheck" class="ghost" data-i18n="diag.run">Check this device now</button>
       </div>
