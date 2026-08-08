@@ -406,6 +406,7 @@ function initParticipants() {
 async function init() {
   $('sessionCount').textContent = loadSessions().length;
   initParticipants();
+  initNormsToggle();
   try { displayInfo = await window.bsrt.getDisplayInfo(); }
   catch (e) { displayInfo = null; }
   renderEnvironment();
@@ -1163,6 +1164,31 @@ function normReasonText(nm) {
     case 'too_short': return L.t('norms.rTooShort');
     default: return L.t('norms.rNoNorms');
   }
+}
+
+/*
+ * The norms panel is off by default: the results screen shows the plain,
+ * uncoloured tables unless someone asks for the comparison. The choice is
+ * remembered, so a researcher who wants norms does not re-tick it every trial.
+ * The report itself is always computed and always exported — only the display
+ * is optional.
+ */
+const SHOW_NORMS_KEY = 'bsrt.desktop.showNorms.v1';
+
+function normsWanted() {
+  try { return localStorage.getItem(SHOW_NORMS_KEY) === '1'; } catch (e) { return false; }
+}
+
+function applyNormsVisibility() {
+  const on = $('showNorms').checked;
+  $('normsPanel').hidden = !on;
+  try { localStorage.setItem(SHOW_NORMS_KEY, on ? '1' : '0'); } catch (e) { /* private mode */ }
+}
+
+function initNormsToggle() {
+  $('showNorms').checked = normsWanted();
+  $('normsPanel').hidden = !$('showNorms').checked;
+  $('showNorms').addEventListener('change', applyNormsVisibility);
 }
 
 function renderNorms(r) {

@@ -394,3 +394,9 @@ td.band-none   { color: var(--muted); }
 #normsDisclaimer { margin-top: 16px; }
 #normsDisclaimer ul { margin: 8px 0 0; padding-left: 18px; }
 #normsDisclaimer li { margin-bottom: 5px; }
+
+/* The norms card collapses to just its toggle when the comparison is off, so
+   the default results screen stays exactly as it was. */
+.norms-card { padding-top: 16px; padding-bottom: 16px; }
+label.check.norms-toggle { margin-top: 0; font-size: 15px; }
+#normsPanel { margin-top: 18px; }

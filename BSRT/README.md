@@ -382,9 +382,15 @@ packaging workflow refuses to build if they are not.
 
 ## Preliminary norms
 
-Results are compared against a **preliminary** control reference of 291 test
-sessions from 12 participants, binned by the **hour the session started** and by
-**cumulative test length**. A 3-minute test is compared against the first 3
+**Off by default.** The results screen shows the plain, uncoloured tables it
+always did — plus the new interpercentile range rows. A single switch,
+**Show preliminary norms**, reveals the comparison, and the choice is
+remembered so it does not have to be re-ticked every trial. The comparison is
+always computed and always exported; only the display is optional.
+
+When switched on, results are compared against a **preliminary** control
+reference of 291 test sessions from 12 participants, binned by the **hour the
+session started** and by **cumulative test length**. A 3-minute test is compared against the first 3
 minutes of the normative protocol, not against its whole length — the reference
 was recorded as a single 8-minute test and each length bin is a prefix of it.
 

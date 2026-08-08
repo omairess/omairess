@@ -985,6 +985,31 @@ function normReasonText(nm) {
   }
 }
 
+/*
+ * The norms panel is off by default: the results screen shows the plain,
+ * uncoloured tables unless someone asks for the comparison. The choice is
+ * remembered, so a researcher who wants norms does not re-tick it every trial.
+ * The report itself is always computed and always exported — only the display
+ * is optional.
+ */
+var SHOW_NORMS_KEY = 'bsrt.showNorms.v1';
+
+function normsWanted() {
+  try { return localStorage.getItem(SHOW_NORMS_KEY) === '1'; } catch (e) { return false; }
+}
+
+function applyNormsVisibility() {
+  var on = $('showNorms').checked;
+  $('normsPanel').hidden = !on;
+  try { localStorage.setItem(SHOW_NORMS_KEY, on ? '1' : '0'); } catch (e) { /* private mode */ }
+}
+
+function initNormsToggle() {
+  $('showNorms').checked = normsWanted();
+  $('normsPanel').hidden = !$('showNorms').checked;
+  $('showNorms').addEventListener('change', applyNormsVisibility);
+}
+
 function renderNorms(r) {
   var nm = r.norms;
   var body = $('normsBody');
@@ -1406,3 +1431,4 @@ $('language').addEventListener('change', applyLanguage);
 applyLanguage();
 refreshCount();
 initParticipants();
+initNormsToggle();

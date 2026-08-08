@@ -252,8 +252,12 @@
     </div>
 
 
-    <div class="card" id="normsCard">
-      <h2 data-i18n="norms.heading">Compared with preliminary norms</h2>
+    <div class="card norms-card" id="normsCard">
+      <label class="check norms-toggle">
+        <input type="checkbox" id="showNorms">
+        <span data-i18n="norms.show">Show preliminary norms</span>
+      </label>
+      <div id="normsPanel" hidden>
       <p class="note tight" id="normsContext"></p>
       <div id="normsUnavailable" class="note warnbox" hidden></div>
       <div id="normsBody" hidden>
@@ -276,6 +280,7 @@
           <span class="band red" data-i18n="norms.legendRed">more than 2 SD worse</span>
         </p>
         <div class="note warnbox" id="normsDisclaimer"></div>
+      </div>
       </div>
     </div>
 
