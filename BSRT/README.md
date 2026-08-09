@@ -537,11 +537,22 @@ always did — plus the new interpercentile range rows. A single switch,
 remembered so it does not have to be re-ticked every trial. The comparison is
 always computed and always exported; only the display is optional.
 
-When switched on, results are compared against a **preliminary** control
-reference of 291 test sessions from 12 participants, binned by the **hour the
-session started** and by **cumulative test length**. A 3-minute test is compared against the first 3
-minutes of the normative protocol, not against its whole length — the reference
-was recorded as a single 8-minute test and each length bin is a prefix of it.
+When switched on, results are compared against a **preliminary** reference of
+435 test sessions from 48 people, pooled from **two studies**, and binned by the
+**hour the session started** and by **cumulative test length**. A 3-minute test
+is compared against the first 3 minutes of the reference sessions, never against
+their whole run.
+
+| Study | Sessions | People | Protocol | Hours covered |
+|---|---|---|---|---|
+| Control group | 291 | 12 | 8 minutes | all 24 |
+| Overnight study | 144 | 36 | 40 minutes | 23:00, 01:00, 03:00, 05:00 |
+
+So the four overnight hours pool both studies for lengths 1–8 minutes and carry
+the overnight study alone from 9 to 40; **every other hour stops at 8 minutes**.
+The app picks the deepest window the hour actually supports, so a 20-minute test
+at 14:00 is compared over its first 8 minutes, and the same test at 03:00 over
+all 20.
 
 Each of 21 variables gets its value, the reference mean ± SD for that hour and
 length, and a signed distance in SDs where **positive always means worse**,
@@ -557,6 +568,46 @@ Colour is never the only signal — each band also carries a left border and the
 word *worse* or *better*, so the table survives greyscale printing and red/green
 colour blindness.
 
+### The two samples are not interchangeable
+
+This matters more than any other caveat here, and the app states it on screen
+whenever a pooled or overnight-only cell is used.
+
+Over the same four hours, the overnight sample is **slightly faster** than the
+control group (RT average 316 ms vs 333 ms at 8 minutes) but misses **about nine
+times as many trials** (2.85% vs 0.32%), and **52 of its 144 sessions (36%)**
+reached the seven-consecutive-miss sleep-onset criterion and stopped early — a
+thing that essentially never happened in the control group. Fast when awake,
+frequently absent altogether, is the signature of a sleepy population rather
+than a merely tired one.
+
+That shape is worth confirming before these numbers are quoted as norms. If the
+overnight sample is a clinical group, hours 23/01/03/05 are not a healthy
+reference and should be split back out. Nothing is lost either way: every cell
+records its own composition as `prov[hour][length-1]` = `[control sessions,
+overnight sessions, sessions that had already ended at sleep onset]`, those
+counts are exported with every comparison row, and the pooling can be reversed
+by regenerating from the raw workbooks.
+
+### Censoring at the longer lengths
+
+A session contributes to every length it completed and to none after it. Because
+sessions that reach sleep onset stop, they drop out of the longer windows:
+
+| Window | Sessions contributing | Already ended at sleep onset |
+|---|---|---|
+| 8 min | 429 | 6 |
+| 10 min | 133 | 11 |
+| 20 min | 117 | 27 |
+| 30 min | 99 | 45 |
+| 40 min | 92 | 52 |
+
+By 40 minutes the reference describes only the people who stayed awake. That is
+a **survivor bias in the direction of alertness**, and it runs the wrong way for
+screening: it makes a sleepy participant look worse than the true population
+would. The app names the number of dropped-out sessions whenever it uses such a
+cell, and the count is in the export.
+
 ### When no comparison is offered
 
 The reference sessions are BSRT runs at a 3000 ms interval, which is 20 stimuli
@@ -564,46 +615,52 @@ a minute. The panel refuses, and says which condition failed, when the trial is
 a **PVT** (about ten stimuli a minute), when the **interval is not 3000 ms**,
 when the **start hour** cannot be read, or when the test did not complete a
 **full minute**. Trial, miss and lapse counts would otherwise be compared
-against a reference measuring something else. A test longer than 8 minutes is
-compared over its first 8 minutes only; there are no norms beyond that.
+against a reference measuring something else.
 
 ### Limits you should read before quoting a z-score
 
-- **They are preliminary.** Each hour bin holds only **9–15 sessions**, and the
+- **They are preliminary.** Most hour bins hold only **9–15 sessions**, and the
   same participant contributes to many bins. The observations are not
-  independent, and every SD is itself estimated from about a dozen numbers.
-- **The reference protocol was 8 minutes.** Comparing a 3-minute test against
-  the first 3 minutes is the right window, but the reference participants knew
-  they were settling in for 8 minutes. Someone expecting a short test may pace
-  themselves differently, so **comparisons below 8 minutes can be biased for
-  that reason alone**. The app flags this whenever the window is shorter.
+  independent, and every SD is itself estimated from a small number of values.
+- **Two samples, two expected durations.** The control participants knew they
+  were settling in for 8 minutes and the overnight participants for 40. Someone
+  expecting a short test may pace themselves differently, so **short comparisons
+  can be biased for that reason alone**. The app flags this whenever the window
+  is shorter than a contributing study's protocol.
 - **Some reference cells have almost no spread.** Every control session scored
   20 hits out of 20 in the first minute, so a difference of one or two trials
   can produce a double-digit SD figure. Where the reference SD is exactly zero
   no z-score is computed at all; the value is marked as outside the reference
   range instead of dividing by zero.
-- **The comparison uses the reference workbook's definitions, not the app's.**
-  The workbook counts every response however slow and sizes a decile with
-  `ceil(10%)`; the app treats a response slower than the hit window as a miss
-  and uses `round(10%)`. Across the 291 reference sessions those two differences
-  move the RT mean by a median of 4.8 ms, so the comparison re-scores the trial
-  the workbook's way. **The numbers in the norms panel will not always match the
-  tables above it**, which is deliberate — the export keeps both.
+- **The comparison uses the reference conventions, not the app's own scoring.**
+  Every response counts however slow, and a decile is sized with `ceil(10%)`
+  rather than `round(10%)`. **The numbers in the norms panel will not always
+  match the tables above it**, which is deliberate — the export keeps both.
 
 ### Verification
 
-The embedded table was checked against the source workbook two ways: all 4032
-published cells (mean and SD) round-trip exactly through `norms.js`, and
-recomputing every published mean from the raw trial values reproduces it, apart
-from one session missing a single trial row that moves eight cells by at most
-0.9 ms. The app's own re-scoring was then checked against an independent
-implementation over 2160 fields with no mismatches.
+The tables are computed from the **raw trial values** of both studies, not from
+anyone's published means, by a Python port of the same `normativeSummary()` the
+app applies to a participant. Three checks back that:
+
+- Recomputing the previous 24 × 8 published tables from the control group's raw
+  trials reproduced **all 8064 cells to within 5 × 10⁻⁵**, which is the rounding
+  of the published file. The earlier norms were correct.
+- Each workbook's own derived columns (`Mean_*`, `SD_*`, `Md_*`, `Miss_*`,
+  `FS_*`) were reproduced from its raw trials — **291/291** control sessions and
+  **all six test lengths** of the overnight study — which fixes the conventions
+  rather than assuming them. Note those columns keep timeouts in the RT average;
+  the app's norms exclude them, as the app's own scoring does.
+- Every populated cell is checked to be 42 values wide with `n` equal to the sum
+  of its provenance counts: 320 cells, no exceptions.
 
 ### Export
 
 A fourth CSV, **norms comparison**, is long-format with one row per variable:
 `norm_value`, `norm_ref_mean`, `norm_ref_sd`, `z_worse`, `band`, plus the hour,
-window, reference n, and the `norm_below_protocol` / `norm_truncated` flags. It
+window, reference n, the `norm_below_protocol` / `norm_truncated` flags, and the
+cell's composition as `norm_ref_n_control`, `norm_ref_n_overnight`,
+`norm_ref_n_ended_early`, `norm_mixed_studies` and `norm_hour_max_min`. It
 `rbind`s with the other exports.
 
 ---

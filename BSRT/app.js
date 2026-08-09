@@ -1637,11 +1637,28 @@ function renderNorms(r) {
   });
 
   var items = [L.t('norms.dPreliminary', { sessions: nm.sessions, participants: nm.participants })];
+  // Which studies stand behind this cell, and under what expected duration.
+  if (nm.mixedStudies) {
+    items.push(L.t('norms.dMixed', {
+      ctrl: nm.provenance[0], night: nm.provenance[1], hour: hh
+    }));
+  } else if (nm.provenance && nm.provenance[1]) {
+    items.push(L.t('norms.dNightOnly', { night: nm.provenance[1], hour: hh }));
+  }
   if (nm.belowProtocol) {
-    items.push(L.t('norms.dShort', { protocol: nm.protocolMinutes, min: nm.windowMinutes }));
+    items.push(L.t('norms.dShort', {
+      protocol: nm.protocols.join(' / '), min: nm.windowMinutes
+    }));
   }
   if (nm.truncated) {
-    items.push(L.t('norms.dTruncated', { test: nm.testMinutes, protocol: nm.protocolMinutes }));
+    items.push(L.t('norms.dTruncated', { test: nm.testMinutes, window: nm.windowMinutes }));
+  }
+  // Sessions that stopped at sleep onset are absent from the longer lengths,
+  // so what is left is the people who stayed awake.
+  if (nm.censored) {
+    items.push(L.t('norms.dCensored', {
+      n: nm.censored, total: nm.censored + nm.n, min: nm.windowMinutes
+    }));
   }
   // A reference SD of well under one count turns a two-trial difference into a
   // double-digit z. Say so when it actually happens rather than always.
@@ -1808,6 +1825,8 @@ var NORMS_HEADER = PARTICIPANT_COLS.concat([
   'norm_available', 'norm_reason', 'norm_source', 'norm_hour', 'norm_window_min',
   'norm_test_min', 'norm_protocol_min', 'norm_below_protocol', 'norm_truncated',
   'norm_ref_sessions', 'norm_ref_n_hour_bin',
+  'norm_hour_max_min', 'norm_ref_n_control', 'norm_ref_n_overnight', 'norm_ref_n_ended_early',
+  'norm_mixed_studies',
   'section', 'variable', 'unit', 'higher_is',
   'norm_value', 'norm_ref_mean', 'norm_ref_sd', 'z_worse', 'band', 'zero_variance_reference'
 ]);
@@ -1817,10 +1836,16 @@ function normsRows(r) {
   var nm = r.norms;
   if (!nm || !nm.available) {
     return [pv.concat([0, nm ? nm.reason : 'no_norms', '', '', '', '', '', '', '', '', '',
+                       '', '', '', '', '',
                        '', '', '', '', '', '', '', '', '', ''])];
   }
-  var ctx = [1, '', nm.source, nm.hour, nm.windowMinutes, nm.testMinutes, nm.protocolMinutes,
-             nm.belowProtocol ? 1 : 0, nm.truncated ? 1 : 0, nm.sessions, nm.n];
+  // The reference cell's own composition travels with every exported row, so a
+  // z-score can always be traced back to which sessions produced it.
+  var prov = nm.provenance || [null, null, null];
+  var ctx = [1, '', nm.source, nm.hour, nm.windowMinutes, nm.testMinutes,
+             nm.protocols.join('/') || nm.protocolMinutes,
+             nm.belowProtocol ? 1 : 0, nm.truncated ? 1 : 0, nm.sessions, nm.n,
+             nm.hourMaxLength, prov[0], prov[1], prov[2], nm.mixedStudies ? 1 : 0];
   return nm.rows.map(function (row) {
     var c = row.comparison;
     return pv.concat(ctx).concat([

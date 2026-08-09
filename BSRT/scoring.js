@@ -754,6 +754,8 @@
       available: false, reason: null, hour: o.hour, mode: o.mode, isiMs: o.isiMs,
       windowMinutes: null, testMinutes: null, truncated: false,
       belowProtocol: false, protocolMinutes: norms ? norms.protocolMinutes : null,
+      hourMaxLength: null, provenance: null, protocols: [], mixedStudies: false,
+      censored: 0,
       sessions: norms ? norms.sessions : null,
       participants: norms ? norms.data.participants : null,
       source: norms ? norms.data.source : null,
@@ -764,15 +766,42 @@
     if (o.isiMs !== 3000) { out.reason = 'isi_mismatch'; return out; }
     if (!(o.hour >= 0 && o.hour < 24)) { out.reason = 'no_hour'; return out; }
 
-    // Whole minutes actually completed, never more than the reference protocol.
+    /*
+     * How deep the reference goes depends on the hour. Only the four overnight
+     * hours were ever tested past 8 minutes, so a 20-minute test at 14:00 is
+     * compared over its first 8 minutes rather than against nothing at all;
+     * windowMinutes says which window was actually used.
+     */
+    var hourMax = norms.maxLengthFor ? norms.maxLengthFor(o.hour) : norms.maxLength;
+    if (!hourMax) { out.reason = 'no_hour'; return out; }
+    out.hourMaxLength = hourMax;
+
+    // Whole minutes actually completed, never more than the reference reaches.
     var completed = Math.floor((o.elapsedMs || 0) / 60000);
     var buckets = o.minuteBuckets == null ? completed : o.minuteBuckets;
-    var window = Math.min(completed, buckets, norms.maxLength);
+    var window = Math.min(completed, buckets, hourMax);
     out.testMinutes = completed;
     if (window < 1) { out.reason = 'too_short'; return out; }
     out.windowMinutes = window;
-    out.truncated = completed > norms.maxLength;
-    out.belowProtocol = window < norms.protocolMinutes;
+    out.truncated = completed > window;
+
+    /*
+     * Which studies stand behind this particular cell, and how many sessions
+     * had already stopped at sleep onset before reaching this length. Both
+     * change what the comparison means, so both are carried out to the report
+     * rather than being averaged away silently.
+     */
+    var prov = norms.provenance ? norms.provenance(o.hour, window) : null;
+    if (prov) {
+      out.provenance = prov;
+      out.censored = prov[2] || 0;
+      if (prov[0]) out.protocols.push(8);
+      if (prov[1]) out.protocols.push(40);
+      out.mixedStudies = prov[0] > 0 && prov[1] > 0;
+    }
+    // Shorter than the protocol the reference sessions were run under, so the
+    // participants behind it were pacing themselves for a longer test.
+    out.belowProtocol = out.protocols.some(function (p) { return window < p; });
 
     var summary = normativeSummary(o.trials, window, o);
     if (!summary) { out.reason = 'too_short'; return out; }
