@@ -1,0 +1,31 @@
+BSRT — Behavioral Sleep Resistance Task (browser version)
+=========================================================
+
+TO RUN IT
+  Double-click index.html. It opens in your browser and works offline.
+  No installation, no internet connection, no account.
+
+  Chrome, Edge or Firefox are all fine. If double-clicking opens a text
+  editor instead, right-click index.html -> Open with -> your browser.
+
+BEFORE TESTING PARTICIPANTS
+  Open "Device check" on the setup screen and run it once on the machine
+  you will actually use. It measures the refresh rate and how the browser
+  stamps key presses, and tells you whether that machine is fit for
+  reaction-time work. It takes about ten seconds.
+
+WHERE THE DATA GOES
+  Nowhere. Everything stays in this browser on this computer, and nothing
+  is transmitted. That also means clearing site data deletes it, so
+  EXPORT AFTER EVERY SESSION using the buttons on the results screen.
+
+  Keep all four CSVs. The raw one is the only irreplaceable file.
+
+IF YOU NEED BETTER TIMING
+  There is a desktop version (macOS/Windows) that measures time against
+  the display's own frame clock. See README.md for when that matters.
+
+FULL DOCUMENTATION
+  README.md in this folder. It covers the paradigm, the scoring
+  definitions, every exported column, the preliminary norms and their
+  limits, and what the timing figures do and do not tell you.

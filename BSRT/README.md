@@ -721,6 +721,10 @@ reported.
 
 ## Running it
 
+**Getting a copy without git:** download `downloads/BSRT-webapp.zip` from the
+repository — click the file, then the Download button — and unzip it. That is
+this folder, bundled for people who should not have to use git.
+
 **Locally:** open `index.html` in a browser. That is the whole procedure.
 
 **Hosting it** (so participants can load it on their own device): drag this
