@@ -198,18 +198,17 @@ def draw_kss(ui, title, question, anchors, selected, hint):
     ui.hint(hint)
 
 
-def draw_sleep_onset(ui, seconds, hint):
+def draw_sleep_onset(ui, title, detail, hint):
     ui.begin()
     ui.panel(0.0, 0.42, fill=(40, 22, 22))
     ui.rect(width=1.15, height=0.006, pos=(0, 0.205),
             fillColor=DANGER, lineColor=None).draw()
-    ui.text('soT', text='SLEEP ONSET', height=0.062, color=DANGER, pos=(0, 0.10)).draw()
-    ui.text('soS', text='the criterion was reached at %s' % seconds,
-            height=0.032, color=TEXT, pos=(0, 0.01)).draw()
+    ui.text('soT', text=title, height=0.062, color=DANGER, pos=(0, 0.10)).draw()
+    ui.text('soS', text=detail, height=0.032, color=TEXT, pos=(0, 0.01)).draw()
     ui.text('soH', text=hint, height=0.030, color=MUTED, pos=(0, -0.09)).draw()
 
 
-def draw_results(ui, title, rows, norm_rows, footer):
+def draw_results(ui, title, rows, norm_rows, footer, heading=''):
     """The end-of-trial screen: the headline numbers, then the norm bands.
 
     Deliberately short. The browser build can afford a full results screen
@@ -231,7 +230,7 @@ def draw_results(ui, title, rows, norm_rows, footer):
         y -= 0.015
         ui.rect(width=1.10, height=0.002, pos=(0, y + 0.020),
                 fillColor=LINE, lineColor=None).draw()
-        ui.text('nHdr', text='against the preliminary norms', height=0.026,
+        ui.text('nHdr', text=heading, height=0.026,
                 color=MUTED, pos=(0, y - 0.008)).draw()
         y -= 0.055
         for label, value, band in norm_rows:

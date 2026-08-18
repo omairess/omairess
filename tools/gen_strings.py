@@ -28,6 +28,16 @@ KEYS = [
     'kss.heading', 'kss.instruction', 'kss.question', 'kss.continue',
     'kss.beforeTitle', 'kss.afterTitle',
     'task.hintBsrt', 'task.hintPvt', 'countdown.hint',
+    # Everything the PsychoPy screens show. These live in i18n.js rather than
+    # in the PsychoPy source so all three builds have one translation source —
+    # they were hardcoded in English at first, which is exactly how a build
+    # ends up half-translated.
+    'pp.titleBsrt', 'pp.titlePvt', 'pp.anyKey', 'pp.kssKeys',
+    'pp.sleepOnset', 'pp.sleepOnsetAt', 'pp.silence', 'pp.silenceQuiet',
+    'pp.finished', 'pp.outcome', 'pp.endMax', 'pp.endSleep', 'pp.endAborted',
+    'pp.stimuli', 'pp.hitsMisses', 'pp.lapsesOver', 'pp.meanRt',
+    'pp.framesDropped', 'pp.sleepOnsetRow', 'pp.normsHeading', 'pp.noSpread',
+    'pp.savedTo', 'pp.sdWorse', 'pp.sdBetter',
 ]
 
 

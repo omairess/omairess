@@ -165,6 +165,14 @@ bsrt_<id>_<session>_t<n>_summary.csv      one row for the trial
 bsrt_<id>_<session>_t<n>_norms.csv        one row per normative variable
 ```
 
+**The files are written the moment the trial ends**, before the sleep-onset
+banner, the closing KSS or the results screen run. Those are screens, and a
+screen can fail; none of them is worth a participant's data. If one does fail,
+the traceback is printed along with the paths that were already saved, and the
+run continues instead of ending on something that looks like a lost session.
+(The closing KSS answer is added by rewriting the same four filenames, so
+nothing accumulates.)
+
 Columns are identical to the browser build's, in the same order. Columns that
 describe a browser (`device_browser`, `screen_w`, `page_host`,
 `cross_origin_isolated` and the rest) are written **empty** rather than dropped:
@@ -202,16 +210,26 @@ table on screen; the experimenter sees a short end-of-trial summary instead.
 
 ## Languages
 
-The on-screen text and the KSS anchors are available in English, French, Dutch
-and German, set with the `language` field in the dialog. They are extracted from
-`BSRT/i18n.js`, so all builds show the same wording.
+The task screens run in **English, French, Dutch and German**, set by the
+`language` field in the first dialog. Every string on them — instructions, the
+KSS and its anchors, the countdown, the sleep-onset banner and the results —
+comes from `strings.json`, which `tools/gen_strings.py` extracts from
+`BSRT/i18n.js`. All three builds therefore show the same wording, and
+`tests/test_psychopy_path.py` runs a whole trial in French and reads back every
+piece of text that reached the screen to prove nothing English leaks through.
+
+**The settings dialogs stay in English.** They are PsychoPy's own
+`DlgFromDict`, which labels each row with the setting's name — the same names
+used in this README, in `DEFAULTS`, and in the exported columns. They are the
+experimenter's screens, filled in before the participant sits down, and the
+participant never sees them. Translating them would mean translating field
+identifiers, which would then no longer match the documentation. Say the word
+if you would rather have them translated anyway; it is a contained change.
 
 **The French, Dutch and German KSS anchors have not been through formal
 translation verification.** They belong to a validated instrument — check them
-against an officially validated translation for your language before publishing,
-and correct `i18n.js` (not `strings.json`, which is generated).
-
----
+against an officially validated translation for your language before
+publishing, and correct `i18n.js` (not `strings.json`, which is generated).
 
 ## What is verified, and what is not
 

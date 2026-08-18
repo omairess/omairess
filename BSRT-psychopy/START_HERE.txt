@@ -142,13 +142,18 @@ Anything else
 ONE THING YOU SHOULD KNOW
 -------------------------------------------------------------
 
-The first version of this was confirmed working on a real
-PsychoPy installation. The screens in THIS update — the
-restyled instructions, sleepiness scale, countdown, sleep-onset
-banner and results — have not been seen on a real machine yet,
-only against a stand-in.
+The task screens are translated (English, French, Dutch,
+German) — set "language" in the first dialog. The SETTINGS
+boxes themselves stay in English: they are PsychoPy's own
+dialogs, they label each row with the setting's name, and the
+participant never sees them.
 
-So the timing and the data are on solid ground; the appearance
-is the part that might have a rough edge. If a screen looks
-wrong or a key does not respond, tell me what you saw and it
-is a quick fix. Step 2 still verifies the part that matters.
+Your data is written the moment the trial ends, before any of
+the closing screens run. If something goes wrong afterwards
+you will see a traceback AND a list of the files already
+saved. The data is not lost.
+
+The timing and the data path have been confirmed on a real
+PsychoPy installation. The restyled screens are newer and have
+only been tested against a stand-in, so that is where a rough
+edge would be. Tell me what you see and it is a quick fix.

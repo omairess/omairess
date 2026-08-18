@@ -192,6 +192,55 @@ try:
           'with fewer epochs than the full schedule (%d of %d)'
           % (len(rec4['scored']['trials']), sched4['nStimuli']))
 
+    print('\n=== a screen failing after the trial cannot cost the data ===')
+    # The reported symptom: reach sleep onset, get no data folder. The cause was
+    # alarm.play() raising inside the trial loop on a machine whose audio device
+    # would not open, which took run_trial and the whole save with it.
+    settings6 = base_settings(out_dir=out_dir, kss_when='none', max_minutes=2,
+                              miss_criterion=7, participant_id='NOSOUND')
+    cfg6 = app.cfg_from(settings6)
+    sched6 = app.btask.build_schedule_for(cfg6)
+    pre6 = FRAME + 5.0 + FRAME * 2
+    ev6 = [(FRAME * 0.5, 'space')]
+    ev6 += [(o / 1000.0 + 0.30 + pre6, 'space') for o in sched6['onsets'][:5]]
+    end6 = pre6 + (sched6['onsets'][11] + sched6['epochIsi'][11]) / 1000.0
+    ev6 += [(end6 + 1.0, 's'), (end6 + 2.0, 'space')]
+    psound.Sound.FAIL_ON_PLAY[0] = True
+    try:
+        pcore.reset()
+        pgui.QUEUE = [dict(settings6)]
+        schedule_keys(ev6)
+        rec6 = app.run(settings6)
+    finally:
+        psound.Sound.FAIL_ON_PLAY[0] = False
+    check(rec6 is not None, 'the trial survived an audio device that will not play')
+    check(rec6['raw']['endReason'] == 'sleep_onset', 'it still ended at sleep onset')
+    written = [p for p in os.listdir(out_dir) if 'NOSOUND' in p]
+    check(len(written) == 4, 'and all four files were written anyway (got %d)' % len(written))
+    check(len(rec6['scored']['trials']) == 12, '12 epochs recorded')
+
+    print('\n=== the data is on disk before the closing screens run ===')
+    # Any screen after the trial is best-effort; the files must already exist.
+    settings7 = base_settings(out_dir=out_dir, kss_when='none', max_minutes=1,
+                              participant_id='CRASHER')
+    cfg7 = app.cfg_from(settings7)
+    sched7 = app.btask.build_schedule_for(cfg7)
+    pre7 = FRAME + 5.0 + FRAME * 2
+    ev7 = [(FRAME * 0.5, 'space')]
+    ev7 += [(o / 1000.0 + 0.30 + pre7, 'space') for o in sched7['onsets']]
+    pcore.reset()
+    pgui.QUEUE = [dict(settings7)]
+    schedule_keys(ev7)          # no key to dismiss the results screen
+    real_results = app.show_results
+    app.show_results = lambda *a, **k: (_ for _ in ()).throw(RuntimeError('screen blew up'))
+    try:
+        rec7 = app.run(settings7)
+    finally:
+        app.show_results = real_results
+    check(rec7 is not None, 'a crashing results screen does not end the run')
+    got7 = [p for p in os.listdir(out_dir) if 'CRASHER' in p]
+    check(len(got7) == 4, 'the four files are already on disk (got %d)' % len(got7))
+
     print('\n=== a PVT runs through the same path ===')
     settings5 = base_settings(out_dir=out_dir, kss_when='none', mode='pvt',
                               max_minutes=2, miss_criterion=0)
@@ -230,6 +279,69 @@ try:
     check(srow['isi_set_s'] == '2.0/4.0/6.0/8.0/10.0',
           'and the interval set used: %s' % srow['isi_set_s'])
     check(srow['schedule_method'] == 'block_permutation', 'and the schedule rule')
+
+    print('\n=== the screens are translated ===')
+    # The symptom was a half-translated interface: the strings that came from
+    # i18n.js changed language, the ones hardcoded here did not. This runs a
+    # whole trial in French and reads back every piece of text that was drawn.
+    def texts_from(win):
+        out = []
+        for frame in win.frames:
+            for stim in frame:
+                t = getattr(stim, 'text', None)
+                if isinstance(t, str) and t.strip():
+                    out.append(t)
+        return out
+
+    settings8 = base_settings(out_dir=out_dir, kss_when='both', max_minutes=1,
+                              language='fr', participant_id='FR01')
+    cfg8 = app.cfg_from(settings8)
+    sched8 = app.btask.build_schedule_for(cfg8)
+    pre8 = FRAME * 3 + 5.0 + FRAME * 2
+    ev8 = [(FRAME * 0.5, 'space'), (FRAME * 1.5, '4')]
+    ev8 += [(o / 1000.0 + 0.30 + pre8, 'space') for o in sched8['onsets']]
+    end8 = pre8 + sched8['plannedDurationMs'] / 1000.0 + 1.0
+    ev8 += [(end8, '7'), (end8 + 1.0, 'space')]
+    pcore.reset()
+    pgui.QUEUE = [dict(settings8)]
+    schedule_keys(ev8)
+    rec8 = app.run(settings8)
+    drawn = ' | '.join(texts_from(_last_window()))
+
+    check('Test de résistance au sommeil' in drawn,
+          'the instruction title is in French')
+    check('appuyez sur une touche' in drawn, 'and its key hint')
+    check('Extrêmement alerte' in drawn, 'the KSS anchors are French')
+    check('appuyez sur 1' in drawn, 'and the KSS key hint')
+    check('Essai terminé' in drawn, 'the results screen title is French')
+    check('temps de réaction moyen' in drawn, 'and its row labels')
+    check('appuyez sur une touche pour fermer' in drawn, 'and its footer')
+
+    # 'stimuli' is deliberately not probed: it is the same word in French.
+    english = [phrase for phrase in
+               ('press any key', 'Trial finished', 'mean reaction time',
+                'Sleep Resistance Task', 'press 1-9', 'press 1–9',
+                'against the preliminary norms', 'hits / misses',
+                'ran to the ceiling')
+               if phrase in drawn]
+    check(not english, 'no English text leaked through: %s' % (english or 'none'))
+
+    # And the other two languages reach the screen at all.
+    for lang, needle in (('nl', 'Slaapweerstandstaak'), ('de', 'Schlafresistenztest')):
+        st = base_settings(out_dir=out_dir, kss_when='none', max_minutes=1,
+                           language=lang, participant_id=lang.upper() + '01')
+        c = app.cfg_from(st)
+        sc = app.btask.build_schedule_for(c)
+        pre = FRAME + 5.0 + FRAME * 2
+        evs = [(FRAME * 0.5, 'space')]
+        evs += [(o / 1000.0 + 0.30 + pre, 'space') for o in sc['onsets']]
+        evs.append((pre + sc['plannedDurationMs'] / 1000.0 + 1.0, 'space'))
+        pcore.reset()
+        pgui.QUEUE = [dict(st)]
+        schedule_keys(evs)
+        app.run(st)
+        check(needle in ' | '.join(texts_from(_last_window())),
+              '%s renders in %s' % (needle, lang))
 
     print('\n=== the setup dialog ===')
     pgui.QUEUE = []

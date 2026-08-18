@@ -5,6 +5,16 @@ from . import core
 FRAME = 1.0 / 60.0
 
 
+class _Snapshot(object):
+    """What one stimulus looked like on one frame."""
+
+    def __init__(self, stim):
+        self.kind = type(stim).__name__
+        self.text = getattr(stim, 'text', None)
+        self.pos = getattr(stim, 'pos', None)
+        self.stim = stim
+
+
 class _Stim(object):
     def __init__(self, win, **kw):
         self.win = win
@@ -59,7 +69,11 @@ class Window(object):
 
     def flip(self, clearBuffer=True):
         core.advance(FRAME)
-        self.frames.append(list(self.pending))
+        # A frame is a SNAPSHOT of what was on it, not a list of references.
+        # The code under test caches and reuses its stimuli, so holding
+        # references would make every recorded frame show the last text that
+        # object ever carried.
+        self.frames.append([_Snapshot(s) for s in self.pending])
         self.pending = []
         self.flips += 1
         return core.getTime()

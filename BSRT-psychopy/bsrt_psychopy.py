@@ -44,6 +44,21 @@ import bsrt_task as btask      # noqa: E402
 HERE = os.path.dirname(os.path.abspath(__file__))
 STRINGS = json.load(open(os.path.join(HERE, 'strings.json')))
 
+
+def T(lang, key, **kw):
+    """One on-screen string, in the chosen language.
+
+    strings.json is generated from i18n.js by tools/gen_strings.py, so the
+    wording is the browser build's wording and the four languages stay in step.
+    Falls back to English rather than showing a bare key, matching i18n.js.
+    """
+    table = STRINGS.get(lang) or STRINGS['en']
+    text = table.get(key) or STRINGS['en'].get(key) or key
+    for k, v in kw.items():
+        text = text.replace('{%s}' % k, str(v))
+    return text
+
+
 DEFAULTS = {
     'participant_id': '',
     'session_label': 'baseline',
@@ -265,12 +280,11 @@ def _wait_key(win, kb, draw, accept=None):
 
 
 def show_instructions(win, ui_, kb, lang, mode):
-    s = STRINGS.get(lang, STRINGS['en'])
-    hint = s['task.hintPvt'] if mode == 'pvt' else s['task.hintBsrt']
-    title = 'Psychomotor Vigilance Task' if mode == 'pvt' else 'Sleep Resistance Task'
+    hint = T(lang, 'task.hintPvt' if mode == 'pvt' else 'task.hintBsrt')
+    title = T(lang, 'pp.titlePvt' if mode == 'pvt' else 'pp.titleBsrt')
 
     def draw():
-        ui.draw_instructions(ui_, title, [hint], 'press any key to continue')
+        ui.draw_instructions(ui_, title, [hint], T(lang, 'pp.anyKey'))
     return _wait_key(win, kb, draw)
 
 
@@ -281,13 +295,12 @@ def ask_kss(win, ui_, kb, lang, title):
     the browser build's wording. Highlighting follows the number under the
     cursor keys as well as the digits, because a row of boxes invites arrows.
     """
-    s = STRINGS.get(lang, STRINGS['en'])
-    anchors = s['_anchors']
+    anchors = (STRINGS.get(lang) or STRINGS['en'])['_anchors']
     state = {'sel': 0}
 
     def draw():
-        ui.draw_kss(ui_, title, s['kss.question'], anchors, state['sel'],
-                    'press 1-9, or use the arrow keys and Enter')
+        ui.draw_kss(ui_, title, T(lang, 'kss.question'), anchors, state['sel'],
+                    T(lang, 'pp.kssKeys'))
 
     kb.clearEvents()
     while True:
@@ -311,13 +324,12 @@ def ask_kss(win, ui_, kb, lang, title):
 def countdown(win, ui_, kb, lang, seconds=5):
     from psychopy import core
 
-    s = STRINGS.get(lang, STRINGS['en'])
     clock = core.Clock()
     while True:
         left = seconds - clock.getTime()
         if left <= 0:
             return True
-        ui.draw_countdown(ui_, int(left) + 1, s['countdown.hint'])
+        ui.draw_countdown(ui_, int(left) + 1, T(lang, 'countdown.hint'))
         win.flip()
         for k in kb.getKeys(waitRelease=False):
             if k.name in QUIT_KEYS:
@@ -329,44 +341,47 @@ def show_results(win, ui_, kb, rec):
     t = rec['scored']['totals']
     raw = rec['raw']
     cfg = rec['config']
+    lang = rec.get('language', 'en')
 
-    end_label = {'max_duration': 'ran to the ceiling',
-                 'sleep_onset': 'stopped at sleep onset',
-                 'aborted': 'stopped by the experimenter'}.get(raw['endReason'],
-                                                               raw['endReason'])
+    end_label = T(lang, {'max_duration': 'pp.endMax',
+                         'sleep_onset': 'pp.endSleep',
+                         'aborted': 'pp.endAborted'}.get(raw['endReason'], 'pp.endMax'))
     rows = [
-        ('outcome', end_label),
-        ('stimuli', '%d' % t['trials']),
-        ('hits / misses', '%d / %d' % (t['hits'], t['misses'])),
-        ('lapses (> %d ms)' % cfg['lapseMs'], '%d' % t['lapses']),
-        ('mean reaction time', '—' if t['avgRt'] is None else '%.0f ms' % t['avgRt']),
-        ('frames (dropped)', '%d (%d)' % (raw['frames'], raw['droppedFrames'])),
+        (T(lang, 'pp.outcome'), end_label),
+        (T(lang, 'pp.stimuli'), '%d' % t['trials']),
+        (T(lang, 'pp.hitsMisses'), '%d / %d' % (t['hits'], t['misses'])),
+        (T(lang, 'pp.lapsesOver', ms=cfg['lapseMs']), '%d' % t['lapses']),
+        (T(lang, 'pp.meanRt'), '—' if t['avgRt'] is None else '%.0f ms' % t['avgRt']),
+        (T(lang, 'pp.framesDropped'),
+         '%d (%d)' % (raw['frames'], raw['droppedFrames'])),
     ]
     if raw.get('sleepOnsetMs'):
-        rows.insert(1, ('sleep onset at', _mmss(raw['sleepOnsetMs'])))
+        rows.insert(1, (T(lang, 'pp.sleepOnsetRow'), _mmss(raw['sleepOnsetMs'])))
 
     # A few headline norm comparisons, if one was available. The full table is
     # in the CSV; this is the experimenter's glance, not the analysis.
     norm_rows = []
     nm = rec.get('norms')
     if nm and nm.get('available'):
-        wanted = ('rtMean', 'lapses', 'misses', 'rtIpr')
         by_key = {r['key']: r for r in nm['rows']}
-        for key in wanted:
+        for key in ('rtMean', 'lapses', 'misses', 'rtIpr'):
             r = by_key.get(key)
             if not r or not r['comparison']:
                 continue
             c = r['comparison']
             if c['z'] is None:
-                value = 'no spread in the reference'
+                value = T(lang, 'pp.noSpread')
             else:
-                value = '%.1f SD %s' % (abs(c['z']), 'worse' if c['z'] >= 0 else 'better')
+                value = T(lang, 'pp.sdWorse' if c['z'] >= 0 else 'pp.sdBetter',
+                          n='%.1f' % abs(c['z']))
             norm_rows.append((r['label'], value, c['band']))
 
+    where = os.path.basename(os.path.dirname(rec['paths'][0]) or '.')
+
     def draw():
-        ui.draw_results(ui_, 'Trial finished', rows, norm_rows,
-                        'saved to %s   —   press any key to close'
-                        % os.path.basename(os.path.dirname(rec['paths'][0]) or '.'))
+        ui.draw_results(ui_, T(lang, 'pp.finished'), rows, norm_rows,
+                        T(lang, 'pp.savedTo', dir=where),
+                        heading=T(lang, 'pp.normsHeading'))
     _wait_key(win, kb, draw)
 
 
@@ -427,6 +442,7 @@ def run(settings, display_factory=None, rts=None):
             return None
 
         kss_before = ''
+        kss_after = ''      # asked after the trial, but the record is built first
         if settings['kss_when'] in ('before', 'both'):
             kss_before = ask_kss(win, ui_, kb, lang, s['kss.beforeTitle']) or ''
 
@@ -442,28 +458,28 @@ def run(settings, display_factory=None, rts=None):
         kb.clearEvents()
         alarm = _make_alarm(cfg)
 
-    fired = {'at': None}
+    alarm_failed = []
 
     def on_sleep_onset(index, t_ms):
-        fired['at'] = t_ms
-        if alarm is not None:
+        """Start the alarm — best effort, and never at the cost of the trial.
+
+        This runs INSIDE the trial loop. An exception here propagates out of
+        run_trial and out of run(), so before it was guarded a sound device
+        that refused to play took the whole session with it: the participant
+        reached sleep onset and no data was written at all. A missing alarm is
+        an inconvenience; missing data is the experiment.
+        """
+        if alarm is None:
+            return
+        try:
             alarm.play(loops=-1)
+        except Exception as e:
+            alarm_failed.append('%s: %s' % (type(e).__name__, e))
 
     raw = btask.run_trial(display, schedule, cfg, on_sleep_onset=on_sleep_onset)
     raw['refreshHz'] = hz
     raw['frameMadMs'] = None
     scored = btask.score_trial(raw, cfg)
-
-    if not simulated:
-        # The alarm keeps sounding until the experimenter silences it, so a
-        # sleep-onset event cannot be missed by someone who stepped away.
-        if raw['endReason'] == 'sleep_onset' and alarm is not None:
-            _wait_for_silence(win, ui_, kb, alarm, raw.get('sleepOnsetMs'))
-        if settings['kss_when'] in ('after', 'both'):
-            kss_after = ask_kss(win, ui_, kb, lang,
-                                STRINGS.get(lang, STRINGS['en'])['kss.afterTitle']) or ''
-        else:
-            kss_after = ''
 
     norms = None
     try:
@@ -478,29 +494,78 @@ def run(settings, display_factory=None, rts=None):
         'lapseMs': cfg['lapseMs'], 'missCriterion': cfg['missCriterion'],
     }, norms) if norms else None
 
-    rec = {
-        'runId': '%s-%s' % (now.strftime('%Y%m%dT%H%M%S'), os.getpid()),
-        'language': lang,
-        'participant': {
-            'participantId': settings['participant_id'],
-            'name': settings['name'], 'address': '',
-            'birthDate': settings['birth_date'], 'education': settings['education'],
-            'sessionLabel': settings['session_label'],
-            'trialNumber': settings['trial_number'],
-            'date': now.strftime('%Y-%m-%d'), 'time': now.strftime('%H:%M:%S'),
-        },
-        'config': cfg, 'schedule': schedule, 'raw': raw, 'scored': scored,
-        'norms': report,
-        'kssWhen': settings['kss_when'], 'kssBefore': kss_before, 'kssAfter': kss_after,
-    }
+    def build(kss_after_value):
+        return {
+            'runId': '%s-%s' % (now.strftime('%Y%m%dT%H%M%S'), os.getpid()),
+            'language': lang,
+            'participant': {
+                'participantId': settings['participant_id'],
+                'name': settings['name'], 'address': '',
+                'birthDate': settings['birth_date'],
+                'education': settings['education'],
+                'sessionLabel': settings['session_label'],
+                'trialNumber': settings['trial_number'],
+                'date': now.strftime('%Y-%m-%d'), 'time': now.strftime('%H:%M:%S'),
+            },
+            'config': cfg, 'schedule': schedule, 'raw': raw, 'scored': scored,
+            'norms': report,
+            'kssWhen': settings['kss_when'],
+            'kssBefore': kss_before, 'kssAfter': kss_after_value,
+        }
 
+    # SAVE BEFORE ANYTHING ELSE CAN GO WRONG.
+    #
+    # What remains after this point is screens: the sleep-onset banner, the
+    # closing KSS, the results. Every one of them can fail on some machine, and
+    # none of them is worth a participant's trial. The files are written here,
+    # and rewritten below if the closing KSS adds an answer — the filenames are
+    # the same, so the second write replaces the first rather than accumulating.
+    rec = build(kss_after)
     paths = bio.write_all(rec, settings['out_dir'])
     rec['paths'] = paths
 
     if not simulated:
-        show_results(win, ui_, kb, rec)
-        win.close()
+        try:
+            if raw['endReason'] == 'sleep_onset':
+                # The banner is shown whether or not the sound worked: it is the
+                # visual half of the alert, and on a machine with no working
+                # audio it is the only half there is.
+                _wait_for_silence(win, ui_, kb, alarm, raw.get('sleepOnsetMs'),
+                                  bool(alarm_failed), lang)
+            if settings['kss_when'] in ('after', 'both'):
+                answer = ask_kss(win, ui_, kb, lang,
+                                 STRINGS.get(lang, STRINGS['en'])['kss.afterTitle'])
+                if answer:
+                    rec = build(answer)
+                    rec['paths'] = bio.write_all(rec, settings['out_dir'])
+        except Exception as e:
+            _report_but_continue(e, paths)
+
+        try:
+            show_results(win, ui_, kb, rec)
+        except Exception as e:
+            _report_but_continue(e, rec['paths'])
+        try:
+            win.close()
+        except Exception:
+            pass
     return rec
+
+
+def _report_but_continue(exc, paths):
+    """Say what broke, and where the data already is.
+
+    Printed rather than raised: by the time anything here runs the trial is
+    over and saved, so the useful thing is to tell the experimenter both facts
+    instead of ending with a traceback that looks like the session was lost.
+    """
+    import traceback
+    sys.stderr.write('\n--- a screen after the trial failed ---\n')
+    traceback.print_exc()
+    sys.stderr.write('THE DATA IS SAFE. Already written:\n')
+    for p in paths or []:
+        sys.stderr.write('  %s\n' % p)
+    sys.stderr.write('---------------------------------------\n')
 
 
 def _make_alarm(cfg):
@@ -514,24 +579,28 @@ def _make_alarm(cfg):
         return None
 
 
-def _wait_for_silence(win, ui_, kb, alarm, sleep_onset_ms):
-    """Hold the alarm until the experimenter silences it.
+def _wait_for_silence(win, ui_, kb, alarm, sleep_onset_ms, sound_failed=False,
+                      lang='en'):
+    """Hold the sleep-onset banner until the experimenter silences it.
 
-    The alarm keeps sounding until someone presses S, so a sleep-onset event
-    cannot be missed by an experimenter who stepped away — the same behaviour
-    as the browser build's banner.
+    Shown whether or not the sound is working — on a machine with no usable
+    audio device the banner is the whole alert, so it must not depend on the
+    alarm having played.
     """
     when = _mmss(sleep_onset_ms) if sleep_onset_ms else '—'
+    hint = T(lang, 'pp.silenceQuiet' if (alarm is None or sound_failed) else 'pp.silence')
     kb.clearEvents()
     while True:
-        ui.draw_sleep_onset(ui_, when, 'press S to silence the alarm')
+        ui.draw_sleep_onset(ui_, T(lang, 'pp.sleepOnset'),
+                            T(lang, 'pp.sleepOnsetAt', t=when), hint)
         win.flip()
         for k in kb.getKeys(waitRelease=False):
             if k.name in SILENCE_KEYS or k.name in QUIT_KEYS:
-                try:
-                    alarm.stop()
-                except Exception:
-                    pass
+                if alarm is not None:
+                    try:
+                        alarm.stop()
+                    except Exception:
+                        pass
                 return
 
 
