@@ -92,7 +92,7 @@ try:
     # One key to dismiss the instructions, then 5 s of countdown, then the trial.
     # The instruction screen ends on the first key at or after t=0.
     pre = FRAME + 5.0 + FRAME * 2
-    events = [(0.0, 'space')] + [(t + pre, k) for (t, k) in responses_for(sched)]
+    events = [(FRAME * 0.5, 'space')] + [(t + pre, k) for (t, k) in responses_for(sched)]
     # Dismiss the end screen just after the trial finishes. Scheduling it far in
     # the future would make the virtual clock grind through every frame between.
     end_s = pre + sched['plannedDurationMs'] / 1000.0 + 1.0
@@ -136,7 +136,7 @@ try:
     # then, so the KSS answer has to be scheduled strictly after that poll or it
     # is swallowed along with the key that dismissed the instructions.
     pre2 = FRAME * 3 + 5.0 + FRAME * 2         # instructions, KSS answer, countdown
-    ev = [(0.0, 'space'), (FRAME * 1.5, '3')]
+    ev = [(FRAME * 0.5, 'space'), (FRAME * 1.5, '3')]
     ev += [(t + pre2, k) for (t, k) in responses_for(sched2)]
     end2 = pre2 + sched2['plannedDurationMs'] / 1000.0 + 1.0
     ev += [(end2, '8'), (end2 + 1.0, 'space')]   # KSS after, then the end screen
@@ -154,7 +154,7 @@ try:
     sched3 = app.btask.build_schedule_for(cfg3)
     pre3 = FRAME + 5.0 + FRAME * 2
     # Respond to the first 5, then stop entirely: seven consecutive misses.
-    ev3 = [(0.0, 'space')]
+    ev3 = [(FRAME * 0.5, 'space')]
     ev3 += [(o / 1000.0 + 0.30 + pre3, 'space') for o in sched3['onsets'][:5]]
     # Sleep onset fires when the twelfth epoch CLOSES, not when it starts. The
     # silence key has to come after that: during the trial the display swallows
@@ -179,7 +179,7 @@ try:
     cfg4 = app.cfg_from(settings4)
     sched4 = app.btask.build_schedule_for(cfg4)
     pre4 = FRAME + 5.0 + FRAME * 2
-    ev4 = [(0.0, 'space')]
+    ev4 = [(FRAME * 0.5, 'space')]
     ev4 += [(o / 1000.0 + 0.30 + pre4, 'space') for o in sched4['onsets'][:4]]
     ev4 += [(pre4 + 20.0, 'escape'), (pre4 + 22.0, 'space')]
     pcore.reset()

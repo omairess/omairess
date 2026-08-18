@@ -29,4 +29,8 @@ class Keyboard(object):
         return [KeyPress(n, t) for (t, n) in ready]
 
     def clearEvents(self):
-        pass
+        # Real clearEvents empties the buffer, so anything already pressed is
+        # discarded. Modelling that matters: code that relies on it would
+        # otherwise look correct here and misbehave on a real keyboard.
+        now = core.getTime()
+        self._pending = [(t, n) for (t, n) in self._pending if t > now]

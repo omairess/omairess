@@ -15,6 +15,7 @@ SUITES = [
     ('test_headers.py', 'CSV columns against the browser build'),
     ('test_export.py', 'a whole trial, written to four files'),
     ('test_psychopy_path.py', 'the PsychoPy branch, against a stub'),
+    ('test_check_setup.py', 'the setup checker, and its verdict rule'),
 ]
 
 

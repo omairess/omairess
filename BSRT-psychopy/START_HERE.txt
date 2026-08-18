@@ -1,0 +1,141 @@
+BSRT for PsychoPy — start here
+=============================================================
+
+You have never used PsychoPy. That is fine. This takes about
+fifteen minutes, most of which is a download.
+
+Do the three steps in order. Step 2 tells you whether the
+timing on your machine is trustworthy, so do not skip it.
+
+
+-------------------------------------------------------------
+STEP 1 — INSTALL PSYCHOPY  (about 10 minutes)
+-------------------------------------------------------------
+
+Go to:   https://www.psychopy.org/download.html
+
+Download the STANDALONE version for your computer:
+
+  Windows   the .exe installer
+  macOS     the .dmg
+
+"Standalone" matters. It brings its own Python and everything
+else with it, so there is nothing else to install and nothing
+to configure. Do not use pip unless you already know you want
+to.
+
+Install it like any other application and open it.
+
+  macOS: the first launch may warn that the app is from an
+  unidentified developer. Right-click the app -> Open -> Open.
+
+When PsychoPy opens it may show a "Builder" window with a
+timeline. Ignore that. You want the CODER view:
+
+  View menu  ->  Coder
+
+That is a plain code editor with a green Run button. It is the
+only part of PsychoPy this task uses.
+
+
+-------------------------------------------------------------
+STEP 2 — CHECK YOUR MACHINE  (about 1 minute)
+-------------------------------------------------------------
+
+Unzip this folder somewhere you can find again — Desktop is
+fine. Keep all the files together in one folder.
+
+In PsychoPy:  File -> Open  ->  check_setup.py
+Then press the green Run button (or Ctrl-R / Cmd-R).
+
+A small window opens, measures your screen, and asks you to
+press the SPACE BAR when a red dot appears. Three times.
+
+You want to see:
+
+    EVERYTHING PASSED — this machine can collect BSRT data.
+
+It also writes bsrt_setup_report.txt into the same folder.
+IF ANYTHING FAILS, SEND ME THAT FILE. It says exactly what
+your machine did, and that is far more useful than a
+description.
+
+What it is actually checking is whether the clock the screen
+uses and the clock the keyboard uses agree. If they do not,
+every reaction time is wrong by a constant amount and nothing
+downstream would reveal it. It is the one thing worth a minute
+of your time before you test anyone.
+
+
+-------------------------------------------------------------
+STEP 3 — RUN THE TASK
+-------------------------------------------------------------
+
+In PsychoPy:  File -> Open  ->  bsrt_psychopy.py
+Press Run.
+
+A settings box appears. For a first test, change only these:
+
+    participant_id     TEST01
+    max_minutes        2          (instead of 40)
+    fullscreen         untick it, so you can get out easily
+    kss_when           both       (to see the sleepiness scale)
+
+Press OK. You get instructions, a countdown, then the task:
+a red dot every 3 seconds. Press SPACE each time you see it.
+
+    escape    stops the trial early — data so far is STILL SAVED
+    s         silences the alarm if it goes off
+
+When it finishes it writes four CSV files into a "data" folder
+next to the script:
+
+    ..._raw.csv          one row per flash  <- the important one
+    ..._perminute.csv    one row per minute
+    ..._summary.csv      one row for the whole trial
+    ..._norms.csv        comparison against the reference data
+
+These are the same four files, with the same columns, that the
+browser and desktop versions write. Your analysis does not need
+to know which one produced them.
+
+
+-------------------------------------------------------------
+IF SOMETHING GOES WRONG
+-------------------------------------------------------------
+
+"No module named psychopy"
+    You ran it with the wrong Python. Open the file inside the
+    PsychoPy Coder window and press Run there instead of using
+    a terminal.
+
+The window is stuck / you cannot get out
+    Press escape. If that fails, alt-tab away and close the
+    PsychoPy window. Run it with fullscreen unticked while
+    you are learning.
+
+Nothing happens when you press keys
+    Click on the task window once so it has focus.
+
+Anything else
+    Send bsrt_setup_report.txt from step 2, plus whatever red
+    text appears in PsychoPy's output panel at the bottom.
+
+
+-------------------------------------------------------------
+ONE THING YOU SHOULD KNOW
+-------------------------------------------------------------
+
+This PsychoPy version has never been run on a real PsychoPy
+installation — it was written and tested where PsychoPy could
+not be installed. Every piece of the scoring is verified
+against the browser version, and the task logic is tested, but
+the part that talks to PsychoPy itself has only been tested
+against a stand-in.
+
+That is exactly what step 2 is for. Expect the possibility of
+a rough edge on the first run, and send me what you see.
+
+The other two versions (browser and desktop) have both been
+run for real, so if you need data today and this misbehaves,
+use one of those.

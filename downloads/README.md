@@ -27,6 +27,25 @@ cp downloads/OPEN_ME_FIRST.txt /tmp/z/BSRT/ 2>/dev/null || true
 mv /tmp/z/BSRT-webapp.zip downloads/
 ```
 
+## BSRT-psychopy.zip — the PsychoPy version
+
+For labs that already run PsychoPy, or are willing to install it. It is the
+most accurate of the three builds: stimulus onsets come from the vsync
+timestamp of the frame that carried them, and reaction times from the
+keyboard's own hardware stamp.
+
+**Download it the same way**, unzip it, and open `START_HERE.txt` — a guide
+written for someone who has never used PsychoPy. It walks through installing
+the standalone application, running `check_setup.py` to confirm the timing on
+that machine is trustworthy, and then running the task.
+
+**Run `check_setup.py` before any participant.** It takes a minute and tells
+you whether the screen clock and the keyboard clock agree, which is the one
+thing that would otherwise be wrong invisibly.
+
+This build has not yet been run against a real PsychoPy installation — see the
+note at the end of `START_HERE.txt`.
+
 ## The desktop version is not here
 
 macOS and Windows builds cannot be produced on this machine — packaging has to
