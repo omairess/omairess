@@ -5,8 +5,9 @@ The same OSLER-paradigm task as `../BSRT` (browser) and `../BSRT-desktop`
 columns — so data from all three builds `rbind`s and the same analysis reads it.
 
 **Read this before running participants: [what is verified, and what is
-not](#what-is-verified-and-what-is-not).** This build has never been executed
-against a real PsychoPy installation.
+not](#what-is-verified-and-what-is-not).** An earlier revision was confirmed
+running on a real PsychoPy installation; the restyled screens added since have
+been exercised only against a stub.
 
 ---
 
@@ -34,6 +35,26 @@ builds — a Builder version would be a fourth implementation to keep in step.
 
 `escape` and `s` are experimenter keys and are never recorded as responses. If
 you need `s` to be a response key, change `SILENCE_KEYS` in `bsrt_psychopy.py`.
+
+### Both paradigms
+
+The first dialog chooses between them, because they need different defaults and
+a modal dialog cannot re-tick a box when the mode changes the way the browser
+build does.
+
+| | **BSRT / OSLER** | **PVT** |
+|---|---|---|
+| Stimulus | a red dot | a counting millisecond timer |
+| Interval | fixed, 3000 ms | varies: 2, 4, 6, 8, 10 s |
+| Sleep-onset criterion | **on** (7 consecutive misses) | **off** |
+| Ends | at the criterion, or the ceiling | at the ceiling |
+
+The PVT schedule is a fresh random **permutation** of the interval set per 30 s
+block — random in order, balanced in composition, so no block comes out
+all-short or all-long. The interval set is editable in the dialog
+(`isi_set_s`, e.g. `2/4/6/8/10`); a set that does not sum to the block length
+cannot be balanced, and the generator says so by recording
+`sampled_with_replacement` in `schedule_method` rather than pretending.
 
 ### Without a screen
 
@@ -77,6 +98,32 @@ late. The measured onset of every stimulus is recorded next to its intended one,
 so presentation error is a number you can look at rather than an assumption.
 
 ---
+
+## The look
+
+The browser build is styled with CSS; PsychoPy has none, so the same design is
+rebuilt in `bsrt_ui.py` out of rectangles and text — the same palette taken
+from `BSRT/styles.css` (`--bg`, `--panel`, `--accent`, the three band colours),
+the same titled-card layout on a dark ground, muted secondary text, and a key
+hint along the bottom.
+
+What that changes in practice:
+
+- **The KSS is a scale**, not nine numbered lines: a row of boxes, the ends
+  always labelled so the direction is unambiguous, the selected anchor spelled
+  out underneath. Answer with 1–9, or arrow keys and Enter.
+- **The countdown** is a number in an accent ring rather than a bare digit.
+- **Sleep onset** takes over the screen in the danger colour, with the time it
+  happened, and holds until the alarm is silenced.
+- **The results screen** lists the headline numbers and, when a comparison was
+  available, the norm bands — each carrying a colour *and* a coloured edge *and*
+  the word "worse" or "better", exactly as the browser table does, so it
+  survives greyscale and red/green colour blindness.
+
+Stimuli are created once and reused rather than rebuilt per frame, which is the
+usual reason a PsychoPy screen stutters. Nothing in `bsrt_ui.py` decides
+anything: the task logic is in `bsrt_task.py` and the scoring in
+`bsrt_core.py`, so a change to the look cannot change a number.
 
 ## What is shared with the other builds
 
@@ -178,13 +225,19 @@ Four test suites, run by `python3 tests/run_all.py`:
 | `test_export.py` | a whole simulated trial writes four files with every row the width of its header, and the right values in them |
 | `test_psychopy_path.py` | the PsychoPy branch — window, keyboard, KSS, countdown, alarm-and-silence, abort, export — runs end to end |
 
-**What is NOT established: this build has never been run against a real PsychoPy
-installation.** PsychoPy could not be installed in the environment where it was
-written (its `esprima` dependency fails to build there), so
-`test_psychopy_path.py` runs it against a stub in `tests/stub_psychopy/`. That
-stub catches typos, wrong attribute names and flow bugs in *this* code, but it
-is written from the same reading of the PsychoPy documentation as the code it
-tests — so a misread API would be reproduced in both and pass.
+**What is NOT established: none of this runs against a real PsychoPy.** PsychoPy
+cannot be installed in the environment where this is written (its `esprima`
+dependency fails to build there), so `test_psychopy_path.py` runs it against a
+stub in `tests/stub_psychopy/`. That stub catches typos, wrong attribute names
+and flow bugs in *this* code, but it is written from the same reading of the
+PsychoPy documentation as the code it tests — so a misread API would be
+reproduced in both and pass.
+
+An earlier revision **was** reported working on a real installation, which
+settles the window, keyboard and timing calls. The screens in `bsrt_ui.py` came
+after that and have not been seen on real hardware: they use `Rect`,
+`TextStim` positioning and `colorSpace='rgb255'`, none of it exotic, but
+unconfirmed.
 
 Before using this for real data, run it once on a real machine and check:
 

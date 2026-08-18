@@ -32,6 +32,14 @@ class Rect(_Stim):
     pass
 
 
+class Line(_Stim):
+    pass
+
+
+class ImageStim(_Stim):
+    pass
+
+
 # The most recently created window, so a test can inspect what was drawn.
 LAST = [None]
 

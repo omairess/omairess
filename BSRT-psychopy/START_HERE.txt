@@ -74,15 +74,31 @@ STEP 3 — RUN THE TASK
 In PsychoPy:  File -> Open  ->  bsrt_psychopy.py
 Press Run.
 
-A settings box appears. For a first test, change only these:
+TWO settings boxes appear, one after the other.
+
+The FIRST asks which task to run:
+
+    mode = bsrt    the sleep resistance task: a red dot every
+                   3 seconds, stops early if you fall asleep
+    mode = pvt     the psychomotor vigilance task: a counter
+                   at random 2-10 second intervals, runs to
+                   the full time
+
+It is asked separately because the two need different
+defaults, and picking the wrong ones quietly gives you the
+wrong test.
+
+The SECOND box has everything else, already filled in
+correctly for whichever task you chose. For a first run,
+change only:
 
     participant_id     TEST01
     max_minutes        2          (instead of 40)
     fullscreen         untick it, so you can get out easily
     kss_when           both       (to see the sleepiness scale)
 
-Press OK. You get instructions, a countdown, then the task:
-a red dot every 3 seconds. Press SPACE each time you see it.
+Press OK. You get instructions, a countdown, then the task.
+Press SPACE each time the stimulus appears.
 
     escape    stops the trial early — data so far is STILL SAVED
     s         silences the alarm if it goes off
@@ -126,16 +142,13 @@ Anything else
 ONE THING YOU SHOULD KNOW
 -------------------------------------------------------------
 
-This PsychoPy version has never been run on a real PsychoPy
-installation — it was written and tested where PsychoPy could
-not be installed. Every piece of the scoring is verified
-against the browser version, and the task logic is tested, but
-the part that talks to PsychoPy itself has only been tested
-against a stand-in.
+The first version of this was confirmed working on a real
+PsychoPy installation. The screens in THIS update — the
+restyled instructions, sleepiness scale, countdown, sleep-onset
+banner and results — have not been seen on a real machine yet,
+only against a stand-in.
 
-That is exactly what step 2 is for. Expect the possibility of
-a rough edge on the first run, and send me what you see.
-
-The other two versions (browser and desktop) have both been
-run for real, so if you need data today and this misbehaves,
-use one of those.
+So the timing and the data are on solid ground; the appearance
+is the part that might have a rough edge. If a screen looks
+wrong or a key does not respond, tell me what you saw and it
+is a quick fix. Step 2 still verifies the part that matters.

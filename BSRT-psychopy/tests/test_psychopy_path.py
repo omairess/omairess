@@ -192,14 +192,82 @@ try:
           'with fewer epochs than the full schedule (%d of %d)'
           % (len(rec4['scored']['trials']), sched4['nStimuli']))
 
+    print('\n=== a PVT runs through the same path ===')
+    settings5 = base_settings(out_dir=out_dir, kss_when='none', mode='pvt',
+                              max_minutes=2, miss_criterion=0)
+    cfg5 = app.cfg_from(settings5)
+    sched5 = app.btask.build_schedule_for(cfg5)
+    pre5 = FRAME + 5.0 + FRAME * 2
+    ev5 = [(FRAME * 0.5, 'space')]
+    ev5 += [(o / 1000.0 + 0.28 + pre5, 'space') for o in sched5['onsets']]
+    ev5.append((pre5 + sched5['plannedDurationMs'] / 1000.0 + 1.0, 'space'))
+    pcore.reset()
+    pgui.QUEUE = [dict(settings5)]
+    schedule_keys(ev5)
+    rec5 = app.run(settings5)
+    check(rec5 is not None, 'the PVT ran')
+    check(len(rec5['scored']['trials']) == 20,
+          'a 2-minute PVT delivered 20 stimuli (got %d)' % len(rec5['scored']['trials']))
+    check(rec5['schedule']['method'] == 'block_permutation',
+          'on a block-permuted schedule')
+    isis = sorted(set(rec5['schedule']['isis']))
+    check(isis == [2000, 4000, 6000, 8000, 10000],
+          'with genuinely variable intervals: %s' % isis)
+    # Each 30 s block must hold exactly one of each interval — that is what
+    # 'balanced' means, and it is the property a naive random draw would lose.
+    blocks = {}
+    for b, v in zip(rec5['schedule']['blocks'], rec5['schedule']['isis']):
+        blocks.setdefault(b, []).append(v)
+    balanced = all(sorted(v) == isis for v in blocks.values() if len(v) == 5)
+    check(balanced, 'and every full block holds one of each (%d blocks)' % len(blocks))
+    check(rec5['raw']['endReason'] == 'max_duration',
+          'it ran to the ceiling rather than stopping at sleep onset')
+    check(len(rec5['paths']) == 4, 'and wrote its four CSVs')
+    import csv as _csv
+    with open([p for p in rec5['paths'] if p.endswith('_summary.csv')][0], newline='') as f:
+        srow = list(_csv.DictReader(f))[0]
+    check(srow['mode'] == 'pvt', 'the summary records mode=pvt')
+    check(srow['isi_set_s'] == '2.0/4.0/6.0/8.0/10.0',
+          'and the interval set used: %s' % srow['isi_set_s'])
+    check(srow['schedule_method'] == 'block_permutation', 'and the schedule rule')
+
     print('\n=== the setup dialog ===')
     pgui.QUEUE = []
-    check(app.ask_settings() is None, 'cancelling the dialog returns nothing')
-    pgui.QUEUE = [{'participant_id': 'P9'}]
+    check(app.ask_settings() is None, 'cancelling the first dialog returns nothing')
+
+    # Two stages: the paradigm, then everything else.
+    pgui.QUEUE = [{'mode': 'bsrt', 'language': 'en'}, {'participant_id': 'P9'}]
     got = app.ask_settings()
     check(got is not None and got['participant_id'] == 'P9',
-          'and an accepted dialog returns the answers')
-    check('mode' in got and 'max_minutes' in got, 'with the defaults filled in')
+          'an accepted dialog returns the answers')
+    check(got['mode'] == 'bsrt' and 'max_minutes' in got, 'with the defaults filled in')
+    check(got['miss_criterion'] == 7, 'a BSRT keeps the sleep-onset criterion (7)')
+
+    # The bug this two-stage dialog exists to prevent: a PVT must NOT stop at
+    # seven consecutive misses, matching the browser build.
+    pgui.QUEUE = [{'mode': 'pvt', 'language': 'en'}, {'participant_id': 'P9'}]
+    got_pvt = app.ask_settings()
+    check(got_pvt['mode'] == 'pvt', 'choosing pvt gives a PVT')
+    check(got_pvt['miss_criterion'] == 0,
+          'and the sleep-onset criterion is OFF (got %r)' % got_pvt['miss_criterion'])
+    cfg_pvt = app.cfg_from(got_pvt)
+    check(cfg_pvt['isiSetMs'] == [2000, 4000, 6000, 8000, 10000],
+          'with the standard PVT interval set: %s' % cfg_pvt['isiSetMs'])
+    sched_pvt = app.btask.build_schedule_for(dict(cfg_pvt, maxMinutes=3))
+    check(sched_pvt['method'] == 'block_permutation',
+          'and a block-permuted variable schedule')
+    check(sched_pvt['nStimuli'] == 30,
+          'a 3-minute PVT presents 30 stimuli (got %d)' % sched_pvt['nStimuli'])
+    check(len(set(sched_pvt['isis'])) == 5,
+          'using all five intervals: %s' % sorted(set(sched_pvt['isis'])))
+
+    # A custom interval set typed into the box is honoured.
+    pgui.QUEUE = [{'mode': 'pvt', 'language': 'en'},
+                  {'participant_id': 'P9', 'isi_set_s': '1/2/3'}]
+    got_custom = app.ask_settings()
+    check(app.cfg_from(got_custom)['isiSetMs'] == [1000, 2000, 3000],
+          'a custom PVT interval set is parsed: %s'
+          % app.cfg_from(got_custom)['isiSetMs'])
 finally:
     shutil.rmtree(out_dir, ignore_errors=True)
 

@@ -37,6 +37,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import bsrt_io as bio          # noqa: E402
+import bsrt_ui as ui           # noqa: E402
 import bsrt_norms as bnorms    # noqa: E402
 import bsrt_task as btask      # noqa: E402
 
@@ -53,6 +54,7 @@ DEFAULTS = {
     'language': 'en',
     'mode': 'bsrt',
     'isi_ms': 3000,
+    'isi_set_s': '2/4/6/8/10',
     'stim_ms': 1000,
     'hit_window_ms': 1000,
     'lapse_ms': 500,
@@ -66,6 +68,35 @@ DEFAULTS = {
     'out_dir': 'data',
     'seed': 0,
 }
+
+# What changes when the paradigm changes. The browser build ticks the
+# sleep-onset criterion off for a PVT (app.js: criterionOn.checked = mode !==
+# 'pvt'); without this the PsychoPy build would run a PVT that stops early at
+# seven consecutive misses, which is not the same test and not what the other
+# two builds do.
+MODE_DEFAULTS = {
+    'bsrt': {'miss_criterion': 7, 'isi_ms': 3000, 'max_minutes': 40},
+    'pvt': {'miss_criterion': 0, 'isi_ms': 3000, 'max_minutes': 10},
+}
+
+
+def parse_isi_set(text):
+    """'2/4/6/8/10' -> [2000, 4000, 6000, 8000, 10000] milliseconds.
+
+    Accepts slashes, commas or spaces. Falls back to the standard PVT set
+    rather than raising, because an unparseable box should not lose a
+    participant who is already sitting down.
+    """
+    out = []
+    for part in str(text).replace(',', ' ').replace('/', ' ').split():
+        try:
+            v = float(part)
+        except ValueError:
+            continue
+        if v > 0:
+            out.append(int(round(v * 1000)))
+    return out or [2000, 4000, 6000, 8000, 10000]
+
 
 RESPONSE_KEYS = ['space', 'return', 'lshift', 'rshift', 'a', 'l', 'num_1']
 QUIT_KEYS = ['escape']
@@ -82,7 +113,7 @@ def cfg_from(settings):
         'lapseMs': int(settings['lapse_ms']),
         'missCriterion': int(settings['miss_criterion']),
         'maxMinutes': int(settings['max_minutes']),
-        'isiSetMs': [2000, 4000, 6000, 8000, 10000],
+        'isiSetMs': parse_isi_set(settings.get('isi_set_s', '2/4/6/8/10')),
         'blockMs': 30000,
         'seed': int(settings['seed']) or random.randint(1, 2 ** 31 - 1),
         'removeFalseStarts': bool(settings['remove_false_starts']),
@@ -116,10 +147,13 @@ class PsychoPyDisplay(object):
         self.quit = False
         self.silence = False
 
+        # The same red as the browser build's LED (styles.css --led), and the
+        # same neutral white for the PVT counter.
         self.dot = visual.Circle(win, radius=0.03, units='height',
-                                 fillColor='red', lineColor=None)
-        self.counter = visual.TextStim(win, text='', height=0.12, color='white',
-                                       units='height')
+                                 fillColor=ui.LED, colorSpace='rgb255',
+                                 lineColor=None)
+        self.counter = visual.TextStim(win, text='', height=0.12, color=ui.TEXT,
+                                       colorSpace='rgb255', units='height')
         self.banner = None
 
     def frame_interval_ms(self):
@@ -213,84 +247,132 @@ class SimulatedDisplay(object):
 # Screens
 
 
-def show_text(win, kb, text, wait_keys=True, height=0.045):
-    from psychopy import visual
+def _wait_key(win, kb, draw, accept=None):
+    """Draw a screen every frame and return the first accepted key.
 
-    stim = visual.TextStim(win, text=text, height=height, color='white',
-                           units='height', wrapWidth=1.4)
-    if not wait_keys:
-        stim.draw()
-        win.flip()
-        return None
+    Redrawing and flipping each pass rather than spinning on getKeys keeps the
+    window responsive to the OS and stops the loop pegging a core.
+    """
     kb.clearEvents()
-    # Redraw and flip every pass rather than spinning on getKeys: a bare polling
-    # loop pegs a core and leaves the window unresponsive to the OS.
     while True:
-        stim.draw()
+        draw()
         win.flip()
         for k in kb.getKeys(waitRelease=False):
             if k.name in QUIT_KEYS:
-                return 'quit'
-            return k.name
+                return 'escape'
+            if accept is None or k.name in accept:
+                return k.name
 
 
-def ask_kss(win, kb, lang, title):
-    """The 9-point Karolinska Sleepiness Scale, one screen, keys 1-9.
+def show_instructions(win, ui_, kb, lang, mode):
+    s = STRINGS.get(lang, STRINGS['en'])
+    hint = s['task.hintPvt'] if mode == 'pvt' else s['task.hintBsrt']
+    title = 'Psychomotor Vigilance Task' if mode == 'pvt' else 'Sleep Resistance Task'
 
-    Anchors come from strings.json, which is extracted from i18n.js — the same
-    wording the browser build shows.
+    def draw():
+        ui.draw_instructions(ui_, title, [hint], 'press any key to continue')
+    return _wait_key(win, kb, draw)
+
+
+def ask_kss(win, ui_, kb, lang, title):
+    """The 9-point Karolinska Sleepiness Scale as a scale, not a list.
+
+    Anchors come from strings.json, extracted from i18n.js, so the wording is
+    the browser build's wording. Highlighting follows the number under the
+    cursor keys as well as the digits, because a row of boxes invites arrows.
     """
     s = STRINGS.get(lang, STRINGS['en'])
     anchors = s['_anchors']
-    lines = [title, '', s['kss.question'], '']
-    for i, a in enumerate(anchors):
-        lines.append('%d   %s' % (i + 1, a))
-    lines += ['', s['kss.instruction']]
-    text = '\n'.join(lines)
+    state = {'sel': 0}
 
-    from psychopy import visual
-    stim = visual.TextStim(win, text=text, height=0.038, color='white',
-                           units='height', wrapWidth=1.6)
+    def draw():
+        ui.draw_kss(ui_, title, s['kss.question'], anchors, state['sel'],
+                    'press 1-9, or use the arrow keys and Enter')
+
     kb.clearEvents()
     while True:
-        stim.draw()
+        draw()
         win.flip()
         for k in kb.getKeys(waitRelease=False):
-            if k.name in QUIT_KEYS:
+            name = k.name or ''
+            if name in QUIT_KEYS:
                 return None
-            if k.name and k.name.isdigit() and 1 <= int(k.name) <= 9:
-                return int(k.name)
-            if k.name and k.name.startswith('num_'):
-                d = k.name[4:]
-                if d.isdigit() and 1 <= int(d) <= 9:
-                    return int(d)
+            digit = name[4:] if name.startswith('num_') else name
+            if digit.isdigit() and 1 <= int(digit) <= 9:
+                return int(digit)
+            if name in ('left', 'down'):
+                state['sel'] = max(1, (state['sel'] or 1) - 1)
+            elif name in ('right', 'up'):
+                state['sel'] = min(9, (state['sel'] or 0) + 1)
+            elif name in ('return', 'space') and state['sel']:
+                return state['sel']
 
 
-def countdown(win, kb, lang, seconds=5):
-    """A visible countdown, so nobody is surprised by the first stimulus."""
-    from psychopy import visual
+def countdown(win, ui_, kb, lang, seconds=5):
+    from psychopy import core
 
     s = STRINGS.get(lang, STRINGS['en'])
-    stim = visual.TextStim(win, text='', height=0.15, color='white', units='height')
-    hint = visual.TextStim(win, text=s['countdown.hint'], height=0.035, color='grey',
-                           units='height', pos=(0, -0.3), wrapWidth=1.4)
-    from psychopy import core
     clock = core.Clock()
     while True:
         left = seconds - clock.getTime()
         if left <= 0:
-            break
-        stim.text = '%d' % int(left + 1)
-        stim.draw()
-        hint.draw()
+            return True
+        ui.draw_countdown(ui_, int(left) + 1, s['countdown.hint'])
         win.flip()
         for k in kb.getKeys(waitRelease=False):
             if k.name in QUIT_KEYS:
                 return False
-    return True
 
 
-# --------------------------------------------------------------------------
+def show_results(win, ui_, kb, rec):
+    """The end-of-trial screen: how the trial went, and how it compares."""
+    t = rec['scored']['totals']
+    raw = rec['raw']
+    cfg = rec['config']
+
+    end_label = {'max_duration': 'ran to the ceiling',
+                 'sleep_onset': 'stopped at sleep onset',
+                 'aborted': 'stopped by the experimenter'}.get(raw['endReason'],
+                                                               raw['endReason'])
+    rows = [
+        ('outcome', end_label),
+        ('stimuli', '%d' % t['trials']),
+        ('hits / misses', '%d / %d' % (t['hits'], t['misses'])),
+        ('lapses (> %d ms)' % cfg['lapseMs'], '%d' % t['lapses']),
+        ('mean reaction time', '—' if t['avgRt'] is None else '%.0f ms' % t['avgRt']),
+        ('frames (dropped)', '%d (%d)' % (raw['frames'], raw['droppedFrames'])),
+    ]
+    if raw.get('sleepOnsetMs'):
+        rows.insert(1, ('sleep onset at', _mmss(raw['sleepOnsetMs'])))
+
+    # A few headline norm comparisons, if one was available. The full table is
+    # in the CSV; this is the experimenter's glance, not the analysis.
+    norm_rows = []
+    nm = rec.get('norms')
+    if nm and nm.get('available'):
+        wanted = ('rtMean', 'lapses', 'misses', 'rtIpr')
+        by_key = {r['key']: r for r in nm['rows']}
+        for key in wanted:
+            r = by_key.get(key)
+            if not r or not r['comparison']:
+                continue
+            c = r['comparison']
+            if c['z'] is None:
+                value = 'no spread in the reference'
+            else:
+                value = '%.1f SD %s' % (abs(c['z']), 'worse' if c['z'] >= 0 else 'better')
+            norm_rows.append((r['label'], value, c['band']))
+
+    def draw():
+        ui.draw_results(ui_, 'Trial finished', rows, norm_rows,
+                        'saved to %s   —   press any key to close'
+                        % os.path.basename(os.path.dirname(rec['paths'][0]) or '.'))
+    _wait_key(win, kb, draw)
+
+
+def _mmss(ms):
+    total = int(round(ms / 1000.0))
+    return '%d:%02d' % (total // 60, total % 60)
 
 
 def measure_frame_interval(win):
@@ -332,22 +414,23 @@ def run(settings, display_factory=None, rts=None):
         from psychopy import visual, core                      # noqa: F401
         from psychopy.hardware import keyboard
 
-        win = visual.Window(fullscr=bool(settings['fullscreen']), color='black',
-                            units='height', allowGUI=False, waitBlanking=True)
+        win = visual.Window(fullscr=bool(settings['fullscreen']), color=ui.BG,
+                            colorSpace='rgb255', units='height', allowGUI=False,
+                            waitBlanking=True)
         kb = keyboard.Keyboard()
+        ui_ = ui.UI(win)
         frame_ms, hz = measure_frame_interval(win)
 
         s = STRINGS.get(lang, STRINGS['en'])
-        hint = s['task.hintPvt'] if cfg['mode'] == 'pvt' else s['task.hintBsrt']
-        if show_text(win, kb, hint + '\n\n\n[ press any key to continue ]') == 'quit':
+        if show_instructions(win, ui_, kb, lang, cfg['mode']) == 'escape':
             win.close()
             return None
 
         kss_before = ''
         if settings['kss_when'] in ('before', 'both'):
-            kss_before = ask_kss(win, kb, lang, s['kss.beforeTitle']) or ''
+            kss_before = ask_kss(win, ui_, kb, lang, s['kss.beforeTitle']) or ''
 
-        if not countdown(win, kb, lang):
+        if not countdown(win, ui_, kb, lang):
             win.close()
             return None
 
@@ -375,9 +458,10 @@ def run(settings, display_factory=None, rts=None):
         # The alarm keeps sounding until the experimenter silences it, so a
         # sleep-onset event cannot be missed by someone who stepped away.
         if raw['endReason'] == 'sleep_onset' and alarm is not None:
-            _wait_for_silence(win, kb, alarm)
+            _wait_for_silence(win, ui_, kb, alarm, raw.get('sleepOnsetMs'))
         if settings['kss_when'] in ('after', 'both'):
-            kss_after = ask_kss(win, kb, lang, STRINGS.get(lang, STRINGS['en'])['kss.afterTitle']) or ''
+            kss_after = ask_kss(win, ui_, kb, lang,
+                                STRINGS.get(lang, STRINGS['en'])['kss.afterTitle']) or ''
         else:
             kss_after = ''
 
@@ -414,7 +498,7 @@ def run(settings, display_factory=None, rts=None):
     rec['paths'] = paths
 
     if not simulated:
-        show_text(win, kb, _end_text(rec, paths))
+        show_results(win, ui_, kb, rec)
         win.close()
     return rec
 
@@ -430,15 +514,17 @@ def _make_alarm(cfg):
         return None
 
 
-def _wait_for_silence(win, kb, alarm):
-    from psychopy import visual
+def _wait_for_silence(win, ui_, kb, alarm, sleep_onset_ms):
+    """Hold the alarm until the experimenter silences it.
 
-    msg = visual.TextStim(
-        win, text='SLEEP ONSET\n\nthe criterion was reached\n\n[ press S to silence ]',
-        height=0.06, color='red', units='height', wrapWidth=1.4)
+    The alarm keeps sounding until someone presses S, so a sleep-onset event
+    cannot be missed by an experimenter who stepped away — the same behaviour
+    as the browser build's banner.
+    """
+    when = _mmss(sleep_onset_ms) if sleep_onset_ms else '—'
     kb.clearEvents()
     while True:
-        msg.draw()
+        ui.draw_sleep_onset(ui_, when, 'press S to silence the alarm')
         win.flip()
         for k in kb.getKeys(waitRelease=False):
             if k.name in SILENCE_KEYS or k.name in QUIT_KEYS:
@@ -449,43 +535,76 @@ def _wait_for_silence(win, kb, alarm):
                 return
 
 
-def _end_text(rec, paths):
-    t = rec['scored']['totals']
-    raw = rec['raw']
-    lines = [
-        'Trial finished.', '',
-        'ended: %s' % raw['endReason'],
-        'stimuli: %d    hits: %d    misses: %d    lapses: %d'
-        % (t['trials'], t['hits'], t['misses'], t['lapses']),
-        'mean RT: %s ms' % ('—' if t['avgRt'] is None else '%.0f' % t['avgRt']),
-        'frames: %d    dropped: %d' % (raw['frames'], raw['droppedFrames']),
-        '', 'saved:',
-    ]
-    lines += ['   ' + os.path.basename(p) for p in paths]
-    lines += ['', '[ press any key to close ]']
-    return '\n'.join(lines)
-
-
 def ask_settings():
-    """The setup dialog. Everything the browser build's setup screen asks."""
+    """Collect the settings, in two steps.
+
+    The paradigm is asked first, on its own, because it changes what the rest of
+    the defaults should be. A PVT with the sleep-onset criterion left on is not
+    a PVT — it would stop at seven consecutive misses — and expecting the
+    experimenter to notice and zero that box is exactly the kind of silent
+    mis-configuration this instrument should not have. The browser build solves
+    it by re-ticking the box when the mode changes; a modal dialog cannot, so it
+    is asked in two passes instead.
+    """
     from psychopy import gui
 
-    settings = dict(DEFAULTS)
-    dlg = gui.DlgFromDict(
-        settings, title='BSRT',
-        order=['participant_id', 'session_label', 'trial_number', 'name',
-               'birth_date', 'education', 'language', 'mode', 'isi_ms', 'stim_ms',
-               'hit_window_ms', 'lapse_ms', 'miss_criterion', 'max_minutes',
-               'kss_when', 'alarm', 'fullscreen', 'remove_false_starts',
-               'remove_outliers', 'out_dir', 'seed'],
-        tip={'seed': '0 picks a random seed and records it, so the schedule is reproducible',
-             'mode': 'bsrt or pvt',
-             'kss_when': 'none, before, after or both',
-             'birth_date': 'YYYY-MM-DD',
-             'max_minutes': 'the ceiling; a BSRT can still stop earlier at sleep onset'})
+    first = {'mode': ['bsrt', 'pvt'], 'language': ['en', 'fr', 'nl', 'de']}
+    dlg = gui.DlgFromDict(first, title='BSRT — paradigm',
+                          order=['mode', 'language'],
+                          tip={'mode': 'bsrt = flashing dot every 3 s; '
+                                       'pvt = counter at 2-10 s intervals'})
     if not dlg.OK:
         return None
+
+    mode = _first(first['mode'], 'bsrt')
+    settings = dict(DEFAULTS)
+    settings.update(MODE_DEFAULTS.get(mode, {}))
+    settings['mode'] = mode
+    settings['language'] = _first(first['language'], 'en')
+
+    order = ['participant_id', 'session_label', 'trial_number', 'name',
+             'birth_date', 'education', 'kss_when', 'max_minutes',
+             'miss_criterion', 'stim_ms', 'hit_window_ms', 'lapse_ms',
+             'alarm', 'fullscreen', 'remove_false_starts', 'remove_outliers',
+             'out_dir', 'seed']
+    # Only show the interval control that applies: a fixed ISI is meaningless
+    # for a PVT, and an interval set is meaningless for a BSRT.
+    if mode == 'pvt':
+        settings.pop('isi_ms', None)
+        order.insert(8, 'isi_set_s')
+    else:
+        settings.pop('isi_set_s', None)
+        order.insert(8, 'isi_ms')
+    settings.pop('mode', None)
+    settings.pop('language', None)
+
+    tips = {
+        'seed': '0 picks a random seed and records it, so the schedule is reproducible',
+        'kss_when': 'none, before, after or both',
+        'birth_date': 'YYYY-MM-DD',
+        'max_minutes': 'the ceiling; a BSRT can still stop earlier at sleep onset',
+        'miss_criterion': 'consecutive misses scored as sleep onset; 0 turns it off',
+        'isi_set_s': 'PVT intervals in seconds, e.g. 2/4/6/8/10',
+        'out_dir': 'where the four CSVs are written',
+    }
+    dlg2 = gui.DlgFromDict(settings, title='BSRT — %s' % mode.upper(),
+                           order=[k for k in order if k in settings], tip=tips)
+    if not dlg2.OK:
+        return None
+
+    settings['mode'] = mode
+    settings['language'] = _first(first['language'], 'en')
+    settings.setdefault('isi_ms', DEFAULTS['isi_ms'])
+    settings.setdefault('isi_set_s', DEFAULTS['isi_set_s'])
     return settings
+
+
+def _first(value, fallback):
+    """A DlgFromDict list field comes back as the chosen string, but an
+    untouched one can still be the list. Take the first entry either way."""
+    if isinstance(value, (list, tuple)):
+        return value[0] if value else fallback
+    return value or fallback
 
 
 def main(argv=None):
