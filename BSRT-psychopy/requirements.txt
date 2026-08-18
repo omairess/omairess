@@ -1,0 +1,12 @@
+# The task itself needs nothing beyond PsychoPy: the scoring, scheduling and
+# export code is stdlib-only by design, so it can be tested without a display
+# and read by anyone without tracking down dependencies.
+#
+# PsychoPy ships its own Python. If you already have PsychoPy installed, there
+# is nothing here to install.
+psychopy>=2021.2
+
+# Not strictly required, but this is what gives the keyboard hardware
+# timestamps. Without it PsychoPy falls back to a less accurate backend and the
+# main reason for using this build is gone.
+psychtoolbox

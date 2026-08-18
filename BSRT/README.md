@@ -691,6 +691,17 @@ instrument, not a diagnostic device.
 
 ---
 
+## There is also a PsychoPy version
+
+`../BSRT-psychopy` runs the same task as a PsychoPy experiment, for labs that
+already have PsychoPy set up. It takes stimulus onsets from the vsync timestamp
+of the frame that carried them and reaction times from the keyboard's own
+hardware stamp, which is more than either of the other builds can do.
+
+Same paradigm, same scoring, same CSV columns — the Python scoring is a checked
+port of `scoring.js` and a test drives both with identical inputs and asserts
+they agree to 1e-9, so the three builds' data can be pooled.
+
 ## A more accurate desktop version exists
 
 If reaction-time precision matters to your study, use `../BSRT-desktop` instead.

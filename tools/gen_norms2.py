@@ -320,6 +320,14 @@ def emit(data):
             f.write(body)
         print('  wrote', p)
 
+    # The PsychoPy build reads the same tables as JSON rather than parsing the
+    # JS wrapper, so all three builds compare against one generated artefact.
+    pj = os.path.join(here, 'BSRT-psychopy', 'norms.json')
+    if os.path.isdir(os.path.dirname(pj)):
+        with open(pj, 'w') as f:
+            json.dump(data, f, separators=(',', ':'), ensure_ascii=False)
+        print('  wrote', pj)
+
 
 MISS_CTRL = 0.0
 MISS_IH = 0.0

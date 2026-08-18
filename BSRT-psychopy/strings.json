@@ -1,0 +1,90 @@
+{
+ "de": {
+  "_anchors": [
+   "Äußerst wach",
+   "Sehr wach",
+   "Wach",
+   "Ziemlich wach",
+   "Weder wach noch schläfrig",
+   "Erste Anzeichen von Schläfrigkeit",
+   "Schläfrig, aber ohne Mühe wach zu bleiben",
+   "Schläfrig, etwas Mühe wach zu bleiben",
+   "Sehr schläfrig, große Mühe wach zu bleiben, kämpfe gegen den Schlaf"
+  ],
+  "countdown.hint": "Machen Sie es sich bequem. Reagieren Sie auf jeden Reiz.",
+  "kss.afterTitle": "Nach der Aufgabe",
+  "kss.beforeTitle": "Vor der Aufgabe",
+  "kss.continue": "Weiter",
+  "kss.heading": "Karolinska-Schläfrigkeitsskala",
+  "kss.instruction": "Wählen Sie die Aussage, die Ihren derzeitigen Zustand am besten beschreibt.",
+  "kss.question": "Wie schläfrig fühlen Sie sich im Moment?",
+  "task.hintBsrt": "Drücken Sie die Leertaste oder tippen Sie, sobald das Licht erscheint.",
+  "task.hintPvt": "Drücken Sie so schnell wie möglich die Leertaste, um den Zähler zu stoppen."
+ },
+ "en": {
+  "_anchors": [
+   "Extremely alert",
+   "Very alert",
+   "Alert",
+   "Rather alert",
+   "Neither alert nor sleepy",
+   "Some signs of sleepiness",
+   "Sleepy, but no effort to keep awake",
+   "Sleepy, some effort to keep awake",
+   "Very sleepy, great effort to keep awake, fighting sleep"
+  ],
+  "countdown.hint": "Get comfortable. Respond to every stimulus.",
+  "kss.afterTitle": "After the task",
+  "kss.beforeTitle": "Before the task",
+  "kss.continue": "Continue",
+  "kss.heading": "Karolinska Sleepiness Scale",
+  "kss.instruction": "Choose the statement that best describes how you feel at this moment.",
+  "kss.question": "How sleepy do you feel right now?",
+  "task.hintBsrt": "Press the space bar, or tap, each time the light appears.",
+  "task.hintPvt": "Press the space bar as fast as you can to stop the counter."
+ },
+ "fr": {
+  "_anchors": [
+   "Extrêmement alerte",
+   "Très alerte",
+   "Alerte",
+   "Plutôt alerte",
+   "Ni alerte ni somnolent",
+   "Quelques signes de somnolence",
+   "Somnolent, mais sans effort pour rester éveillé",
+   "Somnolent, un certain effort pour rester éveillé",
+   "Très somnolent, gros effort pour rester éveillé, lutte contre le sommeil"
+  ],
+  "countdown.hint": "Installez-vous confortablement. Répondez à chaque stimulus.",
+  "kss.afterTitle": "Après la tâche",
+  "kss.beforeTitle": "Avant la tâche",
+  "kss.continue": "Continuer",
+  "kss.heading": "Échelle de somnolence de Karolinska",
+  "kss.instruction": "Choisissez l’affirmation qui décrit le mieux votre état actuel.",
+  "kss.question": "À quel point vous sentez-vous somnolent en ce moment ?",
+  "task.hintBsrt": "Appuyez sur la barre d’espace, ou touchez l’écran, chaque fois que la lumière apparaît.",
+  "task.hintPvt": "Appuyez sur la barre d’espace le plus vite possible pour arrêter le compteur."
+ },
+ "nl": {
+  "_anchors": [
+   "Extreem alert",
+   "Zeer alert",
+   "Alert",
+   "Tamelijk alert",
+   "Niet alert, niet slaperig",
+   "Enkele tekenen van slaperigheid",
+   "Slaperig, maar geen moeite om wakker te blijven",
+   "Slaperig, enige moeite om wakker te blijven",
+   "Zeer slaperig, grote moeite om wakker te blijven, vecht tegen de slaap"
+  ],
+  "countdown.hint": "Ga comfortabel zitten. Reageer op elke stimulus.",
+  "kss.afterTitle": "Na de taak",
+  "kss.beforeTitle": "Vóór de taak",
+  "kss.continue": "Doorgaan",
+  "kss.heading": "Karolinska-slaperigheidsschaal",
+  "kss.instruction": "Kies de uitspraak die het best beschrijft hoe u zich nu voelt.",
+  "kss.question": "Hoe slaperig voelt u zich op dit moment?",
+  "task.hintBsrt": "Druk op de spatiebalk, of tik, telkens als het lampje verschijnt.",
+  "task.hintPvt": "Druk zo snel mogelijk op de spatiebalk om de teller te stoppen."
+ }
+}
