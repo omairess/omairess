@@ -142,11 +142,11 @@ Anything else
 ONE THING YOU SHOULD KNOW
 -------------------------------------------------------------
 
-The task screens are translated (English, French, Dutch,
-German) — set "language" in the first dialog. The SETTINGS
-boxes themselves stay in English: they are PsychoPy's own
-dialogs, they label each row with the setting's name, and the
-participant never sees them.
+Everything is translated (English, French, Dutch, German) —
+set "language" in the FIRST dialog and the second one appears
+in it too, along with all the task screens. The values in the
+dropdowns stay in English (bsrt/pvt, none/before/after/both)
+because they are written into the data files.
 
 Your data is written the moment the trial ends, before any of
 the closing screens run. If something goes wrong afterwards

@@ -38,6 +38,15 @@ KEYS = [
     'pp.stimuli', 'pp.hitsMisses', 'pp.lapsesOver', 'pp.meanRt',
     'pp.framesDropped', 'pp.sleepOnsetRow', 'pp.normsHeading', 'pp.noSpread',
     'pp.savedTo', 'pp.sdWorse', 'pp.sdBetter',
+    # Labels for the two settings dialogs. PsychoPy labels each row with the
+    # dict key, so translating the dialog means translating these and mapping
+    # the answers back onto the internal names.
+    'ppf.dlgTask', 'ppf.dlgSettings', 'ppf.mode', 'ppf.language',
+    'ppf.participant_id', 'ppf.session_label', 'ppf.trial_number', 'ppf.name',
+    'ppf.birth_date', 'ppf.education', 'ppf.kss_when', 'ppf.max_minutes',
+    'ppf.miss_criterion', 'ppf.isi_ms', 'ppf.isi_set_s', 'ppf.stim_ms',
+    'ppf.hit_window_ms', 'ppf.lapse_ms', 'ppf.alarm', 'ppf.fullscreen',
+    'ppf.remove_false_starts', 'ppf.remove_outliers', 'ppf.out_dir', 'ppf.seed',
 ]
 
 

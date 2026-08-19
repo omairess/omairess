@@ -213,8 +213,6 @@ def main():
             continue
         rts.append((pressed.tDown - onset) * 1000.0)
 
-    win.close()
-
     if not rts:
         ok &= verdict(False, 'no reaction times could be measured')
     else:
@@ -223,6 +221,61 @@ def main():
         ok &= verdict(good, 'key and flip timestamps share a clock', detail)
         for line in advice:
             say('      ' + line)
+    say()
+
+    # ---- 5. the sleep-onset alarm ----
+    #
+    # Reported from a real machine as "does not recognize sound while
+    # everything is enabled". PsychoPy binds one audio backend at import and
+    # gives up if it fails, so this tries each in turn and says which worked.
+    import bsrt_psychopy as app
+    alarm, notes = app._make_alarm({'alarm': True})
+    for n in notes:
+        say('      ' + n)
+    if alarm is None:
+        verdict(True, 'no audio backend is available',
+                'the sleep-onset alarm will be visual only')
+        say('      The task still works: the sleep-onset banner takes over the')
+        say('      screen and waits to be dismissed. Only the sound is missing.')
+    else:
+        played = True
+        try:
+            alarm.play(loops=-1)
+        except Exception as e:
+            played = False
+            say('      playing failed: %s: %s' % (type(e).__name__, e))
+        if played:
+            msg.text = ('Sound check\n\n'
+                        'An alarm should be sounding now.\n\n'
+                        'Press Y if you can hear it, N if you cannot.')
+            kb.clearEvents()
+            heard = None
+            for _ in range(int(hz) * 30):
+                msg.draw()
+                win.flip()
+                for k in kb.getKeys(waitRelease=False):
+                    if k.name in ('y', 'n'):
+                        heard = (k.name == 'y')
+                if heard is not None:
+                    break
+            try:
+                alarm.stop()
+            except Exception:
+                pass
+            if heard is None:
+                verdict(True, 'sound check skipped', 'no answer given')
+            else:
+                ok &= verdict(heard, 'the alarm is audible',
+                              'you heard it' if heard else 'you did not hear it')
+                if not heard:
+                    say('      Check the output device and the volume, then run')
+                    say('      this again. If it still fails, the task will fall')
+                    say('      back to a visual-only alarm, which is safe but')
+                    say('      easier to miss from another room.')
+    try:
+        win.close()
+    except Exception:
+        pass
     say()
 
     say('=' * 60)

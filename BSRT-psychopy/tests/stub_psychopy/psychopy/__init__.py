@@ -16,3 +16,19 @@ tests are deterministic.
 """
 
 __version__ = '0.0-stub'
+
+
+class _Prefs(object):
+    """Just enough of psychopy.prefs for the audio-backend selection."""
+
+    def __init__(self):
+        self.hardware = {'audioLib': ['ptb']}
+
+
+prefs = _Prefs()
+
+# Set by a test to imitate an audio backend that constructs fine and only fails
+# when asked to play. It lives HERE rather than in sound.py because the code
+# under test reloads sound.py to switch backends, and a reload would reset a
+# flag defined there.
+FAIL_SOUND = [False]

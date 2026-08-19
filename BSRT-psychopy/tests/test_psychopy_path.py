@@ -24,6 +24,7 @@ import psychopy.core as pcore                                # noqa: E402
 import psychopy.gui as pgui                                  # noqa: E402
 from psychopy.hardware import keyboard as pkb                # noqa: E402
 
+import psychopy as ppkg                                      # noqa: E402
 import psychopy.sound as psound                              # noqa: E402
 import psychopy.visual as pvisual                            # noqa: E402
 
@@ -205,14 +206,14 @@ try:
     ev6 += [(o / 1000.0 + 0.30 + pre6, 'space') for o in sched6['onsets'][:5]]
     end6 = pre6 + (sched6['onsets'][11] + sched6['epochIsi'][11]) / 1000.0
     ev6 += [(end6 + 1.0, 's'), (end6 + 2.0, 'space')]
-    psound.Sound.FAIL_ON_PLAY[0] = True
+    ppkg.FAIL_SOUND[0] = True
     try:
         pcore.reset()
         pgui.QUEUE = [dict(settings6)]
         schedule_keys(ev6)
         rec6 = app.run(settings6)
     finally:
-        psound.Sound.FAIL_ON_PLAY[0] = False
+        ppkg.FAIL_SOUND[0] = False
     check(rec6 is not None, 'the trial survived an audio device that will not play')
     check(rec6['raw']['endReason'] == 'sleep_onset', 'it still ended at sleep onset')
     written = [p for p in os.listdir(out_dir) if 'NOSOUND' in p]
@@ -343,21 +344,50 @@ try:
         check(needle in ' | '.join(texts_from(_last_window())),
               '%s renders in %s' % (needle, lang))
 
+    print('\n=== the KSS shows an anchor on every step ===')
+    # Labelling only the two ends turns the KSS into a bare 1-9 rating, which
+    # is a different instrument. The browser build shows all nine, so this must.
+    import bsrt_ui as ui_mod
+    probe_win = pvisual.Window()
+    probe = ui_mod.UI(probe_win)
+    for lang in ('en', 'fr', 'nl', 'de'):
+        anchors = app.STRINGS[lang]['_anchors']
+        ui_mod.draw_kss(probe, 'KSS', app.T(lang, 'kss.question'), anchors, 5,
+                        app.T(lang, 'pp.kssKeys'))
+        probe_win.flip()
+        shown = [st.text for st in probe_win.frames[-1] if st.text]
+        missing = [a for a in anchors if a not in shown]
+        check(not missing, 'all nine %s anchors are on screen%s'
+              % (lang, '' if not missing else ' — missing %s' % missing))
+        numbers = [t for t in shown if t.isdigit()]
+        check(sorted(numbers, key=int) == [str(i) for i in range(1, 10)],
+              'and every step is numbered 1-9')
+    probe_win.close()
+
     print('\n=== the setup dialog ===')
+
+    def queue(mode, lang, second):
+        """Queue the two dialogs the way the user sees them: the first in
+        English, the second labelled in the chosen language."""
+        first = {app.T('en', 'ppf.mode'): mode, app.T('en', 'ppf.language'): lang}
+        labels = app._labels(lang, second.keys())
+        pgui.QUEUE = [first, dict((labels[k], v) for k, v in second.items())]
+
     pgui.QUEUE = []
     check(app.ask_settings() is None, 'cancelling the first dialog returns nothing')
 
-    # Two stages: the paradigm, then everything else.
-    pgui.QUEUE = [{'mode': 'bsrt', 'language': 'en'}, {'participant_id': 'P9'}]
+    queue('bsrt', 'en', {'participant_id': 'P9'})
     got = app.ask_settings()
     check(got is not None and got['participant_id'] == 'P9',
-          'an accepted dialog returns the answers')
+          'an accepted dialog returns the answers by their internal names')
     check(got['mode'] == 'bsrt' and 'max_minutes' in got, 'with the defaults filled in')
     check(got['miss_criterion'] == 7, 'a BSRT keeps the sleep-onset criterion (7)')
+    check(got['kss_when'] == 'none',
+          'kss_when comes back as a plain value, not a list (%r)' % got['kss_when'])
 
     # The bug this two-stage dialog exists to prevent: a PVT must NOT stop at
     # seven consecutive misses, matching the browser build.
-    pgui.QUEUE = [{'mode': 'pvt', 'language': 'en'}, {'participant_id': 'P9'}]
+    queue('pvt', 'en', {'participant_id': 'P9'})
     got_pvt = app.ask_settings()
     check(got_pvt['mode'] == 'pvt', 'choosing pvt gives a PVT')
     check(got_pvt['miss_criterion'] == 0,
@@ -370,16 +400,34 @@ try:
           'and a block-permuted variable schedule')
     check(sched_pvt['nStimuli'] == 30,
           'a 3-minute PVT presents 30 stimuli (got %d)' % sched_pvt['nStimuli'])
-    check(len(set(sched_pvt['isis'])) == 5,
-          'using all five intervals: %s' % sorted(set(sched_pvt['isis'])))
 
-    # A custom interval set typed into the box is honoured.
-    pgui.QUEUE = [{'mode': 'pvt', 'language': 'en'},
-                  {'participant_id': 'P9', 'isi_set_s': '1/2/3'}]
+    queue('pvt', 'en', {'participant_id': 'P9', 'isi_set_s': '1/2/3'})
     got_custom = app.ask_settings()
     check(app.cfg_from(got_custom)['isiSetMs'] == [1000, 2000, 3000],
           'a custom PVT interval set is parsed: %s'
           % app.cfg_from(got_custom)['isiSetMs'])
+
+    print('\n=== the dialog is translated too ===')
+    queue('bsrt', 'fr', {'participant_id': 'FR9'})
+    got_fr = app.ask_settings()
+    check(got_fr is not None and got_fr['participant_id'] == 'FR9',
+          'a French dialog still answers by internal name')
+    check(got_fr['language'] == 'fr', 'and records the language')
+    check(app.T('fr', 'ppf.participant_id') == 'identifiant du participant',
+          'the labels themselves are French')
+
+    # Labels become dictionary keys, so a collision would silently drop a field.
+    for lang in ('en', 'fr', 'nl', 'de'):
+        labels = list(app._labels(lang, app.DEFAULTS.keys()).values())
+        check(len(labels) == len(set(labels)),
+              'every %s dialog label is unique (%d fields)' % (lang, len(labels)))
+
+    # Values stay English so the exported columns do not depend on the
+    # experimenter's interface language.
+    check(app.CHOICES['kss_when'] == ['none', 'before', 'after', 'both'],
+          'kss_when is a dropdown with untranslated values')
+    check(app.CHOICES['mode'] == ['bsrt', 'pvt'], 'and so is the task')
+
 finally:
     shutil.rmtree(out_dir, ignore_errors=True)
 

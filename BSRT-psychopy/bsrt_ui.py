@@ -158,43 +158,45 @@ def draw_countdown(ui, n, hint):
 
 
 def draw_kss(ui, title, question, anchors, selected, hint):
-    """The 9-point scale drawn as a row of numbered boxes with its anchors.
+    """The 9-point scale with an anchor on EVERY step.
 
-    A wall of nine numbered lines is what a plain text version looks like; the
-    browser build shows a scale, so this does too. The anchor for whichever
-    number is highlighted is shown underneath, which is also how the web
-    version reads.
+    The Karolinska scale is anchored at each point, not only at its ends, and
+    the browser build shows all nine. Labelling only the extremes turns it into
+    a bare 1-9 rating, which is a different instrument: a participant who can
+    read "sleepy, but no effort to keep awake" against 7 is answering the KSS,
+    and one choosing a number on a line is not.
+
+    So it is a vertical list — number, then anchor — with the selected row
+    filled in the accent colour. Nine rows fit comfortably; a horizontal row of
+    nine boxes does not leave room for the words.
     """
     ui.begin()
-    ui.panel(0.0, 0.72)
-    ui.title(title, y=0.30)
-    ui.accent_rule(0.255)
-    ui.body(question, y=0.17, height=0.036, width=1.0)
+    ui.panel(0.0, 0.90, width=1.30)
+    ui.title(title, y=0.395)
+    ui.accent_rule(0.355, width=1.30)
+    ui.text('kssQ', text=question, height=0.034, color=TEXT, pos=(0, 0.305),
+            wrapWidth=1.15).draw()
 
     n = len(anchors)
-    box = 0.085
-    gap = 0.016
-    total = n * box + (n - 1) * gap
-    x0 = -total / 2.0 + box / 2.0
+    row_h = 0.062
+    top = 0.235
     for i in range(n):
-        x = x0 + i * (box + gap)
+        y = top - i * row_h
         on = (selected == i + 1)
-        ui.rect(width=box, height=box, pos=(x, 0.02),
-                fillColor=ACCENT if on else PANEL,
-                lineColor=ACCENT if on else LINE, lineWidth=2).draw()
-        ui.text('kssn%d' % i, text='%d' % (i + 1), height=0.042,
-                color=BG if on else TEXT, pos=(x, 0.02)).draw()
+        if on:
+            ui.rect(width=1.16, height=row_h - 0.006, pos=(0, y),
+                    fillColor=ACCENT, lineColor=None).draw()
+        # The number sits in its own box so the column reads as a scale rather
+        # than as a numbered paragraph.
+        ui.rect(width=0.055, height=row_h - 0.014, pos=(-0.53, y),
+                fillColor=PANEL if not on else BG,
+                lineColor=LINE if not on else BG, lineWidth=1).draw()
+        ui.text('kn%d' % i, text='%d' % (i + 1), height=0.032,
+                color=TEXT if not on else ACCENT, pos=(-0.53, y)).draw()
+        ui.text('ka%d' % i, text=anchors[i], height=0.030,
+                color=BG if on else TEXT, pos=(-0.475, y),
+                anchorHoriz='left', alignText='left', wrapWidth=1.05).draw()
 
-    # The two ends are always labelled, so the direction of the scale is never
-    # ambiguous even before anything is highlighted.
-    ui.text('kssLo', text=anchors[0], height=0.026, color=MUTED,
-            pos=(x0, -0.075), wrapWidth=0.30).draw()
-    ui.text('kssHi', text=anchors[-1], height=0.026, color=MUTED,
-            pos=(x0 + (n - 1) * (box + gap), -0.075), wrapWidth=0.30).draw()
-
-    if selected:
-        ui.text('kssSel', text=anchors[selected - 1], height=0.038,
-                color=ACCENT, pos=(0, -0.185), wrapWidth=1.0).draw()
     ui.hint(hint)
 
 

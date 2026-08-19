@@ -195,6 +195,21 @@ participant saw can be regenerated from the CSV alone.
 
 ---
 
+## The sleep-onset alarm
+
+PsychoPy binds **one** audio backend when `psychopy.sound` is imported, and
+gives up if it fails — which on macOS is common enough that "no sound, while
+everything is enabled" was the first thing reported from a real machine. So the
+alarm tries each backend in turn (`ptb`, `sounddevice`, `pyo`, `pygame`), and if
+none of them works it falls back to the operating system's own player
+(`afplay` on macOS, `paplay`/`aplay` on Linux). Every attempt and its failure
+reason is printed, so silence is reported rather than assumed.
+
+If there is genuinely no audio, the sleep-onset banner still takes over the
+screen and waits to be dismissed, and says "no sound on this machine" so the
+quiet is explained. `check_setup.py` plays the alarm and asks whether you can
+hear it, so this is diagnosable before a session rather than during one.
+
 ## Norms
 
 Identical to the other builds: 435 sessions from two pooled studies, binned by
@@ -218,13 +233,17 @@ comes from `strings.json`, which `tools/gen_strings.py` extracts from
 `tests/test_psychopy_path.py` runs a whole trial in French and reads back every
 piece of text that reached the screen to prove nothing English leaks through.
 
-**The settings dialogs stay in English.** They are PsychoPy's own
-`DlgFromDict`, which labels each row with the setting's name — the same names
-used in this README, in `DEFAULTS`, and in the exported columns. They are the
-experimenter's screens, filled in before the participant sits down, and the
-participant never sees them. Translating them would mean translating field
-identifiers, which would then no longer match the documentation. Say the word
-if you would rather have them translated anyway; it is a contained change.
+**The settings dialogs are translated too.** PsychoPy labels each dialog row
+with the dictionary key it was given, so the dialog is built with translated
+labels and the answers are mapped back onto the internal names. The language is
+asked in the first dialog precisely so the second can be shown in it. Dialog
+**values** — `bsrt`/`pvt`, `none`/`before`/`after`/`both`, the language codes —
+stay in English on purpose: they are written into the `mode`, `kss_when` and
+`language` columns, so translating them would make the exported data depend on
+the experimenter's interface language.
+
+Labels become dictionary keys, so a duplicate would silently drop a field;
+`tests/test_psychopy_path.py` asserts all 22 are unique in each language.
 
 **The French, Dutch and German KSS anchors have not been through formal
 translation verification.** They belong to a validated instrument — check them

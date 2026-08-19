@@ -13,12 +13,9 @@ class Sound(object):
         self.plays = 0
         self.stops = 0
 
-    # Set by a test to imitate an audio backend that constructs fine and only
-    # fails when actually asked to play — the common macOS failure.
-    FAIL_ON_PLAY = [False]
-
     def play(self, loops=0):
-        if Sound.FAIL_ON_PLAY[0]:
+        import psychopy as _p
+        if _p.FAIL_SOUND[0]:
             raise RuntimeError('no audio device available')
         self.playing = True
         self.plays += 1

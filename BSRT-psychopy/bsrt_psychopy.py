@@ -184,7 +184,10 @@ class PsychoPyDisplay(object):
             self.counter.text = '%d' % int(state[1])
             self.counter.draw()
         elif kind == 'feedback':
-            self.counter.text = '%d ms' % int(round(state[1]))
+            # The achieved RT, with no unit: the counter that was just running
+            # showed bare milliseconds, so appending 'ms' at the moment it
+            # freezes changes what the participant is looking at for no reason.
+            self.counter.text = '%d' % int(round(state[1]))
             self.counter.draw()
         if self.banner is not None:
             self.banner.draw()
@@ -456,7 +459,8 @@ def run(settings, display_factory=None, rts=None):
         # the other — and PsychoPy puts both on the monotonic clock already.
         # Resetting one of them mid-run would silently offset every RT.
         kb.clearEvents()
-        alarm = _make_alarm(cfg)
+        alarm, audio_notes = _make_alarm(
+            cfg, log=lambda m: sys.stderr.write(m + '\n'))
 
     alarm_failed = []
 
@@ -568,15 +572,105 @@ def _report_but_continue(exc, paths):
     sys.stderr.write('---------------------------------------\n')
 
 
-def _make_alarm(cfg):
+# Backends PsychoPy can drive, best first. `sound` binds one at import time
+# from the preferences, so switching means setting the preference and
+# reimporting — which is why this loop looks the way it does.
+AUDIO_LIBS = ('ptb', 'sounddevice', 'pyo', 'pygame')
+
+
+def _make_alarm(cfg, log=None):
+    """An alarm object, or None, plus a note of everything that was tried.
+
+    PsychoPy picks ONE audio backend at import and gives up if it fails, which
+    on macOS is common enough that "no sound" was the first thing reported from
+    a real machine. So each backend is tried in turn, the reason each one
+    failed is kept, and if none works the operating system's own player is used
+    instead. Silence is reported, never assumed.
+    """
+    notes = []
     if not cfg.get('alarm'):
-        return None
-    try:
-        from psychopy import sound
-        # A pulsing alert rather than a single beep; it loops until silenced.
-        return sound.Sound(value=880, secs=0.4, stereo=True)
-    except Exception:
-        return None
+        return None, notes
+
+    for lib in AUDIO_LIBS:
+        try:
+            import importlib
+            from psychopy import prefs
+            prefs.hardware['audioLib'] = [lib]
+            from psychopy import sound as _snd
+            importlib.reload(_snd)
+            alarm = _snd.Sound(value=880, secs=0.4, stereo=True)
+            notes.append('audio: using %s' % lib)
+            if log:
+                log(notes[-1])
+            return alarm, notes
+        except Exception as e:
+            notes.append('audio: %s unavailable (%s: %s)' % (lib, type(e).__name__, e))
+
+    fallback = _SystemAlarm()
+    if fallback.usable():
+        notes.append('audio: no PsychoPy backend worked; using the system player')
+        if log:
+            for n in notes:
+                log(n)
+        return fallback, notes
+
+    notes.append('audio: no sound available at all — the banner is the alarm')
+    if log:
+        for n in notes:
+            log(n)
+    return None, notes
+
+
+class _SystemAlarm(object):
+    """Last resort: let the operating system make the noise.
+
+    PsychoPy's audio stack is the fragile part, not the machine — a Mac that
+    plays everything else can still leave PsychoPy without a backend. The
+    sleep-onset alarm is the one sound this task genuinely needs, so when
+    PsychoPy cannot produce it the OS is asked directly.
+    """
+
+    def __init__(self):
+        self.proc = None
+        self.cmd = None
+        if sys.platform == 'darwin':
+            for path in ('/System/Library/Sounds/Sosumi.aiff',
+                         '/System/Library/Sounds/Ping.aiff',
+                         '/System/Library/Sounds/Submarine.aiff'):
+                if os.path.exists(path):
+                    self.cmd = ['/usr/bin/afplay', path]
+                    break
+        elif sys.platform.startswith('linux'):
+            for player in ('/usr/bin/paplay', '/usr/bin/aplay'):
+                if os.path.exists(player):
+                    self.cmd = [player, '/usr/share/sounds/alsa/Front_Center.wav']
+                    break
+
+    def usable(self):
+        return self.cmd is not None
+
+    def play(self, loops=0):
+        """Loop the sound in a child process until stop() is called."""
+        import subprocess
+        if not self.cmd or self.proc is not None:
+            return
+        script = 'while true; do "$@" >/dev/null 2>&1 || exit 0; done'
+        self.proc = subprocess.Popen(['/bin/sh', '-c', script, '_'] + self.cmd,
+                                     stdout=subprocess.DEVNULL,
+                                     stderr=subprocess.DEVNULL)
+
+    def stop(self):
+        if self.proc is None:
+            return
+        try:
+            self.proc.terminate()
+            self.proc.wait(timeout=2)
+        except Exception:
+            try:
+                self.proc.kill()
+            except Exception:
+                pass
+        self.proc = None
 
 
 def _wait_for_silence(win, ui_, kb, alarm, sleep_onset_ms, sound_failed=False,
@@ -604,6 +698,54 @@ def _wait_for_silence(win, ui_, kb, alarm, sleep_onset_ms, sound_failed=False,
                 return
 
 
+# Fields whose value is a fixed choice. PsychoPy renders a list as a dropdown,
+# and the VALUES stay in English on purpose: they are written into the exported
+# `mode`, `language` and `kss_when` columns, so translating them would make the
+# data depend on the experimenter's interface language.
+CHOICES = {
+    'mode': ['bsrt', 'pvt'],
+    'language': ['en', 'fr', 'nl', 'de'],
+    'kss_when': ['none', 'before', 'after', 'both'],
+}
+
+DIALOG_ORDER = [
+    'participant_id', 'session_label', 'trial_number', 'name', 'birth_date',
+    'education', 'kss_when', 'max_minutes', 'miss_criterion', 'stim_ms',
+    'hit_window_ms', 'lapse_ms', 'alarm', 'fullscreen', 'remove_false_starts',
+    'remove_outliers', 'out_dir', 'seed',
+]
+
+
+def _labels(lang, keys):
+    """internal name -> the label shown in the dialog, in `lang`.
+
+    PsychoPy's DlgFromDict labels each row with the dictionary key, so the only
+    way to translate the dialog is to build it with translated keys and map the
+    answers back afterwards. The labels must therefore be unique within a
+    language; tests/test_psychopy_path.py asserts that for all four.
+    """
+    return dict((k, T(lang, 'ppf.' + k)) for k in keys)
+
+
+def _ask(lang, title, values, order, tips=None):
+    """Show one dialog with translated labels; return the answers by internal name."""
+    from psychopy import gui
+
+    labels = _labels(lang, values.keys())
+    shown = {}
+    for k in order:
+        if k in values:
+            shown[labels[k]] = values[k]
+    dlg = gui.DlgFromDict(shown, title=title,
+                          order=[labels[k] for k in order if k in values],
+                          tip=dict((labels[k], v) for k, v in (tips or {}).items()
+                                   if k in labels))
+    if not dlg.OK:
+        return None
+    back = dict((v, k) for k, v in labels.items())
+    return dict((back[label], value) for label, value in shown.items())
+
+
 def ask_settings():
     """Collect the settings, in two steps.
 
@@ -614,58 +756,55 @@ def ask_settings():
     mis-configuration this instrument should not have. The browser build solves
     it by re-ticking the box when the mode changes; a modal dialog cannot, so it
     is asked in two passes instead.
-    """
-    from psychopy import gui
 
-    first = {'mode': ['bsrt', 'pvt'], 'language': ['en', 'fr', 'nl', 'de']}
-    dlg = gui.DlgFromDict(first, title='BSRT — paradigm',
-                          order=['mode', 'language'],
-                          tip={'mode': 'bsrt = flashing dot every 3 s; '
-                                       'pvt = counter at 2-10 s intervals'})
-    if not dlg.OK:
+    Asking the language first also means the SECOND dialog can be shown in it.
+    """
+    first = _ask('en', T('en', 'ppf.dlgTask'),
+                 {'mode': list(CHOICES['mode']), 'language': list(CHOICES['language'])},
+                 ['mode', 'language'],
+                 {'mode': 'bsrt = flashing dot every 3 s; '
+                          'pvt = counter at 2-10 s intervals'})
+    if first is None:
         return None
 
     mode = _first(first['mode'], 'bsrt')
+    lang = _first(first['language'], 'en')
+
     settings = dict(DEFAULTS)
     settings.update(MODE_DEFAULTS.get(mode, {}))
-    settings['mode'] = mode
-    settings['language'] = _first(first['language'], 'en')
+    settings['kss_when'] = list(CHOICES['kss_when'])
+    for k in ('mode', 'language'):
+        settings.pop(k, None)
 
-    order = ['participant_id', 'session_label', 'trial_number', 'name',
-             'birth_date', 'education', 'kss_when', 'max_minutes',
-             'miss_criterion', 'stim_ms', 'hit_window_ms', 'lapse_ms',
-             'alarm', 'fullscreen', 'remove_false_starts', 'remove_outliers',
-             'out_dir', 'seed']
+    order = list(DIALOG_ORDER)
     # Only show the interval control that applies: a fixed ISI is meaningless
     # for a PVT, and an interval set is meaningless for a BSRT.
     if mode == 'pvt':
         settings.pop('isi_ms', None)
-        order.insert(8, 'isi_set_s')
+        order.insert(9, 'isi_set_s')
     else:
         settings.pop('isi_set_s', None)
-        order.insert(8, 'isi_ms')
-    settings.pop('mode', None)
-    settings.pop('language', None)
+        order.insert(9, 'isi_ms')
 
     tips = {
         'seed': '0 picks a random seed and records it, so the schedule is reproducible',
-        'kss_when': 'none, before, after or both',
         'birth_date': 'YYYY-MM-DD',
         'max_minutes': 'the ceiling; a BSRT can still stop earlier at sleep onset',
         'miss_criterion': 'consecutive misses scored as sleep onset; 0 turns it off',
         'isi_set_s': 'PVT intervals in seconds, e.g. 2/4/6/8/10',
         'out_dir': 'where the four CSVs are written',
     }
-    dlg2 = gui.DlgFromDict(settings, title='BSRT — %s' % mode.upper(),
-                           order=[k for k in order if k in settings], tip=tips)
-    if not dlg2.OK:
+    answers = _ask(lang, '%s — %s' % (T(lang, 'ppf.dlgSettings'), mode.upper()),
+                   settings, order, tips)
+    if answers is None:
         return None
 
-    settings['mode'] = mode
-    settings['language'] = _first(first['language'], 'en')
-    settings.setdefault('isi_ms', DEFAULTS['isi_ms'])
-    settings.setdefault('isi_set_s', DEFAULTS['isi_set_s'])
-    return settings
+    answers['mode'] = mode
+    answers['language'] = lang
+    answers['kss_when'] = _first(answers.get('kss_when'), 'none')
+    answers.setdefault('isi_ms', DEFAULTS['isi_ms'])
+    answers.setdefault('isi_set_s', DEFAULTS['isi_set_s'])
+    return answers
 
 
 def _first(value, fallback):
