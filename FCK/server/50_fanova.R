@@ -1,0 +1,2265 @@
+# ==========================================================================
+# server/50_fanova.R
+#
+# PORTED VERBATIM by tools/port_fck.py — do not hand-edit the ranges
+# below without updating that script's manifest.  Provenance:
+#   WaPaa1_3.R lines 4425-6227  (group UIs, fANOVA (between + repeated measures))
+#   WaPaa1_3.R lines 6524-6976  (post-hoc pairwise outputs)
+# ==========================================================================
+  # Group variable UI
+  output$group_variable_ui <- renderUI({
+    # Only depend on selected_group_vars and group_variables, NOT group_labels
+    # This prevents re-rendering when the user switches group variables
+    req(values$selected_group_vars)
+
+    if(!is.null(values$group_variables)) {
+      # Build UI elements
+      ui_elements <- tagList(
+        h5("Group Variable Status")
+      )
+
+      # If multiple group variables are available, show selector
+      if(length(values$selected_group_vars) > 1) {
+        # Preserve current selection if it exists and is valid
+        current_selection <- isolate(input$fanova_group_var)
+        if(is.null(current_selection) || !(current_selection %in% values$selected_group_vars)) {
+          current_selection <- values$selected_group_vars[1]
+        }
+
+        ui_elements <- tagList(
+          ui_elements,
+          selectInput("fanova_group_var", "Select Group Variable for fANOVA:",
+                      choices = values$selected_group_vars,
+                      selected = current_selection),
+          hr()
+        )
+      }
+
+      ui_elements
+    } else if(!is.null(values$group_labels)) {
+      # Single group variable case (backwards compatibility)
+      tagList(
+        h5("Group Variable Status"),
+        p(paste("Groups loaded:", length(unique(values$group_labels)), "groups")),
+        p(paste("Total subjects:", length(values$group_labels)))
+      )
+    } else {
+      tagList(
+        p("No group variable detected."),
+        p("To use Functional ANOVA, ensure you select a Group Variable during data import."),
+        hr(),
+        h5("Create Groups Manually"),
+        numericInput("manual_n_groups", "Number of groups:", value = 2, min = 2, max = 10),
+        actionButton("create_groups", "Create Groups", class = "btn-warning")
+      )
+    }
+  })
+
+  # Separate UI output for group info display (updates when fanova_group_var changes)
+  output$fanova_group_info <- renderUI({
+    # Get current group variable
+    current_var <- input$fanova_group_var
+    if(is.null(current_var) && !is.null(values$selected_group_vars)) {
+      current_var <- values$selected_group_vars[1]
+    }
+
+    current_groups <- if(!is.null(current_var) && !is.null(values$group_variables) &&
+                         current_var %in% colnames(values$group_variables)) {
+      values$group_variables[[current_var]]
+    } else {
+      values$group_labels
+    }
+
+    if(is.null(current_groups)) return(NULL)
+
+    n_groups <- length(unique(current_groups))
+
+    ui_elements <- tagList(
+      p(paste("Current group variable:", current_var)),
+      p(paste("Number of groups:", n_groups)),
+      p(paste("Total subjects:", length(current_groups)))
+    )
+
+    # If more than 2 groups, show group selector
+    if(n_groups > 2) {
+      ui_elements <- tagList(
+        ui_elements,
+        hr(),
+        h5("Select Groups to Include in Analysis"),
+        pickerInput(
+          inputId = "fanova_groups_to_include",
+          label = "Groups to include:",
+          choices = levels(as.factor(current_groups)),
+          selected = levels(as.factor(current_groups)),
+          options = list(
+            `actions-box` = TRUE,
+            `selected-text-format` = "count > 3"
+          ),
+          multiple = TRUE
+        ),
+        helpText("Select at least 2 groups to compare. Deselect groups you want to exclude.")
+      )
+    }
+
+    ui_elements
+  })
+  
+  # Create groups manually
+  observeEvent(input$create_groups, {
+    req(values$data)
+    n_subjects <- nrow(values$data)
+    n_groups <- input$manual_n_groups
+
+    group_labels <- rep(paste0("Group", 1:n_groups), length.out = n_subjects)
+    values$group_labels <- factor(group_labels)
+
+    showNotification("Groups created successfully!", type = "message", duration = 3)
+  })
+
+  # Helper function to get current fANOVA group labels based on selection
+  get_fanova_group_labels <- reactive({
+    # If user selected a specific group variable for fANOVA, use that
+    if(!is.null(input$fanova_group_var) && !is.null(values$group_variables) &&
+       input$fanova_group_var %in% colnames(values$group_variables)) {
+      return(values$group_variables[[input$fanova_group_var]])
+    }
+    # Otherwise fall back to primary group_labels
+    return(values$group_labels)
+  })
+  
+  # UI for subject ID selection (for RM-ANOVA)
+  output$subject_id_ui <- renderUI({
+    req(values$data)
+    
+    # Get column names from original uploaded data if available
+    col_names <- if(!is.null(values$uploaded_data)) {
+      colnames(values$uploaded_data)
+    } else {
+      NULL
+    }
+    
+    if(!is.null(col_names)) {
+      # Filter out time-related columns (those matching the data columns)
+      time_cols <- colnames(values$data)
+      non_time_cols <- setdiff(col_names, time_cols)
+      
+      if(length(non_time_cols) > 0) {
+        selectInput("rm_subject_id_var", 
+                    "Subject ID variable:",
+                    choices = c("", non_time_cols),
+                    selected = "")
+      } else {
+        tagList(
+          p("No ID variables found.", style = "color: orange;"),
+          p("For repeated measures ANOVA, your data should include a subject ID column."),
+          helpText("You can create subject IDs manually by numbering rows.")
+        )
+      }
+    } else {
+      tagList(
+        p("Upload data to select subject ID variable.", style = "color: orange;")
+      )
+    }
+  })
+  
+  # UI for repeated measures factor selection
+  output$rm_factor_ui <- renderUI({
+    req(values$data)
+
+    # Get column names from original uploaded data if available
+    col_names <- if(!is.null(values$uploaded_data)) {
+      colnames(values$uploaded_data)
+    } else {
+      NULL
+    }
+
+    if(!is.null(col_names)) {
+      # Filter out time-related columns
+      time_cols <- colnames(values$data)
+      non_time_cols <- setdiff(col_names, time_cols)
+
+      if(length(non_time_cols) > 0) {
+        selectInput("rm_factor_var",
+                    "Repeated measures factor (visit/condition/time):",
+                    choices = c("", non_time_cols),
+                    selected = "")
+      } else {
+        tagList(
+          p("No factor variables found.", style = "color: orange;"),
+          p("For repeated measures ANOVA, you need a column indicating the repeated condition/visit/time."),
+          helpText("Example: A 'visit' column with values like 'baseline', 'week1', 'week2', etc.")
+        )
+      }
+    } else {
+      tagList(
+        p("Upload data to select repeated measures factor.", style = "color: orange;")
+      )
+    }
+  })
+
+  # UI for selecting which levels of the RM factor to include
+  output$rm_factor_levels_ui <- renderUI({
+    req(input$rm_factor_var)
+    req(values$uploaded_data)
+
+    if(input$rm_factor_var == "" || !(input$rm_factor_var %in% colnames(values$uploaded_data))) {
+      return(NULL)
+    }
+
+    # Get the levels of the selected factor
+    rm_factor_data <- values$uploaded_data[[input$rm_factor_var]]
+    factor_levels <- unique(as.character(rm_factor_data))
+    factor_levels <- factor_levels[!is.na(factor_levels)]
+
+    if(length(factor_levels) > 2) {
+      tagList(
+        hr(),
+        h5("Select Conditions/Visits to Include"),
+        pickerInput(
+          inputId = "rm_levels_to_include",
+          label = "Levels to include in analysis:",
+          choices = factor_levels,
+          selected = factor_levels,
+          options = list(
+            `actions-box` = TRUE,
+            `selected-text-format` = "count > 3"
+          ),
+          multiple = TRUE
+        ),
+        helpText("Select at least 2 levels to compare. Deselect levels you want to exclude.")
+      )
+    } else {
+      # Only 2 or fewer levels - no need for selection
+      tagList(
+        hr(),
+        p(paste("Levels detected:", paste(factor_levels, collapse = ", "))),
+        p(paste("Number of levels:", length(factor_levels)))
+      )
+    }
+  })
+  
+  # Repeated Measures Functional ANOVA function using rmfanova package
+  perform_rm_fanova <- function(fd_obj, subject_id, rm_factor, n_permutations = 200, alpha = 0.05) {
+    
+    # Check rmfanova package is available (should be auto-loaded at startup)
+    if (!requireNamespace("rmfanova", quietly = TRUE)) {
+      stop("Package 'rmfanova' is required but not installed. Please install it using: install.packages('rmfanova')")
+    }
+    
+    n_time <- 100
+    time_points <- seq(0, 1, length.out = n_time)
+    
+    # Evaluate functional data at time points
+    curves <- eval.fd(time_points, fd_obj)  # n_time x n_curves
+    
+    # Prepare data for rmfanova
+    subject_id <- as.factor(subject_id)
+    rm_factor <- as.factor(rm_factor)
+    
+    # Get unique levels
+    visits <- levels(rm_factor)
+    n_visits <- length(visits)
+    
+    cat("Running repeated measures functional ANOVA...\n")
+    cat("Number of subjects:", length(unique(subject_id)), "\n")
+    cat("Number of visits/conditions:", n_visits, "\n")
+    cat("Visits:", paste(visits, collapse = ", "), "\n")
+    
+    # Try different rmfanova function signatures
+    tryCatch({
+      
+      # Try to call rmfanova with different possible syntaxes
+      # The actual syntax depends on package version
+      
+      # Attempt 1: Standard syntax from examples
+      rm_results <- tryCatch({
+        rmfanova::rmfanova(curves, id = subject_id, visit = rm_factor)
+      }, error = function(e1) {
+        
+        # Attempt 2: Without named arguments
+        tryCatch({
+          rmfanova::rmfanova(curves, subject_id, rm_factor)
+        }, error = function(e2) {
+          
+          # Attempt 3: Check if function is actually called something else
+          tryCatch({
+            # Try rm.fanova or rmfANOVA
+            if(exists("rm.fanova", where = "package:rmfanova")) {
+              rm.fanova(curves, id = subject_id, visit = rm_factor)
+            } else if(exists("rmfANOVA", where = "package:rmfanova")) {
+              rmfANOVA(curves, id = subject_id, visit = rm_factor)
+            } else {
+              stop("Could not find rmfanova function. Available functions: ", 
+                   paste(ls("package:rmfanova"), collapse = ", "))
+            }
+          }, error = function(e3) {
+            
+            # If all attempts fail, use manual implementation
+            cat("Note: Using manual RM-ANOVA implementation (rmfanova function not compatible)\n")
+            return(NULL)
+          })
+        })
+      })
+      
+      # If rmfanova call failed or returned NULL, use manual implementation
+      if(is.null(rm_results)) {
+        cat("Performing manual repeated measures functional ANOVA...\n")
+        
+        # Manual RM-ANOVA implementation
+        # This is a simplified version that accounts for repeated measures structure
+
+        # Calculate mean curves for each visit
+        visit_means <- matrix(NA, n_time, n_visits)
+        visit_sds <- matrix(NA, n_time, n_visits)
+        visit_sizes <- numeric(n_visits)
+
+        for(i in 1:n_visits) {
+          visit_idx <- which(rm_factor == visits[i])
+          visit_sizes[i] <- length(unique(subject_id[visit_idx]))
+          visit_curves <- curves[, visit_idx, drop = FALSE]
+          visit_means[, i] <- rowMeans(visit_curves, na.rm = TRUE)
+
+          if(length(visit_idx) > 1) {
+            visit_sds[, i] <- apply(visit_curves, 1, sd, na.rm = TRUE)
+          } else {
+            visit_sds[, i] <- 0
+          }
+        }
+
+        # === DIAGNOSTIC OUTPUT ===
+        cat("\n=== VISIT MEANS DIAGNOSTIC ===\n")
+        cat("Number of visits/conditions:", n_visits, "\n")
+        cat("Visit names:", paste(visits, collapse=", "), "\n")
+        cat("Visit means matrix dimensions:", dim(visit_means), "\n")
+        cat("Visit sizes (n subjects per visit):", paste(visit_sizes, collapse=", "), "\n")
+
+        for(i in 1:n_visits) {
+          cat("\nVisit", i, "(", visits[i], "):\n")
+          cat("  First 5 time points:", paste(round(visit_means[1:5, i], 3), collapse=", "), "\n")
+          cat("  Mean across all time points:", round(mean(visit_means[, i]), 3), "\n")
+          cat("  SD across all time points:", round(sd(visit_means[, i]), 3), "\n")
+        }
+
+        if(n_visits == 2) {
+          cat("\nComparison between visits:\n")
+          cat("  Are means identical?", all.equal(visit_means[,1], visit_means[,2]), "\n")
+          cat("  Max absolute difference:", round(max(abs(visit_means[,1] - visit_means[,2])), 6), "\n")
+        }
+        cat("==============================\n\n")
+
+        # Calculate F-statistics accounting for within-subject correlation
+        # Use subject-specific deviations
+        unique_subjects <- unique(subject_id)
+        n_subjects <- length(unique_subjects)
+        
+        # First pass: Calculate observed F-statistics and build data matrices
+        F_stat <- numeric(n_time)
+        Y_matrices <- vector("list", n_time)  # Store for permutation testing
+
+        cat("=== Y_MATRIX CONSTRUCTION DIAGNOSTIC ===\n")
+
+        for(t in 1:n_time) {
+          # Create data matrix: subjects × visits
+          Y_matrix <- matrix(NA, n_subjects, n_visits)
+          
+          for(i in 1:n_subjects) {
+            subj <- unique_subjects[i]
+            for(j in 1:n_visits) {
+              idx <- which(subject_id == subj & rm_factor == visits[j])
+              if(length(idx) > 0) {
+                Y_matrix[i, j] <- curves[t, idx[1]]
+              }
+            }
+          }
+          
+          # Remove subjects with missing data at this time point
+          complete_rows <- complete.cases(Y_matrix)
+          Y_complete <- Y_matrix[complete_rows, , drop = FALSE]
+
+          # Diagnostic output for first time point only
+          if(t == 1) {
+            cat("\nTime point 1 - Y_matrix construction:\n")
+            cat("  Y_matrix dimensions:", dim(Y_matrix), "(subjects × visits)\n")
+            cat("  Y_complete dimensions:", dim(Y_complete), "\n")
+            cat("  First 5 subjects, visit 1:", paste(round(Y_complete[1:min(5, nrow(Y_complete)), 1], 3), collapse=", "), "\n")
+            cat("  First 5 subjects, visit 2:", paste(round(Y_complete[1:min(5, nrow(Y_complete)), 2], 3), collapse=", "), "\n")
+            cat("  Column means:", paste(round(colMeans(Y_complete), 3), collapse=", "), "\n")
+            cat("  Are columns identical?", all.equal(Y_complete[,1], Y_complete[,2]), "\n")
+          }
+
+          # Store for permutation testing
+          Y_matrices[[t]] <- Y_complete
+
+          if(nrow(Y_complete) >= 2 && n_visits >= 2) {
+            # Perform repeated measures ANOVA at this time point
+            # Remove subject mean (within-subject centering)
+            subject_means <- rowMeans(Y_complete, na.rm = TRUE)
+            Y_centered <- Y_complete - subject_means
+            
+            # Calculate SS
+            grand_mean <- mean(Y_complete, na.rm = TRUE)
+            visit_means_t <- colMeans(Y_complete, na.rm = TRUE)
+            
+            SS_visit <- sum(nrow(Y_complete) * (visit_means_t - grand_mean)^2)
+            SS_residual <- sum(Y_centered^2, na.rm = TRUE)
+            
+            df_visit <- n_visits - 1
+            df_residual <- (nrow(Y_complete) - 1) * (n_visits - 1)
+            
+            if(df_residual > 0 && SS_residual > 0) {
+              F_stat[t] <- (SS_visit / df_visit) / (SS_residual / df_residual)
+            } else {
+              F_stat[t] <- NA
+            }
+
+            # Diagnostic output for first time point
+            if(t == 1) {
+              cat("\nTime point 1 - F-statistic calculation:\n")
+              cat("  Grand mean:", round(grand_mean, 3), "\n")
+              cat("  Visit means:", paste(round(visit_means_t, 3), collapse=", "), "\n")
+              cat("  SS_visit:", round(SS_visit, 3), "\n")
+              cat("  SS_residual:", round(SS_residual, 3), "\n")
+              cat("  df_visit:", df_visit, ", df_residual:", df_residual, "\n")
+              cat("  F-statistic:", round(F_stat[t], 3), "\n")
+            }
+          } else {
+            F_stat[t] <- NA
+          }
+        }
+        cat("=========================================\n\n")
+        
+        # Handle NAs in F-statistics
+        F_stat[is.na(F_stat)] <- 0
+        
+        # PERMUTATION TEST for p-values (matching pairwise approach)
+        cat("Computing permutation-based p-values (", n_permutations, " permutations)...\n")
+        
+        F_stat_perm <- matrix(NA, n_time, n_permutations)
+        
+        withProgress(message = 'Permutation testing...', value = 0, {
+          for(perm in 1:n_permutations) {
+            if(perm %% 20 == 0) incProgress(20 / n_permutations)
+            
+            for(t in 1:n_time) {
+              Y_complete <- Y_matrices[[t]]
+              
+              if(!is.null(Y_complete) && nrow(Y_complete) >= 2 && n_visits >= 2) {
+                # For RM data, randomly flip signs of condition effects within each subject
+                # This preserves the within-subject correlation structure
+                
+                # Method: Randomly permute conditions within each subject
+                Y_perm <- Y_complete
+                for(i in 1:nrow(Y_complete)) {
+                  Y_perm[i, ] <- Y_complete[i, sample(1:n_visits)]
+                }
+                
+                # Calculate permuted F-statistic
+                subject_means_perm <- rowMeans(Y_perm, na.rm = TRUE)
+                Y_centered_perm <- Y_perm - subject_means_perm
+                
+                grand_mean_perm <- mean(Y_perm, na.rm = TRUE)
+                visit_means_perm <- colMeans(Y_perm, na.rm = TRUE)
+                
+                SS_visit_perm <- sum(nrow(Y_perm) * (visit_means_perm - grand_mean_perm)^2)
+                SS_residual_perm <- sum(Y_centered_perm^2, na.rm = TRUE)
+                
+                df_visit <- n_visits - 1
+                df_residual <- (nrow(Y_perm) - 1) * (n_visits - 1)
+                
+                if(df_residual > 0 && SS_residual_perm > 0) {
+                  F_stat_perm[t, perm] <- (SS_visit_perm / df_visit) / (SS_residual_perm / df_residual)
+                } else {
+                  F_stat_perm[t, perm] <- 0
+                }
+              } else {
+                F_stat_perm[t, perm] <- 0
+              }
+            }
+          }
+        })
+        
+        # Calculate permutation-based p-values
+        p_values_pointwise <- numeric(n_time)
+        for(t in 1:n_time) {
+          p_values_pointwise[t] <- mean(F_stat_perm[t, ] >= F_stat[t], na.rm = TRUE)
+        }
+        
+        # Handle any remaining NAs
+        p_values_pointwise[is.na(p_values_pointwise)] <- 1
+        
+        cat("Permutation testing complete.\n")
+        
+      } else {
+        # Extract results from rmfanova
+        # The structure depends on the package version
+        
+        # Try to extract pointwise statistics
+        if(!is.null(rm_results$pointwise)) {
+          F_stat <- rm_results$pointwise$stat
+          p_values_pointwise <- rm_results$pointwise$pval
+        } else if(!is.null(rm_results$stat)) {
+          F_stat <- rm_results$stat
+          p_values_pointwise <- rm_results$pval
+        } else {
+          # Calculate manually as fallback
+          visit_means <- matrix(NA, n_time, n_visits)
+          for(i in 1:n_visits) {
+            visit_idx <- which(rm_factor == visits[i])
+            visit_means[, i] <- rowMeans(curves[, visit_idx, drop = FALSE])
+          }
+          
+          # Simple F-statistic calculation
+          overall_mean <- rowMeans(curves)
+          SSB <- rowSums((visit_means - overall_mean)^2) * length(unique(subject_id))
+          SST <- rowSums((curves - overall_mean)^2)
+          
+          F_stat <- SSB / (SST - SSB + 1e-10)
+          p_values_pointwise <- pf(F_stat, n_visits - 1, ncol(curves) - n_visits, lower.tail = FALSE)
+        }
+        
+        # Calculate visit means for plotting
+        visit_means <- matrix(NA, n_time, n_visits)
+        visit_sds <- matrix(NA, n_time, n_visits)
+        visit_sizes <- numeric(n_visits)
+
+        for(i in 1:n_visits) {
+          visit_idx <- which(rm_factor == visits[i])
+          visit_sizes[i] <- length(unique(subject_id[visit_idx]))
+          visit_curves <- curves[, visit_idx, drop = FALSE]
+          visit_means[, i] <- rowMeans(visit_curves, na.rm = TRUE)
+
+          if(length(visit_idx) > 1) {
+            visit_sds[, i] <- apply(visit_curves, 1, sd, na.rm = TRUE)
+          } else {
+            visit_sds[, i] <- 0
+          }
+        }
+      }
+      
+      # Continue with common processing...
+      # Adjust p-values for multiple comparisons
+      p_values_adjusted <- p.adjust(p_values_pointwise, method = "fdr")
+      sig_regions <- p_values_adjusted < alpha
+      
+      # Calculate effect sizes (eta-squared)
+      overall_mean <- rowMeans(curves)
+      SST <- numeric(n_time)
+      SSB <- numeric(n_time)
+      
+      for(t in 1:n_time) {
+        for(i in 1:n_visits) {
+          SSB[t] <- SSB[t] + visit_sizes[i] * (visit_means[t, i] - overall_mean[t])^2
+        }
+        
+        for(j in 1:ncol(curves)) {
+          SST[t] <- SST[t] + (curves[t, j] - overall_mean[t])^2
+        }
+      }
+      
+      eta_squared <- SSB / (SST + 1e-10)  # Add small constant to avoid division by zero
+      eta_squared[SST == 0] <- 0
+      
+      # Global test statistic (L2 norm)
+      L2_stat <- sqrt(sum((SSB / length(subject_id))^2))
+      p_value_L2 <- NA  # Would need permutation test
+      
+      # Calculate confidence bands using bootstrap
+      n_boot <- 100
+      visit_means_boot <- array(NA, dim = c(n_time, n_visits, n_boot))
+      
+      unique_subjects <- unique(subject_id)
+      
+      for(boot in 1:n_boot) {
+        # Resample subjects (not observations)
+        boot_subjects <- sample(unique_subjects, replace = TRUE)
+        
+        for(i in 1:n_visits) {
+          boot_curves_list <- list()
+          for(subj in boot_subjects) {
+            # Get curves for this subject in this visit
+            subj_visit_idx <- which(subject_id == subj & rm_factor == visits[i])
+            if(length(subj_visit_idx) > 0) {
+              boot_curves_list[[length(boot_curves_list) + 1]] <- curves[, subj_visit_idx[1], drop = FALSE]
+            }
+          }
+          
+          if(length(boot_curves_list) > 0) {
+            boot_curves_matrix <- do.call(cbind, boot_curves_list)
+            visit_means_boot[, i, boot] <- rowMeans(boot_curves_matrix)
+          } else {
+            visit_means_boot[, i, boot] <- visit_means[, i]
+          }
+        }
+      }
+      
+      # Calculate confidence bands
+      visit_means_lower <- matrix(NA, n_time, n_visits)
+      visit_means_upper <- matrix(NA, n_time, n_visits)
+      
+      for(i in 1:n_visits) {
+        for(t in 1:n_time) {
+          quantiles <- quantile(visit_means_boot[t, i, ], probs = c(0.025, 0.975), na.rm = TRUE)
+          visit_means_lower[t, i] <- quantiles[1]
+          visit_means_upper[t, i] <- quantiles[2]
+        }
+      }
+      
+      # DIAGNOSTIC: Verify F_stat before return
+      cat("\n=== FINAL F-STAT DIAGNOSTIC ===\n")
+      cat("F_stat vector length:", length(F_stat), "\n")
+      cat("First 5 F-statistics:", paste(round(F_stat[1:min(5, length(F_stat))], 3), collapse=", "), "\n")
+      cat("Max F-statistic:", round(max(F_stat, na.rm = TRUE), 3), "\n")
+      cat("Mean F-statistic:", round(mean(F_stat, na.rm = TRUE), 3), "\n")
+      cat("Number of significant time points (raw p < 0.05):", sum(p_values_pointwise < 0.05, na.rm = TRUE), "/", length(p_values_pointwise), "\n")
+      cat("Number of significant time points (FDR adjusted):", sum(p_values_adjusted < 0.05, na.rm = TRUE), "/", length(p_values_adjusted), "\n")
+      cat("Min p-value:", format.pval(min(p_values_pointwise, na.rm = TRUE), digits = 4), "\n")
+      cat("================================\n\n")
+
+      # Return results in same format as between-subjects ANOVA
+      return(list(
+        design = "within",
+        time_points = time_points,
+        group_means = visit_means,
+        group_sds = visit_sds,
+        group_means_lower = visit_means_lower,
+        group_means_upper = visit_means_upper,
+        group_labels = rm_factor,
+        groups = visits,
+        n_groups = n_visits,
+        group_sizes = visit_sizes,
+        F_stat = F_stat,
+        p_values_pointwise = p_values_pointwise,
+        p_values_adjusted = p_values_adjusted,
+        sig_regions = sig_regions,
+        L2_stat = L2_stat,
+        p_value_L2 = p_value_L2,
+        eta_squared = eta_squared,
+        df_between = n_visits - 1,
+        df_within = length(unique(subject_id)) * (n_visits - 1),
+        alpha = alpha,
+        n_permutations = n_permutations,
+        subject_id = subject_id,
+        rm_factor = rm_factor
+      ))
+      
+    }, error = function(e) {
+      stop(paste("Error in RM-ANOVA:", e$message))
+    })
+  }
+  
+  # Functional ANOVA function - ENHANCED
+  perform_functional_anova <- function(fd_obj, group_labels, n_permutations = 200, 
+                                       test_type = "both", alpha = 0.05) {
+    
+    n_curves <- ncol(fd_obj$coefs)
+    n_time <- 100
+    time_points <- seq(0, 1, length.out = n_time)
+    
+    curves <- eval.fd(time_points, fd_obj)
+    
+    group_labels <- as.factor(group_labels)
+    groups <- levels(group_labels)
+    n_groups <- length(groups)
+    
+    group_means <- matrix(NA, n_time, n_groups)
+    group_sds <- matrix(NA, n_time, n_groups)
+    group_sizes <- numeric(n_groups)
+    
+    for(i in 1:n_groups) {
+      group_idx <- which(group_labels == groups[i])
+      group_sizes[i] <- length(group_idx)
+      group_curves <- curves[, group_idx, drop = FALSE]
+      group_means[, i] <- rowMeans(group_curves)
+      
+      # Calculate standard deviation for each time point
+      if(length(group_idx) > 1) {
+        group_sds[, i] <- apply(group_curves, 1, sd)
+      } else {
+        group_sds[, i] <- 0
+      }
+    }
+    
+    overall_mean <- rowMeans(curves)
+    
+    # Calculate F-statistics
+    SSB <- numeric(n_time)
+    SSW <- numeric(n_time)
+    
+    for(t in 1:n_time) {
+      for(i in 1:n_groups) {
+        SSB[t] <- SSB[t] + group_sizes[i] * (group_means[t, i] - overall_mean[t])^2
+      }
+      
+      for(i in 1:n_groups) {
+        group_idx <- which(group_labels == groups[i])
+        for(j in group_idx) {
+          SSW[t] <- SSW[t] + (curves[t, j] - group_means[t, i])^2
+        }
+      }
+    }
+    
+    df_between <- n_groups - 1
+    df_within <- n_curves - n_groups
+    
+    F_stat <- (SSB / df_between) / (SSW / df_within)
+    L2_stat <- sqrt(sum((SSB / n_curves)^2))
+    
+    # Permutation test for p-values
+    F_stat_perm <- matrix(NA, n_time, n_permutations)
+    L2_stat_perm <- numeric(n_permutations)
+    
+    for(perm in 1:n_permutations) {
+      perm_labels <- sample(group_labels)
+      
+      # Recalculate statistics with permuted labels
+      perm_means <- matrix(NA, n_time, n_groups)
+      for(i in 1:n_groups) {
+        perm_idx <- which(perm_labels == groups[i])
+        perm_means[, i] <- rowMeans(curves[, perm_idx, drop = FALSE])
+      }
+      
+      SSB_perm <- numeric(n_time)
+      SSW_perm <- numeric(n_time)
+      
+      for(t in 1:n_time) {
+        for(i in 1:n_groups) {
+          perm_idx <- which(perm_labels == groups[i])
+          SSB_perm[t] <- SSB_perm[t] + length(perm_idx) * (perm_means[t, i] - overall_mean[t])^2
+          
+          for(j in perm_idx) {
+            SSW_perm[t] <- SSW_perm[t] + (curves[t, j] - perm_means[t, i])^2
+          }
+        }
+      }
+      
+      F_stat_perm[, perm] <- (SSB_perm / df_between) / (SSW_perm / df_within)
+      L2_stat_perm[perm] <- sqrt(sum((SSB_perm / n_curves)^2))
+    }
+    
+    # Calculate p-values
+    p_values_pointwise <- numeric(n_time)
+    for(t in 1:n_time) {
+      p_values_pointwise[t] <- mean(F_stat_perm[t, ] >= F_stat[t])
+    }
+    
+    p_value_L2 <- mean(L2_stat_perm >= L2_stat)
+    
+    p_values_adjusted <- p.adjust(p_values_pointwise, method = "fdr")
+    sig_regions <- p_values_adjusted < alpha
+    
+    SST <- SSB + SSW
+    eta_squared <- SSB / SST
+    
+    # Calculate confidence bands using bootstrap
+    n_boot <- 100
+    group_means_boot <- array(NA, dim = c(n_time, n_groups, n_boot))
+    
+    for(boot in 1:n_boot) {
+      for(i in 1:n_groups) {
+        group_idx <- which(group_labels == groups[i])
+        if(length(group_idx) > 0) {
+          boot_idx <- sample(group_idx, replace = TRUE)
+          group_means_boot[, i, boot] <- rowMeans(curves[, boot_idx, drop = FALSE])
+        }
+      }
+    }
+    
+    # Calculate confidence bands
+    group_means_lower <- matrix(NA, n_time, n_groups)
+    group_means_upper <- matrix(NA, n_time, n_groups)
+    
+    for(i in 1:n_groups) {
+      for(t in 1:n_time) {
+        quantiles <- quantile(group_means_boot[t, i, ], probs = c(0.025, 0.975), na.rm = TRUE)
+        group_means_lower[t, i] <- quantiles[1]
+        group_means_upper[t, i] <- quantiles[2]
+      }
+    }
+    
+    return(list(
+      time_points = time_points,
+      group_means = group_means,
+      group_sds = group_sds,  # Added standard deviations
+      group_means_lower = group_means_lower,
+      group_means_upper = group_means_upper,
+      group_labels = group_labels,
+      groups = groups,
+      n_groups = n_groups,
+      group_sizes = group_sizes,
+      F_stat = F_stat,
+      p_values_pointwise = p_values_pointwise,
+      p_values_adjusted = p_values_adjusted,
+      sig_regions = sig_regions,
+      L2_stat = L2_stat,
+      p_value_L2 = p_value_L2,
+      eta_squared = eta_squared,
+      df_between = df_between,
+      df_within = df_within,
+      alpha = alpha,
+      n_permutations = n_permutations
+    ))
+  }
+  
+  # Run functional ANOVA - ENHANCED for both between and within designs
+  observeEvent(input$run_fanova, {
+    if(is.null(values$data)) {
+      showNotification("Please load data first!", type = "error", duration = 5)
+      return()
+    }
+    
+    # Validate based on design type
+    if(input$fanova_design == "between") {
+      # Between-subjects validation - REQUIRES group labels from preprocessing
+      fanova_groups <- get_fanova_group_labels()
+      if(is.null(fanova_groups)) {
+        showNotification("For between-subjects ANOVA: Please define group labels in the Data Preprocessing tab first!",
+                         type = "error", duration = 5)
+        return()
+      }
+
+      if(length(unique(fanova_groups)) < 2) {
+        showNotification("Need at least 2 groups for ANOVA!", type = "error", duration = 5)
+        return()
+      }
+
+      cat("Running BETWEEN-SUBJECTS functional ANOVA...\n")
+      cat("Using group variable:", if(!is.null(input$fanova_group_var)) input$fanova_group_var else "primary", "\n")
+      
+    } else if(input$fanova_design == "within") {
+      # Within-subjects (repeated measures) validation
+      if(is.null(input$rm_subject_id_var) || input$rm_subject_id_var == "") {
+        showNotification("Please select a Subject ID variable for repeated measures ANOVA!", 
+                         type = "error", duration = 5)
+        return()
+      }
+      
+      if(is.null(input$rm_factor_var) || input$rm_factor_var == "") {
+        showNotification("Please select a repeated measures factor (visit/condition/time)!", 
+                         type = "error", duration = 5)
+        return()
+      }
+      
+      # Extract subject ID and RM factor from uploaded data
+      if(is.null(values$uploaded_data)) {
+        showNotification("Original data with ID and factor variables not available!", 
+                         type = "error", duration = 5)
+        return()
+      }
+      
+      # Get the variables
+      subject_id_col <- input$rm_subject_id_var
+      rm_factor_col <- input$rm_factor_var
+      
+      if(!(subject_id_col %in% colnames(values$uploaded_data)) || 
+         !(rm_factor_col %in% colnames(values$uploaded_data))) {
+        showNotification("Selected variables not found in data!", 
+                         type = "error", duration = 5)
+        return()
+      }
+      
+      subject_id_data <- values$uploaded_data[[subject_id_col]]
+      rm_factor_data <- values$uploaded_data[[rm_factor_col]]
+      
+      # Check that we have multiple levels of the RM factor
+      if(length(unique(rm_factor_data)) < 2) {
+        showNotification("Need at least 2 levels of the repeated measures factor!", 
+                         type = "error", duration = 5)
+        return()
+      }
+      
+      cat("Running WITHIN-SUBJECTS (Repeated Measures) functional ANOVA...\n")
+      cat("Subject ID variable:", subject_id_col, "\n")
+      cat("RM factor variable:", rm_factor_col, "\n")
+      cat("Number of unique subjects:", length(unique(subject_id_data)), "\n")
+      cat("Number of conditions/visits:", length(unique(rm_factor_data)), "\n")
+      cat("Total number of observations:", length(subject_id_data), "\n")
+      
+      # Validate this is truly repeated measures
+      n_subjects <- length(unique(subject_id_data))
+      n_obs <- length(subject_id_data)
+      if(n_subjects == n_obs) {
+        cat("\n*** WARNING ***\n")
+        cat("Number of subjects equals number of observations!\n")
+        cat("This suggests you may not have true repeated measures data.\n")
+        cat("Each subject should appear multiple times (once per condition/visit).\n")
+        cat("Consider using between-subjects design instead.\n")
+        cat("***************\n\n")
+      } else {
+        cat("Expected observations per subject:", round(n_obs / n_subjects, 2), "\n")
+      }
+    }
+    
+    tryCatch({
+      # Determine which data to use based on user selection
+      fd_to_use <- NULL
+      
+      # Check if user wants to use warped curves and if they're available
+      if(input$fanova_data_source == "warped" && !is.null(values$warping_results)) {
+        cat("Using time-warped curves for FANOVA\n")
+        
+        # Try to get the registered fd object from warping results
+        if(!is.null(values$warping_results$regfd)) {
+          fd_to_use <- values$warping_results$regfd
+          showNotification("Using time-warped curves for FANOVA", type = "message", duration = 3)
+        } else if(!is.null(values$warping_results$registered_curves)) {
+          # If no regfd but registered curves exist, create fd from them
+          n_time <- nrow(values$warping_results$registered_curves)
+          time_points <- values$warping_results$time_points
+          if(is.null(time_points)) {
+            time_points <- seq(0, 1, length.out = n_time)
+          }
+          basis <- create.bspline.basis(rangeval = c(0, 1), nbasis = min(20, n_time-2))
+          # Use lambda=0: registered curves are already processed, just need fd representation
+          fd_to_use <- smooth.basis(time_points, values$warping_results$registered_curves, 
+                                    fdPar(basis, 2, 0))$fd
+          showNotification("Using time-warped curves for FANOVA", type = "message", duration = 3)
+        } else {
+          showNotification("No warped curves available, using original data", type = "warning", duration = 5)
+        }
+      }
+      
+      # If no warped data was used or available, use original data
+      if(is.null(fd_to_use)) {
+        cat("Using original curves for FANOVA\n")
+        
+        # CRITICAL: Check if data has already been smoothed in Data Preprocessing
+        if(is.null(values$fd_obj)) {
+          # Determine which data to use
+          data_for_fd <- if(!is.null(values$smooth_data)) {
+            cat("Using already smoothed data (no additional smoothing)\n")
+            values$smooth_data
+          } else {
+            cat("Using raw data (will create fd object)\n")
+            values$data
+          }
+          
+          n_time <- ncol(data_for_fd)
+          time_points <- seq(0, 1, length.out = n_time)
+          basis <- create.bspline.basis(rangeval = c(0, 1), nbasis = min(20, n_time-2))
+          
+          # Create fd object WITHOUT additional smoothing (lambda = 0 for already smoothed data)
+          if(!is.null(values$smooth_data)) {
+            # Data already smoothed - just create fd representation with no penalty
+            values$fd_obj <- smooth.basis(time_points, t(data_for_fd), fdPar(basis, 2, 0))$fd
+          } else {
+            # Raw data - apply default smoothing
+            values$fd_obj <- smooth.basis(time_points, t(data_for_fd), basis)$fd
+          }
+        }
+        fd_to_use <- values$fd_obj
+        showNotification("Using original curves for FANOVA", type = "message", duration = 3)
+      }
+      
+      # Perform FANOVA based on design type
+      if(input$fanova_design == "between") {
+        # Between-subjects ANOVA
+
+        # Get current group labels from the selected fANOVA group variable
+        current_group_labels <- get_fanova_group_labels()
+
+        # Filter by selected groups if user has made a selection
+        groups_to_include <- input$fanova_groups_to_include
+        if(!is.null(groups_to_include) && length(groups_to_include) >= 2) {
+          # Find indices of subjects in selected groups
+          include_idx <- which(current_group_labels %in% groups_to_include)
+
+          if(length(include_idx) < 2) {
+            showNotification("Not enough subjects in selected groups!", type = "error", duration = 5)
+            return()
+          }
+
+          # Subset the fd object - need to extract curves, subset, and recreate
+          n_time <- 100
+          time_points_eval <- seq(0, 1, length.out = n_time)
+          all_curves <- eval.fd(time_points_eval, fd_to_use)
+          subset_curves <- all_curves[, include_idx, drop = FALSE]
+
+          # Recreate fd object from subset
+          basis <- fd_to_use$basis
+          fd_to_use <- smooth.basis(time_points_eval, subset_curves, basis)$fd
+
+          # Subset group labels and drop unused levels
+          current_group_labels <- droplevels(current_group_labels[include_idx])
+
+          cat("Filtered to groups:", paste(groups_to_include, collapse = ", "), "\n")
+          cat("Subjects included:", length(include_idx), "\n")
+
+          # Store which groups were selected for reference
+          values$fanova_selected_groups <- groups_to_include
+        } else if(!is.null(groups_to_include) && length(groups_to_include) < 2) {
+          showNotification("Please select at least 2 groups for comparison!", type = "error", duration = 5)
+          return()
+        }
+
+        values$fanova_results <- perform_functional_anova(
+          fd_obj = fd_to_use,
+          group_labels = current_group_labels,
+          n_permutations = input$n_permutations,
+          test_type = input$fanova_test_type,
+          alpha = input$alpha_level
+        )
+
+        values$fanova_results$design <- "between"
+        
+      } else if(input$fanova_design == "within") {
+        # Within-subjects (repeated measures) ANOVA
+        subject_id_data <- values$uploaded_data[[input$rm_subject_id_var]]
+        rm_factor_data <- values$uploaded_data[[input$rm_factor_var]]
+
+        # Filter by selected levels if user has made a selection
+        levels_to_include <- input$rm_levels_to_include
+        if(!is.null(levels_to_include) && length(levels_to_include) >= 2) {
+          # Find indices of observations with selected levels
+          include_idx <- which(as.character(rm_factor_data) %in% levels_to_include)
+
+          if(length(include_idx) < 2) {
+            showNotification("Not enough observations in selected levels!", type = "error", duration = 5)
+            return()
+          }
+
+          # Subset the fd object
+          n_time <- 100
+          time_points_eval <- seq(0, 1, length.out = n_time)
+          all_curves <- eval.fd(time_points_eval, fd_to_use)
+          subset_curves <- all_curves[, include_idx, drop = FALSE]
+
+          # Recreate fd object from subset
+          basis <- fd_to_use$basis
+          fd_to_use <- smooth.basis(time_points_eval, subset_curves, basis)$fd
+
+          # Subset the subject ID and RM factor data
+          subject_id_data <- subject_id_data[include_idx]
+          rm_factor_data <- droplevels(as.factor(rm_factor_data[include_idx]))
+
+          cat("Filtered to RM levels:", paste(levels_to_include, collapse = ", "), "\n")
+          cat("Observations included:", length(include_idx), "\n")
+        } else if(!is.null(levels_to_include) && length(levels_to_include) < 2) {
+          showNotification("Please select at least 2 levels for comparison!", type = "error", duration = 5)
+          return()
+        }
+
+        # CRITICAL VALIDATION: Check data structure matches fd_obj
+        n_curves_in_fd <- ncol(fd_to_use$coefs)
+
+        # Additional validation: lengths must match
+        if(length(subject_id_data) != n_curves_in_fd || length(rm_factor_data) != n_curves_in_fd) {
+          showNotification(
+            sprintf("ERROR: Variable lengths don't match! Subject ID: %d, RM factor: %d, Curves: %d",
+                    length(subject_id_data), length(rm_factor_data), n_curves_in_fd),
+            type = "error", duration = 10)
+          return()
+        }
+
+        cat("Within-subjects validation passed:\n")
+        cat("  Number of curves:", n_curves_in_fd, "\n")
+        cat("  Subject ID length:", length(subject_id_data), "\n")
+        cat("  RM factor length:", length(rm_factor_data), "\n")
+        cat("  Unique levels:", length(unique(rm_factor_data)), "\n")
+
+        values$fanova_results <- perform_rm_fanova(
+          fd_obj = fd_to_use,
+          subject_id = subject_id_data,
+          rm_factor = rm_factor_data,
+          n_permutations = input$n_permutations,
+          alpha = input$alpha_level
+        )
+
+        values$fanova_results$design <- "within"
+      }
+      
+      # Store which data source was used
+      values$fanova_results$data_source <- input$fanova_data_source
+      
+      showNotification("Functional ANOVA completed!", type = "message", duration = 3)
+      
+    }, error = function(e) {
+      cat("FANOVA error:", e$message, "\n")
+      showNotification(paste("FANOVA error:", e$message), type = "error", duration = 10)
+    })
+  })
+  
+  # FANOVA outputs (enhanced for both between and within designs)
+  output$fanova_global_results <- renderPrint({
+    req(values$fanova_results)
+    
+    res <- values$fanova_results
+    
+    cat("========================================\n")
+    cat("    FUNCTIONAL ANOVA RESULTS\n")
+    cat("========================================\n\n")
+    
+    # Show design type
+    design_type <- if(!is.null(res$design)) {
+      if(res$design == "between") "Between-Subjects" else "Within-Subjects (Repeated Measures)"
+    } else {
+      "Between-Subjects"
+    }
+    cat("Design:", design_type, "\n\n")
+    
+    # Show group/condition information
+    if(!is.null(res$design) && res$design == "within") {
+      cat("Number of conditions:", res$n_groups, "\n")
+      cat("Conditions:", paste(res$groups, collapse = ", "), "\n")
+      cat("Subjects per condition:", paste(res$group_sizes, collapse = ", "), "\n")
+    } else {
+      cat("Number of groups:", res$n_groups, "\n")
+      cat("Groups:", paste(res$groups, collapse = ", "), "\n")
+      cat("Group sizes:", paste(res$group_sizes, collapse = ", "), "\n")
+    }
+    
+    cat("\nL2 statistic:", round(res$L2_stat, 4), "\n")
+    
+    if(!is.na(res$p_value_L2)) {
+      cat("L2 p-value:", round(res$p_value_L2, 4), "\n")
+    }
+    
+    cat("\n========================================\n")
+  })
+  
+  output$fanova_summary_table <- renderDT({
+    req(values$fanova_results)
+    
+    res <- values$fanova_results
+    
+    # Calculate additional statistics for each group/condition
+    curves <- eval.fd(res$time_points, values$fd_obj)
+    
+    # Determine label for first column
+    group_label <- if(!is.null(res$design) && res$design == "within") {
+      "Condition"
+    } else {
+      "Group"
+    }
+    
+    summary_df <- data.frame(
+      GroupOrCondition = res$groups,
+      N = res$group_sizes,
+      Mean_Area = round(apply(res$group_means, 2, function(x) mean(x)), 3),
+      SD_Area = round(apply(res$group_means, 2, function(x) sd(x)), 3),
+      Max_Value = round(apply(res$group_means, 2, max), 3),
+      Min_Value = round(apply(res$group_means, 2, min), 3),
+      Range = round(apply(res$group_means, 2, function(x) diff(range(x))), 3)
+    )
+    
+    # Rename first column
+    colnames(summary_df)[1] <- group_label
+    
+    datatable(summary_df, 
+              options = list(pageLength = 10, dom = 't', scrollX = TRUE), 
+              rownames = FALSE) %>%
+      formatStyle("N",
+                  backgroundColor = styleInterval(c(5, 10), 
+                                                  c("#ffcccc", "#ffffcc", "#ccffcc")))
+  })
+  
+  # FANOVA plots - ENHANCED with SD bands and toggles
+  output$fanova_mean_plot <- renderPlotly({
+    req(values$fanova_results)
+
+    res <- values$fanova_results
+    hover_times <- hover_time_labels(res$time_points)
+
+    # Get toggle values (with defaults if not yet initialized)
+    show_sd_bands <- if(!is.null(input$fanova_show_sd_bands)) input$fanova_show_sd_bands else TRUE
+    show_sig_regions <- if(!is.null(input$fanova_show_sig_regions)) input$fanova_show_sig_regions else TRUE
+
+    # Create color palette that scales with number of groups
+    base_cols <- c("red","blue","green","orange","purple","brown","cyan","magenta","darkgray","gold")
+    colors <- colorRampPalette(base_cols)(res$n_groups)
+
+    n_time <- length(res$time_points)
+
+    # Calculate SD for each group
+    curves <- eval.fd(res$time_points, values$fd_obj)
+    group_sds <- matrix(NA, n_time, res$n_groups)
+
+    for(i in 1:res$n_groups) {
+      group_idx <- which(res$group_labels == res$groups[i])
+      if(length(group_idx) > 1) {
+        group_curves <- curves[, group_idx, drop = FALSE]
+        group_sds[,i] <- apply(group_curves, 1, sd)
+      } else {
+        group_sds[,i] <- 0
+      }
+    }
+
+    p <- plot_ly(type = 'scatter', mode = 'lines')
+
+    # Add SD bands and mean curves for each group
+    # NOTE: No legendgroup linking - each trace toggles independently
+    for(i in 1:res$n_groups) {
+      # Build safe rgba fill color with alpha
+      col_rgb <- col2rgb(colors[i])
+      fillcol <- sprintf("rgba(%d,%d,%d,%.2f)", col_rgb[1], col_rgb[2], col_rgb[3], 0.2)
+
+      # Add ±1 SD band (only if toggle is on)
+      if(show_sd_bands) {
+        p <- p %>% add_trace(
+          x = c(res$time_points, rev(res$time_points)),
+          y = c(res$group_means[,i] + group_sds[,i],
+                rev(res$group_means[,i] - group_sds[,i])),
+          fill = 'toself',
+          fillcolor = fillcol,
+          line = list(color = 'transparent'),
+          showlegend = TRUE,
+          name = paste0(res$groups[i], " ±SD"),
+          hoverinfo = 'skip'
+          # No legendgroup - toggles independently from mean curve
+        )
+      }
+
+      # Add mean curve
+      p <- p %>% add_trace(
+        x = res$time_points,
+        y = res$group_means[,i],
+        line = list(color = colors[i], width = 3),
+        name = res$groups[i],
+        # No legendgroup - toggles independently from SD band
+        hovertemplate = paste(res$groups[i], "<br>Time: %{customdata}<br>Mean: %{y:.3f}<extra></extra>"),
+        customdata = hover_times
+      )
+    }
+
+    # Add significant regions as background (only if toggle is on)
+    # All significant regions share a legendgroup so they toggle together
+    if(show_sig_regions && any(res$sig_regions)) {
+      sig_starts <- which(diff(c(0, res$sig_regions)) == 1)
+      sig_ends <- which(diff(c(res$sig_regions, 0)) == -1)
+
+      for(idx in 1:length(sig_starts)) {
+        y_range <- range(c(res$group_means + group_sds, res$group_means - group_sds))
+
+        p <- p %>% add_trace(
+          x = c(res$time_points[sig_starts[idx]], res$time_points[sig_ends[idx]],
+                res$time_points[sig_ends[idx]], res$time_points[sig_starts[idx]]),
+          y = c(min(y_range), min(y_range), max(y_range), max(y_range)),
+          fill = 'toself',
+          fillcolor = 'rgba(200, 200, 200, 0.2)',
+          line = list(color = 'transparent'),
+          showlegend = (idx == 1),
+          name = 'Significant',
+          legendgroup = 'significant_regions',  # All sig regions toggle together
+          hoverinfo = 'skip'
+        )
+      }
+    }
+    
+    # Dynamic title based on settings
+    plot_title <- if(show_sd_bands) "Group Mean Functions ±1 SD" else "Group Mean Functions"
+
+    p <- p %>% layout(
+      title = plot_title,
+      yaxis = list(title = "Value"),
+      hovermode = 'x',
+      legend = list(x = 0.02, y = 0.98, tracegroupgap = 5)
+    )
+    p <- format_plotly_time_axis(p, res$time_points, tick_step_hours = as.numeric(input$tick_freq_fanova))
+
+    # Enable editable mode so legend can be dragged
+    p <- p %>% config(editable = TRUE)
+    p
+  })
+  
+  output$fanova_fstat_plot <- renderPlotly({
+    req(values$fanova_results)
+    
+    res <- values$fanova_results
+    hover_times <- hover_time_labels(res$time_points)
+
+    # Calculate critical value
+    crit_val <- qf(1 - res$alpha, res$df_between, res$df_within)
+    
+    p <- plot_ly(type = 'scatter', mode = 'lines') %>%
+      add_trace(x = res$time_points, y = res$F_stat,
+                line = list(color = 'blue', width = 2),
+                name = 'F-statistic',
+                hovertemplate = "Time: %{customdata}<br>F-stat: %{y:.2f}<extra></extra>",
+                customdata = hover_times) %>%
+      add_trace(x = c(0, 1), y = c(crit_val, crit_val),
+                line = list(color = 'red', width = 2, dash = 'dash'),
+                name = paste('Critical value (α =', res$alpha, ')'),
+                hovertemplate = paste("Critical F =", round(crit_val, 2), "<extra></extra>")) %>%
+      layout(title = paste("Pointwise F-statistics (", res$n_groups, "groups)"),
+             yaxis = list(title = "F-statistic"))
+
+    p <- format_plotly_time_axis(p, res$time_points, tick_step_hours = as.numeric(input$tick_freq_fanova))
+    p
+  })
+  
+  output$fanova_pvalue_plot <- renderPlotly({
+    req(values$fanova_results)
+    
+    res <- values$fanova_results
+    hover_times <- hover_time_labels(res$time_points)
+
+    p <- plot_ly(type = 'scatter', mode = 'lines') %>%
+      add_trace(x = res$time_points, y = res$p_values_adjusted,
+                line = list(color = 'darkgreen', width = 2),
+                name = 'Adjusted p-values (FDR)',
+                hovertemplate = "Time: %{customdata}<br>P-value: %{y:.4f}<extra></extra>",
+                customdata = hover_times) %>%
+      add_trace(x = res$time_points, y = res$p_values_pointwise,
+                line = list(color = 'lightgreen', width = 1, dash = 'dot'),
+                name = 'Raw p-values',
+                hovertemplate = "Time: %{customdata}<br>P-value: %{y:.4f}<extra></extra>",
+                customdata = hover_times) %>%
+      add_trace(x = c(0, 1), y = c(res$alpha, res$alpha),
+                line = list(color = 'red', width = 2, dash = 'dash'),
+                name = paste('α =', res$alpha),
+                hovertemplate = paste("Alpha =", res$alpha, "<extra></extra>")) %>%
+      add_trace(x = c(0, 1), y = c(0.01, 0.01),
+                line = list(color = 'orange', width = 1, dash = 'dot'),
+                name = 'p = 0.01',
+                showlegend = FALSE,
+                hoverinfo = 'skip') %>%
+      add_trace(x = c(0, 1), y = c(0.001, 0.001),
+                line = list(color = 'darkred', width = 1, dash = 'dot'),
+                name = 'p = 0.001',
+                showlegend = FALSE,
+                hoverinfo = 'skip') %>%
+      layout(title = paste("Pointwise p-values (", res$n_groups, "groups)"),
+             yaxis = list(title = "p-value", type = 'log',
+                          range = c(log10(0.0001), log10(1))))
+    p <- format_plotly_time_axis(p, res$time_points, tick_step_hours = as.numeric(input$tick_freq_fanova))
+    p
+  })
+  
+  output$fanova_effect_size_plot <- renderPlotly({
+    req(values$fanova_results)
+    
+    res <- values$fanova_results
+    hover_times <- hover_time_labels(res$time_points)
+
+    # Add background for effect size interpretation
+    p <- plot_ly(type = 'scatter', mode = 'lines')
+    
+    # Add reference lines for effect size interpretation
+    p <- p %>% 
+      add_trace(x = c(0, 1), y = c(0.01, 0.01),
+                line = list(color = 'lightgray', width = 1, dash = 'dot'),
+                name = 'Small effect',
+                showlegend = FALSE,
+                hoverinfo = 'skip') %>%
+      add_trace(x = c(0, 1), y = c(0.06, 0.06),
+                line = list(color = 'gray', width = 1, dash = 'dot'),
+                name = 'Medium effect',
+                showlegend = FALSE,
+                hoverinfo = 'skip') %>%
+      add_trace(x = c(0, 1), y = c(0.14, 0.14),
+                line = list(color = 'darkgray', width = 1, dash = 'dot'),
+                name = 'Large effect',
+                showlegend = FALSE,
+                hoverinfo = 'skip')
+    
+    # Add eta-squared curve
+    p <- p %>% add_trace(x = res$time_points, y = res$eta_squared,
+                         fill = 'tozeroy',
+                         fillcolor = 'rgba(100, 100, 255, 0.3)',
+                         line = list(color = 'purple', width = 2),
+                         name = 'η² (Effect size)',
+                         hovertemplate = "Time: %{customdata}<br>η²: %{y:.3f}<extra></extra>",
+                         customdata = hover_times)
+    
+    p <- p %>% layout(title = paste("Effect Size (η²) across Time -", res$n_groups, "groups"),
+                      yaxis = list(title = "η² (proportion of variance explained)", 
+                                   range = c(0, max(0.3, max(res$eta_squared) * 1.1))),
+                      annotations = list(
+                        list(x = 0.95, y = 0.01, text = "Small", showarrow = FALSE, 
+                             font = list(size = 10, color = "gray")),
+                        list(x = 0.95, y = 0.06, text = "Medium", showarrow = FALSE,
+                             font = list(size = 10, color = "gray")),
+                        list(x = 0.95, y = 0.14, text = "Large", showarrow = FALSE,
+                             font = list(size = 10, color = "gray"))
+                      ))
+
+    p <- format_plotly_time_axis(p, res$time_points, tick_step_hours = as.numeric(input$tick_freq_fanova))
+    p
+  })
+  
+  output$fanova_effect_summary <- renderPrint({
+    req(values$fanova_results)
+    
+    res <- values$fanova_results
+    mean_eta <- mean(res$eta_squared)
+    
+    cat("Effect Size Summary (η²):\n")
+    cat("Mean η²:", round(mean_eta, 4), "\n")
+  })
+  
+  # Check if FANOVA completed
+  output$fanova_completed <- reactive({
+    !is.null(values$fanova_results)
+  })
+  outputOptions(output, "fanova_completed", suspendWhenHidden = FALSE)
+  
+  # Pairwise comparison functions - ENHANCED
+  # Repeated Measures Pairwise Comparisons (for within-subjects designs)
+  perform_pairwise_comparisons_rm <- function(fd_obj, subject_id, rm_factor, n_permutations = 200,
+                                              correction_method = "bonferroni", alpha = 0.05) {
+    
+    n_time <- 100
+    time_points <- seq(0, 1, length.out = n_time)
+    
+    curves <- eval.fd(time_points, fd_obj)
+    
+    subject_id <- as.factor(subject_id)
+    rm_factor <- as.factor(rm_factor)
+    
+    conditions <- levels(rm_factor)
+    n_conditions <- length(conditions)
+    
+    n_pairs <- choose(n_conditions, 2)
+    pairs <- combn(conditions, 2, simplify = FALSE)
+    pair_names <- sapply(pairs, function(p) paste(p[1], "vs", p[2]))
+    
+    pairwise_results <- list()
+    
+    cat("Performing paired comparisons (within-subjects)...\n")
+    cat("Number of condition pairs:", n_pairs, "\n")
+    
+    withProgress(message = 'Performing pairwise comparisons', value = 0, {
+      for(pair_idx in 1:n_pairs) {
+        incProgress(1/n_pairs, detail = paste("Comparing", pair_names[pair_idx]))
+        
+        pair <- pairs[[pair_idx]]
+        
+        # Get indices for each condition
+        idx1 <- which(rm_factor == pair[1])
+        idx2 <- which(rm_factor == pair[2])
+        
+        # Match subjects across conditions
+        subjects_in_1 <- subject_id[idx1]
+        subjects_in_2 <- subject_id[idx2]
+        
+        # Find subjects present in both conditions (for paired comparison)
+        common_subjects <- intersect(subjects_in_1, subjects_in_2)
+        n_pairs_subj <- length(common_subjects)
+        
+        cat("  Pair:", pair_names[pair_idx], "- Matched subjects:", n_pairs_subj, "\n")
+        
+        if(n_pairs_subj < 2) {
+          warning("Not enough paired subjects for comparison: ", pair_names[pair_idx])
+          next
+        }
+        
+        # Extract matched curves
+        matched_curves1 <- matrix(NA, n_time, n_pairs_subj)
+        matched_curves2 <- matrix(NA, n_time, n_pairs_subj)
+        
+        for(i in 1:n_pairs_subj) {
+          subj <- common_subjects[i]
+          
+          # Find this subject's curve in condition 1
+          subj_idx1 <- idx1[which(subjects_in_1 == subj)[1]]
+          matched_curves1[, i] <- curves[, subj_idx1]
+          
+          # Find this subject's curve in condition 2
+          subj_idx2 <- idx2[which(subjects_in_2 == subj)[1]]
+          matched_curves2[, i] <- curves[, subj_idx2]
+        }
+        
+        # Calculate paired differences
+        paired_diffs <- matched_curves1 - matched_curves2
+        mean_diff <- rowMeans(paired_diffs)
+        
+        # Calculate paired t-statistics
+        se_diff <- apply(paired_diffs, 1, sd) / sqrt(n_pairs_subj)
+        t_stat <- mean_diff / se_diff
+        
+        # Handle NaN/Inf (when se_diff is 0)
+        t_stat[!is.finite(t_stat)] <- 0
+        
+        # L2 norm statistic
+        L2_stat <- sqrt(sum(mean_diff^2))
+        
+        # Permutation test for paired data
+        # Randomly flip signs of differences
+        t_stat_perm <- matrix(NA, n_time, n_permutations)
+        L2_stat_perm <- numeric(n_permutations)
+        
+        for(perm in 1:n_permutations) {
+          # Random sign flips for each subject
+          sign_flips <- sample(c(-1, 1), n_pairs_subj, replace = TRUE)
+          
+          perm_diffs <- paired_diffs * rep(sign_flips, each = n_time)
+          perm_mean_diff <- rowMeans(perm_diffs)
+          perm_se_diff <- apply(perm_diffs, 1, sd) / sqrt(n_pairs_subj)
+          
+          t_stat_perm[, perm] <- perm_mean_diff / perm_se_diff
+          t_stat_perm[!is.finite(t_stat_perm[, perm]), perm] <- 0
+          
+          L2_stat_perm[perm] <- sqrt(sum(perm_mean_diff^2))
+        }
+        
+        # Calculate p-values
+        p_values_pointwise <- numeric(n_time)
+        for(t in 1:n_time) {
+          p_values_pointwise[t] <- mean(abs(t_stat_perm[t, ]) >= abs(t_stat[t]), na.rm = TRUE)
+        }
+        
+        p_value_L2 <- mean(L2_stat_perm >= L2_stat)
+        
+        # Bootstrap confidence intervals for paired differences
+        n_boot <- 100
+        diff_boot <- matrix(NA, n_time, n_boot)
+        
+        for(boot in 1:n_boot) {
+          boot_idx <- sample(1:n_pairs_subj, replace = TRUE)
+          diff_boot[, boot] <- rowMeans(paired_diffs[, boot_idx, drop = FALSE])
+        }
+        
+        ci_lower <- apply(diff_boot, 1, quantile, probs = 0.025, na.rm = TRUE)
+        ci_upper <- apply(diff_boot, 1, quantile, probs = 0.975, na.rm = TRUE)
+        
+        # Cohen's d for paired samples (using SD of differences)
+        sd_diff <- apply(paired_diffs, 1, sd)
+        cohens_d <- mean_diff / sd_diff
+        cohens_d[!is.finite(cohens_d)] <- 0
+        
+        # Calculate means for each condition (for plotting)
+        mean1 <- rowMeans(matched_curves1)
+        mean2 <- rowMeans(matched_curves2)
+        
+        pairwise_results[[pair_names[pair_idx]]] <- list(
+          group1 = pair[1],
+          group2 = pair[2],
+          n1 = n_pairs_subj,  # Number of matched pairs
+          n2 = n_pairs_subj,
+          n_matched = n_pairs_subj,
+          design = "within",
+          mean1 = mean1,
+          mean2 = mean2,
+          mean_diff = mean_diff,
+          t_stat = t_stat,
+          p_values_pointwise = p_values_pointwise,
+          L2_stat = L2_stat,
+          p_value_L2 = p_value_L2,
+          ci_lower = ci_lower,
+          ci_upper = ci_upper,
+          cohens_d = cohens_d,
+          se_diff = se_diff
+        )
+      }
+    })
+    
+    # Apply multiple comparison correction
+    all_p_values_L2 <- sapply(pairwise_results, function(x) x$p_value_L2)
+    adjusted_p_values_L2 <- p.adjust(all_p_values_L2, method = correction_method)
+    
+    # Apply correction to pointwise p-values
+    for(i in 1:length(pairwise_results)) {
+      pairwise_results[[i]]$p_values_adjusted <- p.adjust(pairwise_results[[i]]$p_values_pointwise, 
+                                                          method = correction_method)
+      pairwise_results[[i]]$p_value_L2_adjusted <- adjusted_p_values_L2[i]
+      pairwise_results[[i]]$sig_regions <- pairwise_results[[i]]$p_values_adjusted < alpha
+      pairwise_results[[i]]$sig_global <- pairwise_results[[i]]$p_value_L2_adjusted < alpha
+    }
+    
+    return(list(
+      results = pairwise_results,
+      time_points = time_points,
+      correction_method = correction_method,
+      alpha = alpha,
+      n_permutations = n_permutations,
+      groups = conditions,
+      n_groups = n_conditions,
+      pair_names = pair_names,
+      design = "within"
+    ))
+  }
+  
+  # Between-Subjects Pairwise Comparisons (original function)
+  perform_pairwise_comparisons <- function(fd_obj, group_labels, n_permutations = 200,
+                                           correction_method = "bonferroni", alpha = 0.05) {
+    
+    n_curves <- ncol(fd_obj$coefs)
+    n_time <- 100
+    time_points <- seq(0, 1, length.out = n_time)
+    
+    curves <- eval.fd(time_points, fd_obj)
+    
+    group_labels <- as.factor(group_labels)
+    groups <- levels(group_labels)
+    n_groups <- length(groups)
+    
+    n_pairs <- choose(n_groups, 2)
+    pairs <- combn(groups, 2, simplify = FALSE)
+    pair_names <- sapply(pairs, function(p) paste(p[1], "vs", p[2]))
+    
+    pairwise_results <- list()
+    
+    withProgress(message = 'Performing pairwise comparisons', value = 0, {
+      for(pair_idx in 1:n_pairs) {
+        incProgress(1/n_pairs, detail = paste("Comparing", pair_names[pair_idx]))
+        
+        pair <- pairs[[pair_idx]]
+        idx1 <- which(group_labels == pair[1])
+        idx2 <- which(group_labels == pair[2])
+        
+        curves1 <- curves[, idx1, drop = FALSE]
+        curves2 <- curves[, idx2, drop = FALSE]
+        
+        n1 <- length(idx1)
+        n2 <- length(idx2)
+        
+        mean1 <- rowMeans(curves1)
+        mean2 <- rowMeans(curves2)
+        mean_diff <- mean1 - mean2
+        
+        # Calculate proper t-statistics
+        pooled_var <- ((n1 - 1) * apply(curves1, 1, var) + 
+                         (n2 - 1) * apply(curves2, 1, var)) / (n1 + n2 - 2)
+        se_diff <- sqrt(pooled_var * (1/n1 + 1/n2))
+        t_stat <- mean_diff / se_diff
+        
+        # L2 norm statistic
+        L2_stat <- sqrt(sum(mean_diff^2))
+        
+        # Permutation test
+        t_stat_perm <- matrix(NA, n_time, n_permutations)
+        L2_stat_perm <- numeric(n_permutations)
+        
+        combined_curves <- cbind(curves1, curves2)
+        combined_labels <- c(rep(1, n1), rep(2, n2))
+        
+        for(perm in 1:n_permutations) {
+          perm_labels <- sample(combined_labels)
+          
+          perm_curves1 <- combined_curves[, perm_labels == 1, drop = FALSE]
+          perm_curves2 <- combined_curves[, perm_labels == 2, drop = FALSE]
+          
+          perm_mean1 <- rowMeans(perm_curves1)
+          perm_mean2 <- rowMeans(perm_curves2)
+          perm_diff <- perm_mean1 - perm_mean2
+          
+          perm_pooled_var <- ((n1 - 1) * apply(perm_curves1, 1, var) + 
+                                (n2 - 1) * apply(perm_curves2, 1, var)) / (n1 + n2 - 2)
+          perm_se_diff <- sqrt(perm_pooled_var * (1/n1 + 1/n2))
+          
+          t_stat_perm[, perm] <- perm_diff / perm_se_diff
+          L2_stat_perm[perm] <- sqrt(sum(perm_diff^2))
+        }
+        
+        # Calculate p-values
+        p_values_pointwise <- numeric(n_time)
+        for(t in 1:n_time) {
+          p_values_pointwise[t] <- mean(abs(t_stat_perm[t, ]) >= abs(t_stat[t]), na.rm = TRUE)
+        }
+        
+        p_value_L2 <- mean(L2_stat_perm >= L2_stat)
+        
+        # Bootstrap confidence intervals
+        n_boot <- 100
+        diff_boot <- matrix(NA, n_time, n_boot)
+        
+        for(boot in 1:n_boot) {
+          boot_idx1 <- sample(idx1, replace = TRUE)
+          boot_idx2 <- sample(idx2, replace = TRUE)
+          
+          boot_mean1 <- rowMeans(curves[, boot_idx1, drop = FALSE])
+          boot_mean2 <- rowMeans(curves[, boot_idx2, drop = FALSE])
+          diff_boot[, boot] <- boot_mean1 - boot_mean2
+        }
+        
+        ci_lower <- apply(diff_boot, 1, quantile, probs = 0.025)
+        ci_upper <- apply(diff_boot, 1, quantile, probs = 0.975)
+        
+        # Cohen's d effect size
+        cohens_d <- mean_diff / sqrt(pooled_var)
+        
+        pairwise_results[[pair_names[pair_idx]]] <- list(
+          group1 = pair[1],
+          group2 = pair[2],
+          n1 = n1,
+          n2 = n2,
+          design = "between",
+          mean_diff = mean_diff,
+          t_stat = t_stat,
+          p_values_pointwise = p_values_pointwise,
+          L2_stat = L2_stat,
+          p_value_L2 = p_value_L2,
+          ci_lower = ci_lower,
+          ci_upper = ci_upper,
+          cohens_d = cohens_d,
+          se_diff = se_diff
+        )
+      }
+    })
+    
+    # Apply multiple comparison correction
+    all_p_values_L2 <- sapply(pairwise_results, function(x) x$p_value_L2)
+    adjusted_p_values_L2 <- p.adjust(all_p_values_L2, method = correction_method)
+    
+    # Apply correction to pointwise p-values
+    for(i in 1:n_pairs) {
+      pairwise_results[[i]]$p_values_adjusted <- p.adjust(pairwise_results[[i]]$p_values_pointwise, 
+                                                          method = correction_method)
+      pairwise_results[[i]]$p_value_L2_adjusted <- adjusted_p_values_L2[i]
+      pairwise_results[[i]]$sig_regions <- pairwise_results[[i]]$p_values_adjusted < alpha
+      pairwise_results[[i]]$sig_global <- pairwise_results[[i]]$p_value_L2_adjusted < alpha
+    }
+    
+    return(list(
+      results = pairwise_results,
+      time_points = time_points,
+      correction_method = correction_method,
+      alpha = alpha,
+      n_permutations = n_permutations,
+      groups = groups,
+      n_groups = n_groups,
+      pair_names = pair_names,
+      design = "between"
+    ))
+  }
+  
+  # Run pairwise comparisons - ENHANCED for both between and within designs
+  observeEvent(input$run_pairwise, {
+    if(is.null(values$fanova_results)) {
+      showNotification("Please run Functional ANOVA first!", type = "error", duration = 5)
+      return()
+    }
+    
+    cat("Running pairwise comparisons...\n")
+    
+    # Check if this is a within-subjects design
+    design_type <- if(!is.null(values$fanova_results$design)) {
+      values$fanova_results$design
+    } else {
+      "between"
+    }
+    
+    cat("Design type:", design_type, "\n")
+    
+    tryCatch({
+      # Use the same data source as FANOVA
+      fd_to_use <- NULL
+      
+      # Check what data source was used in FANOVA
+      if(!is.null(values$fanova_results$data_source) && 
+         values$fanova_results$data_source == "warped" && 
+         !is.null(values$warping_results)) {
+        
+        cat("Using time-warped curves for pairwise comparisons\n")
+        
+        if(!is.null(values$warping_results$regfd)) {
+          fd_to_use <- values$warping_results$regfd
+        } else if(!is.null(values$warping_results$registered_curves)) {
+          n_time <- nrow(values$warping_results$registered_curves)
+          time_points <- values$warping_results$time_points
+          if(is.null(time_points)) {
+            time_points <- seq(0, 1, length.out = n_time)
+          }
+          basis <- create.bspline.basis(rangeval = c(0, 1), nbasis = min(20, n_time-2))
+          # Use lambda=0: registered curves already processed, just need fd representation
+          fd_to_use <- smooth.basis(time_points, values$warping_results$registered_curves, 
+                                    fdPar(basis, 2, 0))$fd
+        }
+      }
+      
+      # Fallback to original data if warped not available
+      if(is.null(fd_to_use)) {
+        cat("Using original curves for pairwise comparisons\n")
+        fd_to_use <- values$fd_obj
+      }
+      
+      # Call appropriate pairwise function based on design
+      # IMPORTANT: Use the same n_permutations that was used in the omnibus FANOVA
+      n_perm_to_use <- if(!is.null(values$fanova_results$n_permutations)) {
+        values$fanova_results$n_permutations
+      } else {
+        input$pairwise_permutations  # Fallback
+      }
+      
+      cat("Using", n_perm_to_use, "permutations (same as omnibus test)\n")
+      
+      if(design_type == "within") {
+        # Within-subjects: need subject IDs and RM factor
+        if(is.null(values$fanova_results$subject_id) || is.null(values$fanova_results$rm_factor)) {
+          showNotification("Subject ID or RM factor missing from FANOVA results!", type = "error", duration = 5)
+          return()
+        }
+        
+        cat("Performing PAIRED comparisons for within-subjects design\n")
+        
+        values$pairwise_results <- perform_pairwise_comparisons_rm(
+          fd_obj = fd_to_use,
+          subject_id = values$fanova_results$subject_id,
+          rm_factor = values$fanova_results$rm_factor,
+          n_permutations = n_perm_to_use,
+          correction_method = input$pairwise_correction,
+          alpha = input$pairwise_alpha
+        )
+      } else {
+        # Between-subjects: use original function
+        cat("Performing INDEPENDENT comparisons for between-subjects design\n")
+        
+        values$pairwise_results <- perform_pairwise_comparisons(
+          fd_obj = fd_to_use,
+          group_labels = values$group_labels,
+          n_permutations = n_perm_to_use,
+          correction_method = input$pairwise_correction,
+          alpha = input$pairwise_alpha
+        )
+      }
+      
+      showNotification("Pairwise comparisons completed!", type = "message", duration = 3)
+      
+    }, error = function(e) {
+      cat("Pairwise error:", e$message, "\n")
+      showNotification(paste("Pairwise comparison error:", e$message), type = "error", duration = 10)
+    })
+  })
+
+  # ALL REMAINING PAIRWISE AND EXPORT OUTPUTS - included as-is from the original
+  # (These are all already correctly written - just ensuring they're included)
+  
+  output$pairwise_selector <- renderUI({
+    req(values$pairwise_results)
+    
+    selectInput("selected_pair", "Select pairwise comparison:",
+                choices = values$pairwise_results$pair_names,
+                selected = values$pairwise_results$pair_names[1])
+  })
+  
+  output$pairwise_summary <- renderPrint({
+    req(values$pairwise_results)
+    
+    res <- values$pairwise_results
+    
+    cat("========================================\n")
+    cat("  PAIRWISE COMPARISONS SUMMARY\n")
+    cat("========================================\n\n")
+    
+    # Show design type
+    design_type <- if(!is.null(res$design)) {
+      if(res$design == "within") "Within-Subjects (PAIRED)" else "Between-Subjects (INDEPENDENT)"
+    } else {
+      "Between-Subjects (INDEPENDENT)"
+    }
+    cat("Design:", design_type, "\n\n")
+    
+    cat("Number of groups/conditions:", res$n_groups, "\n")
+    cat("Number of comparisons:", length(res$pair_names), "\n")
+    cat("Correction method:", res$correction_method, "\n")
+    cat("Significance level:", res$alpha, "\n")
+    cat("Permutations:", res$n_permutations, "\n\n")
+    
+    n_sig_global <- sum(sapply(res$results, function(x) x$sig_global))
+    
+    cat("Results Summary:\n")
+    cat("----------------\n")
+    cat("Globally significant comparisons:", n_sig_global, "/", 
+        length(res$pair_names), 
+        sprintf("(%.1f%%)", 100 * n_sig_global / length(res$pair_names)), "\n\n")
+    
+    if(n_sig_global > 0) {
+      cat("Significant pairs (global test):\n")
+      for(pair_name in res$pair_names) {
+        if(res$results[[pair_name]]$sig_global) {
+          p_val <- res$results[[pair_name]]$p_value_L2_adjusted
+          stars <- if(p_val < 0.001) "***" else if(p_val < 0.01) "**" else if(p_val < 0.05) "*" else ""
+          cat(sprintf("   - %-20s p = %s %s\n", 
+                      pair_name, 
+                      format.pval(p_val, digits = 4),
+                      stars))
+        }
+      }
+    } else {
+      cat("No significant pairwise differences found.\n")
+    }
+    
+    cat("\n========================================\n")
+  })
+  
+  output$pairwise_global_table <- renderDT({
+    req(values$pairwise_results)
+    
+    results_df <- data.frame(
+      Comparison = values$pairwise_results$pair_names,
+      N1 = sapply(values$pairwise_results$results, function(x) x$n1),
+      N2 = sapply(values$pairwise_results$results, function(x) x$n2),
+      L2_Stat = round(sapply(values$pairwise_results$results, function(x) x$L2_stat), 3),
+      P_Raw = sapply(values$pairwise_results$results, function(x) 
+        format.pval(x$p_value_L2, digits = 4)),
+      P_Adj = sapply(values$pairwise_results$results, function(x) 
+        format.pval(x$p_value_L2_adjusted, digits = 4)),
+      Sig = ifelse(sapply(values$pairwise_results$results, function(x) x$sig_global), 
+                   "Yes", "No"),
+      Mean_Cohen_d = round(sapply(values$pairwise_results$results, function(x) 
+        mean(abs(x$cohens_d))), 3)
+    )
+    
+    datatable(results_df, 
+              options = list(pageLength = 15, scrollX = TRUE), 
+              rownames = FALSE) %>%
+      formatStyle("Sig",
+                  backgroundColor = styleEqual("Yes", "#d4edda")) %>%
+      formatStyle("Mean_Cohen_d",
+                  backgroundColor = styleInterval(c(0.2, 0.5, 0.8), 
+                                                  c("white", "#ffffcc", "#ffcccc", "#ff9999")))
+  })
+  
+  output$pairwise_difference_plot <- renderPlotly({
+    req(values$pairwise_results, input$selected_pair)
+
+    pair_result <- values$pairwise_results$results[[input$selected_pair]]
+    time_points <- values$pairwise_results$time_points
+    hover_times <- hover_time_labels(time_points)
+
+    p <- plot_ly(type = 'scatter', mode = 'lines')
+    
+    if(any(pair_result$sig_regions)) {
+      sig_starts <- which(diff(c(0, pair_result$sig_regions)) == 1)
+      sig_ends <- which(diff(c(pair_result$sig_regions, 0)) == -1)
+      
+      for(i in 1:length(sig_starts)) {
+        y_range <- range(c(pair_result$ci_lower, pair_result$ci_upper))
+        y_expand <- diff(y_range) * 0.1
+        
+        p <- p %>% add_trace(
+          x = c(time_points[sig_starts[i]], time_points[sig_ends[i]], 
+                time_points[sig_ends[i]], time_points[sig_starts[i]]),
+          y = c(min(y_range) - y_expand, min(y_range) - y_expand,
+                max(y_range) + y_expand, max(y_range) + y_expand),
+          fill = 'toself',
+          fillcolor = 'rgba(255, 200, 200, 0.3)',
+          line = list(color = 'transparent'),
+          showlegend = (i == 1),
+          name = 'Significant',
+          hoverinfo = 'skip'
+        )
+      }
+    }
+    
+    if(input$pairwise_confidence_bands) {
+      p <- p %>% add_trace(
+        x = c(time_points, rev(time_points)),
+        y = c(pair_result$ci_lower, rev(pair_result$ci_upper)),
+        fill = 'toself',
+        fillcolor = 'rgba(100, 100, 255, 0.2)',
+        line = list(color = 'transparent'),
+        name = '95% CI',
+        hoverinfo = 'skip'
+      )
+      
+      p <- p %>% add_trace(
+        x = time_points,
+        y = pair_result$ci_lower,
+        line = list(color = 'lightblue', width = 1, dash = 'dot'),
+        showlegend = FALSE,
+        hoverinfo = 'skip'
+      ) %>% add_trace(
+        x = time_points,
+        y = pair_result$ci_upper,
+        line = list(color = 'lightblue', width = 1, dash = 'dot'),
+        showlegend = FALSE,
+        hoverinfo = 'skip'
+      )
+    }
+    
+    p <- p %>% add_trace(
+      x = time_points,
+      y = pair_result$mean_diff,
+      line = list(color = 'blue', width = 3),
+      name = 'Mean Difference',
+      hovertemplate = paste("Time: %{customdata}",
+                            "<br>Difference: %{y:.3f}",
+                            "<br>Cohen's d: ", round(pair_result$cohens_d, 2),
+                            "<extra></extra>"),
+      customdata = hover_times
+    )
+    
+    p <- p %>% add_trace(
+      x = c(0, 1),
+      y = c(0, 0),
+      line = list(color = 'black', width = 1, dash = 'dash'),
+      name = 'Zero',
+      hoverinfo = 'none'
+    )
+    
+    mean_effect <- mean(abs(pair_result$cohens_d))
+    effect_text <- if(mean_effect < 0.2) "Negligible" else if(mean_effect < 0.5) "Small" else if(mean_effect < 0.8) "Medium" else "Large"
+    
+    p <- p %>% layout(
+      title = paste("Difference:", pair_result$group1, "-", pair_result$group2,
+                    "<br><sub>Mean |Cohen's d| =", round(mean_effect, 2), 
+                    "(", effect_text, "effect)</sub>"),
+      yaxis = list(title = "Mean Difference"),
+      hovermode = 'x',
+      legend = list(x = 0.02, y = 0.98)
+    )
+
+    p <- format_plotly_time_axis(p, time_points, tick_step_hours = as.numeric(input$tick_freq_pairwise))
+    p
+  })
+  
+  output$pairwise_pvalue_plot <- renderPlotly({
+    req(values$pairwise_results, input$selected_pair)
+
+    pair_result <- values$pairwise_results$results[[input$selected_pair]]
+    time_points <- values$pairwise_results$time_points
+    hover_times <- hover_time_labels(time_points)
+    
+    p <- plot_ly(type = 'scatter', mode = 'lines')
+    
+    if(any(pair_result$sig_regions)) {
+      sig_starts <- which(diff(c(0, pair_result$sig_regions)) == 1)
+      sig_ends <- which(diff(c(pair_result$sig_regions, 0)) == -1)
+      
+      for(i in 1:length(sig_starts)) {
+        p <- p %>% add_trace(
+          x = c(time_points[sig_starts[i]], time_points[sig_ends[i]], 
+                time_points[sig_ends[i]], time_points[sig_starts[i]]),
+          y = c(0.0001, 0.0001, 1, 1),
+          fill = 'toself',
+          fillcolor = 'rgba(200, 255, 200, 0.3)',
+          line = list(color = 'transparent'),
+          showlegend = (i == 1),
+          name = 'Significant region',
+          hoverinfo = 'skip'
+        )
+      }
+    }
+    
+    p <- p %>% add_trace(
+      x = time_points,
+      y = pair_result$p_values_adjusted,
+      line = list(color = 'darkgreen', width = 2),
+      name = paste('Adjusted p-values (', values$pairwise_results$correction_method, ')', sep = ''),
+      hovertemplate = "Time: %{customdata}<br>Adjusted p: %{y:.4f}<extra></extra>",
+      customdata = hover_times
+    ) %>%
+      add_trace(
+        x = time_points,
+        y = pair_result$p_values_pointwise,
+        line = list(color = 'lightgreen', width = 1, dash = 'dot'),
+        name = 'Raw p-values',
+        hovertemplate = "Time: %{customdata}<br>Raw p: %{y:.4f}<extra></extra>",
+        customdata = hover_times
+      ) %>%
+      add_trace(
+        x = c(0, 1),
+        y = c(input$pairwise_alpha, input$pairwise_alpha),
+        line = list(color = 'red', width = 2, dash = 'dash'),
+        name = paste('α =', input$pairwise_alpha),
+        hoverinfo = 'none'
+      )
+    
+    p <- p %>% add_trace(
+      x = c(0, 1),
+      y = c(0.01, 0.01),
+      line = list(color = 'orange', width = 1, dash = 'dot'),
+      name = 'p = 0.01',
+      hoverinfo = 'none'
+    ) %>%
+      add_trace(
+        x = c(0, 1),
+        y = c(0.001, 0.001),
+        line = list(color = 'darkred', width = 1, dash = 'dot'),
+        name = 'p = 0.001',
+        hoverinfo = 'none'
+      )
+    
+    p <- p %>% layout(
+      title = paste("P-values:", input$selected_pair),
+      yaxis = list(
+        title = "p-value",
+        type = 'log',
+        range = c(log10(0.0001), log10(1)),
+        tickvals = c(0.001, 0.01, 0.05, 0.1, 0.5, 1),
+        ticktext = c("0.001", "0.01", "0.05", "0.1", "0.5", "1")
+      ),
+      hovermode = 'x',
+      legend = list(x = 0.02, y = 0.02)
+    )
+
+    p <- format_plotly_time_axis(p, time_points, tick_step_hours = as.numeric(input$tick_freq_pairwise))
+    p
+  })
+  
+  output$pairwise_heatmap <- renderPlotly({
+    req(values$pairwise_results)
+    
+    n_groups <- values$pairwise_results$n_groups
+    groups <- values$pairwise_results$groups
+    
+    p_matrix <- matrix(1, nrow = n_groups, ncol = n_groups)
+    rownames(p_matrix) <- groups
+    colnames(p_matrix) <- groups
+    
+    for(pair_name in values$pairwise_results$pair_names) {
+      pair_result <- values$pairwise_results$results[[pair_name]]
+      i <- which(groups == pair_result$group1)
+      j <- which(groups == pair_result$group2)
+      p_val <- pair_result$p_value_L2_adjusted
+      p_matrix[i, j] <- p_val
+      p_matrix[j, i] <- p_val
+    }
+    
+    z_matrix <- -log10(p_matrix)
+    z_matrix[is.infinite(z_matrix)] <- 5
+    
+    hover_text <- matrix("", nrow = n_groups, ncol = n_groups)
+    for(i in 1:n_groups) {
+      for(j in 1:n_groups) {
+        if(i == j) {
+          hover_text[i, j] <- paste(groups[i], "(same group)")
+        } else {
+          p_val_text <- if(p_matrix[i, j] < 0.001) {
+            "< 0.001"
+          } else {
+            format(round(p_matrix[i, j], 4), nsmall = 4)
+          }
+          sig_text <- if(p_matrix[i, j] < values$pairwise_results$alpha) "***" else "n.s."
+          hover_text[i, j] <- paste(groups[i], "vs", groups[j],
+                                    "<br>p =", p_val_text,
+                                    "<br>", sig_text)
+        }
+      }
+    }
+    
+    annotations <- list()
+    for(i in 1:n_groups) {
+      for(j in 1:n_groups) {
+        if(i != j) {
+          star_text <- if(p_matrix[i, j] < 0.001) "***" else 
+            if(p_matrix[i, j] < 0.01) "**" else 
+              if(p_matrix[i, j] < 0.05) "*" else ""
+          
+          if(star_text != "") {
+            annotations <- append(annotations, list(list(
+              x = groups[j],
+              y = groups[i],
+              text = star_text,
+              showarrow = FALSE,
+              font = list(color = 'white', size = 14)
+            )))
+          }
+        }
+      }
+    }
+    
+    plot_ly(
+      z = z_matrix,
+      x = groups,
+      y = groups,
+      type = 'heatmap',
+      colorscale = list(
+        c(0, 'white'),
+        c(0.3, 'lightblue'),
+        c(0.6, 'blue'),
+        c(1, 'darkred')
+      ),
+      hovertemplate = "%{text}<extra></extra>",
+      text = hover_text,
+      colorbar = list(
+        title = "Significance",
+        tickmode = "array",
+        tickvals = c(0, -log10(0.05), -log10(0.01), -log10(0.001), 5),
+        ticktext = c("1", "0.05", "0.01", "0.001", "<0.00001")
+      )
+    ) %>%
+      layout(
+        title = paste("Pairwise Comparison P-values (", values$pairwise_results$correction_method, "correction)"),
+        xaxis = list(title = "", tickangle = 45),
+        yaxis = list(title = "", autorange = 'reversed'),
+        annotations = annotations
+      )
+  })
+  
+  output$pairwise_significance_timeline <- renderPlotly({
+    req(values$pairwise_results)
+    
+    time_points <- values$pairwise_results$time_points
+    n_pairs <- length(values$pairwise_results$pair_names)
+    hover_times <- hover_time_labels(time_points)
+    
+    p <- plot_ly(type = 'scatter', mode = 'lines')
+    
+    base_cols <- c('#e41a1c','#377eb8','#4daf4a','#984ea3','#ff7f00',
+                   '#ffff33','#a65628','#f781bf','#999999','#66c2a5',
+                   '#fc8d62','#8da0cb','#e78ac3','#a6d854','#ffd92f')
+    colors <- colorRampPalette(base_cols)(n_pairs)
+    
+    for(i in 1:n_pairs) {
+      p <- p %>% add_trace(
+        x = time_points,
+        y = rep(i, length(time_points)),
+        line = list(color = 'lightgray', width = 0.5),
+        showlegend = FALSE,
+        hoverinfo = 'skip'
+      )
+    }
+    
+    for(i in 1:n_pairs) {
+      pair_name <- values$pairwise_results$pair_names[i]
+      pair_result <- values$pairwise_results$results[[pair_name]]
+      
+      if(any(pair_result$sig_regions)) {
+        sig_starts <- which(diff(c(0, pair_result$sig_regions)) == 1)
+        sig_ends <- which(diff(c(pair_result$sig_regions, 0)) == -1)
+        
+        for(j in 1:length(sig_starts)) {
+          p <- p %>% add_trace(
+            x = time_points[sig_starts[j]:sig_ends[j]],
+            y = rep(i, sig_ends[j] - sig_starts[j] + 1),
+            line = list(color = colors[i], width = 8),
+            showlegend = (j == 1),
+            name = pair_name,
+            legendgroup = pair_name,
+            hovertemplate = paste(pair_name,
+                                  "<br>Time: %{customdata}",
+                                  "<br>Significant<extra></extra>"),
+            customdata = hover_times[sig_starts[j]:sig_ends[j]]
+          )
+        }
+      } else {
+        p <- p %>% add_trace(
+          x = c(NA),
+          y = c(NA),
+          name = paste(pair_name, "(n.s.)"),
+          line = list(color = 'gray'),
+          showlegend = TRUE
+        )
+      }
+    }
+    
+    for(t in seq(0, 1, by = 0.25)) {
+      p <- p %>% add_trace(
+        x = c(t, t),
+        y = c(0.5, n_pairs + 0.5),
+        line = list(color = 'lightgray', width = 0.5, dash = 'dot'),
+        showlegend = FALSE,
+        hoverinfo = 'skip'
+      )
+    }
+    
+    p <- p %>% layout(
+      title = "Timeline of Significant Regions",
+      xaxis = list(title = "Time", range = c(0, 1)),
+      yaxis = list(
+        title = "Comparison",
+        tickmode = "array",
+        tickvals = 1:n_pairs,
+        ticktext = values$pairwise_results$pair_names,
+        range = c(0.5, n_pairs + 0.5),
+        autorange = 'reversed'
+      ),
+      hovermode = 'x',
+      plot_bgcolor = 'rgba(240, 240, 240, 0.5)',
+      legend = list(x = 1.02, y = 1, font = list(size = 10))
+    )
+    
+    # Apply time label formatting
+    p <- format_plotly_time_axis(p, tick_step_hours = as.numeric(input$tick_freq_pairwise))
+    p
+  })
+  
+  output$pairwise_regions_table <- renderDT({
+    req(values$pairwise_results)
+    
+    # Placeholder table - would need implementation
+    datatable(data.frame(Message = "Regions table not yet implemented"),
+              options = list(dom = 't'),
+              rownames = FALSE)
+  })
