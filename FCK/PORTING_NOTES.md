@@ -118,12 +118,33 @@ feeding seven analyses that would be much easier to miss, so applying smoothing
 (or a new file, or a new variable selection) clears the analysis results and
 they have to be re-run.
 
-**4.8 Harmonic time values.** The cosinor tab detects clock times from the
-column names itself; the shared import now does the same thing once, into
-`values$time_numeric`. Rather than have two detectors disagree, the cosinor
-time selector gained one extra option — "Use shared times detected at import".
-It is additive: the default is still `_index_`, so the tab behaves exactly as
-before unless you pick the new option.
+**4.8 Harmonic time values, and the two meanings of "time".** WaPaa has two
+notions of time that are easy to confuse:
+
+* `extract_time_values()` returns `1:n_time`. It does **not** read the column
+  names — its own comment says "Use sequential numbering to maintain
+  chronology". This is what fills `values$time_numeric` and what every ported
+  plot uses as its x coordinate.
+* `extract_hour_from_colname()` is the real parser (`Base9h` → 9,
+  `Base7h30` → 7.5, `KSS_9u_dag1` → 9, `X8.25` → 8.25) and is used only to
+  build axis *labels*.
+
+Both are left exactly as they are, so every ported plot keeps its original
+coordinates. `FCK/server/03_helpers_clock.R` adds a third, explicitly named
+thing: `values$time_clock`, real clock hours reported **only when they can be
+trusted** — every column must parse to a finite hour in `[0, 24)`, which
+rejects the `T1…T30` case where the parser's "any number" fallback would
+otherwise hand back column indices dressed up as hours.
+
+On that basis the cosinor time selector gains one extra option, "Use shared
+clock times parsed at import". It is additive: the default is still `_index_`,
+so the tab behaves exactly as before unless you pick it, and it refuses with a
+message rather than guessing when no clock times could be parsed.
+
+*(This corrects an earlier version of the merge in which that option read
+`values$time_numeric` — i.e. it fed `1, 2, 3, …` to the cosinor fit while its
+label promised clock times. Harmless for evenly-spaced hourly columns, wrong
+for the unequally-spaced designs the option exists to serve.)*
 
 **4.9 Landmark plot NULL guard.** *(bug fix)* WaPaa's landmark plot branches on
 `input$landmark_target` and `input$selected_subject`, neither of which its UI
@@ -147,6 +168,32 @@ reported if not.
 
 **4.12 Tab id.** CIRCAREG's pairwise tab used `tabName = "pairwise"`, which
 WaPaa's post-hoc tab already owns; the cosinor one is now `harm_pairwise`.
+
+**4.13 Smoothing can use real clock times.** *(new, opt-in)* Both source apps
+smoothed against the column index (`t <- 1:n_time`), which is correct only when
+the columns are evenly spaced in real time. CIRCAREG's own help text
+acknowledges the problem — it tells you to enter times manually "if your
+measurements are unequally spaced (e.g. hourly during day, 2-hourly at night)"
+— but that escape hatch existed for the *cosinor fit only*. The smoothing
+underneath it, and therefore the fPCA, fANOVA and clustering built on the
+smoothed curves, still treated a 2-hour gap as one step exactly like a 1-hour
+gap.
+
+A checkbox on the smoothing tab, **"Space time points by their real clock
+times"**, switches the smoothing argument to elapsed hours
+(`fck_cumulative_hours()`, unwrapped across midnight: 20, 22, 2, 8 → 0, 2, 6,
+12). The basis range follows, a cyclic Fourier basis is then given
+`period = 24` explicitly rather than fda's default of "however long the
+recording happened to be", and the 0–1 representation the fPCA family reads is
+rescaled *preserving the spacing* — otherwise the `fd` object would put the
+columns back on an even grid and undo the whole thing.
+
+It is **off by default**, so existing results reproduce exactly. When on, the
+roughness penalty becomes per hour rather than per column, so the smoothing
+factor needs re-tuning; the app says so when you apply it, and the fit summary
+now reports which time axis produced the numbers. If the column names yield no
+usable clock times the app warns and falls back to the column index rather than
+silently doing something else.
 
 ## 5. Rename table
 
@@ -178,11 +225,18 @@ duplicate code.
 * **Two time-detection paths still exist.** The cosinor tab keeps its own
   column-name parser alongside the shared one (4.8). They agree on the common
   formats; the shared one is one click away if they ever disagree.
+* **Real-time spacing is opt-in, not automatic.** The Data Import tab now says
+  when your columns are unevenly spaced, but it will not switch the smoothing
+  for you — that would change results for anyone who re-ran an old analysis.
+* **Real-time smoothing has not been run end-to-end.** Its parsing and midnight
+  unwrapping are covered by `tests/clock_helpers_test.R`, but the fda calls
+  themselves have not been executed (see below).
 * **`group_summary` and `group_preview_plot`** are defined in the server but no
   UI places them. That is true in WaPaa as well — dead code carried across
   rather than silently deleted.
 * **The CV basis-count divergence** in 4.5.
-* **Not run end-to-end here.** `tests/smoke_test.R` verifies that every file
+* **Not run end-to-end here.** `tests/smoke_test.R` and
+  `tests/clock_helpers_test.R` verify that every file
   parses, the whole UI renders, every tab is reachable, no output is defined
   twice and all 16 server files register in one environment. It cannot verify
   the statistics: `fda`, `refund`, `rmfanova`, `fda.usc` and `shinyWidgets`

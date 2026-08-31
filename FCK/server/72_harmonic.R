@@ -123,23 +123,23 @@
       selectInput("harmonic_time_var", "Time Variable:", 
                   choices = c("Use column index (equally spaced)" = "_index_", 
                               "Specify times manually" = "_manual_",
-                              # MERGED APP: reuse the clock times detected once
-                              # at import (values$time_numeric) instead of
+                              # MERGED APP: reuse the clock times parsed once
+                              # at import (values$time_clock) instead of
                               # re-detecting them here.  Additive: the default
                               # is still "_index_".
-                              "Use shared times detected at import" = "_shared_",
+                              "Use shared clock times parsed at import" = "_shared_",
                               numeric_vars),
                   selected = "_index_"),
       conditionalPanel(
         condition = "input.harmonic_time_var == '_shared_'",
-        if(!is.null(values$time_numeric) && length(values$time_numeric) == n_time) {
+        if(!is.null(values$time_clock) && length(values$time_clock) == n_time) {
           div(style = "color: green; font-size: 0.9em;", icon("check-circle"),
-              sprintf(" Using the %d time values detected at import: %s%s",
-                      n_time, paste(head(values$time_numeric, 6), collapse = ", "),
+              sprintf(" Using the %d clock times parsed at import: %s%s",
+                      n_time, paste(head(values$time_clock, 6), collapse = ", "),
                       if(n_time > 6) ", ..." else ""))
         } else {
           div(style = "color: #b00; font-size: 0.9em;", icon("exclamation-triangle"),
-              " Import did not detect usable time values from the column names. Use 'Specify times manually'.")
+              " Import could not parse clock times from the column names. Use 'Specify times manually'.")
         }
       ),
       conditionalPanel(
@@ -1662,17 +1662,16 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       wrap_applied <- FALSE
       
       if(input$harmonic_time_var == "_shared_") {
-        # MERGED APP: the shared import step already extracted numeric clock
-        # times from the column names into values$time_numeric.  Use them
-        # verbatim so the harmonic tab and the fPCA/fANOVA/clustering tabs
-        # all place the same column at the same time.
-        if(is.null(values$time_numeric) || length(values$time_numeric) != n_time) {
+        # MERGED APP: the shared import step already parsed real clock hours
+        # from the column names into values$time_clock (03_helpers_clock.R).
+        # Use those, so this tab and the manual-entry route agree.
+        if(is.null(values$time_clock) || length(values$time_clock) != n_time) {
           showNotification(
-            "No shared time values available (import did not detect times from the column names). Use 'Specify times manually'.",
+            "No shared clock times available: the column names did not yield hours in [0, 24). Use 'Specify times manually'.",
             type = "error", duration = 10)
           return()
         }
-        time_vec <- as.numeric(values$time_numeric)
+        time_vec <- as.numeric(values$time_clock)
         original_times <- time_vec
 
       } else if(input$harmonic_time_var == "_index_") {

@@ -57,6 +57,11 @@
                                "none" = "None (Raw data)")
         cat("Method:", method_label, "\n")
       }
+
+      # MERGED APP: which time axis these numbers came from.
+      if(!is.null(metrics$time_axis)) {
+        cat("Time axis:", metrics$time_axis, "\n")
+      }
       
       if(!is.null(metrics$n_basis)) {
         cat("Number of B-splines:", metrics$n_basis, "\n")

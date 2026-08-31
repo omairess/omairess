@@ -122,6 +122,7 @@ observeEvent(input$load_data, {
     values$group_variables <- NULL
     values$selected_group_vars <- NULL
     values$time_numeric <- NULL
+    values$time_clock <- NULL
     fck_reset_analyses(values)
 
     showNotification("File loaded. Please select variables below.",
@@ -241,11 +242,18 @@ observeEvent(input$apply_selection, {
 
     # Time labels + numeric clock times, once, for every tab.
     values$time_labels <- colnames(temp_data)
+    # WaPaa's plotting x coordinates (1:n_time — extract_time_values() does not
+    # read the column names) ...
     values$time_numeric <- extract_time_values(values$time_labels)
+    # ... and, separately, real clock hours when the names actually yield them.
+    values$time_clock <- fck_clock_hours(values$time_labels)
     cat("Time labels stored:", paste(head(values$time_labels, 3), collapse = ", "), "...\n")
-    hour_labels <- get_hour_labels()
-    if(!is.null(hour_labels) && length(hour_labels) > 0) {
-      cat("Extracted hours:", paste(head(hour_labels, 10), collapse = ", "), "...\n")
+    if(!is.null(values$time_clock)) {
+      cat("Clock times parsed:", paste(head(values$time_clock, 10), collapse = ", "), "...\n")
+      if(fck_spacing_is_uneven(values$time_labels))
+        cat("NOTE: these time points are NOT evenly spaced.\n")
+    } else {
+      cat("No clock times could be parsed from the column names.\n")
     }
 
     # Drop all-NA rows and columns (and keep the group vectors aligned).
@@ -266,6 +274,7 @@ observeEvent(input$apply_selection, {
         values$time_labels <- values$time_labels[!na_cols]
         if(!is.null(values$time_numeric) && length(values$time_numeric) == length(na_cols))
           values$time_numeric <- values$time_numeric[!na_cols]
+        values$time_clock <- fck_clock_hours(values$time_labels)
       }
     }
 
@@ -328,7 +337,8 @@ observeEvent(input$generate_sample, {
     }
 
     values$time_labels  <- sprintf("%02d:00", hours)
-    values$time_numeric <- as.numeric(hours)
+    values$time_numeric <- seq_len(n_time)          # plotting x axis, as WaPaa
+    values$time_clock   <- as.numeric(hours)        # real clock hours: 0..23
 
     covs <- data.frame(
       ID      = 1:n_subjects,
@@ -378,13 +388,20 @@ output$data_status <- renderPrint({
   } else {
     cat("Analysis Data Ready!\n")
     cat("Dimensions:", nrow(values$data), "subjects x", ncol(values$data), "time points\n")
-    if(!is.null(values$time_numeric)) {
-      cat("Time values detected from column names:",
-          paste(head(values$time_numeric, 8), collapse = ", "),
-          if(length(values$time_numeric) > 8) "..." else "", "\n")
+    if(!is.null(values$time_clock)) {
+      cat("Clock times parsed from the column names:",
+          paste(head(values$time_clock, 8), collapse = ", "),
+          if(length(values$time_clock) > 8) "..." else "", "\n")
+      if(fck_spacing_is_uneven(values$time_labels)) {
+        cat("  These time points are NOT evenly spaced. Smoothing treats every\n")
+        cat("  column as one equal step unless you tick 'Space time points by\n")
+        cat("  their real clock times' on the smoothing tab.\n")
+      }
     } else {
-      cat("No numeric time values could be parsed from the column names.\n")
-      cat("  (Harmonic regression can still be given times manually.)\n")
+      cat("No clock times could be parsed from the column names.\n")
+      cat("  Analyses that need real time (harmonic regression, real-time\n")
+      cat("  smoothing) fall back to the column order; harmonic regression can\n")
+      cat("  also be given the times manually on its own tab.\n")
     }
     if(!is.null(values$group_labels)) {
       cat("Groups:", length(unique(values$group_labels)), "groups detected\n")

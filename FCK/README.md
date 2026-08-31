@@ -51,7 +51,10 @@ if any of these were missing):
 2. **Data Preprocessing/Smoothing** — B-spline or (for 24-hour data) Fourier
    basis, automatic REML or manual lambda, per-subject smoothing that
    interpolates missing values, optional clamping to a range, per-subject
-   R²/RMSE/EDF/GCV.
+   R²/RMSE/EDF/GCV. Optionally spaces the time points by their **real clock
+   times** instead of the column index — tick this if your measurements are
+   unevenly spaced (hourly by day, 2-hourly at night), or a long gap gets
+   smoothed as though it were a short one.
 3. **Smoothing Diagnostics** — GAM REML fit, REML profile over lambda,
    k-fold cross-validation (optionally stratified by group), GCV vs n-basis
    sweep, and a "use these results" button that sets the smoothing factor.
@@ -98,7 +101,8 @@ Everything downstream reads these, and only these:
 | `values$smooth_data` | the same matrix after the shared smoothing step |
 | `values$fd_obj` | `fda` object for the smoothed curves, on a 0–1 range |
 | `values$time_labels` | original column names, in file order |
-| `values$time_numeric` | numeric clock times parsed from those names |
+| `values$time_numeric` | column indices `1:n_time` — WaPaa's plotting x axis, *not* clock times |
+| `values$time_clock` | real clock hours parsed from the column names, or `NULL` when they cannot be trusted |
 | `values$covariates` | scalar variables, original types (predictors/response) |
 | `values$group_variables`, `$selected_group_vars`, `$group_labels` | the same scalar variables as factors, for grouping |
 
@@ -113,8 +117,9 @@ FCK/
     30_diagnostics.R … 90_export.R        <- ported tabs
   server/
     00_state.R             the shared state bus
-    01_helpers_time.R      clock-time helpers (used by every plot)
+    01_helpers_time.R      WaPaa's time helpers (used by every plot)
     02_helpers_gam.R       GAM prediction helpers
+    03_helpers_clock.R     real clock times, when they can be trusted
     10_import.R  20_smoothing.R           <- hand-merged shared steps
     11_import_views.R  21_smoothing_views.R  30_diagnostics.R
     40_fpca.R  50_fanova.R  60_clustering.R
@@ -130,10 +135,16 @@ them, and no analysis code had to be rewritten to be namespaced.
 ## Checking it still assembles
 
 ```r
-Rscript tests/smoke_test.R        # from the FCK directory
+Rscript tests/smoke_test.R           # from the FCK directory
+Rscript tests/clock_helpers_test.R
 ```
 
-It parses every file, builds and renders the whole UI, checks that every
-sidebar entry reaches a uniquely-named tab, checks that no output id is
-assigned twice, and registers all 16 server files under a mock session. It
+`smoke_test.R` parses every file, builds and renders the whole UI, checks that
+every sidebar entry reaches a uniquely-named tab, checks that no output id is
+assigned twice, and registers all 17 server files under a mock session. It
 needs only the UI packages, so it runs without `fda` or `refund` installed.
+
+`clock_helpers_test.R` pins the clock-time parsing that the cosinor tab's
+shared-times option and the real-time smoothing both depend on — including the
+midnight unwrap and the cases that must be *refused* rather than mistaken for
+hours. It needs no packages at all.

@@ -108,11 +108,16 @@ def patch(text, anchor, replacement, path, required=True):
 # ---------------------------------------------------------------------------
 
 # The harmonic tab detects clock times from the column names itself.  The
-# merged app ALSO detects them once, at import, into values$time_numeric
-# (WaPaa's extractor).  Rather than have two detectors disagree, the harmonic
-# time selector gains one EXTRA choice that reuses the shared vector.  The
-# default is unchanged ("_index_"), so the original behaviour is untouched
+# merged app ALSO parses them once, at import, into values$time_clock (see
+# FCK/server/03_helpers_clock.R).  Rather than have two detectors disagree, the
+# harmonic time selector gains one EXTRA choice that reuses the shared vector.
+# The default is unchanged ("_index_"), so the original behaviour is untouched
 # unless the user picks the new option.
+#
+# NOTE: this deliberately uses values$time_clock, NOT values$time_numeric.
+# WaPaa's extract_time_values() returns 1:n_time without reading the column
+# names at all, so time_numeric is a column counter; feeding it to a cosinor
+# fit would silently claim unequally-spaced measurements were hourly.
 HARMONIC_TIME_UI_ANCHOR = """      selectInput("harmonic_time_var", "Time Variable:", 
                   choices = c("Use column index (equally spaced)" = "_index_", 
                               "Specify times manually" = "_manual_",
@@ -122,40 +127,39 @@ HARMONIC_TIME_UI_ANCHOR = """      selectInput("harmonic_time_var", "Time Variab
 HARMONIC_TIME_UI_NEW = """      selectInput("harmonic_time_var", "Time Variable:", 
                   choices = c("Use column index (equally spaced)" = "_index_", 
                               "Specify times manually" = "_manual_",
-                              # MERGED APP: reuse the clock times detected once
-                              # at import (values$time_numeric) instead of
+                              # MERGED APP: reuse the clock times parsed once
+                              # at import (values$time_clock) instead of
                               # re-detecting them here.  Additive: the default
                               # is still "_index_".
-                              "Use shared times detected at import" = "_shared_",
+                              "Use shared clock times parsed at import" = "_shared_",
                               numeric_vars),
                   selected = "_index_"),
       conditionalPanel(
         condition = "input.harmonic_time_var == '_shared_'",
-        if(!is.null(values$time_numeric) && length(values$time_numeric) == n_time) {
+        if(!is.null(values$time_clock) && length(values$time_clock) == n_time) {
           div(style = "color: green; font-size: 0.9em;", icon("check-circle"),
-              sprintf(" Using the %d time values detected at import: %s%s",
-                      n_time, paste(head(values$time_numeric, 6), collapse = ", "),
+              sprintf(" Using the %d clock times parsed at import: %s%s",
+                      n_time, paste(head(values$time_clock, 6), collapse = ", "),
                       if(n_time > 6) ", ..." else ""))
         } else {
           div(style = "color: #b00; font-size: 0.9em;", icon("exclamation-triangle"),
-              " Import did not detect usable time values from the column names. Use 'Specify times manually'.")
+              " Import could not parse clock times from the column names. Use 'Specify times manually'.")
         }
       ),"""
 
 HARMONIC_TIME_SERVER_ANCHOR = """      if(input$harmonic_time_var == "_index_") {"""
 
 HARMONIC_TIME_SERVER_NEW = """      if(input$harmonic_time_var == "_shared_") {
-        # MERGED APP: the shared import step already extracted numeric clock
-        # times from the column names into values$time_numeric.  Use them
-        # verbatim so the harmonic tab and the fPCA/fANOVA/clustering tabs
-        # all place the same column at the same time.
-        if(is.null(values$time_numeric) || length(values$time_numeric) != n_time) {
+        # MERGED APP: the shared import step already parsed real clock hours
+        # from the column names into values$time_clock (03_helpers_clock.R).
+        # Use those, so this tab and the manual-entry route agree.
+        if(is.null(values$time_clock) || length(values$time_clock) != n_time) {
           showNotification(
-            "No shared time values available (import did not detect times from the column names). Use 'Specify times manually'.",
+            "No shared clock times available: the column names did not yield hours in [0, 24). Use 'Specify times manually'.",
             type = "error", duration = 10)
           return()
         }
-        time_vec <- as.numeric(values$time_numeric)
+        time_vec <- as.numeric(values$time_clock)
         original_times <- time_vec
 
       } else if(input$harmonic_time_var == "_index_") {"""
@@ -180,6 +184,22 @@ LANDMARK_GUARD_NEW = """      # MERGED APP: NULL-safe ordering (see tools/port_f
       # "invalid length zero argument" instead of drawing the mean curve.
       if(is.null(input$selected_subject) || is.null(input$landmark_target) ||
          input$landmark_target == "mean") {"""
+
+# The smoothing fit summary reports the method, basis count and lambda but not
+# which time axis was used.  Both source apps only ever had one (the column
+# index), so there was nothing to report; the merged app lets the user smooth
+# against real clock times instead, and a fit summary that does not say which
+# axis produced it is a summary you cannot act on.
+TIME_AXIS_ANCHOR = """        cat("Method:", method_label, "\\n")
+      }"""
+
+TIME_AXIS_NEW = """        cat("Method:", method_label, "\\n")
+      }
+
+      # MERGED APP: which time axis these numbers came from.
+      if(!is.null(metrics$time_axis)) {
+        cat("Time axis:", metrics$time_axis, "\\n")
+      }"""
 
 FOSR_EXPORT_ANCHOR = """  output$export_scores_csv <- downloadHandler("""
 FOSR_EXPORT_NEW = """  output$export_fosr_coefs_csv <- downloadHandler("""
@@ -243,7 +263,7 @@ MANIFEST = [
      [("W", 1817, 1843, "recommended n_basis when the data change", None),
       ("W", 1902, 1967, "raw data plot with clock-time axis", None)]),
     ("server/21_smoothing_views.R", None,
-     [("W", 1406, 1494, "smoothing fit statistics printout", None),
+     [("W", 1406, 1494, "smoothing fit statistics printout", "time_axis"),
       ("C", 913, 930, "compact smoothing fit-metrics panel", None),
       ("W", 2862, 3016, "interactive smoothed-curve plot + curve selection", None)]),
 
@@ -294,6 +314,8 @@ def build():
                               HARMONIC_TIME_UI_NEW, rel)
                 chunk = patch(chunk, HARMONIC_TIME_SERVER_ANCHOR,
                               HARMONIC_TIME_SERVER_NEW, rel)
+            elif transform == "time_axis":
+                chunk = patch(chunk, TIME_AXIS_ANCHOR, TIME_AXIS_NEW, rel)
             elif transform == "landmark":
                 chunk = patch(chunk, LANDMARK_GUARD_ANCHOR,
                               LANDMARK_GUARD_NEW, rel)

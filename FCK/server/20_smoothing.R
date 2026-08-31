@@ -36,8 +36,32 @@ observeEvent(input$apply_smooth, {
   tryCatch({
     n_time     <- ncol(values$data)
     n_subjects <- nrow(values$data)
-    t_full     <- 1:n_time          # integer grid: numerically stable
     cyclic     <- isTRUE(input$is_cyclic)
+
+    # ---- the time axis to smooth against ------------------------------------
+    # Both source apps used the column index, which is only correct when the
+    # columns are evenly spaced in real time. Opt in to real clock times when
+    # they are not (see FCK/server/03_helpers_clock.R).
+    real_time <- NULL
+    if(isTRUE(input$use_real_time)) {
+      real_time <- fck_cumulative_hours(values$time_labels)
+      if(is.null(real_time) || length(real_time) != n_time) {
+        real_time <- NULL
+        showNotification(
+          "Real clock times requested, but the column names do not yield hours in [0, 24). Smoothing against the column index instead.",
+          type = "warning", duration = 10)
+      }
+    }
+    using_real_time <- !is.null(real_time)
+    t_full <- if(using_real_time) real_time else 1:n_time   # smoothing argument
+    t_rng  <- range(t_full)
+
+    if(using_real_time) {
+      showNotification(
+        sprintf("Smoothing against real elapsed time (%.2f to %.2f h). The roughness penalty is now per hour, so the smoothing factor may need re-tuning.",
+                t_rng[1], t_rng[2]),
+        type = "message", duration = 8)
+    }
 
     # ---- basis size ---------------------------------------------------------
     if(input$smooth_method == "none") {
@@ -66,13 +90,18 @@ observeEvent(input$apply_smooth, {
     # CIRCAREG shipped, so it is kept rather than silently changed here.
     if(cyclic) {
       nb_used <- min(n_time, 13)
-      basis   <- create.fourier.basis(rangeval = c(1, n_time), nbasis = nb_used)
+      # On real elapsed hours the period is 24 h, not "however long the
+      # recording happened to be" (fda's default period = diff(rangeval)).
+      basis   <- if(using_real_time)
+        create.fourier.basis(rangeval = t_rng, nbasis = nb_used, period = 24)
+      else
+        create.fourier.basis(rangeval = t_rng, nbasis = nb_used)
       nb_used <- basis$nbasis
     } else if(input$smooth_method == "none") {
-      basis   <- create.bspline.basis(rangeval = c(1, n_time), breaks = t_full, norder = 4)
+      basis   <- create.bspline.basis(rangeval = t_rng, breaks = t_full, norder = 4)
       nb_used <- nb
     } else {
-      basis   <- create.bspline.basis(rangeval = c(1, n_time), nbasis = nb)
+      basis   <- create.bspline.basis(rangeval = t_rng, nbasis = nb)
       nb_used <- nb
     }
 
@@ -81,7 +110,13 @@ observeEvent(input$apply_smooth, {
       if(cyclic) create.fourier.basis(rangeval = c(0, 1), nbasis = k)
       else       create.bspline.basis(rangeval = c(0, 1), nbasis = k)
     }
-    time_points_01 <- seq(0, 1, length.out = n_time)
+    # The fPCA / warping / fANOVA / clustering family works on a 0-1 range. With
+    # real times that rescaling has to preserve the spacing, otherwise the fd
+    # object would put the columns back on an even grid and undo the point of
+    # the option. (This matches WaPaa's calculate_time_positions(), which
+    # normalises the same cumulative hours for the plot axes.)
+    time_points_01 <- if(using_real_time) (t_full - t_rng[1]) / diff(t_rng)
+                      else seq(0, 1, length.out = n_time)
 
     if(input$smooth_method == "none") {
       # ---- raw data, no smoothing -------------------------------------------
@@ -203,6 +238,7 @@ observeEvent(input$apply_smooth, {
         lambda         = lam,
         method         = input$smooth_method,
         basis_type     = if(cyclic) "fourier" else "bspline",
+        time_axis      = if(using_real_time) "real clock time (hours)" else "column index",
         mean_df        = mean(df_vec, na.rm = TRUE),
         sd_df          = sd(df_vec,   na.rm = TRUE),
         max_df         = max(df_vec,  na.rm = TRUE),
@@ -226,8 +262,10 @@ observeEvent(input$apply_smooth, {
       values$fd_obj <- smooth.basis(time_points_01, t(smooth_mat),
                                     fdPar(basis_01, 2, 0))$fd
 
-      cat(sprintf("Smoothed on 1:%d with a %s basis (%d functions); fd object re-expressed on 0-1.\n",
-                  n_time, if(cyclic) "Fourier" else "B-spline", nb_used))
+      cat(sprintf("Smoothed on %s with a %s basis (%d functions); fd object re-expressed on 0-1.\n",
+                  if(using_real_time) sprintf("real elapsed hours %.2f-%.2f", t_rng[1], t_rng[2])
+                  else sprintf("1:%d", n_time),
+                  if(cyclic) "Fourier" else "B-spline", nb_used))
 
       # ---- report ------------------------------------------------------------
       n_with_na      <- sum(apply(values$data, 1, function(x) any(is.na(x))))

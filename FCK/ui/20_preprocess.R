@@ -30,6 +30,26 @@ ui_tab_preprocess <- tabItem(
 
       # From CIRCAREG: periodic data gets a Fourier basis instead of B-splines.
       checkboxInput("is_cyclic", "Is data cyclic? (e.g. 24h clock)", FALSE),
+
+      # Both source apps smoothed against the column INDEX (1, 2, 3, ...),
+      # which is only right when the columns are evenly spaced in real time.
+      # Off by default so existing results are reproduced exactly.
+      checkboxInput("use_real_time",
+                    "Space time points by their real clock times", FALSE),
+      conditionalPanel(
+        condition = "input.use_real_time == true",
+        helpText(HTML(
+          "Uses the hours parsed from the column names (e.g. <code>Base9h</code>,
+           <code>KSS_9u_dag1</code>, <code>20h15</code>, <code>08:00</code>),
+           unwrapped across midnight, as the smoothing argument instead of
+           1, 2, 3, &hellip;<br>
+           <b>Tick this if your measurements are unevenly spaced</b> — hourly by
+           day and 2-hourly at night, say — otherwise a 2-hour gap is smoothed as
+           though it were as short as a 1-hour one.<br>
+           The roughness penalty is then per <i>hour</i> rather than per column,
+           so the smoothing factor will need re-tuning; the Data Import tab
+           reports whether clock times were parsed at all."))
+      ),
       conditionalPanel(
         condition = "input.is_cyclic == true",
         helpText(HTML(

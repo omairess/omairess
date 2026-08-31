@@ -24,7 +24,8 @@
 #   values$fd_obj       fda object for the smoothed curves, on a 0-1 range
 #                       (fPCA / warping / fANOVA / clustering assume 0-1)
 #   values$time_labels  original column names, in file order
-#   values$time_numeric numeric clock times parsed from those names, or NULL
+#   values$time_numeric column indices 1:n_time (WaPaa's plotting x axis)
+#   values$time_clock   real clock hours from the column names, or NULL
 #   values$covariates   scalar variables, ORIGINAL types (predictors/response)
 #   values$group_variables / $selected_group_vars / $group_labels
 #                       the same scalar variables as factors, for grouping
@@ -36,7 +37,12 @@ values <- reactiveValues(
   uploaded_data         = NULL,   # same, kept for the RM-ANOVA variable pickers
   data                  = NULL,   # numeric analysis matrix (subjects x time)
   time_labels           = NULL,   # original column names for the time points
-  time_numeric          = NULL,   # numeric time values parsed from those names
+  time_numeric          = NULL,   # WaPaa's plotting x coordinates: 1:n_time.
+                                  #   NOT clock times — see 03_helpers_clock.R
+  time_clock            = NULL,   # real clock hours parsed from the column
+                                  #   names, or NULL when they cannot be
+                                  #   trusted. This is the one to use when an
+                                  #   analysis needs actual elapsed time.
   covariates            = NULL,   # scalar variables, original types
   group_variables       = NULL,   # the same variables coerced to factors
   selected_group_vars   = NULL,   # their names

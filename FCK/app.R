@@ -79,14 +79,6 @@ if (length(missing_optional)) {
   message("Everything else works. Install with install.packages(\"<pkg>\").\n")
 }
 
-# Exact versions of everything that is loaded, for the reproducible-code export.
-FCK_PACKAGES <- c(required_packages, names(optional_packages))
-fck_pkg_versions <- function(pkgs = FCK_PACKAGES) {
-  vapply(pkgs, function(p) tryCatch(as.character(utils::packageVersion(p)),
-                                    error = function(e) "NOT INSTALLED"),
-         character(1))
-}
-
 # --- Source the UI and remember the server files ----------------------------
 # The UI files run now (they build tab objects).  The server files must run
 # INSIDE the server function, once per session, so they are only listed here.
