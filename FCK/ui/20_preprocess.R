@@ -103,6 +103,27 @@ ui_tab_preprocess <- tabItem(
         plotlyOutput("nbasis_gcv_plot", height = "280px")
       ),
       hr(),
+      h5("Missing values"),
+      helpText(HTML(
+        "Smoothing fills every gap: a subject measured at 8 of 20 times comes out
+         with 20 values. Filling <i>between</i> two of that subject's measurements
+         is what smoothing is for. Filling <i>beyond</i> their first or last one is
+         not — a spline carried past its data follows its end polynomial, so a
+         short recording in a long protocol can come back with arbitrary values.")),
+      checkboxInput("allow_extrapolation",
+                    "Let the fitted curve run beyond each subject's observed range",
+                    FALSE),
+      conditionalPanel(
+        condition = "input.allow_extrapolation == false",
+        helpText("Values past a subject's first/last measurement are held flat at",
+                 "that measurement. They are still invented — the map below marks them.")
+      ),
+      conditionalPanel(
+        condition = "input.allow_extrapolation == true",
+        helpText(HTML("<b>The curve is extrapolated.</b> Check the map below for how
+                       far past the data that reaches before using these curves."))
+      ),
+      hr(),
       actionButton("apply_smooth", "Apply Smoothing", class = "btn-warning"),
       helpText("This is the only smoothing step in the app: every analysis tab",
                "reads the curves it produces."),
@@ -133,6 +154,38 @@ ui_tab_preprocess <- tabItem(
         verbatimTextOutput("selected_curve_info"),
         actionButton("clear_curve_selection", "Clear Selection", class = "btn-sm btn-default")
       )
+    )
+  ),
+
+  fluidRow(
+    box(
+      title = "Missing data & filled points",
+      status = "danger", solidHeader = TRUE, width = 12, collapsible = TRUE,
+      helpText("Which values in the smoothed curves are measurements, and which",
+               "the smoother supplied. Apply smoothing first."),
+      verbatimTextOutput("missing_headline"),
+      uiOutput("missing_legend"),
+      hr(),
+      fluidRow(
+        column(8,
+          selectInput("missing_sort", "Order rows by:",
+                      choices = c("As in the file" = "file",
+                                  "Fewest measured points first" = "observed",
+                                  "Most filled-in points first" = "filled"),
+                      selected = "file", width = "260px"),
+          plotlyOutput("missing_map", height = "420px")
+        ),
+        column(4,
+          uiOutput("missing_subject_ui"),
+          plotlyOutput("missing_curve", height = "360px")
+        )
+      ),
+      hr(),
+      DTOutput("missing_table"),
+      br(),
+      downloadButton("export_fill_status_csv",
+                     "Download the observed/interpolated/extrapolated map (CSV)",
+                     class = "btn-primary")
     )
   )
 )

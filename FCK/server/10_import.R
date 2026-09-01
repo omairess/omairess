@@ -268,6 +268,30 @@ observeEvent(input$apply_selection, {
         if(!is.null(values$covariates))
           values$covariates <- values$covariates[!na_rows, , drop = FALSE]
       }
+      # Rows with barely any measurements are mostly reconstructed by the
+      # smoother rather than observed. Dropping them here, where the frame is
+      # rebuilt from raw_df each time, keeps every parallel vector aligned and
+      # keeps the choice reversible: lower the threshold and press Confirm again.
+      min_obs <- input$min_observed_points
+      if (!is.null(min_obs) && is.finite(min_obs) && min_obs > 0) {
+        n_obs_row <- rowSums(!is.na(values$data))
+        too_few <- n_obs_row < min_obs
+        if (any(too_few)) {
+          values$data <- values$data[!too_few, , drop = FALSE]
+          if(!is.null(values$group_labels))
+            values$group_labels <- values$group_labels[!too_few]
+          if(!is.null(values$group_variables))
+            values$group_variables <- values$group_variables[!too_few, , drop = FALSE]
+          if(!is.null(values$covariates))
+            values$covariates <- values$covariates[!too_few, , drop = FALSE]
+          showNotification(
+            sprintf("Dropped %d row%s with fewer than %d measured time points (kept %d).",
+                    sum(too_few), if(sum(too_few) == 1) "" else "s",
+                    as.integer(min_obs), nrow(values$data)),
+            type = "warning", duration = 10)
+        }
+      }
+
       na_cols <- apply(is.na(values$data), 2, all)
       if(any(na_cols)) {
         values$data <- values$data[, !na_cols, drop = FALSE]

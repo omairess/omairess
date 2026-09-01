@@ -55,6 +55,13 @@ if any of these were missing):
    times** instead of the column index — tick this if your measurements are
    unevenly spaced (hourly by day, 2-hourly at night), or a long gap gets
    smoothed as though it were a short one.
+   The **Missing data & filled points** panel below it answers "which of these
+   values did I actually measure?": a map of every cell as observed /
+   interpolated / extrapolated, a per-subject table sorted worst-first, and a
+   one-subject inspector showing the curve against its real points. By default
+   the curve is **not** extrapolated past a subject's first and last
+   measurement — it is held flat there, because a spline carried past its data
+   follows its end polynomial.
 3. **Smoothing Diagnostics** — GAM REML fit, REML profile over lambda,
    k-fold cross-validation (optionally stratified by group), GCV vs n-basis
    sweep, and a "use these results" button that sets the smoothing factor.
@@ -124,6 +131,7 @@ FCK/
     02_helpers_gam.R       GAM prediction helpers
     03_helpers_clock.R     real clock times, when they can be trusted
     04_helpers_fd.R        the one rule for building an fd object
+    05_helpers_missing.R   which values are measured, filled, or invented
     10_import.R  20_smoothing.R           <- hand-merged shared steps
     11_import_views.R  21_smoothing_views.R  30_diagnostics.R
     40_fpca.R  50_fanova.R  60_clustering.R
@@ -143,6 +151,7 @@ them, and no analysis code had to be rewritten to be namespaced.
 Rscript tests/smoke_test.R           # from the FCK directory
 Rscript tests/clock_helpers_test.R
 Rscript tests/codegen_test.R
+Rscript tests/missing_status_test.R
 ```
 
 `smoke_test.R` parses every file, builds and renders the whole UI, checks that
@@ -154,6 +163,9 @@ needs only the UI packages, so it runs without `fda` or `refund` installed.
 shared-times option and the real-time smoothing both depend on — including the
 midnight unwrap and the cases that must be *refused* rather than mistaken for
 hours. It needs no packages at all.
+
+`missing_status_test.R` pins the observed / interpolated / extrapolated
+classification the missing-data panel rests on. It needs no packages.
 
 `codegen_test.R` drives the code export with a stub result for every analysis
 family and checks that what comes out is valid R — a script that does not parse

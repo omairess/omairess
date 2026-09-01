@@ -63,6 +63,10 @@ ui_tab_export <- tabItem(
                "these are the curves every analysis in this app was run on."),
       downloadButton("export_smoothed_csv", "Download Smoothed Curves (CSV)", class = "btn-primary"),
       downloadButton("export_smoothed_long_csv", "Download Smoothed Curves - Long Format (CSV)", class = "btn-primary"),
+      helpText("The matching observed/interpolated/extrapolated map downloads from",
+               "the 'Missing data & filled points' panel on the smoothing tab — export",
+               "both together, or the smoothed curves travel without any record of",
+               "which of their values were measured."),
       hr(),
 
       h4("Export Plots"),
@@ -73,9 +77,10 @@ ui_tab_export <- tabItem(
 
       h4("Export R Code"),
       downloadButton("export_code", "Download Analysis Code (R)", class = "btn-warning"),
-      helpText("Reproduces the import, smoothing and functional-PCA/ANOVA/clustering",
-               "pipeline in plain R. The cosinor and FoSR/SoFR fits are not yet",
-               "written into it — see PORTING_NOTES.md."),
+      helpText("Reproduces the whole pipeline in plain R: import, smoothing,",
+               "functional PCA/ANOVA/clustering, and the cosinor, FoSR and SoFR",
+               "fits. The cosinor section carries the app's own fitting function",
+               "verbatim rather than a re-implementation of it."),
       hr(),
 
       h4("Analysis Code Preview"),

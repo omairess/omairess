@@ -249,6 +249,49 @@ format and failing silently on the ones it gets wrong.
 code in the source app. They are now a collapsible box on the Data Import tab,
 next to the selection that produces them.
 
+**4.18 Filled points are visible, and extrapolation is off by default.**
+*(new)* Smoothing fills every gap — a subject measured at 8 of 20 times comes
+out of the smoother with 20 values. Both source apps did this correctly and
+neither showed which values were invented.
+
+The distinction that matters is not observed-vs-missing but *where* the missing
+value sits. Filling **between** two of a subject's own measurements is what
+smoothing is for. Filling **beyond** their first or last measurement is not:
+`eval.fd()` is evaluated across the whole grid, and a B-spline carried past its
+data follows its end polynomial rather than levelling off.
+
+On a real staggered sleep-deprivation protocol (13 participants x 7 cycles, 20
+two-hourly columns spanning 06:00 day 1 to 20:00 day 2) the split is **46 %
+observed, 22 % interpolated within range, 32 % extrapolated beyond it** — a
+median of 12 h and a maximum of 32 h invented per row, with 7 of 85 rows more
+than half filled in. One row has 3 measurements and 16 extrapolated points.
+That is not an edge case; it is what a staggered protocol looks like.
+
+So:
+
+* `values$fill_status` records, per cell, whether it was observed, interpolated
+  or extrapolated (`server/05_helpers_missing.R`), computed from the raw data
+  before anything is filled.
+* A **"Missing data & filled points"** panel on the smoothing tab shows the map
+  (subjects x time, three states, sortable), a per-subject table sorted worst
+  first, and a single-subject inspector plotting the curve with its measured
+  points solid, interpolated points hollow, and extrapolated points crossed.
+  It downloads as a CSV alongside the smoothed curves.
+* **Extrapolation is off by default**: values beyond a subject's observed range
+  are held flat at their first/last measurement rather than following the
+  fitted polynomial. This is a deliberate change from both source apps, which
+  always extrapolated. Flat-held values are still invented and the map still
+  marks them; the checkbox restores the original behaviour.
+* An optional **minimum measured points per row** at import drops rows that are
+  mostly reconstruction. It defaults to 0 (keep everything) and is applied where
+  the frame is rebuilt from `raw_df`, so lowering it and pressing Confirm again
+  brings the rows back.
+
+`tests/missing_status_test.R` pins the classification, including the staggered
+pattern above; mislabelling an extrapolated point as interpolated would be
+invisible, since the map would simply reassure you about a value nothing
+constrains.
+
 ## 5. Rename table
 
 | source | source app | merged app |

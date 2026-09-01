@@ -53,6 +53,11 @@ observeEvent(input$apply_smooth, {
       }
     }
     using_real_time <- !is.null(real_time)
+
+    # Where every value in the smoothed curves will come from. Computed from the
+    # RAW data, before anything is filled, and kept for the whole session so any
+    # later plot or export can say which points are measurements.
+    values$fill_status <- fck_fill_status(values$data)
     t_full <- if(using_real_time) real_time else 1:n_time   # smoothing argument
     t_rng  <- range(t_full)
 
@@ -137,10 +142,12 @@ observeEvent(input$apply_smooth, {
       # real smooth applied under a control labelled "no smoothing".
       values$fd_obj <- fck_fd_no_smoothing(temp_data, time_points_01)
       values$smooth_fit_metrics <- list(
-        method     = "none",
-        n_basis    = ncol(temp_data),
-        basis_type = "bspline (interpolating)",
-        time_axis  = if(using_real_time) "real clock time (hours)" else "column index"
+        method        = "none",
+        n_basis       = ncol(temp_data),
+        basis_type    = "bspline (interpolating)",
+        time_axis     = if(using_real_time) "real clock time (hours)" else "column index",
+        fill_headline = fck_fill_headline(values$fill_status),
+        extrapolation = "mean-imputed for the curve representation only; values$smooth_data keeps the real NAs"
       )
       values$smoothing_avg_metrics <- NULL
       showNotification(
@@ -198,6 +205,28 @@ observeEvent(input$apply_smooth, {
         }
       })
 
+      # ---- extrapolation ------------------------------------------------------
+      # eval.fd() is evaluated across the WHOLE grid, including stretches where a
+      # subject has no data at either side. A B-spline carried past its data
+      # follows its end polynomial, so a subject measured for 6 h of a 38 h
+      # protocol can come back with values that are not merely uncertain but
+      # arbitrary. Holding the fitted value flat past the last observation at
+      # least keeps it in range; those points are still invented, and the
+      # missing-data map marks them.
+      if(!isTRUE(input$allow_extrapolation)) {
+        st <- values$fill_status
+        n_clamped <- 0L
+        for(i in seq_len(n_subjects)) {
+          obs_i <- which(st[i, ] == FCK_FILL_OBSERVED)
+          if(!length(obs_i)) next
+          lo <- min(obs_i); hi <- max(obs_i)
+          if(lo > 1)      { smooth_mat[i, seq_len(lo - 1)] <- smooth_mat[i, lo]; n_clamped <- n_clamped + lo - 1L }
+          if(hi < n_time) { smooth_mat[i, (hi + 1):n_time] <- smooth_mat[i, hi]; n_clamped <- n_clamped + n_time - hi }
+        }
+        if(n_clamped > 0)
+          cat(sprintf("Held %d extrapolated values flat at each subject's last observation.\n", n_clamped))
+      }
+
       if(input$constrain_bounds) {
         min_val <- input$min_bound
         max_val <- input$max_bound
@@ -254,7 +283,11 @@ observeEvent(input$apply_smooth, {
         max_df         = max(df_vec,  na.rm = TRUE),
         mean_gcv       = mean(gcv_vec, na.rm = TRUE),
         rel_rmse_pct   = rel_rmse_pct,
-        data_range     = data_range
+        data_range     = data_range,
+        fill_headline  = fck_fill_headline(values$fill_status),
+        extrapolation  = if(isTRUE(input$allow_extrapolation))
+          "carried past each subject's observed range by the fitted curve"
+        else "held flat at each subject's first/last observation"
       )
 
       values$smoothing_avg_metrics <- c(
@@ -309,6 +342,15 @@ observeEvent(input$apply_smooth, {
       cat(sprintf("Mean RMSE: %.3f (SD: %.3f)\n",
                   values$smooth_fit_metrics$mean_rmse,
                   values$smooth_fit_metrics$sd_rmse))
+    }
+
+    # Say how much of what just came out of the smoother is not measurement.
+    if(!is.null(values$fill_status)) {
+      extrap_frac <- mean(values$fill_status == FCK_FILL_EXTRAPOLATED)
+      showNotification(
+        paste0(fck_fill_headline(values$fill_status),
+               ". See 'Missing data & filled points' below."),
+        type = if(extrap_frac > 0.1) "warning" else "message", duration = 12)
     }
 
     # Re-smoothing changes the curves under EVERY analysis. In the two source
