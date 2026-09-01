@@ -287,7 +287,13 @@
           lambda <- lambda_seq[lambda_idx]
           
           # Create basis for this lambda
-          nb <- min(20, n_time - 2)
+          # MERGED APP: follow the user's basis count (CIRCAREG's behaviour) so
+          # the recommended smoothing factor applies to the smoothing they will
+          # actually run. WaPaa fixed this at 20 regardless.
+          nb_user <- if(!is.null(input$smooth_method) && input$smooth_method == "manual")
+            input$n_basis_manual else input$n_basis
+          if(is.null(nb_user) || !is.finite(nb_user)) nb_user <- 20
+          nb <- max(4, min(as.integer(nb_user), n_time - 2))
           basis <- create.bspline.basis(rangeval = c(1, n_time), nbasis = nb)
           fdParobj <- fdPar(basis, 2, lambda)
           

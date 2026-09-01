@@ -131,11 +131,21 @@ observeEvent(input$apply_smooth, {
           temp_data[i, na_idx] <- mean(temp_data[i, !na_idx], na.rm = TRUE)
         }
       }
-      basis_01 <- make_basis_01(min(20, n_time - 2))
-      values$fd_obj <- smooth.basis(time_points_01, t(temp_data), basis_01)$fd
-      values$smooth_fit_metrics <- NULL
+      # "No smoothing" now means exactly that: an interpolating basis, so the
+      # fd object passes through the observed values. WaPaa built this on
+      # min(20, n_time - 2) basis functions, which on 24 hourly columns is a
+      # real smooth applied under a control labelled "no smoothing".
+      values$fd_obj <- fck_fd_no_smoothing(temp_data, time_points_01)
+      values$smooth_fit_metrics <- list(
+        method     = "none",
+        n_basis    = ncol(temp_data),
+        basis_type = "bspline (interpolating)",
+        time_axis  = if(using_real_time) "real clock time (hours)" else "column index"
+      )
       values$smoothing_avg_metrics <- NULL
-      showNotification("Using Raw Data (No Smoothing).", type = "message")
+      showNotification(
+        "Using raw data (no smoothing): curves are represented by an interpolating basis and pass through your data points.",
+        type = "message", duration = 8)
 
     } else {
       # ---- per-subject smoothing --------------------------------------------

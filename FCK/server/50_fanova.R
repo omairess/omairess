@@ -922,29 +922,14 @@
       if(is.null(fd_to_use)) {
         cat("Using original curves for FANOVA\n")
         
-        # CRITICAL: Check if data has already been smoothed in Data Preprocessing
+        # CRITICAL: Check if data has already been smoothed in Data Preprocessing.
+        # MERGED APP: when it has not, fck_ensure_fd_obj() builds an
+        # INTERPOLATING representation and says so, instead of quietly
+        # smoothing onto min(20, n_time - 2) basis functions as WaPaa did.
+        # Nothing here re-smooths data that the preprocessing step already
+        # smoothed: values$fd_obj is reused as-is.
         if(is.null(values$fd_obj)) {
-          # Determine which data to use
-          data_for_fd <- if(!is.null(values$smooth_data)) {
-            cat("Using already smoothed data (no additional smoothing)\n")
-            values$smooth_data
-          } else {
-            cat("Using raw data (will create fd object)\n")
-            values$data
-          }
-          
-          n_time <- ncol(data_for_fd)
-          time_points <- seq(0, 1, length.out = n_time)
-          basis <- create.bspline.basis(rangeval = c(0, 1), nbasis = min(20, n_time-2))
-          
-          # Create fd object WITHOUT additional smoothing (lambda = 0 for already smoothed data)
-          if(!is.null(values$smooth_data)) {
-            # Data already smoothed - just create fd representation with no penalty
-            values$fd_obj <- smooth.basis(time_points, t(data_for_fd), fdPar(basis, 2, 0))$fd
-          } else {
-            # Raw data - apply default smoothing
-            values$fd_obj <- smooth.basis(time_points, t(data_for_fd), basis)$fd
-          }
+          if(!fck_ensure_fd_obj(values)) return()
         }
         fd_to_use <- values$fd_obj
         showNotification("Using original curves for FANOVA", type = "message", duration = 3)

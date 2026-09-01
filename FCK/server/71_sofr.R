@@ -185,6 +185,16 @@
       # Store additional info for diagnostics
       fit$y_original <- y_clean
       fit$is_binary <- is_binary_outcome
+
+      # MERGED APP: what this fit actually used, for the code export.
+      fit$fck_settings <- list(
+        response     = input$sofr_response,
+        predictors   = preds,
+        formula      = formula_str,
+        family       = pfr_family$family,
+        link         = pfr_family$link,
+        using_smoothed = !is.null(values$smooth_data),
+        n_obs        = length(y_clean))
       
       # Bootstrap for coefficient CIs if requested
       if(isTRUE(input$sofr_use_bootstrap)) {

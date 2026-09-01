@@ -93,6 +93,26 @@ ui_tab_import <- tabItem(
     )
   ),
 
+  # WaPaa defines group_summary and group_preview_plot in its server but no tab
+  # ever placed them, so they were dead code in both the source app and the
+  # first cut of this merge. They belong next to the variable selection that
+  # produces them.
+  fluidRow(
+    box(
+      title = "Group Structure",
+      status = "warning",
+      solidHeader = TRUE,
+      width = 12,
+      collapsible = TRUE,
+      helpText("The primary grouping variable — the first scalar variable you selected.",
+               "Each analysis tab can pick a different one."),
+      fluidRow(
+        column(4, DTOutput("group_summary")),
+        column(8, plotOutput("group_preview_plot", height = "280px"))
+      )
+    )
+  ),
+
   fluidRow(
     box(
       title = "Data Preview",

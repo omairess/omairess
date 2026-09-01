@@ -99,10 +99,11 @@ survives into the fPCA.
 
 **4.5 Smoothing diagnostics** are WaPaa's, which is a strict superset of
 CIRCAREG's: it adds group-stratified CV folds and the GCV-vs-n-basis sweep, and
-is otherwise line-for-line the same code. *Known divergence:* inside the
-cross-validation WaPaa fixes the basis at `min(20, n_time - 2)` where CIRCAREG
-used the user's `n_basis`. WaPaa's is kept so its numbers do not move; if you
-smooth with a very different basis count, read the CV curve with that in mind.
+is otherwise line-for-line the same code. One line is changed: inside the
+cross-validation WaPaa fixed the basis at `min(20, n_time - 2)`, where CIRCAREG
+used the user's `n_basis`. CIRCAREG's behaviour wins here — the CV curve exists
+to recommend a smoothing factor for the smoothing you are about to run, and a
+basis count unrelated to yours makes the recommendation mis-targeted.
 
 **4.6 Sample data.** The two generators produced different datasets (WaPaa: 100
 points on 0–1 with group structure; CIRCAREG: 24 hourly points with covariates
@@ -195,6 +196,59 @@ now reports which time axis produced the numbers. If the column names yield no
 usable clock times the app warns and falls back to the column index rather than
 silently doing something else.
 
+**4.14 "No smoothing" now means no smoothing.** *(bug fix)* The fPCA / warping
+/ fANOVA / clustering family needs an `fd` object, and building one always
+means projecting onto a basis. The source apps wrote that projection in four
+places with two different sizes, and in two of them it fired without being
+asked:
+
+* choosing **"Raw data (no smoothing)"** still built `fd_obj` on
+  `min(20, n_time - 2)` basis functions — on 24 hourly columns that is a real
+  smooth, applied under a control labelled *no smoothing*;
+* running fPCA or fANOVA **without visiting the smoothing tab** did the same
+  thing, silently, from inside the analysis tab.
+
+There is now one rule, in `FCK/server/04_helpers_fd.R`: no smoothing means an
+*interpolating* basis (`nbasis = n_time`), so `smooth.basis` is a square system
+that reproduces the observed values at the observed times. The analysis tabs
+call `fck_ensure_fd_obj()`, which builds that representation **and says so** in
+a notification rather than choosing a smoothing basis on the user's behalf. The
+penalised smoothing on the preprocessing tab is untouched and remains the only
+place a roughness penalty is applied.
+
+To be explicit about what this does *not* claim: an `fd` object cannot avoid
+committing to some behaviour between the measurement points. What it can avoid
+is changing the values *at* them, and now it does.
+
+**4.15 The exported R script covers every family.** *(C1)* WaPaa's generator
+covered its own analyses; CIRCAREG had none. Three sections are added —
+harmonic/cosinor, FoSR, SoFR — driven by settings each fit records about itself
+(`fck_settings`) rather than by reading the widgets at export time, which would
+emit whatever they happen to say now instead of what produced the stored model.
+
+The cosinor section emits the app's own `fit_cosinor()` through `deparse()`
+rather than a hand-written re-implementation. A re-implementation is a second
+copy of 300 lines of fitting logic that can drift from the one that produced
+the numbers; dumping the real function cannot. `tests/codegen_test.R` drives
+the generator with a stub result for every family and checks the output is
+valid R.
+
+**4.16 Sessions can be saved and reopened.** *(C2)* Neither source app could
+be: close the browser and the import, the smoothing and every fitted model were
+gone. `FCK/server/91_session.R` writes one `.rds` holding the whole `values`
+bus, the analysis-defining settings, and the exact package versions. On
+restore it reports what came back and **warns if any package version has moved
+since**, because an `fda` or `mgcv` update can shift the numbers a restored
+model is sitting next to. Cosmetic display controls come back at their
+defaults; only the settings in `RESTORE_INPUTS` are pushed back into widgets,
+because restoring every input generically means guessing each widget's message
+format and failing silently on the ones it gets wrong.
+
+**4.17 The group-structure views are visible.** WaPaa defined
+`group_summary` and `group_preview_plot` but no tab ever placed them — dead
+code in the source app. They are now a collapsible box on the Data Import tab,
+next to the selection that produces them.
+
 ## 5. Rename table
 
 | source | source app | merged app |
@@ -218,10 +272,18 @@ duplicate code.
 
 ## 6. Known gaps
 
-* **The R-code export covers the WaPaa pipeline only.** `export_code` writes a
-  script that reproduces the import, smoothing, fPCA, fANOVA and clustering
-  steps. The cosinor, FoSR and SoFR fits are *not* written into it — CIRCAREG
-  never had a generator to port. Their parameters export as CSV instead.
+* **The exported script is checked for syntax, not for equivalence.**
+  `tests/codegen_test.R` proves it is valid R and that every family
+  contributed a section; nobody has yet run an exported script end to end and
+  compared its numbers against the app's. The cosinor section emits the app's
+  real fitting function, so it should agree exactly; the FoSR GAM section
+  reproduces the model but derives its coefficient curves the same
+  approximate way the app does (prediction contrasts), which is exact for
+  numeric predictors and approximate for factors.
+* **The FoSR bootstrap has no seed in the app.** Its bands differ slightly run
+  to run. The exported script fixes `set.seed(1)` so the script is
+  reproducible, which means the script's bands will not match any particular
+  run of the app exactly.
 * **Two time-detection paths still exist.** The cosinor tab keeps its own
   column-name parser alongside the shared one (4.8). They agree on the common
   formats; the shared one is one click away if they ever disagree.

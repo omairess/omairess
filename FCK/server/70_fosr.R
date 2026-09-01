@@ -203,6 +203,16 @@
                     gam_n_time = n_time)
       }
       
+      # MERGED APP: what this fit actually used, for the code export.
+      fit$fck_settings <- list(
+        predictors   = input$reg_predictors,
+        method       = input$reg_method,
+        use_bootstrap = isTRUE(input$use_bootstrap),
+        n_boot       = if(isTRUE(input$use_bootstrap)) input$n_boot else NULL,
+        using_smoothed = !is.null(values$smooth_data),
+        n_subjects   = nrow(Y),
+        n_time       = ncol(Y))
+
       values$reg_model <- fit
       updateSelectInput(session, "reg_color_var", choices = input$reg_predictors)
       updateSelectInput(session, "reg_coeff_select", choices = rownames(fit$beta.hat))

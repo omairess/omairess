@@ -2226,6 +2226,12 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
         n_harmonics = n_harmonics,
         trend_type = trend_type,
         include_trend = trend_type != "none",  # For backwards compatibility
+        # MERGED APP: the bounds this run actually used, for the code export.
+        fck_settings = list(
+          use_bounds = use_bounds, mesor_min = mesor_min, mesor_max = mesor_max,
+          amplitude_min = amplitude_min, amplitude_max = amplitude_max,
+          A_sat_min = A_sat_min, A_sat_max = A_sat_max,
+          tau_min = tau_min, tau_max = tau_max),
         t_offset = t_offset_global,
         t_center = t_center_global,
         using_smoothed = using_smoothed,

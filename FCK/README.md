@@ -89,7 +89,10 @@ if any of these were missing):
     cluster-by-group composition tests, dendrograms.
 
 13. **Data Export** — every table above as CSV, plot bundles as PDF, the
-    smoothed curves in wide and long form, and a reproducible R script.
+    smoothed curves in wide and long form, a reproducible R script covering
+    every analysis family, and **save/restore of the whole session** as a
+    single `.rds` (data, smoothing, every fitted model, and the package
+    versions they were computed under).
 
 ## Data contract
 
@@ -120,12 +123,14 @@ FCK/
     01_helpers_time.R      WaPaa's time helpers (used by every plot)
     02_helpers_gam.R       GAM prediction helpers
     03_helpers_clock.R     real clock times, when they can be trusted
+    04_helpers_fd.R        the one rule for building an fd object
     10_import.R  20_smoothing.R           <- hand-merged shared steps
     11_import_views.R  21_smoothing_views.R  30_diagnostics.R
     40_fpca.R  50_fanova.R  60_clustering.R
     70_fosr.R  71_sofr.R  72_harmonic.R  73_cosinor_pairwise.R
-    90_export.R
-  tests/smoke_test.R       structural check (see below)
+    90_export.R            exports + the reproducible-code generator
+    91_session.R           save / restore a whole session
+  tests/                   see "Checking it still assembles" below
 ```
 
 The server files are sourced into **one** environment, exactly as when each app
@@ -137,6 +142,7 @@ them, and no analysis code had to be rewritten to be namespaced.
 ```r
 Rscript tests/smoke_test.R           # from the FCK directory
 Rscript tests/clock_helpers_test.R
+Rscript tests/codegen_test.R
 ```
 
 `smoke_test.R` parses every file, builds and renders the whole UI, checks that
@@ -148,3 +154,20 @@ needs only the UI packages, so it runs without `fda` or `refund` installed.
 shared-times option and the real-time smoothing both depend on — including the
 midnight unwrap and the cases that must be *refused* rather than mistaken for
 hours. It needs no packages at all.
+
+`codegen_test.R` drives the code export with a stub result for every analysis
+family and checks that what comes out is valid R — a script that does not parse
+looks like a reproducibility guarantee and is not one.
+
+## A note on smoothing
+
+There is exactly one place a roughness penalty is applied: **Apply Smoothing**
+on the preprocessing tab. Nothing downstream re-smooths — the fPCA, fANOVA,
+post-hoc and clustering tabs all reuse `values$fd_obj`, which is built from the
+already-smoothed curves with λ = 0 (a change of representation, not a second
+smooth).
+
+If you never smooth, the curves are represented by an **interpolating** basis:
+they pass through your data points and nothing is smoothed. The app says so
+when it does this. (In WaPaa, both "Raw data (no smoothing)" and going straight
+to an analysis quietly projected onto ≤ 20 basis functions instead.)

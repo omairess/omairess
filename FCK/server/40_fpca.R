@@ -73,20 +73,11 @@
       time_grid <- seq(0, 1, length.out = n)
       
       if(is.null(values$fd_obj)) {
-        n_basis <- min(20, n - 2, max(4, floor(n/3)))
-        basis <- create.bspline.basis(c(0, 1), nbasis = n_basis)
-        
-        # Check if data is already smoothed to avoid double smoothing
-        if(!is.null(values$smooth_data)) {
-          # Data already smoothed in preprocessing - just create fd representation
-          cat("Creating fd_obj from already smoothed data (lambda=0)\n")
-          values$fd_obj <- smooth.basis(time_grid, t(data_to_use), fdPar(basis, 2, 0))$fd
-        } else {
-          # Raw data - apply default smoothing
-          cat("Creating fd_obj from raw data with default smoothing\n")
-          values$fd_obj <- smooth.basis(time_grid, t(data_to_use), basis)$fd
-        }
-        cat("Created fd_obj with", n_basis, "basis functions\n")
+        # MERGED APP: one rule for this, in FCK/server/04_helpers_fd.R. No
+        # smoothing is invented here; an interpolating basis is used and the
+        # user is told. (WaPaa silently smoothed onto min(20, n-2) bases.)
+        if(!fck_ensure_fd_obj(values)) return()
+        cat("Created fd_obj with an interpolating basis (no smoothing)\n")
       }
       
       if(input$pca_type == "fpca") {

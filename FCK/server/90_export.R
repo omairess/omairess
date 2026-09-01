@@ -478,6 +478,13 @@
       add("library(cluster)    # Clustering diagnostics")
       add("library(fda.usc)    # Functional clustering")
     }
+    if(!is.null(values$sofr_model)) {
+      add("library(refund)     # Scalar-on-function regression")
+    }
+    if(!is.null(values$harmonic_model) &&
+       identical(values$harmonic_model$trend_type, "exp_sat")) {
+      add("library(minpack.lm) # Robust non-linear fits (exponential saturation)")
+    }
     add("")
 
     # ---- SECTION 2: DATA LOADING ----
@@ -981,6 +988,180 @@
       add("  stat_summary(aes(group = group), fun = mean, geom = 'line', linewidth = 2) +")
       add("  theme_minimal() +")
       add("  labs(title = 'Functional Data by Group', x = 'Time', y = 'Value')")
+      add("")
+    }
+
+    # ---- SECTION 10: HARMONIC (COSINOR) REGRESSION ----
+    # MERGED APP: CIRCAREG had no code generator, so these three sections are
+    # new. Settings come from the fit itself (fck_settings), never from the
+    # live widgets, so the script matches the model that is on screen.
+    if(!is.null(values$harmonic_model)) {
+      hm <- values$harmonic_model
+      st <- hm$fck_settings
+      add("# -----------------------------------------------------------------------------")
+      add("# 10. HARMONIC (COSINOR) REGRESSION")
+      add("# -----------------------------------------------------------------------------")
+      add("")
+      add(sprintf("period        <- %s", hm$period))
+      add(sprintf("n_harmonics   <- %s", hm$n_harmonics))
+      add(sprintf('trend_type    <- "%s"', hm$trend_type))
+      add(sprintf("time_vec      <- c(%s)",
+                  paste(signif(as.numeric(hm$time_vec), 10), collapse = ", ")))
+      add(sprintf("cosinor_input <- %s   # %s",
+                  if(isTRUE(hm$using_smoothed)) "smooth_curves" else "raw_data",
+                  if(isTRUE(hm$using_smoothed)) "the smoothed curves"
+                  else "the raw data (no smoothing had been applied)"))
+      add("")
+      if(!is.null(st)) {
+        add(sprintf("use_bounds    <- %s", isTRUE(st$use_bounds)))
+        for(nm in c("mesor_min", "mesor_max", "amplitude_min", "amplitude_max",
+                    "A_sat_min", "A_sat_max", "tau_min", "tau_max")) {
+          v <- st[[nm]]
+          add(sprintf("%-13s <- %s", nm,
+                      if(is.null(v) || !is.finite(v)) "NA" else format(v)))
+        }
+        add("")
+      }
+      add("# The app's own fitting function, emitted verbatim (not a")
+      add("# re-implementation) so this script reproduces its numbers exactly:")
+      add(paste("fit_cosinor <-", paste(deparse(fit_cosinor), collapse = "\n")))
+      add("")
+      if(identical(hm$trend_type, "exp_sat") && exists("fit_cosinor_nonlinear")) {
+        add(paste("fit_cosinor_nonlinear <-",
+                  paste(deparse(fit_cosinor_nonlinear), collapse = "\n")))
+        add("")
+      }
+      add("# The same per-subject call the app makes:")
+      add("cosinor_fits <- lapply(seq_len(nrow(cosinor_input)), function(i) {")
+      add("  fit_cosinor(time_vec, cosinor_input[i, ], period = period,")
+      add("              n_harmonics = n_harmonics, trend_type = trend_type,")
+      if(!is.null(st)) {
+        add("              use_bounds = use_bounds,")
+        add("              mesor_min = mesor_min, mesor_max = mesor_max,")
+        add("              amplitude_min = amplitude_min, amplitude_max = amplitude_max,")
+        add("              A_sat_min = A_sat_min, A_sat_max = A_sat_max,")
+        add("              tau_min = tau_min, tau_max = tau_max)")
+      } else {
+        add("              use_bounds = FALSE)")
+      }
+      add("})")
+      add("")
+      add("# MESOR / amplitude / acrophase per subject (successful fits only):")
+      add("ok <- vapply(cosinor_fits, function(f) isTRUE(f$success), logical(1))")
+      add("cosinor_params <- do.call(rbind, lapply(which(ok), function(i) {")
+      add("  f <- cosinor_fits[[i]]")
+      add("  data.frame(subject = i, mesor = f$mesor,")
+      add("             amplitude = f$amplitude[1], acrophase = f$acrophase[1],")
+      add("             r_squared = f$r_squared)")
+      add("}))")
+      add("print(head(cosinor_params))")
+      if(!is.null(hm$individual_fits)) {
+        add(sprintf("# The app fitted %d of %d subjects successfully.",
+                    sum(vapply(hm$individual_fits,
+                               function(f) isTRUE(f$success), logical(1))),
+                    length(hm$individual_fits)))
+      }
+      add("")
+      add("# NOTE: acrophase is CIRCULAR. Do not average it arithmetically --")
+      add("# average the (cos, sin) components, as the app's polar plot does.")
+      add("")
+    }
+
+    # ---- SECTION 11: FUNCTION-ON-SCALAR REGRESSION ----
+    if(!is.null(values$reg_model) && !is.null(values$reg_model$fck_settings)) {
+      st <- values$reg_model$fck_settings
+      add("# -----------------------------------------------------------------------------")
+      add("# 11. FUNCTION-ON-SCALAR REGRESSION (FoSR)")
+      add("# -----------------------------------------------------------------------------")
+      add("")
+      add(sprintf("fosr_predictors <- c(%s)",
+                  paste0('"', st$predictors, '"', collapse = ", ")))
+      add(sprintf("Y <- %s   # %d subjects x %d time points",
+                  if(isTRUE(st$using_smoothed)) "smooth_curves" else "raw_data",
+                  st$n_subjects, st$n_time))
+      add("keep   <- complete.cases(covariates[, fosr_predictors, drop = FALSE])")
+      add("df_reg <- covariates[keep, , drop = FALSE]")
+      add("Y      <- Y[keep, , drop = FALSE]")
+      add("")
+      if(identical(st$method, "OLS_nosmooth")) {
+        add("# Pointwise OLS: one regression per time point, in closed form.")
+        add("f           <- as.formula(paste('~', paste(fosr_predictors, collapse = ' + ')))")
+        add("X           <- model.matrix(f, data = df_reg)")
+        add("xtx_inv     <- solve(crossprod(X))")
+        add("projector   <- xtx_inv %*% t(X)")
+        add("beta_hat    <- projector %*% Y          # the coefficient curves")
+        add("fitted_vals <- X %*% beta_hat")
+        add("residuals   <- Y - fitted_vals")
+        add("n <- nrow(Y); p <- ncol(X)")
+        add("sigma2 <- colSums(residuals^2) / (n - p)")
+        add("")
+        if(isTRUE(st$use_bootstrap)) {
+          add(sprintf("# Residual bootstrap for the coefficient bands (B = %d).", st$n_boot))
+          add("# The app does not fix a seed, so its bands differ slightly run to run;")
+          add("# this script fixes one so the script itself is reproducible.")
+          add("set.seed(1)")
+          add(sprintf("B <- %d", st$n_boot))
+          add("boot_betas <- array(NA, dim = c(B, nrow(beta_hat), ncol(beta_hat)))")
+          add("for (b in 1:B) {")
+          add("  resid_idx <- sample(seq_len(n), n, replace = TRUE)")
+          add("  boot_betas[b, , ] <- projector %*% (fitted_vals + residuals[resid_idx, ])")
+          add("}")
+          add("boot_ci_lower <- apply(boot_betas, c(2, 3), quantile, 0.025, na.rm = TRUE)")
+          add("boot_ci_upper <- apply(boot_betas, c(2, 3), quantile, 0.975, na.rm = TRUE)")
+          add("")
+        }
+      } else {
+        add("# Smoothed OLS: one GAM over the (subject, time) long form, with a")
+        add("# penalised spline in time and a by-smooth per predictor.")
+        add("long_data <- data.frame(")
+        add("  value   = as.vector(t(Y)),")
+        add("  time    = rep(seq(0, 1, length.out = ncol(Y)), times = nrow(Y)),")
+        add("  subject = rep(seq_len(nrow(Y)), each = ncol(Y)))")
+        add("for (v in fosr_predictors) long_data[[v]] <- rep(df_reg[[v]], each = ncol(Y))")
+        add("gam_formula <- as.formula(paste('value ~ s(time) +',")
+        add("  paste(sprintf('s(time, by = %s)', fosr_predictors), collapse = ' + '),")
+        add("  '+', paste(fosr_predictors, collapse = ' + ')))")
+        add("gam_fit <- mgcv::gam(gam_formula, data = long_data, method = 'REML')")
+        add("summary(gam_fit)")
+        add("")
+        add("# NOTE: the app turns this fit into coefficient curves by prediction")
+        add("# contrasts (predict at x = 1 minus predict at x = 0), which is exact")
+        add("# for numeric predictors and an approximation for factors.")
+        add("")
+      }
+      add(sprintf("# Method as fitted: %s", values$reg_model$method))
+      add("")
+    }
+
+    # ---- SECTION 12: SCALAR-ON-FUNCTION REGRESSION ----
+    if(!is.null(values$sofr_model) && !is.null(values$sofr_model$fck_settings)) {
+      st <- values$sofr_model$fck_settings
+      add("# -----------------------------------------------------------------------------")
+      add("# 12. SCALAR-ON-FUNCTION REGRESSION (SoFR)")
+      add("# -----------------------------------------------------------------------------")
+      add("")
+      add(sprintf("X_func <- %s   # the curves, as the functional predictor",
+                  if(isTRUE(st$using_smoothed)) "smooth_curves" else "raw_data"))
+      add(sprintf('y      <- covariates[["%s"]]', st$response))
+      if(length(st$predictors)) {
+        add(sprintf("sofr_scalars <- c(%s)",
+                    paste0('"', st$predictors, '"', collapse = ", ")))
+      }
+      add("")
+      add("keep   <- complete.cases(y) & complete.cases(X_func)")
+      add("X_func <- X_func[keep, , drop = FALSE]; y <- y[keep]")
+      add("")
+      add("pfr_data <- list(X_func = X_func, y = y)")
+      if(length(st$predictors)) {
+        add("for (v in sofr_scalars) pfr_data[[v]] <- covariates[keep, v]")
+      }
+      add(sprintf("sofr_fit <- refund::pfr(%s,", st$formula))
+      add(sprintf("                        data = pfr_data, family = %s(link = '%s'))",
+                  st$family, st$link))
+      add("summary(sofr_fit)")
+      add("")
+      add(sprintf("# Fitted on %d observations; %s family, %s link.",
+                  st$n_obs, st$family, st$link))
       add("")
     }
 

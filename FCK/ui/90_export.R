@@ -81,5 +81,22 @@ ui_tab_export <- tabItem(
       h4("Analysis Code Preview"),
       verbatimTextOutput("code_preview")
     )
+  ),
+
+  # Neither source app could be reopened: close the browser and the import,
+  # the smoothing and every fitted model were gone.
+  fluidRow(
+    box(
+      title = "Session", status = "success", solidHeader = TRUE, width = 12,
+      h4("Save this session"),
+      helpText("Writes one .rds holding the data, the variable selection, the",
+               "smoothed curves and every result you have run, plus the exact",
+               "package versions they were produced with."),
+      downloadButton("save_session", "Save session (.rds)", class = "btn-success"),
+      hr(),
+      h4("Restore a session"),
+      fileInput("load_session", "Open a saved .rds", accept = ".rds"),
+      verbatimTextOutput("session_status")
+    )
   )
 )
