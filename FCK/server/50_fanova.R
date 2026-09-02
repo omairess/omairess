@@ -207,7 +207,7 @@
     }
 
     # Get the levels of the selected factor
-    rm_factor_data <- values$uploaded_data[[input$rm_factor_var]]
+    rm_factor_data <- fck_rm_column(values, input$rm_factor_var)
     factor_levels <- unique(as.character(rm_factor_data))
     factor_levels <- factor_levels[!is.na(factor_levels)]
 
@@ -988,8 +988,9 @@
         
       } else if(input$fanova_design == "within") {
         # Within-subjects (repeated measures) ANOVA
-        subject_id_data <- values$uploaded_data[[input$rm_subject_id_var]]
-        rm_factor_data <- values$uploaded_data[[input$rm_factor_var]]
+        # MERGED APP: aligned to the curves (see FCK/server/52_posthoc_source.R).
+        subject_id_data <- fck_rm_column(values, input$rm_subject_id_var)
+        rm_factor_data  <- fck_rm_column(values, input$rm_factor_var)
 
         # Filter by selected levels if user has made a selection
         levels_to_include <- input$rm_levels_to_include
@@ -1054,6 +1055,17 @@
       
       # Store which data source was used
       values$fanova_results$data_source <- input$fanova_data_source
+
+      # MERGED APP: the post-hoc tab reads these back so it compares the same
+      # variable, the same levels and the same curves the omnibus did.
+      values$fanova_results$fd_used <- fd_to_use
+      values$fanova_results$group_var <- if(input$fanova_design == "within") {
+        input$rm_factor_var
+      } else if(!is.null(input$fanova_group_var) && nzchar(input$fanova_group_var)) {
+        input$fanova_group_var
+      } else if(!is.null(values$selected_group_vars)) {
+        values$selected_group_vars[1]
+      } else NULL
       
       showNotification("Functional ANOVA completed!", type = "message", duration = 3)
       
@@ -1757,35 +1769,48 @@
       
       cat("Using", n_perm_to_use, "permutations (same as omnibus test)\n")
       
-      if(design_type == "within") {
-        # Within-subjects: need subject IDs and RM factor
-        if(is.null(values$fanova_results$subject_id) || is.null(values$fanova_results$rm_factor)) {
-          showNotification("Subject ID or RM factor missing from FANOVA results!", type = "error", duration = 5)
-          return()
-        }
-        
+      # MERGED APP: what to compare is resolved in one place
+      # (FCK/server/52_posthoc_source.R). Before this, the between-subjects
+      # branch passed values$group_labels -- the FIRST scalar variable selected
+      # at import -- while the omnibus test had run on input$fanova_group_var,
+      # optionally restricted to a subset of its levels on a matching fd
+      # object. With more than one scalar variable selected, the omnibus and
+      # its "post-hoc" tests were silently testing different variables.
+      spec <- fck_posthoc_spec(input, values)
+      if (!isTRUE(spec$ok)) {
+        showNotification(spec$message, type = "error", duration = 10)
+        return()
+      }
+      fd_for_pairs <- if (!is.null(spec$fd)) spec$fd else fd_to_use
+      cat("Post-hoc source:", spec$description, "\n")
+
+      if(spec$design == "within") {
         cat("Performing PAIRED comparisons for within-subjects design\n")
-        
+
         values$pairwise_results <- perform_pairwise_comparisons_rm(
-          fd_obj = fd_to_use,
-          subject_id = values$fanova_results$subject_id,
-          rm_factor = values$fanova_results$rm_factor,
+          fd_obj = fd_for_pairs,
+          subject_id = spec$subject_id,
+          rm_factor = spec$rm_factor,
           n_permutations = n_perm_to_use,
           correction_method = input$pairwise_correction,
           alpha = input$pairwise_alpha
         )
       } else {
-        # Between-subjects: use original function
         cat("Performing INDEPENDENT comparisons for between-subjects design\n")
-        
+
         values$pairwise_results <- perform_pairwise_comparisons(
-          fd_obj = fd_to_use,
-          group_labels = values$group_labels,
+          fd_obj = fd_for_pairs,
+          group_labels = spec$group_labels,
           n_permutations = n_perm_to_use,
           correction_method = input$pairwise_correction,
           alpha = input$pairwise_alpha
         )
       }
+
+      # Travels with the result, so the summary and the export can say what was
+      # compared rather than leaving the reader to assume it was the omnibus.
+      values$pairwise_results$posthoc_source <- spec$description
+      values$pairwise_results$matches_omnibus <- isTRUE(spec$matches_omnibus)
       
       showNotification("Pairwise comparisons completed!", type = "message", duration = 3)
       

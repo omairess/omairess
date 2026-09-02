@@ -75,7 +75,11 @@ if any of these were missing):
 6. **Functional ANOVA** — between-subjects and repeated-measures designs,
    pointwise and global permutation tests, effect sizes.
 7. **fANOVA: post-hoc tests** — pairwise curve comparisons with multiple-testing
-   correction, difference/p-value plots, heatmap, significance timeline.
+   correction, difference/p-value plots, heatmap, significance timeline. A
+   control at the top says **what** is being compared: by default the same
+   variable, levels, curves and design the omnibus ANOVA used, or a variable and
+   design chosen here — including a within-subjects (paired) comparison, which
+   does not require the omnibus to have been a repeated-measures one.
 
 **C — circadian and functional regression**
 
@@ -132,6 +136,7 @@ FCK/
     03_helpers_clock.R     real clock times, when they can be trusted
     04_helpers_fd.R        the one rule for building an fd object
     05_helpers_missing.R   which values are measured, filled, or invented
+    06_helpers_posthoc.R   what the post-hoc tests compare
     10_import.R  20_smoothing.R           <- hand-merged shared steps
     11_import_views.R  21_smoothing_views.R  30_diagnostics.R
     40_fpca.R  50_fanova.R  60_clustering.R
@@ -152,6 +157,7 @@ Rscript tests/smoke_test.R           # from the FCK directory
 Rscript tests/clock_helpers_test.R
 Rscript tests/codegen_test.R
 Rscript tests/missing_status_test.R
+Rscript tests/posthoc_source_test.R
 ```
 
 `smoke_test.R` parses every file, builds and renders the whole UI, checks that
@@ -166,6 +172,10 @@ hours. It needs no packages at all.
 
 `missing_status_test.R` pins the observed / interpolated / extrapolated
 classification the missing-data panel rests on. It needs no packages.
+
+`posthoc_source_test.R` pins what the post-hoc tests compare — that they follow
+the omnibus ANOVA's variable rather than the first scalar variable selected, and
+that they refuse rather than guess when nothing lines up. No packages needed.
 
 `codegen_test.R` drives the code export with a stub result for every analysis
 family and checks that what comes out is valid R — a script that does not parse

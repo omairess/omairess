@@ -15,6 +15,9 @@ ui_tab_posthoc <- tabItem(
             width = 12,
             conditionalPanel(
               condition = "output.fanova_completed",
+              # MERGED APP: choose what these tests compare (default: whatever
+              # the omnibus fANOVA used). See FCK/server/52_posthoc_source.R.
+              uiOutput("pairwise_source_ui"),
               h4("Pairwise Test Configuration"),
               radioButtons("pairwise_correction", "Multiple comparison correction:",
                            choices = list("Bonferroni" = "bonferroni",

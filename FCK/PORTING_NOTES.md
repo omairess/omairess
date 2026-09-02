@@ -292,6 +292,47 @@ pattern above; mislabelling an extrapolated point as interpolated would be
 invisible, since the map would simply reassure you about a value nothing
 constrains.
 
+**4.19 The post-hoc tests compared the wrong variable.** *(bug fix)* The omnibus
+functional ANOVA runs on `input$fanova_group_var` (via
+`get_fanova_group_labels()`), optionally restricted to a subset of its levels on
+an fd object subset to match. The post-hoc tests then called
+`perform_pairwise_comparisons()` with `values$group_labels` — the **primary**
+grouping variable, i.e. whichever scalar variable happened to be selected first
+at import.
+
+With two or more scalar variables selected, the omnibus tested one variable and
+its "post-hoc" tests silently tested another, on the full unfiltered curve set.
+Nothing in the output said so, which is why `tests/posthoc_source_test.R` pins
+it rather than leaving it to inspection.
+
+Resolution now happens in one place (`FCK/server/06_helpers_posthoc.R`), driven
+by a control on the post-hoc tab:
+
+* **Follow the functional ANOVA** (default) — the labels, the levels, the
+  curves and the design the omnibus actually used, read back from
+  `values$fanova_results` (which now also carries `fd_used` and `group_var`).
+  They cannot drift apart, because there is only one source.
+* **Choose a variable and design here** — including a **within-subjects
+  (paired)** comparison, which previously required the omnibus itself to have
+  been a repeated-measures ANOVA. A comparison on a variable the omnibus was
+  never run on is a *new family of tests*, not post-hoc ones; the app labels it
+  that way rather than letting it borrow the omnibus's authority, and the
+  correction is stated to cover that family only.
+
+The resolver refuses rather than guesses: a single-level variable, labels that
+do not line up with the curve count, or a paired design where no subject appears
+at more than one level all stop with a message naming the problem.
+
+**4.20 Repeated-measures columns were read from unfiltered rows.** *(bug fix)*
+The repeated-measures path read its subject-ID and factor columns from
+`values$uploaded_data` — the raw imported frame, **before** the import step
+drops all-missing rows (and, in this app, rows below the minimum-measured-points
+threshold). Any dropped row shifted every pairing, and nothing errored: the
+lengths only had to be plausible for the test to return numbers.
+`fck_rm_column()` prefers the row-aligned `values$covariates` and, when it must
+fall back to the raw frame, checks the length and stops with an explanation
+instead of mispairing.
+
 ## 5. Rename table
 
 | source | source app | merged app |

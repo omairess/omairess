@@ -31,6 +31,10 @@
 #                       the same scalar variables as factors, for grouping
 # ==============================================================================
 
+# shiny does not export %||%, and base R only gained it in 4.4. Defined here so
+# every later server file can rely on it.
+if (!exists("%||%")) `%||%` <- function(a, b) if (is.null(a)) b else a
+
 values <- reactiveValues(
   # ---- shared: data ---------------------------------------------------------
   raw_df                = NULL,   # raw imported data frame

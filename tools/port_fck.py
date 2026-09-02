@@ -473,6 +473,44 @@ CODE_SECTIONS_NEW = r"""    # ---- SECTION 10: HARMONIC (COSINOR) REGRESSION ---
     add("# =============================================================================")"""
 
 
+# ---------------------------------------------------------------------------
+# The post-hoc tab compared the wrong variable.  The omnibus fANOVA runs on
+# input$fanova_group_var (optionally restricted to a subset of its levels, on a
+# matching fd object); the post-hoc tests then called
+# perform_pairwise_comparisons() with values$group_labels -- the FIRST scalar
+# variable selected at import.  With two or more scalar variables selected, the
+# omnibus and its "post-hoc" tests silently tested different variables, on
+# different curve sets, and nothing in the output said so.
+#
+# Resolution now lives in FCK/server/52_posthoc_source.R, which either follows
+# the omnibus exactly or takes an explicit choice made on the post-hoc tab --
+# including a within-subjects (paired) design that no longer requires the
+# omnibus to have been a repeated-measures one.
+# ---------------------------------------------------------------------------
+POSTHOC_CALLS_ANCHOR = '      if(design_type == "within") {\n        # Within-subjects: need subject IDs and RM factor\n        if(is.null(values$fanova_results$subject_id) || is.null(values$fanova_results$rm_factor)) {\n          showNotification("Subject ID or RM factor missing from FANOVA results!", type = "error", duration = 5)\n          return()\n        }\n        \n        cat("Performing PAIRED comparisons for within-subjects design\\n")\n        \n        values$pairwise_results <- perform_pairwise_comparisons_rm(\n          fd_obj = fd_to_use,\n          subject_id = values$fanova_results$subject_id,\n          rm_factor = values$fanova_results$rm_factor,\n          n_permutations = n_perm_to_use,\n          correction_method = input$pairwise_correction,\n          alpha = input$pairwise_alpha\n        )\n      } else {\n        # Between-subjects: use original function\n        cat("Performing INDEPENDENT comparisons for between-subjects design\\n")\n        \n        values$pairwise_results <- perform_pairwise_comparisons(\n          fd_obj = fd_to_use,\n          group_labels = values$group_labels,\n          n_permutations = n_perm_to_use,\n          correction_method = input$pairwise_correction,\n          alpha = input$pairwise_alpha\n        )\n      }'
+
+POSTHOC_CALLS_NEW = '      # MERGED APP: what to compare is resolved in one place\n      # (FCK/server/52_posthoc_source.R). Before this, the between-subjects\n      # branch passed values$group_labels -- the FIRST scalar variable selected\n      # at import -- while the omnibus test had run on input$fanova_group_var,\n      # optionally restricted to a subset of its levels on a matching fd\n      # object. With more than one scalar variable selected, the omnibus and\n      # its "post-hoc" tests were silently testing different variables.\n      spec <- fck_posthoc_spec(input, values)\n      if (!isTRUE(spec$ok)) {\n        showNotification(spec$message, type = "error", duration = 10)\n        return()\n      }\n      fd_for_pairs <- if (!is.null(spec$fd)) spec$fd else fd_to_use\n      cat("Post-hoc source:", spec$description, "\\n")\n\n      if(spec$design == "within") {\n        cat("Performing PAIRED comparisons for within-subjects design\\n")\n\n        values$pairwise_results <- perform_pairwise_comparisons_rm(\n          fd_obj = fd_for_pairs,\n          subject_id = spec$subject_id,\n          rm_factor = spec$rm_factor,\n          n_permutations = n_perm_to_use,\n          correction_method = input$pairwise_correction,\n          alpha = input$pairwise_alpha\n        )\n      } else {\n        cat("Performing INDEPENDENT comparisons for between-subjects design\\n")\n\n        values$pairwise_results <- perform_pairwise_comparisons(\n          fd_obj = fd_for_pairs,\n          group_labels = spec$group_labels,\n          n_permutations = n_perm_to_use,\n          correction_method = input$pairwise_correction,\n          alpha = input$pairwise_alpha\n        )\n      }\n\n      # Travels with the result, so the summary and the export can say what was\n      # compared rather than leaving the reader to assume it was the omnibus.\n      values$pairwise_results$posthoc_source <- spec$description\n      values$pairwise_results$matches_omnibus <- isTRUE(spec$matches_omnibus)'
+
+FANOVA_STORE_ANCHOR = '      # Store which data source was used\n      values$fanova_results$data_source <- input$fanova_data_source'
+
+FANOVA_STORE_NEW = '      # Store which data source was used\n      values$fanova_results$data_source <- input$fanova_data_source\n\n      # MERGED APP: the post-hoc tab reads these back so it compares the same\n      # variable, the same levels and the same curves the omnibus did.\n      values$fanova_results$fd_used <- fd_to_use\n      values$fanova_results$group_var <- if(input$fanova_design == "within") {\n        input$rm_factor_var\n      } else if(!is.null(input$fanova_group_var) && nzchar(input$fanova_group_var)) {\n        input$fanova_group_var\n      } else if(!is.null(values$selected_group_vars)) {\n        values$selected_group_vars[1]\n      } else NULL'
+
+POSTHOC_UI_ANCHOR = '              h4("Pairwise Test Configuration"),\n              radioButtons("pairwise_correction", "Multiple comparison correction:",'
+
+POSTHOC_UI_NEW = '              # MERGED APP: choose what these tests compare (default: whatever\n              # the omnibus fANOVA used). See FCK/server/52_posthoc_source.R.\n              uiOutput("pairwise_source_ui"),\n              h4("Pairwise Test Configuration"),\n              radioButtons("pairwise_correction", "Multiple comparison correction:",'
+
+# WaPaa reads the repeated-measures subject/factor columns straight out of
+# values$uploaded_data, the raw frame from before the import step drops rows.
+# Any dropped row silently shifts every pairing. fck_rm_column() prefers the
+# row-aligned values$covariates and checks the length when it cannot.
+RM_READ_ANCHOR = '        subject_id_data <- values$uploaded_data[[input$rm_subject_id_var]]\n        rm_factor_data <- values$uploaded_data[[input$rm_factor_var]]'
+
+RM_READ_NEW = '        # MERGED APP: aligned to the curves (see FCK/server/52_posthoc_source.R).\n        subject_id_data <- fck_rm_column(values, input$rm_subject_id_var)\n        rm_factor_data  <- fck_rm_column(values, input$rm_factor_var)'
+
+RM_LEVELS_ANCHOR = '    rm_factor_data <- values$uploaded_data[[input$rm_factor_var]]'
+
+RM_LEVELS_NEW = '    rm_factor_data <- fck_rm_column(values, input$rm_factor_var)'
+
 CV_NBASIS_ANCHOR = """          nb <- min(20, n_time - 2)"""
 
 CV_NBASIS_NEW = """          # MERGED APP: follow the user's basis count (CIRCAREG's behaviour) so
@@ -577,7 +615,7 @@ MANIFEST = [
     ("ui/50_fanova.R", "ui_tab_fanova",
      [("W", 579, 694, "Functional ANOVA", None)]),
     ("ui/51_posthoc.R", "ui_tab_posthoc",
-     [("W", 697, 789, "fANOVA post-hoc tests", None)]),
+     [("W", 697, 789, "fANOVA post-hoc tests", "posthoc_ui")]),
     ("ui/60_clustering.R", "ui_tab_clustering",
      [("W", 792, 1065, "Functional clustering", None)]),
     ("ui/70_fosr.R", "ui_tab_fosr",
@@ -671,6 +709,12 @@ def build():
                 chunk = patch(chunk, FPCA_FD_ANCHOR, FPCA_FD_NEW, rel)
             elif transform == "fanova_fd":
                 chunk = patch(chunk, FANOVA_FD_ANCHOR, FANOVA_FD_NEW, rel)
+                chunk = patch(chunk, FANOVA_STORE_ANCHOR, FANOVA_STORE_NEW, rel)
+                chunk = patch(chunk, POSTHOC_CALLS_ANCHOR, POSTHOC_CALLS_NEW, rel)
+                chunk = patch(chunk, RM_READ_ANCHOR, RM_READ_NEW, rel)
+                chunk = patch(chunk, RM_LEVELS_ANCHOR, RM_LEVELS_NEW, rel)
+            elif transform == "posthoc_ui":
+                chunk = patch(chunk, POSTHOC_UI_ANCHOR, POSTHOC_UI_NEW, rel)
             elif transform == "time_axis":
                 chunk = patch(chunk, TIME_AXIS_ANCHOR, TIME_AXIS_NEW, rel)
             elif transform == "landmark":
