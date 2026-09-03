@@ -451,6 +451,16 @@ value plotted (stretches the shape, small differences visible) and from zero
 (proportional, but flattens a rhythm whose MESOR is far from zero). The note
 states which is in force, since neither is right for every reading.
 
+**4.22 The preprocessing plot drew a fixed 50 curves.** *(new control)* WaPaa
+capped its curve plot at `min(n_subj, 50)` and said nothing about the rest, so on
+85 rows a third of the data was silently absent from the picture people use to
+judge their smoothing. The count is now a control (10 / 25 / 50 / 100 / 250 /
+All), defaulting to 50 so nothing moves for an existing analysis.
+
+It had to change in **two** places. The click-to-select handler recomputes the
+same cap to work out which trace was clicked, so leaving that at 50 would mean
+clicking the 60th curve selects nothing or the wrong subject.
+
 ## 5. Rename table
 
 | source | source app | merged app |

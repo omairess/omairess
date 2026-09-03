@@ -519,6 +519,21 @@ DENSITY_TAB_ANCHOR = '            tabPanel("2. Polar Plot (Acrophase)", icon = i
 
 DENSITY_TAB_NEW = '            tabPanel("2. Polar Plot (Acrophase)", icon = icon("compass"),\n                     fluidRow(\n                       column(8, plotlyOutput("harmonic_polar_plot", height = "500px")),\n                       column(4,\n                              h4("Polar Plot Settings"),\n                              uiOutput("harmonic_selector_polar"),\n                              helpText("Acrophase displayed in polar coordinates. Radius = Amplitude, Angle = Acrophase."),\n                              checkboxInput("polar_show_mean", "Show Population Mean Vector", TRUE),\n                              checkboxInput("polar_show_ellipse", "Show Confidence Ellipse", TRUE)\n                       )\n                     )\n            ),\n            # MERGED APP: the same circle as a DENSITY, oriented as a clock\n            # face -- noon at the top, midnight at the bottom, so the upper\n            # half is daytime and the lower half night.  See\n            # FCK/server/07_helpers_circular.R and 74_polar_density.R.\n            tabPanel("2b. Polar Density", icon = icon("circle-notch"),\n                     fluidRow(\n                       column(8,\n                              plotlyOutput("harmonic_density_plot", height = "540px"),\n                              verbatimTextOutput("harmonic_density_note")),\n                       column(4,\n                              h4("Density Settings"),\n                              helpText(HTML(\n                                "A filled shape around a clock face. The radius\n                                 carries either a <b>von Mises kernel density of\n                                 the acrophases</b> -- the circular analogue of a\n                                 KDE, so mass near midnight wraps instead of\n                                 splitting between the ends of a histogram -- or\n                                 the <b>signal itself averaged over the\n                                 clock</b>.<br><br>\n                                 <b>Noon is at the top, midnight at the bottom:</b>\n                                 the upper half of the circle is daytime\n                                 (06:00-18:00), the lower half night. Hours run\n                                 clockwise.")),\n                              uiOutput("density_controls_ui")\n                       )\n                     )\n            ),'
 
+# The preprocessing plot draws the first 50 curves and says nothing about the
+# rest, so on 85 rows a third of the data is silently absent from the picture
+# people use to judge their smoothing. The count is now a control.
+#
+# It has to change in TWO places. The click handler recomputes the same cap to
+# work out which trace was clicked; leave it at 50 and clicking the 60th curve
+# either selects nothing or selects the wrong subject.
+NSHOW_PLOT_ANCHOR = '      # Add individual curves (use 0-1 normalized time)\n      n_show <- min(n_subj, 50)'
+
+NSHOW_PLOT_NEW = '      # Add individual curves (use 0-1 normalized time)\n      # MERGED APP: how many curves to draw is the user\'s choice. WaPaa fixed\n      # this at 50 and gave no sign that anything had been left out.\n      n_req <- suppressWarnings(as.numeric(input$data_plot_n %||% 50))\n      if (!is.finite(n_req) || n_req <= 0) n_req <- n_subj      # "All"\n      n_show <- min(n_subj, as.integer(n_req))'
+
+NSHOW_CLICK_ANCHOR = '      n_subj <- nrow(values$data)\n      n_show <- min(n_subj, 50)'
+
+NSHOW_CLICK_NEW = '      n_subj <- nrow(values$data)\n      # MERGED APP: how many curves to draw is the user\'s choice. WaPaa fixed\n      # this at 50 and gave no sign that anything had been left out.\n      n_req <- suppressWarnings(as.numeric(input$data_plot_n %||% 50))\n      if (!is.finite(n_req) || n_req <= 0) n_req <- n_subj      # "All"\n      n_show <- min(n_subj, as.integer(n_req))'
+
 CV_NBASIS_ANCHOR = """          nb <- min(20, n_time - 2)"""
 
 CV_NBASIS_NEW = """          # MERGED APP: follow the user's basis count (CIRCAREG's behaviour) so
@@ -653,7 +668,7 @@ MANIFEST = [
     ("server/21_smoothing_views.R", None,
      [("W", 1406, 1494, "smoothing fit statistics printout", "time_axis"),
       ("C", 913, 930, "compact smoothing fit-metrics panel", None),
-      ("W", 2862, 3016, "interactive smoothed-curve plot + curve selection", None)]),
+      ("W", 2862, 3016, "interactive smoothed-curve plot + curve selection", "nshow")]),
 
     # ---- server: shared smoothing diagnostics ------------------------------
     # Both apps had this section; WaPaa's is a strict superset of CIRCAREG's
@@ -727,6 +742,9 @@ def build():
                 chunk = patch(chunk, POSTHOC_UI_ANCHOR, POSTHOC_UI_NEW, rel)
             elif transform == "time_axis":
                 chunk = patch(chunk, TIME_AXIS_ANCHOR, TIME_AXIS_NEW, rel)
+            elif transform == "nshow":
+                chunk = patch(chunk, NSHOW_PLOT_ANCHOR, NSHOW_PLOT_NEW, rel)
+                chunk = patch(chunk, NSHOW_CLICK_ANCHOR, NSHOW_CLICK_NEW, rel)
             elif transform == "landmark":
                 chunk = patch(chunk, LANDMARK_GUARD_ANCHOR,
                               LANDMARK_GUARD_NEW, rel)

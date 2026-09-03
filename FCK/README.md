@@ -51,7 +51,8 @@ if any of these were missing):
 2. **Data Preprocessing/Smoothing** — B-spline or (for 24-hour data) Fourier
    basis, automatic REML or manual lambda, per-subject smoothing that
    interpolates missing values, optional clamping to a range, per-subject
-   R²/RMSE/EDF/GCV. Optionally spaces the time points by their **real clock
+   R²/RMSE/EDF/GCV, with a control for how many curves the plot draws.
+   Optionally spaces the time points by their **real clock
    times** instead of the column index — tick this if your measurements are
    unevenly spaced (hourly by day, 2-hourly at night), or a long gap gets
    smoothed as though it were a short one.

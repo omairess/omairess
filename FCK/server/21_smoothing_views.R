@@ -145,7 +145,11 @@
       p <- plot_ly(type = 'scatter', mode = 'lines', source = "data_plot_source")
 
       # Add individual curves (use 0-1 normalized time)
-      n_show <- min(n_subj, 50)
+      # MERGED APP: how many curves to draw is the user's choice. WaPaa fixed
+      # this at 50 and gave no sign that anything had been left out.
+      n_req <- suppressWarnings(as.numeric(input$data_plot_n %||% 50))
+      if (!is.finite(n_req) || n_req <= 0) n_req <- n_subj      # "All"
+      n_show <- min(n_subj, as.integer(n_req))
       for(i in 1:n_show) {
         # Determine if this curve is selected
         is_selected <- !is.null(selected_idx) && i == selected_idx
@@ -214,7 +218,11 @@
 
       # The last curve is the mean (index 0 in customdata), skip it
       n_subj <- nrow(values$data)
-      n_show <- min(n_subj, 50)
+      # MERGED APP: how many curves to draw is the user's choice. WaPaa fixed
+      # this at 50 and gave no sign that anything had been left out.
+      n_req <- suppressWarnings(as.numeric(input$data_plot_n %||% 50))
+      if (!is.finite(n_req) || n_req <= 0) n_req <- n_subj      # "All"
+      n_show <- min(n_subj, as.integer(n_req))
 
       if(curve_num <= n_show) {
         # It's an individual curve, select it
