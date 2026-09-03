@@ -182,6 +182,21 @@ output$var_select_container <- renderUI({
        composition and cosinor group tests. The first one selected is the primary
        grouping variable; each tab can pick a different one.")),
 
+    # Rows are CURVES, not necessarily people. Without an identifier no analysis
+    # can tell that two rows are the same participant, and every between-groups
+    # test then treats correlated observations as independent.
+    selectInput(
+      inputId = "subject_id_var",
+      label = "Participant identifier (optional):",
+      choices = c("Auto-detect / none" = "_none_", cols),
+      selected = "_none_"
+    ),
+    helpText(HTML(
+      "Only needed when one participant contributes <b>more than one row</b> —
+       repeated days or sessions. The app cannot otherwise know, and a
+       between-groups test on repeated rows is anticonservative. Auto-detects a
+       column called ID, subject or participant.")),
+
     actionButton("apply_selection", "Confirm & Process Data",
                  class = "btn-success", icon = icon("check"))
   )
@@ -240,6 +255,40 @@ observeEvent(input$apply_selection, {
 
     values$data <- temp_data_mat
 
+    # ---- participant identifier, if the file carries one --------------------
+    # Scores and per-subject parameters are one row per CURVE. When the same
+    # participant contributes several curves (repeated days, repeated sessions),
+    # every between-groups test that treats rows as independent is
+    # anticonservative. Nothing can detect that without an identifier, so one is
+    # captured here and carried through the row filters below alongside the
+    # group vectors. Auto-detected; the user can override in the scalar picker.
+    values$subject_ids <- NULL
+    id_pick <- input$subject_id_var
+    if (!is.null(id_pick) && nzchar(id_pick) && !identical(id_pick, "_none_") &&
+        id_pick %in% names(values$raw_df)) {
+      values$subject_ids <- as.character(values$raw_df[[id_pick]])
+    } else {
+      cand <- names(values$raw_df)[tolower(names(values$raw_df)) %in%
+                                     c("id", "subject", "subject_id", "subjectid",
+                                       "participant", "participant_id", "pid")]
+      if (length(cand)) {
+        values$subject_ids <- as.character(values$raw_df[[cand[1]]])
+        cat("Participant identifier auto-detected from column:", cand[1], "\n")
+      }
+    }
+    if (!is.null(values$subject_ids) && length(values$subject_ids) != nrow(values$data)) {
+      values$subject_ids <- NULL   # cannot vouch for it; better absent than wrong
+    }
+    if (!is.null(values$subject_ids)) {
+      n_dup <- sum(duplicated(values$subject_ids))
+      if (n_dup > 0)
+        showNotification(
+          sprintf("%d of %d rows repeat a participant identifier: %d distinct participants. Analyses that treat rows as independent observations will say so.",
+                  n_dup, length(values$subject_ids),
+                  length(unique(values$subject_ids))),
+          type = "warning", duration = 15)
+    }
+
     # Time labels + numeric clock times, once, for every tab.
     values$time_labels <- colnames(temp_data)
     # WaPaa's plotting x coordinates (1:n_time — extract_time_values() does not
@@ -261,6 +310,8 @@ observeEvent(input$apply_selection, {
       na_rows <- apply(is.na(values$data), 1, all)
       if(any(na_rows)) {
         values$data <- values$data[!na_rows, , drop = FALSE]
+        if(!is.null(values$subject_ids))
+          values$subject_ids <- values$subject_ids[!na_rows]
         if(!is.null(values$group_labels))
           values$group_labels <- values$group_labels[!na_rows]
         if(!is.null(values$group_variables))
@@ -278,6 +329,8 @@ observeEvent(input$apply_selection, {
         too_few <- n_obs_row < min_obs
         if (any(too_few)) {
           values$data <- values$data[!too_few, , drop = FALSE]
+          if(!is.null(values$subject_ids))
+            values$subject_ids <- values$subject_ids[!too_few]
           if(!is.null(values$group_labels))
             values$group_labels <- values$group_labels[!too_few]
           if(!is.null(values$group_variables))

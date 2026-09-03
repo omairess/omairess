@@ -40,6 +40,12 @@ values <- reactiveValues(
   raw_df                = NULL,   # raw imported data frame
   uploaded_data         = NULL,   # same, kept for the RM-ANOVA variable pickers
   data                  = NULL,   # numeric analysis matrix (subjects x time)
+  # One participant identifier per ROW of $data, kept aligned through every row
+  # filter. NULL when the file carries no recognisable ID column. Its only job
+  # is to let an analysis notice that two rows are the same person: the fPCA
+  # component ANOVA uses it to detect repeated curves, which make a
+  # between-groups test anticonservative.
+  subject_ids           = NULL,
   time_labels           = NULL,   # original column names for the time points
   time_numeric          = NULL,   # WaPaa's plotting x coordinates: 1:n_time.
                                   #   NOT clock times — see 03_helpers_clock.R

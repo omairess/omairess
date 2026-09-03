@@ -566,6 +566,64 @@ is not installable here and an unexecuted test is a claim rather than a check
 1305-subject file is not in this repository, so old and new are scored against
 truth rather than diffed against a re-run that could not be produced honestly.
 
+**4.25 Per-component ANOVA on fPCA / warped-fPCA scores.** *(new feature)* The
+fPCA tab produced an n x k score matrix and stopped; there was no way to ask
+whether groups differ on a component. `server/09_helpers_pcanova.R` (arithmetic,
+testable without a session) and `server/42_fpca_anova.R` (controls, report,
+plot, CSV) add it, with the section appended to `ui/41_results.R`.
+
+What it does beyond a stack of `aov()` calls:
+
+* **Two multiplicity families, corrected separately.** Pairwise-within-a-
+  component and omnibus-across-components are different families. Correcting
+  the first and forgetting the second is the usual error and the more serious
+  one: k omnibus tests are what manufacture a "significant PC" by chance. Both
+  have their own control.
+* **The post-hoc gate runs on the across-component-adjusted p**, so a component
+  that only survives before that correction gets no pairwise table lending it
+  credibility. `tests/testthat/test-pc-anova.R` pins this with an effect sized
+  to pass raw (p = 0.028) and fail Bonferroni over 8 components (p = 0.22).
+* **Corrections offered:** none, Bonferroni, Holm, Hochberg, Hommel, BH, BY,
+  Tukey HSD, Games-Howell. Tukey and Games-Howell are family-wise by
+  construction, so `p.adjust` is *not* applied to them a second time — a test
+  asserts that.
+* **Welch by default when the variances differ**, chosen per component by
+  Brown-Forsythe. With n = 654 against n = 59 the equal-variance F is not a safe
+  default. Kruskal-Wallis is reported alongside for the severely non-normal case.
+* **Eigenvalue separation** is shown next to every component: when two
+  eigenvalues are nearly tied the split between their eigenfunctions is an
+  arbitrary rotation, and a "difference on PC2" belongs to the pair.
+* **Repeated curves are detected.** Scores are one row per *curve*;
+  `values$subject_ids` is now captured at import and carried through every row
+  filter, so the report can say that a between-groups test on repeated rows is
+  anticonservative instead of silently being one.
+
+One bug found in this module while testing it, worth recording because it is a
+general R trap: `l[[j]] <- NULL` **deletes** element j and shifts everything
+after it down. Building the per-component lists that way meant a single
+untestable component renumbered every later one, so PC4's result would be
+reported as PC3's. Fixed with `l[j] <- list(NULL)`; a test pins it.
+
+**4.26 The environment opened up.** Sections 4.24 and earlier record that CRAN
+was blocked and that the statistics had never been executed. That is no longer
+true and the claims are corrected here rather than left standing:
+
+* `minpack.lm`, `testthat`, `mgcv` and `readxl` install from the Ubuntu archive
+  (`apt-get install r-cran-*`), which is reachable where CRAN is not.
+* `fda` is not packaged for Ubuntu; it installs from the read-only CRAN mirror
+  on GitHub (`github.com/cran/fda`) **with the `fds` dependency removed** —
+  `fds` is a data package that fda's R code never calls, only its NAMESPACE
+  imports. Basis construction, `smooth.basis`, `fdPar`, `eval.fd` and `pca.fd`
+  all verified working. Anything touching fda's bundled example datasets will
+  not.
+* The full `testthat` suite now runs for real: **405 assertions pass**, and the
+  base-R shim in `tests/audit_test.R` was confirmed faithful (it reported the
+  same 298 for the cosinor file).
+* `tests/real_data_run.R` runs the audited pipeline on the real Circaflex file
+  by extracting the app's own fitters from `server/72_harmonic.R` via the parse
+  tree — the shipped code, not a copy. `tests/real_fpca_anova.R` does the same
+  for the component ANOVA.
+
 ## 5. Rename table
 
 | source | source app | merged app |

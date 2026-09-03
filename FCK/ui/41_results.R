@@ -117,5 +117,37 @@ ui_tab_results <- tabItem(
             hr(),
             DTOutput("scores_table")
           )
+        ),
+
+        # ====================================================================
+        # NEW (2026-09-03): group comparisons on the component scores.
+        #
+        # The tab produced an n x k score matrix and stopped. This asks whether
+        # the groups differ on each component, with both multiplicity families
+        # corrected -- pairwise within a component, and omnibus across
+        # components. Server: server/42_fpca_anova.R; arithmetic:
+        # server/09_helpers_pcanova.R.
+        # ====================================================================
+        fluidRow(
+          box(
+            title = "Group Comparison on Component Scores (ANOVA per PC)",
+            status = "primary",
+            solidHeader = TRUE,
+            width = 12,
+            collapsible = TRUE,
+            fluidRow(
+              column(4,
+                     uiOutput("pca_anova_controls")
+              ),
+              column(8,
+                     plotlyOutput("pca_anova_plot", height = "420px"),
+                     br(),
+                     downloadButton("download_pca_anova",
+                                    "Download the full table (CSV)", class = "btn-sm")
+              )
+            ),
+            hr(),
+            verbatimTextOutput("pca_anova_results")
+          )
         )
       )

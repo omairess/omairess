@@ -1,0 +1,160 @@
+============================================================================== 
+CIRCAFLEX 2019 — REPORT AFTER THE AUDIT
+============================================================================== 
+
+Dependent variable: sleepiness VAS
+  Observed range in the file: [0.0, 500.0]
+  Admissible range: NOT SPECIFIED. Set it in the DV panel to have fitted
+  values checked; on a 0-500 VAS a fit predicting -20 is misspecified, and
+  nothing in the report can tell you that until the bounds are declared.
+Period: 24 h   Harmonics: 2   Trend: SATURATING EXPONENTIAL
+Data: RAW (no smoothing applied)
+  0.75% of cells are missing; the cosinor uses the observations present.
+Time origin: MIDNIGHT. The trend is anchored at the first observation (t - 8)
+  while the harmonics are anchored at midnight, so the intercept is the
+  constant of a model with two origins and is not the value at either.
+
+--- Fit outcomes ---
+Subjects attempted:         1305
+  Converged:                367
+  Converged but on a bound: 938  (excluded)
+  Failed outright:          0
+Population summaries below use 367 subject(s).
+The old report counted all 1305 as successes.
+
+--- Central value ---
+Intercept (beta_0, at t = 0):                           138.250
+MESOR (rhythm-adjusted mean over the observed window):  275.716
+  Difference: 137.47 units. The intercept is NOT the MESOR here.
+
+--- Population rhythm parameters (VECTOR-averaged) ---
+  H1: amplitude = 106.153, acrophase = 2.87 h
+  H2: amplitude = 32.055, acrophase = 3.83 h  (modulo 12 h)
+
+--- Circular concentration and the Rayleigh test ---
+H1  n = 367
+  r-bar (UNWEIGHTED, for Rayleigh):                0.701
+  r-bar (AMPLITUDE-WEIGHTED, for the vector mean): 0.750
+  Rayleigh Z = 180.5, p = <1e-16
+  Circular SD = 3.218 h
+H2  n = 367
+  r-bar (UNWEIGHTED, for Rayleigh):                0.446
+  r-bar (AMPLITUDE-WEIGHTED, for the vector mean): 0.531
+  Rayleigh Z = 72.96, p = <1e-16
+  Circular SD = 2.427 h
+
+--- Fitted model equation (pooled) ---
+Y(t) = 138.25 + 245.64·(1 - e^(-(t - 8)/11.3)) + 106.15·cos(2π·1·t/24 - 0.75) + 32.06·cos(2π·2·t/24 - 2.01) 
+
+--- Individual parameters (ARITHMETIC means, +/- linear SD) ---
+  Intercept:           138.250 (SD 204.285)   [arithmetic]
+  A_sat (asymptote):   245.640 (SD 433.050)   [arithmetic]
+  tau (time constant): 11.30 (SD 23.25) h   [arithmetic]
+    ! SD/mean above 0.5: a likelihood ridge, not population heterogeneity.
+  H1 amplitude: 141.494 (SD 62.549)   [arithmetic]
+  H1 acrophase: circular mean 3.04 h, circular SD 3.22 h   [circular]
+  H2 amplitude: 60.328 (SD 35.913)   [arithmetic]
+  H2 acrophase: circular mean 4.09 h, circular SD 2.43 h   [circular]
+
+  R-squared: mean 0.891, range [0.386, 0.996]
+  Significant rhythms (p<0.05): 305 / 367 (83.1%)
+    The zero-amplitude test is now the harmonics GIVEN the trend.
+
+--- Variance decomposition (commonality analysis) ---
+  Unique to Process S (homeostatic): 0.085  (9.6%)
+  Unique to Process C (circadian):   0.501  (56.3%)
+  Shared between S and C:            0.305  (34.2%)
+  ------------------------------------------------
+  Total R-squared:                   0.891  (100.0%)
+  No dominance verdict is emitted.
+
+--- Group-specific parameters ---
+Group sizes sum to 367; 367 subjects were fitted.
+  These reconcile.
+
+Group 'YOUTH' (n = 179):
+  Intercept (beta_0, at t = 0):  161.177 (SD 212.079)   [arithmetic]
+  MESOR (rhythm-adjusted mean):  292.491   [integrated over the window]
+  A_sat: 224.280   tau: 10.36 h   [arithmetic]
+  H1 amplitude: 109.409   [vector]   /  142.231 (SD 63.462)   [arithmetic]
+  H1 acrophase: 2.95 h   [vector]   r-bar unweighted 0.706, weighted 0.769
+
+  Fitted equation:
+  Y(t) = 161.18 + 224.28·(1 - e^(-(t - 8)/10.4)) + 109.41·cos(2π·1·t/24 - 0.77) + 32.21·cos(2π·2·t/24 - 2.05) 
+
+Group 'ADULT' (n = 114):
+  Intercept (beta_0, at t = 0):  106.509 (SD 193.146)   [arithmetic]
+  MESOR (rhythm-adjusted mean):  249.324   [integrated over the window]
+  A_sat: 249.123   tau: 10.79 h   [arithmetic]
+  H1 amplitude: 106.753   [vector]   /  140.879 (SD 62.703)   [arithmetic]
+  H1 acrophase: 2.91 h   [vector]   r-bar unweighted 0.719, weighted 0.758
+
+  Fitted equation:
+  Y(t) = 106.51 + 249.12·(1 - e^(-(t - 8)/10.8)) + 106.75·cos(2π·1·t/24 - 0.76) + 33.12·cos(2π·2·t/24 - 2.03) 
+
+Group 'MIDDLE_AGE' (n = 62):
+  Intercept (beta_0, at t = 0):  128.794 (SD 190.086)   [arithmetic]
+  MESOR (rhythm-adjusted mean):  287.937   [integrated over the window]
+  A_sat: 305.947   tau: 12.90 h   [arithmetic]
+  H1 amplitude: 90.407   [vector]   /  134.159 (SD 60.527)   [arithmetic]
+  H1 acrophase: 2.62 h   [vector]   r-bar unweighted 0.648, weighted 0.674
+
+  Fitted equation:
+  Y(t) = 128.79 + 305.95·(1 - e^(-(t - 8)/12.9)) + 90.41·cos(2π·1·t/24 - 0.69) + 29.06·cos(2π·2·t/24 - 1.89) 
+
+Group 'ELDERLY' (n = 12):
+  Intercept (beta_0, at t = 0):  146.642 (SD 239.910)   [arithmetic]
+  MESOR (rhythm-adjusted mean):  227.955   [integrated over the window]
+  A_sat: 220.656   tau: 21.95 h   [arithmetic]
+  H1 amplitude: 135.926   [vector]   /  174.253 (SD 53.054)   [arithmetic]
+  H1 acrophase: 2.35 h   [vector]   r-bar unweighted 0.790, weighted 0.780
+
+  Fitted equation:
+  Y(t) = 146.64 + 220.66·(1 - e^(-(t - 8)/21.9)) + 135.93·cos(2π·1·t/24 - 0.62) + 37.58·cos(2π·2·t/24 - 1.79) 
+
+--- Group comparisons ---
+
+intercept:
+  F(3, 363) = 1.730, p = 0.16;  eta^2 = 0.014, omega^2 = 0.006
+    YOUTH        161.177 (SD 212.079, n = 179)
+    ADULT        106.509 (SD 193.146, n = 114)
+    MIDDLE_AGE   128.794 (SD 190.086, n = 62)
+    ELDERLY      146.642 (SD 239.910, n = 12)
+  Largest contrast YOUTH - ADULT: 54.668, 95% CI [7.303, 102.032], Hedges' g = 0.266
+  Monotone trend (YOUTH<ADULT<MIDDLE_AGE<ELDERLY): t(363) = -0.115, p = 0.908, 95% CI [-192.582, 171.261]
+
+amp1:
+  F(3, 363) = 1.398, p = 0.243;  eta^2 = 0.011, omega^2 = 0.003
+    YOUTH        142.231 (SD 63.462, n = 179)
+    ADULT        140.879 (SD 62.703, n = 114)
+    MIDDLE_AGE   134.159 (SD 60.527, n = 62)
+    ELDERLY      174.253 (SD 53.054, n = 12)
+  Largest contrast MIDDLE_AGE - ELDERLY: -40.094, 95% CI [-76.241, -3.947], Hedges' g = -0.667
+  Monotone trend (YOUTH<ADULT<MIDDLE_AGE<ELDERLY): t(363) = 1.575, p = 0.116, 95% CI [-11.105, 100.449]
+
+amp2:
+  F(3, 363) = 0.947, p = 0.418;  eta^2 = 0.008, omega^2 = -0.000
+    YOUTH        57.379 (SD 33.458, n = 179)
+    ADULT        64.011 (SD 38.091, n = 114)
+    MIDDLE_AGE   60.756 (SD 38.521, n = 62)
+    ELDERLY      67.106 (SD 36.508, n = 12)
+  Largest contrast YOUTH - ELDERLY: -9.727, 95% CI [-33.270, 13.815], Hedges' g = -0.288
+  Monotone trend (YOUTH<ADULT<MIDDLE_AGE<ELDERLY): t(363) = 0.795, p = 0.427, 95% CI [-19.121, 45.047]
+
+A_sat:
+  F(3, 341) = 0.516, p = 0.672;  eta^2 = 0.005, omega^2 = -0.004
+    YOUTH        224.280 (SD 449.782, n = 165)
+    ADULT        249.123 (SD 395.352, n = 111)
+    MIDDLE_AGE   305.947 (SD 426.489, n = 57)
+    ELDERLY      220.656 (SD 577.016, n = 12)
+  Largest contrast MIDDLE_AGE - ELDERLY: 85.292, 95% CI [-292.887, 463.470], Hedges' g = 0.185
+  Monotone trend (YOUTH<ADULT<MIDDLE_AGE<ELDERLY): t(341) = 0.116, p = 0.908, 95% CI [-366.110, 412.061]
+
+tau:
+  F(3, 363) = 1.054, p = 0.369;  eta^2 = 0.009, omega^2 = 0.000
+    YOUTH        10.357 (SD 21.966, n = 179)
+    ADULT        10.794 (SD 20.805, n = 114)
+    MIDDLE_AGE   12.900 (SD 26.374, n = 62)
+    ELDERLY      21.948 (SD 41.386, n = 12)
+  Largest contrast YOUTH - ELDERLY: -11.591, 95% CI [-38.015, 14.833], Hedges' g = -0.490
+  Monotone trend (YOUTH<ADULT<MIDDLE_AGE<ELDERLY): t(363) = 1.747, p = 0.0815, 95% CI [-2.320, 39.198]

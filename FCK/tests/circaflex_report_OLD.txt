@@ -1,0 +1,68 @@
+============================================================================== 
+CIRCAFLEX 2019 — REPORT AS THE CODE PRODUCED IT BEFORE THE AUDIT
+============================================================================== 
+
+Period: 24   Harmonics: 2   Trend: SATURATING EXPONENTIAL
+Number of subjects: 1305 
+  - Successfully fitted: 1305 
+
+--- Population Mean Parameters (Vector-Averaged) ---
+MESOR:     150.501
+Amplitude (H1): 94.619
+Acrophase (H1): 38.51 (2.57 hours)
+
+  All Harmonics (vector-averaged):
+    H1: Amplitude=94.619, Acrophase=2.57 hours
+    H2: Amplitude=29.943, Acrophase=3.39 hours
+
+Rayleigh test for uniformity (H1):
+  Z = 694.952, p = 0.0000
+  Mean resultant length (r-bar) = 0.730
+
+--- Fitted Model Equation ---
+Y(t) = 150.50 + 94.62*cos(2pi*1*t/24 - 0.67) + 29.94*cos(2pi*2*t/24 - 1.78)
+
+--- Individual Parameter Summary ---
+MESOR:     Mean=150.501, SD=157.567
+A_sat (asymptote): Mean=818.666, SD=1046.040 (units)
+tau (time constant): Mean=74.91, SD=49.61 (hours)
+H1 Amplitude: Mean=129.660, SD=66.315
+H1 Acrophase: Circular mean=2.59 h, r-bar=0.649
+H2 Acrophase: Arithmetic mean=9.22 h   [on a 0-24 scale: the /h divisor was missing]
+R-squared: Mean=0.869, Range=[0.109, 0.996]
+Significant rhythms (p<0.05): 881 / 1305 (67.5%)
+
+--- Variance Decomposition: Relative Importance ---
+R2 from Process S (homeostatic): Mean=0.501
+R2 from Process C (circadian):   Mean=0.798
+
+Proportion of total R2 explained by:
+  Process S: 56.4%
+  Process C: 91.7%
+  [these sum to 148.1%]
+
+Interpretation: Circadian rhythm (C) is the dominant component
+
+--- Group-Specific Parameters ---
+
+Group 'YOUTH' (n=654):
+  MESOR:     159.071 (SD=159.296)
+  H1 Amplitude: 98.610 (SD=67.392)
+  H1 Acrophase: 2.81 hours
+
+Group 'ADULT' (n=410):
+  MESOR:     131.207 (SD=149.676)
+  H1 Amplitude: 93.836 (SD=65.411)
+  H1 Acrophase: 2.43 hours
+
+Group 'MIDDLE_AGE' (n=181):
+  MESOR:     153.913 (SD=166.385)
+  H1 Amplitude: 79.245 (SD=62.029)
+  H1 Acrophase: 1.87 hours
+
+Group 'ELDERLY' (n=59):
+  MESOR:     177.603 (SD=155.646)
+  H1 Amplitude: 108.978 (SD=73.953)
+  H1 Acrophase: 2.55 hours
+
+[group n's sum to 1304; 1305 subjects were fitted]
