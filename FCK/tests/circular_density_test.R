@@ -208,5 +208,51 @@ co3 <- c(50, 12, -5, NA, NA)
 check("a missing harmonic is skipped, not propagated",
       all(is.finite(fck_rhythm_from_coefs(co3, tt, 24, 2, "none"))))
 
+# --- night as a gradient ----------------------------------------------------
+g <- fck_night_gradient(23, 7)                    # the usual window, wraps midnight
+check("gradient covers the whole night window", near(sum(g$width), 8, 1e-9),
+      sprintf("%.3f h", sum(g$width)))
+check("gradient starts at dusk and ends at dawn",
+      abs(g$hour[1] - 23) < 0.2 && abs(g$hour[nrow(g)] - 7) < 0.2,
+      sprintf("%.2f .. %.2f", g$hour[1], g$hour[nrow(g)]))
+check("gradient crosses midnight rather than running backwards",
+      any(g$hour > 23) && any(g$hour < 7))
+check("deepest at the middle of the night", abs(g$hour[which.max(g$depth)] - 3) < 0.3,
+      sprintf("deepest at %.2f h", g$hour[which.max(g$depth)]))
+check("both edges fade to white", g$depth[1] < 0.05 && g$depth[nrow(g)] < 0.05)
+check("depth is symmetric about the midpoint",
+      near(g$depth, rev(g$depth), 1e-9))
+
+g2 <- fck_night_gradient(1, 5)                    # a window that does not wrap
+check("a non-wrapping window works too",
+      near(sum(g2$width), 4, 1e-9) && abs(g2$hour[which.max(g2$depth)] - 3) < 0.2)
+check("no night when dusk equals dawn", is.null(fck_night_gradient(6, 6)))
+# 0 and 24 are the same angle, so "night from 00:00 to 24:00" is the same input
+# as dusk == dawn and cannot be told apart from it. Documented as no night
+# rather than guessed at.
+check("a whole-period window reads as dusk == dawn", is.null(fck_night_gradient(0, 24)))
+
+# --- every trace of a series must hide with its legend entry -----------------
+# Splitting fill and line into separate traces is what lets the lines sit above
+# every fill, but without legendgroup a legend click hides only the trace it
+# names: the line vanishes and its fill stays, which reads as "faded", not
+# "off". This checks the source rather than the render, because the render
+# needs a browser.
+src <- paste(readLines(file.path(app_dir, "server/74_polar_density.R"), warn = FALSE),
+             collapse = "\n")
+body <- sub(".*output\\$harmonic_density_plot", "", src)
+body <- sub("output\\$harmonic_density_note.*", "", body)
+starts <- gregexpr("add_trace\\(p,", body)[[1]]
+n_traces <- length(starts)
+n_grouped <- 0L
+for (i in seq_len(n_traces)) {
+  stop_at <- if (i < n_traces) starts[i + 1] else nchar(body)
+  blk <- substr(body, starts[i], stop_at)
+  if (grepl("legendgroup = ", blk, fixed = TRUE)) n_grouped <- n_grouped + 1L
+}
+# the two night backdrops are background, not series, and carry no group
+check("every series trace carries a legendgroup", n_grouped == n_traces - 2L,
+      sprintf("%d of %d traces grouped", n_grouped, n_traces))
+
 if (failures) { cat("\n", failures, " failure(s).\n", sep = ""); quit(status = 1) }
 cat("\nCircular density tests passed.\n")

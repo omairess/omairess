@@ -420,6 +420,22 @@ Also pinned there: a known amplitude and acrophase survive the round trip
 (a curve built to peak at 03:30 peaks at 03:30 on the clock), and a missing
 harmonic coefficient is skipped rather than poisoning the whole curve.
 
+**Night is drawn as a gradient**, fading in at dusk, deepest halfway through the
+window and fading out at dawn, over a default window of 23:00–07:00. A hard grey
+half-circle split at 06:00/18:00 asserts an edge that night does not have; a ramp
+carries the same information without the assertion. It is drawn as an *annulus*
+rather than wedges from the centre — wedges converge to a point, so the colour is
+most intense at the origin, the one place on the plot that carries no time at
+all, and it tints the data fills worst where they overlap. The flat block is
+still available, as is none.
+
+**Every trace of a series carries `legendgroup`.** Splitting fill from line is
+what lets the lines sit above every fill, but without a legend group a legend
+click hides only the trace it names: the line vanishes and its fill stays behind,
+which reads as "that curve went faint" rather than "that group is off".
+`tests/circular_density_test.R` checks this at source level, since verifying it
+in the render would need a browser.
+
 The radial axis is **labelled in the response's own units**, with the tick radii
 computed through the same mapping the data went through, so a label at 60 sits
 exactly where a fitted value of 60 is drawn. Angular ticks default to every

@@ -124,13 +124,19 @@ output$density_controls_ui <- renderUI({
                    radial scale.")),
     checkboxInput("density_show_points", "Show individual acrophases", TRUE),
     checkboxInput("density_show_mean", "Show mean direction (length = R-bar)", TRUE),
-    checkboxInput("density_show_night", "Shade the night sector", TRUE),
+    radioButtons("density_night_style", "Night shown as:",
+                 choices = c("Gradient, deepest at solar midnight" = "gradient",
+                             "Flat block" = "block",
+                             "Not shown" = "none"),
+                 selected = "gradient"),
     conditionalPanel(
-      condition = "input.density_show_night == true",
+      condition = "input.density_night_style != 'none'",
       fluidRow(
-        column(6, numericInput("density_dusk", "Night from (h):", 18, min = 0, max = 24, step = 0.5)),
-        column(6, numericInput("density_dawn", "Night to (h):",    6, min = 0, max = 24, step = 0.5))
-      )
+        column(6, numericInput("density_dusk", "Night from (h):", 23, min = 0, max = 24, step = 0.5)),
+        column(6, numericInput("density_dawn", "Night to (h):",    7, min = 0, max = 24, step = 0.5))
+      ),
+      helpText("The gradient fades in at dusk, is deepest halfway through the",
+               "window and fades out at dawn — night without asserting an edge.")
     )
   )
 })
@@ -353,10 +359,32 @@ output$harmonic_density_plot <- renderPlotly({
 
   p <- plot_ly()
 
-  # --- night sector, behind everything ---------------------------------------
-  if (isTRUE(input$density_show_night)) {
-    for (arc in fck_night_arcs(input$density_dusk %||% 18,
-                               input$density_dawn %||% 6, period)) {
+  # --- night, behind everything ----------------------------------------------
+  night_style <- input$density_night_style %||% "gradient"
+  dusk <- input$density_dusk %||% 23
+  dawn <- input$density_dawn %||% 7
+
+  if (identical(night_style, "gradient")) {
+    gr <- fck_night_gradient(dusk, dawn, period, n = 180)
+    if (!is.null(gr)) {
+      # One barpolar trace with a colour per wedge: plotly has no angular
+      # gradient, and a stack of filled polygons would seam visibly.
+      # Drawn as an ANNULUS, not wedges from the centre. Wedges converge to a
+      # point, so the colour is most intense at the origin -- the one place on
+      # the plot that carries no time at all -- and it tints the data fills
+      # worst where they overlap. Starting at the inner radius keeps the
+      # intensity even along the arc and the hub clean.
+      night_base <- max(inner, 0.12)
+      p <- add_trace(p, type = "barpolar",
+                     r = rep(1.10 - night_base, nrow(gr)),
+                     base = night_base,
+                     theta = fck_hour_to_theta(gr$hour, period),
+                     width = gr$width * (360 / period),
+                     marker = list(color = gr$color, line = list(width = 0)),
+                     hoverinfo = "skip", showlegend = FALSE)
+    }
+  } else if (identical(night_style, "block")) {
+    for (arc in fck_night_arcs(dusk, dawn, period)) {
       hrs <- seq(arc[1], arc[2], length.out = 60)
       p <- add_trace(p, type = "scatterpolar", mode = "lines",
                      r = c(rep(1.10, length(hrs)), 0),
@@ -383,7 +411,7 @@ output$harmonic_density_plot <- renderPlotly({
                      fill = "toself", fillcolor = paste0(col, "26"),
                      line = list(color = "rgba(0,0,0,0)"),
                      name = paste(nm[i], "band"), showlegend = FALSE,
-                     hoverinfo = "skip")
+                     legendgroup = nm[i], hoverinfo = "skip")
     }
     if (ci_style %in% c("dotted", "both") && !is.null(b$edges)) {
       for (k in seq_along(b$edges)) {
@@ -392,6 +420,7 @@ output$harmonic_density_plot <- renderPlotly({
                        r = e$r, theta = fck_hour_to_theta(e$hours, period),
                        line = list(color = col, width = 1.5, dash = "dot"),
                        name = paste(nm[i], "95% CI"),
+                       legendgroup = nm[i],
                        showlegend = (k == 1 && length(rings) == 1),
                        hoverinfo = "text",
                        text = sprintf("%s %s<br>%02d:%02.0f<br>%.2f", nm[i],
@@ -403,6 +432,10 @@ output$harmonic_density_plot <- renderPlotly({
   }
 
   # --- the rings themselves ---------------------------------------------------
+  # Every trace of a series carries legendgroup = that series' name. Without it
+  # a legend click hides only the trace it names -- the line disappears and its
+  # fill stays behind, which reads as "the curve went faint" rather than "the
+  # group is off".
   # Fills first, then every line on top. Drawn ring-by-ring, the second group's
   # fill lies over the first group's line and hides exactly the comparison the
   # plot exists to make.
@@ -415,7 +448,8 @@ output$harmonic_density_plot <- renderPlotly({
                      fill = "toself",
                      fillcolor = paste0(col, if (length(rings) == 1) "8C" else "33"),
                      line = list(color = "rgba(0,0,0,0)"),
-                     name = nm[i], showlegend = FALSE, hoverinfo = "skip")
+                     name = nm[i], showlegend = FALSE,
+                     legendgroup = nm[i], hoverinfo = "skip")
     }
   }
   for (i in seq_along(rings)) {
@@ -423,7 +457,7 @@ output$harmonic_density_plot <- renderPlotly({
     col <- FCK_DENSITY_COLORS[((i - 1) %% length(FCK_DENSITY_COLORS)) + 1]
     p <- add_trace(p, type = "scatterpolar", mode = "lines",
                    r = rg$r, theta = fck_hour_to_theta(rg$hours, period),
-                   name = nm[i],
+                   name = nm[i], legendgroup = nm[i],
                    line = list(color = col, width = 2.5,
                                dash = FCK_DENSITY_DASH[((i - 1) %% length(FCK_DENSITY_DASH)) + 1]),
                    hoverinfo = "text",
@@ -441,6 +475,7 @@ output$harmonic_density_plot <- renderPlotly({
                      r = rep(1.05, length(idx)),
                      theta = fck_hour_to_theta(pts$hours[idx], period),
                      showlegend = FALSE, name = "subjects",
+                     legendgroup = names(pts$groups)[i],
                      marker = list(color = col, size = 9, opacity = 0.8,
                                    symbol = "line-ns-open",
                                    line = list(color = col, width = 2)),
@@ -458,6 +493,7 @@ output$harmonic_density_plot <- renderPlotly({
                    r = c(inner, inner + (1 - inner) * s$r_bar),
                    theta = rep(fck_hour_to_theta(s$mean_hour, period), 2),
                    showlegend = FALSE, name = paste(names(means)[i], "mean"),
+                   legendgroup = names(means)[i],
                    line = list(color = col, width = 3),
                    marker = list(color = col, size = c(1, 9)),
                    hoverinfo = "text",

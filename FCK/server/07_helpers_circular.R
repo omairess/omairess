@@ -241,3 +241,34 @@ fck_rhythm_from_coefs <- function(coefs, time_vec, period, n_harmonics,
   }
   pred
 }
+
+# ==============================================================================
+# Night as a gradient rather than a block
+#
+# A hard-edged grey half-circle says "night starts at 18:00 and stops at 06:00",
+# which is not what night does and not what a reader should take from a
+# background. A ramp that fades in at dusk, is deepest around solar midnight and
+# fades out at dawn carries the same information without asserting an edge.
+#
+# Returns one wedge per step: centre angle in HOURS, width in hours, and the
+# colour. The window is followed FORWARD from dusk to dawn, so a window that
+# crosses midnight (23:00 -> 07:00, the usual case) needs no special handling.
+# ==============================================================================
+fck_night_gradient <- function(dusk = 23, dawn = 7, period = 24, n = 72,
+                               ramp = c("#ffffff", "#cde2fb", "#9ec5f4", "#6da7ec")) {
+  dusk <- dusk %% period; dawn <- dawn %% period
+  len <- (dawn - dusk) %% period
+  if (!is.finite(len) || len <= 0) return(NULL)          # no night to draw
+  n <- max(8L, as.integer(n))
+
+  u <- (seq_len(n) - 0.5) / n                            # wedge centres in [0,1]
+  # deepest at the middle of the window, white at both ends
+  depth <- 1 - abs(2 * u - 1)
+  cols <- grDevices::colorRampPalette(ramp)(101)[round(depth * 100) + 1]
+
+  data.frame(hour  = (dusk + u * len) %% period,
+             width = len / n,
+             depth = depth,
+             color = cols,
+             stringsAsFactors = FALSE)
+}
