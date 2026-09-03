@@ -97,6 +97,16 @@ output$density_controls_ui <- renderUI({
     ),
     hr(),
     checkboxInput("density_fill", "Fill the shape", TRUE),
+    selectInput("density_ci_style", "Confidence band drawn as:",
+                choices = c("Dotted lines" = "dotted",
+                            "Shaded band" = "shaded",
+                            "Both" = "both",
+                            "Not shown" = "none"),
+                selected = "dotted"),
+    selectInput("density_tick_step", "Label every:",
+                choices = c("hour" = 1, "2 hours" = 2, "3 hours" = 3, "6 hours" = 6),
+                selected = 1),
+    checkboxInput("density_radial_labels", "Show the value scale on the radius", TRUE),
     radioButtons("density_radial_from", "Radius measured from:",
                  choices = c("The smallest value plotted" = "range",
                              "Zero" = "zero"),
@@ -241,10 +251,17 @@ output$harmonic_density_plot <- renderPlotly({
 
   # radius scaled into [inner, 1] so a low stretch does not collapse to a point
   from_zero <- identical(input$density_radial_from %||% "range", "zero")
+  # The baseline is decided once per mode and kept in axis_lo/axis_hi, so the
+  # radial tick labels below are guaranteed to use the same mapping as the data.
+  axis_lo <- NA_real_; axis_hi <- NA_real_; axis_unit <- ""
   scale_r <- function(v, lo, hi) {
-    if (from_zero) lo <- min(0, lo, na.rm = TRUE)
     if (!is.finite(hi) || hi <= lo) return(rep((inner + 1) / 2, length(v)))
     inner + (1 - inner) * pmax(0, pmin(1, (v - lo) / (hi - lo)))
+  }
+  set_axis <- function(lo, hi, unit) {
+    if (from_zero) lo <- min(0, lo, na.rm = TRUE)
+    axis_lo <<- lo; axis_hi <<- hi; axis_unit <<- unit
+    invisible(NULL)
   }
 
   rings <- list(); pts <- NULL; means <- list(); bands <- list()
@@ -256,6 +273,7 @@ output$harmonic_density_plot <- renderPlotly({
     period <- fr$period
     vals <- unlist(lapply(fr$rings, function(r) c(r$pred, r$lower, r$upper)))
     lo <- min(vals, na.rm = TRUE); hi <- max(vals, na.rm = TRUE)
+    set_axis(lo, hi, "fitted response"); lo <- axis_lo
     for (nm2 in names(fr$rings)) {
       rr <- fr$rings[[nm2]]
       cr <- fck_close_ring(rr$hours, rr$pred)
@@ -264,7 +282,14 @@ output$harmonic_density_plot <- renderPlotly({
                            raw = cr$values, unit = "fitted")
       if (!is.null(rr$lower) && !is.null(rr$upper)) {
         b <- fck_band_ring(rr$hours, rr$lower, rr$upper)
-        if (!is.null(b)) bands[[nm2]] <- list(hours = b$hours, r = scale_r(b$values, lo, hi))
+        eu <- fck_close_ring(rr$hours, rr$upper)
+        el <- fck_close_ring(rr$hours, rr$lower)
+        bands[[nm2]] <- list(
+          hours = if (!is.null(b)) b$hours else NULL,
+          r     = if (!is.null(b)) scale_r(b$values, lo, hi) else NULL,
+          edges = Filter(Negate(is.null), list(
+            if (!is.null(eu)) list(hours = eu$hours, r = scale_r(eu$values, lo, hi), raw = eu$values),
+            if (!is.null(el)) list(hours = el$hours, r = scale_r(el$values, lo, hi), raw = el$values))))
       }
     }
     validate(need(length(rings) > 0, "The fitted curves could not be drawn."))
@@ -275,6 +300,7 @@ output$harmonic_density_plot <- renderPlotly({
       "The signal profile needs smoothed curves and clock times parsed from the column names. Apply smoothing, or use the acrophase density."))
     lo <- min(unlist(lapply(pr, function(p) c(p$mean, if (isTRUE(input$density_band)) p$mean - p$sd))), na.rm = TRUE)
     hi <- max(unlist(lapply(pr, function(p) c(p$mean, if (isTRUE(input$density_band)) p$mean + p$sd))), na.rm = TRUE)
+    set_axis(lo, hi, "response"); lo <- axis_lo
     for (nm in names(pr)) {
       p <- pr[[nm]]
       r <- fck_close_ring(p$hours, p$mean)
@@ -282,8 +308,15 @@ output$harmonic_density_plot <- renderPlotly({
       rings[[nm]] <- list(hours = r$hours, r = scale_r(r$values, lo, hi),
                           raw = r$values, unit = "value")
       if (isTRUE(input$density_band) && any(is.finite(p$sd))) {
-        b <- fck_band_ring(p$hours, p$mean - p$sd, p$mean + p$sd)
-        if (!is.null(b)) bands[[nm]] <- list(hours = b$hours, r = scale_r(b$values, lo, hi))
+        b  <- fck_band_ring(p$hours, p$mean - p$sd, p$mean + p$sd)
+        eu <- fck_close_ring(p$hours, p$mean + p$sd)
+        el <- fck_close_ring(p$hours, p$mean - p$sd)
+        bands[[nm]] <- list(
+          hours = if (!is.null(b)) b$hours else NULL,
+          r     = if (!is.null(b)) scale_r(b$values, lo, hi) else NULL,
+          edges = Filter(Negate(is.null), list(
+            if (!is.null(eu)) list(hours = eu$hours, r = scale_r(eu$values, lo, hi), raw = eu$values),
+            if (!is.null(el)) list(hours = el$hours, r = scale_r(el$values, lo, hi), raw = el$values))))
       }
     }
     validate(need(length(rings) > 0, "Not enough clock times to draw a ring."))
@@ -305,6 +338,7 @@ output$harmonic_density_plot <- renderPlotly({
       fck_circular_density(dd$hours[idx], bw, period, weights = weights[idx]))
     hi <- max(vapply(dens, function(d) if (is.null(d)) 0 else max(d$density), 0), na.rm = TRUE)
     validate(need(is.finite(hi) && hi > 0, "Density could not be computed."))
+    set_axis(0, hi, "density")
     for (i in seq_along(groups)) {
       d <- dens[[i]]; if (is.null(d)) next
       rings[[names(groups)[i]]] <- list(hours = d$hours, r = scale_r(d$density, 0, hi),
@@ -334,29 +368,63 @@ output$harmonic_density_plot <- renderPlotly({
   }
 
   nm <- names(rings)
-  # --- SD bands (profile mode), under the lines ------------------------------
+  ci_style <- input$density_ci_style %||% "dotted"
+
+  # --- uncertainty: shaded ribbon and/or dotted edges ------------------------
+  # A ribbon is easy to read but hides the ring where two groups overlap; dotted
+  # edges stay legible over a fill and over each other, which is why they are
+  # the default here and the ribbon is not.
   for (i in seq_along(bands)) {
     b <- bands[[nm[i]]]; if (is.null(b)) next
     col <- FCK_DENSITY_COLORS[((i - 1) %% length(FCK_DENSITY_COLORS)) + 1]
-    p <- add_trace(p, type = "scatterpolar", mode = "lines",
-                   r = b$r, theta = fck_hour_to_theta(b$hours, period),
-                   fill = "toself", fillcolor = paste0(col, "26"),
-                   line = list(color = "rgba(0,0,0,0)"),
-                   name = paste(nm[i], "+/- 1 SD"), showlegend = FALSE,
-                   hoverinfo = "skip")
+    if (ci_style %in% c("shaded", "both")) {
+      p <- add_trace(p, type = "scatterpolar", mode = "lines",
+                     r = b$r, theta = fck_hour_to_theta(b$hours, period),
+                     fill = "toself", fillcolor = paste0(col, "26"),
+                     line = list(color = "rgba(0,0,0,0)"),
+                     name = paste(nm[i], "band"), showlegend = FALSE,
+                     hoverinfo = "skip")
+    }
+    if (ci_style %in% c("dotted", "both") && !is.null(b$edges)) {
+      for (k in seq_along(b$edges)) {
+        e <- b$edges[[k]]
+        p <- add_trace(p, type = "scatterpolar", mode = "lines",
+                       r = e$r, theta = fck_hour_to_theta(e$hours, period),
+                       line = list(color = col, width = 1.5, dash = "dot"),
+                       name = paste(nm[i], "95% CI"),
+                       showlegend = (k == 1 && length(rings) == 1),
+                       hoverinfo = "text",
+                       text = sprintf("%s %s<br>%02d:%02.0f<br>%.2f", nm[i],
+                                      if (k == 1) "upper" else "lower",
+                                      floor(e$hours %% period), (e$hours %% 1) * 60,
+                                      e$raw))
+      }
+    }
   }
 
   # --- the rings themselves ---------------------------------------------------
+  # Fills first, then every line on top. Drawn ring-by-ring, the second group's
+  # fill lies over the first group's line and hides exactly the comparison the
+  # plot exists to make.
+  if (do_fill) {
+    for (i in seq_along(rings)) {
+      rg <- rings[[i]]
+      col <- FCK_DENSITY_COLORS[((i - 1) %% length(FCK_DENSITY_COLORS)) + 1]
+      p <- add_trace(p, type = "scatterpolar", mode = "lines",
+                     r = rg$r, theta = fck_hour_to_theta(rg$hours, period),
+                     fill = "toself",
+                     fillcolor = paste0(col, if (length(rings) == 1) "8C" else "33"),
+                     line = list(color = "rgba(0,0,0,0)"),
+                     name = nm[i], showlegend = FALSE, hoverinfo = "skip")
+    }
+  }
   for (i in seq_along(rings)) {
     rg <- rings[[i]]
     col <- FCK_DENSITY_COLORS[((i - 1) %% length(FCK_DENSITY_COLORS)) + 1]
     p <- add_trace(p, type = "scatterpolar", mode = "lines",
                    r = rg$r, theta = fck_hour_to_theta(rg$hours, period),
                    name = nm[i],
-                   fill = if (do_fill) "toself" else "none",
-                   fillcolor = if (do_fill)
-                     paste0(col, if (length(rings) == 1) "8C" else "40") else NULL,
-                   line = list(color = col, width = 2,
+                   line = list(color = col, width = 2.5,
                                dash = FCK_DENSITY_DASH[((i - 1) %% length(FCK_DENSITY_DASH)) + 1]),
                    hoverinfo = "text",
                    text = sprintf("%s<br>%02d:%02.0f<br>%s %.3f", nm[i],
@@ -398,21 +466,57 @@ output$harmonic_density_plot <- renderPlotly({
                                   s$r_bar, s$n))
   }
 
-  tick_h <- seq(0, period - 1, by = if (period == 24) 3 else max(1, round(period / 8)))
+  # --- angular ticks: every hour by default ----------------------------------
+  step <- suppressWarnings(as.numeric(input$density_tick_step %||% 1))
+  if (!is.finite(step) || step <= 0) step <- 1
+  tick_h <- seq(0, period - step, by = step)
+  hour_lab <- if (period == 24) {
+    # 24 labels round a circle need to be short; keep the colon only when there
+    # is room for it.
+    if (step >= 2) sprintf("%02d:00", tick_h) else sprintf("%02d", tick_h)
+  } else sprintf("%.1f", tick_h)
+
+  # --- radial ticks: the value scale, in the response's own units ------------
+  # Placed with the SAME mapping the data went through (scale_r on axis_lo/hi),
+  # so a label at 60 sits exactly where a fitted value of 60 is drawn.
+  rad <- list(range = c(0, 1.13), showticklabels = FALSE, ticks = "",
+              showline = FALSE, gridcolor = "rgba(11,11,11,0.08)")
+  if (isTRUE(input$density_radial_labels %||% TRUE) &&
+      is.finite(axis_lo) && is.finite(axis_hi) && axis_hi > axis_lo) {
+    vt <- pretty(c(axis_lo, axis_hi), n = 5)
+    vt <- vt[vt >= axis_lo & vt <= axis_hi]
+    if (length(vt) >= 2) {
+      rad <- list(
+        range = c(0, 1.13),
+        tickmode = "array",
+        tickvals = scale_r(vt, axis_lo, axis_hi),
+        ticktext = formatC(vt, format = "g", digits = 4),
+        tickfont = list(size = 10, color = "#52514e"),
+        angle = 112.5,          # between 12:00 and 09:00, clear of the hour ring
+        tickangle = 0,
+        showline = FALSE, ticks = "outside", ticklen = 3,
+        gridcolor = "rgba(11,11,11,0.10)")
+    }
+  }
+
   plotly::layout(p,
     polar = list(
       bgcolor = "#fcfcfb",
-      radialaxis = list(range = c(0, 1.13), showticklabels = FALSE, ticks = "",
-                        showline = FALSE, gridcolor = "rgba(11,11,11,0.08)"),
+      radialaxis = rad,
       angularaxis = list(
         tickmode = "array",
         tickvals = fck_hour_to_theta(tick_h, period),
-        ticktext = if (period == 24) sprintf("%02d:00", tick_h) else sprintf("%.1f", tick_h),
+        ticktext = hour_lab,
+        tickfont = list(size = if (step == 1) 10 else 11),
         direction = "counterclockwise", rotation = 0,
         gridcolor = "rgba(11,11,11,0.12)")),
-    showlegend = length(rings) > 1,
+    annotations = if (nzchar(axis_unit)) list(list(
+      text = axis_unit, showarrow = FALSE, xref = "paper", yref = "paper",
+      x = 0, y = 1, xanchor = "left", yanchor = "top",
+      font = list(size = 11, color = "#52514e"))) else NULL,
+    showlegend = length(rings) > 1 || (ci_style %in% c("dotted", "both") && length(bands) > 0),
     legend = list(orientation = "h", y = -0.08),
-    margin = list(t = 30, b = 60))
+    margin = list(t = 34, b = 60))
 })
 
 output$harmonic_density_note <- renderText({

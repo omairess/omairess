@@ -420,6 +420,16 @@ Also pinned there: a known amplitude and acrophase survive the round trip
 (a curve built to peak at 03:30 peaks at 03:30 on the clock), and a missing
 harmonic coefficient is skipped rather than poisoning the whole curve.
 
+The radial axis is **labelled in the response's own units**, with the tick radii
+computed through the same mapping the data went through, so a label at 60 sits
+exactly where a fitted value of 60 is drawn. Angular ticks default to every
+hour. Uncertainty is drawn as **dotted edges** by default rather than a shaded
+ribbon: a ribbon hides the ring wherever two groups overlap, and dotted edges
+stay legible over a fill and over each other (shaded, both, or none are also
+available). Fills are drawn for every ring first and the lines on top of all of
+them — ring-by-ring, the second group's fill lies over the first group's line
+and hides exactly the comparison the plot exists to make.
+
 A radial-baseline control chooses between measuring the radius from the smallest
 value plotted (stretches the shape, small differences visible) and from zero
 (proportional, but flattens a rhythm whose MESOR is far from zero). The note
