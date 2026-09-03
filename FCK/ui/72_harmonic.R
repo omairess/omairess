@@ -116,6 +116,30 @@ ui_tab_harmonic <- tabItem(
                        )
                      )
             ),
+            # MERGED APP: the same circle as a DENSITY, oriented as a clock
+            # face -- noon at the top, midnight at the bottom, so the upper
+            # half is daytime and the lower half night.  See
+            # FCK/server/07_helpers_circular.R and 74_polar_density.R.
+            tabPanel("2b. Acrophase Density", icon = icon("circle-notch"),
+                     fluidRow(
+                       column(8,
+                              plotlyOutput("harmonic_density_plot", height = "540px"),
+                              verbatimTextOutput("harmonic_density_note")),
+                       column(4,
+                              h4("Density Settings"),
+                              helpText(HTML(
+                                "A von Mises kernel density of the acrophases --
+                                 the circular analogue of a KDE, so mass near
+                                 midnight wraps instead of being split between
+                                 the two ends of a histogram.<br><br>
+                                 <b>Noon is at the top, midnight at the bottom:</b>
+                                 the upper half of the circle is daytime
+                                 (06:00-18:00), the lower half night. Hours run
+                                 clockwise.")),
+                              uiOutput("density_controls_ui")
+                       )
+                     )
+            ),
             tabPanel("3. Parameter Distribution", icon = icon("chart-bar"),
                      fluidRow(
                        column(12, 

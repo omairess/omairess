@@ -333,6 +333,38 @@ lengths only had to be plausible for the test to return numbers.
 fall back to the raw frame, checks the length and stops with an explanation
 instead of mispairing.
 
+**4.21 A circular density of the acrophases.** *(new)* The existing polar plot
+draws one marker per subject at (amplitude, acrophase), which overplots badly at
+85 rows and shows where individuals are rather than where the sample sits. Tab
+**2b. Acrophase Density** puts a von Mises kernel density on the same circle —
+the circular analogue of a KDE, so mass near midnight wraps instead of being
+split between the two ends of a histogram.
+
+The circle is oriented as a clock face: **noon at the top, midnight at the
+bottom**, hours running clockwise, so the upper half is daytime (06:00–18:00)
+and the lower half night, with the night sector shaded (the dusk/dawn bounds are
+adjustable). In plotly's angular convention that is
+`theta(h) = (270 - 15h) mod 360`.
+
+Bandwidth defaults to Taylor's (2008) circular plug-in rule and can be set by
+hand in hours. Amplitude weighting is optional and off by default: unweighted, a
+barely-detectable rhythm counts as much as a strong one even though its
+acrophase is mostly noise. The mean direction is drawn with length = R̄, and the
+note under the plot states the bandwidth, n, the circular mean, R̄ and what that
+concentration means.
+
+Colour follows the reference categorical palette in fixed slot order. Overlapping
+density rings are an all-pairs comparison, where only the first three slots clear
+the colour-vision gates (worst pair ΔE 9.2 deutan, 24.0 normal-vision), so line
+style distinguishes series as well as hue and the note says so past three groups.
+Non-24 h periods are plotted as phase within the period, with the day/night
+framing explicitly disclaimed.
+
+`tests/circular_density_test.R` pins the orientation (a sign slip mirrors the
+clock, and a mirrored clock still looks like a clock), the wrapping, that the
+density integrates to 1, that a very small bandwidth does not overflow, and the
+weighting behaviour.
+
 ## 5. Rename table
 
 | source | source app | merged app |

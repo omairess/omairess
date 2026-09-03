@@ -511,6 +511,14 @@ RM_LEVELS_ANCHOR = '    rm_factor_data <- values$uploaded_data[[input$rm_factor_
 
 RM_LEVELS_NEW = '    rm_factor_data <- fck_rm_column(values, input$rm_factor_var)'
 
+# A circular density of the acrophases, next to the existing polar plot. The
+# polar plot puts one marker per subject at (amplitude, acrophase), which
+# overplots badly at 85 rows; the density shows the shape of the distribution
+# on the same circle, oriented as a clock face with day on top.
+DENSITY_TAB_ANCHOR = '            tabPanel("2. Polar Plot (Acrophase)", icon = icon("compass"),\n                     fluidRow(\n                       column(8, plotlyOutput("harmonic_polar_plot", height = "500px")),\n                       column(4,\n                              h4("Polar Plot Settings"),\n                              uiOutput("harmonic_selector_polar"),\n                              helpText("Acrophase displayed in polar coordinates. Radius = Amplitude, Angle = Acrophase."),\n                              checkboxInput("polar_show_mean", "Show Population Mean Vector", TRUE),\n                              checkboxInput("polar_show_ellipse", "Show Confidence Ellipse", TRUE)\n                       )\n                     )\n            ),'
+
+DENSITY_TAB_NEW = '            tabPanel("2. Polar Plot (Acrophase)", icon = icon("compass"),\n                     fluidRow(\n                       column(8, plotlyOutput("harmonic_polar_plot", height = "500px")),\n                       column(4,\n                              h4("Polar Plot Settings"),\n                              uiOutput("harmonic_selector_polar"),\n                              helpText("Acrophase displayed in polar coordinates. Radius = Amplitude, Angle = Acrophase."),\n                              checkboxInput("polar_show_mean", "Show Population Mean Vector", TRUE),\n                              checkboxInput("polar_show_ellipse", "Show Confidence Ellipse", TRUE)\n                       )\n                     )\n            ),\n            # MERGED APP: the same circle as a DENSITY, oriented as a clock\n            # face -- noon at the top, midnight at the bottom, so the upper\n            # half is daytime and the lower half night.  See\n            # FCK/server/07_helpers_circular.R and 74_polar_density.R.\n            tabPanel("2b. Acrophase Density", icon = icon("circle-notch"),\n                     fluidRow(\n                       column(8,\n                              plotlyOutput("harmonic_density_plot", height = "540px"),\n                              verbatimTextOutput("harmonic_density_note")),\n                       column(4,\n                              h4("Density Settings"),\n                              helpText(HTML(\n                                "A von Mises kernel density of the acrophases --\n                                 the circular analogue of a KDE, so mass near\n                                 midnight wraps instead of being split between\n                                 the two ends of a histogram.<br><br>\n                                 <b>Noon is at the top, midnight at the bottom:</b>\n                                 the upper half of the circle is daytime\n                                 (06:00-18:00), the lower half night. Hours run\n                                 clockwise.")),\n                              uiOutput("density_controls_ui")\n                       )\n                     )\n            ),'
+
 CV_NBASIS_ANCHOR = """          nb <- min(20, n_time - 2)"""
 
 CV_NBASIS_NEW = """          # MERGED APP: follow the user's basis count (CIRCAREG's behaviour) so
@@ -623,7 +631,7 @@ MANIFEST = [
     ("ui/71_sofr.R", "ui_tab_sofr",
      [("C", 346, 421, "Scalar-on-Function regression", None)]),
     ("ui/72_harmonic.R", "ui_tab_harmonic",
-     [("C", 424, 586, "Harmonic (cosinor) regression", None)]),
+     [("C", 424, 586, "Harmonic (cosinor) regression", "density_tab")]),
     ("ui/73_cosinor_pairwise.R", "ui_tab_cosinor_pairwise",
      [("C", 589, 654, "cosinor pairwise group tests; ids prefixed hp_", "hp")]),
 
@@ -713,6 +721,8 @@ def build():
                 chunk = patch(chunk, POSTHOC_CALLS_ANCHOR, POSTHOC_CALLS_NEW, rel)
                 chunk = patch(chunk, RM_READ_ANCHOR, RM_READ_NEW, rel)
                 chunk = patch(chunk, RM_LEVELS_ANCHOR, RM_LEVELS_NEW, rel)
+            elif transform == "density_tab":
+                chunk = patch(chunk, DENSITY_TAB_ANCHOR, DENSITY_TAB_NEW, rel)
             elif transform == "posthoc_ui":
                 chunk = patch(chunk, POSTHOC_UI_ANCHOR, POSTHOC_UI_NEW, rel)
             elif transform == "time_axis":

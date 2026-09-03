@@ -89,7 +89,10 @@ if any of these were missing):
    ROC, calibration and classification metrics for binary outcomes.
 10. **Harmonic Regression** — cosinor with 1–3 harmonics, optional linear/log/
     exponential-saturation trend, MESOR / amplitude / acrophase per subject,
-    polar plots, circular statistics, group comparisons.
+    polar plots, circular statistics, group comparisons. The **Acrophase
+    Density** tab shows a von Mises kernel density on a clock face — noon at the
+    top, midnight at the bottom, night shaded — so a distribution straddling
+    midnight reads as one peak instead of two.
 11. **Cosinor: pairwise tests** — pairwise group comparisons of any cosinor
     parameter, with corrections, effect sizes and confidence intervals.
 
@@ -137,6 +140,7 @@ FCK/
     04_helpers_fd.R        the one rule for building an fd object
     05_helpers_missing.R   which values are measured, filled, or invented
     06_helpers_posthoc.R   what the post-hoc tests compare
+    07_helpers_circular.R  circular density and the clock-face orientation
     10_import.R  20_smoothing.R           <- hand-merged shared steps
     11_import_views.R  21_smoothing_views.R  30_diagnostics.R
     40_fpca.R  50_fanova.R  60_clustering.R
@@ -158,6 +162,7 @@ Rscript tests/clock_helpers_test.R
 Rscript tests/codegen_test.R
 Rscript tests/missing_status_test.R
 Rscript tests/posthoc_source_test.R
+Rscript tests/circular_density_test.R
 ```
 
 `smoke_test.R` parses every file, builds and renders the whole UI, checks that
@@ -176,6 +181,9 @@ classification the missing-data panel rests on. It needs no packages.
 `posthoc_source_test.R` pins what the post-hoc tests compare — that they follow
 the omnibus ANOVA's variable rather than the first scalar variable selected, and
 that they refuse rather than guess when nothing lines up. No packages needed.
+
+`circular_density_test.R` pins the clock-face orientation and the wrapping of
+the acrophase density. No packages needed.
 
 `codegen_test.R` drives the code export with a stub result for every analysis
 family and checks that what comes out is valid R — a script that does not parse
