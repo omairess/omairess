@@ -49,7 +49,22 @@ fck_bw_to_kappa <- function(bw_hours, period = 24) {
   1 / sigma_rad^2
 }
 
-# Data-driven default bandwidth (Taylor 2008, the circular plug-in rule):
+# Data-driven default bandwidth (Taylor 2008, the circular plug-in rule), CAPPED.
+#
+# The cap is not cosmetic. The rule estimates concentration from R-bar, which is
+# a GLOBAL quantity: for a symmetric bimodal sample R-bar is near zero however
+# tight each mode is, so the rule concludes "uniform, smooth maximally" and
+# returns a bandwidth that flattens the plot into a featureless disc exactly
+# when there is structure worth seeing. Measured on simulated shapes, tight
+# bimodal data drove it to the ceiling (density max/min 1.1 — a circle).
+#
+# Two fixes were tried. Deriving the concentration from higher trigonometric
+# moments (the p-th moment picks up p-fold structure) rescued the bimodal and
+# trimodal cases but INVENTED lobes in genuinely uniform data (max/min 6.8),
+# which is the worse failure: a density plot that manufactures structure is
+# worse than one that misses a subtle mode, and the bandwidth slider is right
+# there. Capping at period/12 behaves sensibly across every shape tested
+# (bimodal max/min 15.1, uniform 1.7) and can never manufacture anything.
 #
 #   kappa_bw = ( 3 n kappa^2 I2(2 kappa) / (4 sqrt(pi) I1(kappa)^2) ) ^ (2/5)
 #
@@ -69,17 +84,32 @@ fck_default_bandwidth <- function(hours, period = 24, weights = NULL) {
   }
   w <- w / sum(w)
   r_bar <- sqrt(sum(w * cos(a))^2 + sum(w * sin(a))^2)
-  if (!is.finite(r_bar) || r_bar < 1e-6) return(period / 6)   # no scale: 4 h
+  if (!is.finite(r_bar) || r_bar < 1e-6) return(period / 12)  # no scale: the cap
   kappa <- if (r_bar < 0.53) 2 * r_bar + r_bar^3 + 5 * r_bar^5 / 6
            else if (r_bar < 0.85) -0.4 + 1.39 * r_bar + 0.43 / (1 - r_bar)
            else 1 / (r_bar^3 - 4 * r_bar^2 + 3 * r_bar)
-  if (!is.finite(kappa) || kappa <= 0) return(period / 6)
-  num <- 3 * n * kappa^2 * besselI(2 * kappa, nu = 2)
-  den <- 4 * sqrt(pi) * besselI(kappa, nu = 1)^2
+  if (!is.finite(kappa) || kappa <= 0) return(period / 12)
+  # besselI overflows to Inf for large kappa, i.e. for the MOST concentrated
+  # samples, and the rule then fell through to its fallback -- the widest
+  # bandwidth, for the tightest data, which is backwards. The exponentially
+  # scaled forms fix it exactly rather than approximately: I2(2k) carries
+  # exp(2k) and I1(k)^2 carries exp(2k), so the factors cancel in the ratio.
+  num <- 3 * n * kappa^2 * besselI(2 * kappa, nu = 2, expon.scaled = TRUE)
+  den <- 4 * sqrt(pi) * besselI(kappa, nu = 1, expon.scaled = TRUE)^2
   kappa_bw <- if (is.finite(num) && is.finite(den) && den > 0) (num / den)^(2/5) else NA_real_
-  if (!is.finite(kappa_bw) || kappa_bw <= 0) return(period / 6)
+  if (!is.finite(kappa_bw) || kappa_bw <= 0) return(period / 12)
   bw <- (1 / sqrt(kappa_bw)) * period / (2 * pi)      # radians -> hours
-  min(max(bw, period / 96), period / 4)               # 0.25 h .. 6 h on 24 h
+  min(max(bw, period / 96), period / 12)              # 0.25 h .. 2 h on 24 h
+}
+
+# How peaked the shape is: max/min of the density. Near 1 means the ring is
+# essentially round — worth saying out loud, because a round ring reads as a
+# broken plot when it is in fact the correct answer for near-uniform data.
+fck_density_contrast <- function(dens) {
+  if (is.null(dens) || !length(dens$density)) return(NA_real_)
+  mn <- min(dens$density)
+  if (!is.finite(mn) || mn <= 0) return(Inf)
+  max(dens$density) / mn
 }
 
 # The density itself, evaluated on a grid of clock hours.
@@ -136,4 +166,45 @@ fck_night_arcs <- function(dusk = 18, dawn = 6, period = 24) {
   dusk <- dusk %% period; dawn <- dawn %% period
   if (isTRUE(all.equal(dusk, dawn))) return(list())
   if (dusk < dawn) list(c(dusk, dawn)) else list(c(dusk, period), c(0, dawn))
+}
+
+# ==============================================================================
+# Wrapping a recording onto one clock face
+#
+# For the polar PROFILE plot (radius = the measured value at each clock time,
+# closed into a ring) as opposed to the acrophase density above.
+#
+# A protocol longer than the period visits the same clock time more than once —
+# your 38 h sleep-deprivation runs hit 06:00 twice — so the columns have to be
+# split by day before anything is drawn, or the ring doubles back on itself and
+# the fill turns into knots.
+# ==============================================================================
+
+# Split elapsed hours into clock time and day number.
+fck_wrap_to_clock <- function(cum_hours, period = 24) {
+  list(clock = cum_hours %% period,
+       day   = as.integer(floor(cum_hours / period)) + 1L)
+}
+
+# Put one day's points in clock order and close the ring by repeating the first
+# point at the end, so a filled polygon has no seam.
+fck_close_ring <- function(hours, values) {
+  ok <- is.finite(hours) & is.finite(values)
+  hours <- hours[ok]; values <- values[ok]
+  if (length(hours) < 2) return(NULL)
+  o <- order(hours)
+  list(hours = c(hours[o], hours[o][1]), values = c(values[o], values[o][1]))
+}
+
+# A ribbon (mean +/- something) as ONE closed polygon: out along the upper edge,
+# back along the lower edge reversed. plotly fills scatterpolar with 'toself',
+# which needs exactly that ordering.
+fck_band_ring <- function(hours, lo, hi) {
+  ok <- is.finite(hours) & is.finite(lo) & is.finite(hi)
+  hours <- hours[ok]; lo <- lo[ok]; hi <- hi[ok]
+  if (length(hours) < 2) return(NULL)
+  o <- order(hours)
+  hours <- hours[o]; lo <- lo[o]; hi <- hi[o]
+  list(hours  = c(hours, hours[1], rev(hours), hours[length(hours)]),
+       values = c(hi,    hi[1],    rev(lo),    lo[length(lo)]))
 }

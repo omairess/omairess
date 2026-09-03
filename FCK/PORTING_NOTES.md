@@ -346,8 +346,35 @@ and the lower half night, with the night sector shaded (the dusk/dawn bounds are
 adjustable). In plotly's angular convention that is
 `theta(h) = (270 - 15h) mod 360`.
 
-Bandwidth defaults to Taylor's (2008) circular plug-in rule and can be set by
-hand in hours. Amplitude weighting is optional and off by default: unweighted, a
+The radius carries either the acrophase density or the **signal itself averaged
+over the clock** (the smoothed curves wrapped onto one 24 h face). A recording
+longer than the period visits the same clock time twice — a 38 h protocol hits
+06:00 on both days — so the profile mode either averages the days at each clock
+time or draws one ring per day; it never silently folds them together. The shape
+is filled, and an adjustable **inner radius** keeps a low stretch of the clock
+from collapsing to a point, which is what turns a ring into petals; the note
+says plainly that a non-zero inner radius breaks proportionality between radius
+and value, and 0 restores it.
+
+Bandwidth defaults to Taylor's (2008) circular plug-in rule, **capped at
+period/12**, and can be set by hand in hours. The cap is not cosmetic: the rule
+estimates concentration from R̄, a *global* quantity that collapses for
+multimodal data — symmetric bimodal acrophases have R̄ ≈ 0 however tight each
+mode is — so the uncapped rule flattened the ring into a featureless disc
+exactly where there was structure to see (measured max/min 1.1 on tight bimodal
+data). Deriving the concentration from higher trigonometric moments was tried
+and rejected: it rescued the multimodal cases but grew lobes in genuinely
+uniform data (max/min 6.8), and a density plot that manufactures structure is
+worse than one that misses a subtle mode. The cap behaves across every shape
+tested (tight bimodal 14.8, uniform 1.7) and cannot manufacture anything. The
+note reports the max/min contrast and, when the ring is nearly round, says that
+this is the data rather than a broken plot.
+
+Fixed while measuring this: `besselI` overflows to `Inf` for large κ, so the
+rule fell through to its fallback — the *widest* bandwidth — for the *most
+concentrated* samples, which is backwards. The exponentially scaled forms cancel
+exactly (`I2(2κ)` and `I1(κ)²` both carry `exp(2κ)`), so very tight acrophases
+now get 0.25 h rather than the ceiling. Amplitude weighting is optional and off by default: unweighted, a
 barely-detectable rhythm counts as much as a strong one even though its
 acrophase is mostly noise. The mean direction is drawn with length = R̄, and the
 note under the plot states the bandwidth, n, the circular mean, R̄ and what that

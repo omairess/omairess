@@ -89,10 +89,11 @@ if any of these were missing):
    ROC, calibration and classification metrics for binary outcomes.
 10. **Harmonic Regression** — cosinor with 1–3 harmonics, optional linear/log/
     exponential-saturation trend, MESOR / amplitude / acrophase per subject,
-    polar plots, circular statistics, group comparisons. The **Acrophase
-    Density** tab shows a von Mises kernel density on a clock face — noon at the
-    top, midnight at the bottom, night shaded — so a distribution straddling
-    midnight reads as one peak instead of two.
+    polar plots, circular statistics, group comparisons. The **Polar Density**
+    tab draws a filled shape on a clock face — noon at the top, midnight at the
+    bottom, night shaded — carrying either a von Mises kernel density of the
+    acrophases (so a distribution straddling midnight reads as one peak, not
+    two) or the signal itself averaged over the clock.
 11. **Cosinor: pairwise tests** — pairwise group comparisons of any cosinor
     parameter, with corrections, effect sizes and confidence intervals.
 

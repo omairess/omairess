@@ -52,6 +52,28 @@ loose <- fck_default_bandwidth(seq(0, 23, length.out = 40))
 check("auto bandwidth is narrower for concentrated data", tight < loose,
       sprintf("tight %.2f vs loose %.2f", tight, loose))
 check("auto bandwidth stays in range", tight > 0 && loose <= 6)
+
+# The cap exists because Taylor's rule estimates concentration from R-bar, a
+# GLOBAL quantity that collapses for multimodal data: symmetric bimodal
+# acrophases have R-bar ~ 0 however tight each mode is, and the uncapped rule
+# then flattens the ring into a featureless circle exactly where there is
+# structure to see.
+set.seed(7)
+bimodal <- c(rnorm(30, 8, 0.8), rnorm(30, 20, 0.8)) %% 24
+check("bandwidth is capped at period/12", fck_default_bandwidth(bimodal) <= 24/12 + 1e-9,
+      sprintf("got %.2f h", fck_default_bandwidth(bimodal)))
+check("tight bimodal data keep visible structure at the default bandwidth",
+      fck_density_contrast(fck_circular_density(bimodal, fck_default_bandwidth(bimodal))) > 5,
+      sprintf("contrast %.1f", fck_density_contrast(fck_circular_density(bimodal, fck_default_bandwidth(bimodal)))))
+
+# ...and the other half of the bargain: uniform data must NOT grow lobes. A
+# density plot that manufactures structure is worse than one that misses a mode.
+unif <- runif(60, 0, 24)
+check("uniform data stay nearly round at the default bandwidth",
+      fck_density_contrast(fck_circular_density(unif, fck_default_bandwidth(unif))) < 3,
+      sprintf("contrast %.1f", fck_density_contrast(fck_circular_density(unif, fck_default_bandwidth(unif)))))
+check("contrast of identical points is infinite, not an error",
+      !is.na(fck_density_contrast(fck_circular_density(rep(9, 20), 1))))
 check("auto bandwidth survives n < 3", is.finite(fck_default_bandwidth(c(4, 5))))
 
 # --- the density wraps -------------------------------------------------------
@@ -98,6 +120,28 @@ check("an empty night is no arcs", length(fck_night_arcs(6, 6)) == 0)
 # --- a non-24 h period still maps sensibly -----------------------------------
 check("period 12: half-period at the bottom", near(fck_hour_to_theta(0, 12), 270))
 check("period 12: quarter-period on the left", near(fck_hour_to_theta(3, 12), 180))
+
+# --- wrapping a longer-than-24h recording onto one clock --------------------
+w <- fck_wrap_to_clock(c(0, 6, 23, 24, 30, 38))       # a 38 h protocol
+check("clock times wrap", near(w$clock, c(0, 6, 23, 0, 6, 14)))
+check("days are counted, not folded away", identical(w$day, c(1L,1L,1L,2L,2L,2L)))
+
+# --- closing a ring ---------------------------------------------------------
+r <- fck_close_ring(c(12, 0, 6, 18), c(4, 1, 2, 3))
+check("ring is sorted by clock time", near(r$hours[1:4], c(0, 6, 12, 18)))
+check("ring closes on its first point",
+      near(r$hours[length(r$hours)], r$hours[1]) &&
+      near(r$values[length(r$values)], r$values[1]))
+check("ring drops non-finite points",
+      length(fck_close_ring(c(0, 6, NA, 18), c(1, 2, 3, NA))$hours) == 3)
+check("ring needs two points", is.null(fck_close_ring(c(3), c(1))))
+
+# --- a band is one closed polygon: out along the top, back along the bottom --
+b <- fck_band_ring(c(0, 8, 16), lo = c(1, 2, 3), hi = c(4, 5, 6))
+check("band polygon closes", near(b$hours[1], 0) && near(b$hours[length(b$hours)], 16))
+check("band goes out on the upper edge then back on the lower",
+      identical(b$values[1:3], c(4, 5, 6)) && identical(b$values[5:7], c(6, 5, 4) * 0 + c(3, 2, 1)))
+check("band has 2n+2 vertices", length(b$hours) == 2 * 3 + 2)
 
 if (failures) { cat("\n", failures, " failure(s).\n", sep = ""); quit(status = 1) }
 cat("\nCircular density tests passed.\n")
