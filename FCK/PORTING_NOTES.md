@@ -461,6 +461,61 @@ It had to change in **two** places. The click-to-select handler recomputes the
 same cap to work out which trace was clicked, so leaving that at 50 would mean
 clicking the 60th curve selects nothing or the wrong subject.
 
+**4.23 The polar tab disagreed with the two plots it mirrors.** *(bug fix)*
+Reported from screenshots: the same clock time read 86.6 on the Harmonic
+Regression Fit, 47.5 on the polar fit ring and 21.4 on the averaged-signal
+ring. Three numbers, one model. Two separate causes, both mine, both silent —
+each produced a plausible circle rather than an error.
+
+*The fit ring dropped the trend.* `fck_rhythm_from_coefs()` computed the
+coefficient offset for the trend parameters but never added the trend TERM,
+so it drew MESOR + harmonics while `predict_from_coefs()` on tab 1 drew
+MESOR + trend + harmonics. The two therefore differed by exactly the trend at
+that time — about 39 units at 03:00 of the second day on the reporter's data,
+which is most of the signal when the trend dominates. The omission was
+deliberate and documented (a trend is not periodic, so 08:00 on two different
+days is one angle with two values and the ring cannot close), but the plot
+never said so and labelled its radial axis "fitted response". A design
+decision the reader cannot see is indistinguishable from a bug.
+
+The fix keeps both curves and makes the tab say which one is on screen.
+`fck_rhythm_from_coefs()` gains `include_trend` and `t_offset` and now mirrors
+`predict_from_coefs()` term for term. A new control, **Curve shown**, offers:
+
+* *The fit over the recording* (default) — evaluated on the model's own
+  absolute axis (`mod$time_vec`: 8, 9, … 30) and placed on the dial at
+  `t %% 24`, so it matches tab 1 value-for-value. It is an **open arc**: it
+  covers only the hours recorded, and the gap between its two ends is the
+  trend. Filled back along the inner radius rather than with `toself`, so the
+  uncovered hours read as empty instead of as a flat stretch of curve.
+* *The rhythm only* — the periodic part, which is the only thing that closes
+  into a ring. The radial axis relabels itself to `fitted response, trend
+  removed` and the note states that the values are not tab 1's.
+
+With `trend_type = "none"` the two coincide and the control is inert.
+
+*The averaged-signal ring was rotated by the start hour.* `fck_profile_rings()`
+took `fck_cumulative_hours()` — which returns **elapsed** hours from the first
+column, starting at 0 — and passed it to `fck_wrap_to_clock()` as if it were a
+clock time. Column 1 landed at 00:00 whatever time the recording began. On an
+08:00 start the whole ring was rotated 8 h backwards: the 04:00 peak was drawn
+at 20:00, and hovering 03:00 returned the value from 11:00. That is a real
+result pointing at the wrong time of day, which is worse than a missing one.
+It now reads the clock hour that `fck_clock_hours()` already parsed per column
+and uses `cum` only for the day index.
+
+`fck_open_path()` and `fck_band_path()` are the unsorted counterparts of
+`fck_close_ring()` and `fck_band_ring()`. Sorting is right for a periodic ring
+and wrong for an arc running 08:00 → 06:00 through midnight, where it would
+reorder the path to 00:00 → 23:00 and draw the curve backwards through itself.
+
+`tests/polar_agreement_test.R` covers both: the polar evaluator is checked
+term-for-term against a transcription of `predict_from_coefs()` under linear
+and saturating trends and two harmonics; the trend-free curve is checked to
+close and the fit to *not* close; and the elapsed-vs-clock distinction is
+asserted directly, including that the offset between them is exactly the start
+hour.
+
 ## 5. Rename table
 
 | source | source app | merged app |

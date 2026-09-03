@@ -210,28 +210,50 @@ fck_band_ring <- function(hours, lo, hi) {
 }
 
 # ==============================================================================
-# The rhythmic part of a fitted cosinor, for the polar version of the fit plot
+# A fitted cosinor evaluated for the polar version of the fit plot
 #
 # predict_from_coefs() lays coefficients out as
 #     c(mesor, [trend coefs...], beta_cos_1, beta_sin_1, beta_cos_2, ...)
 # and finds the harmonics at an offset that depends on trend_type. Calling it
 # with trend_type = "none" to drop a trend would therefore read the TREND
 # coefficients as the first harmonic — a silent, plausible-looking wrong curve.
-# This keeps the real trend_type for indexing and simply never adds the trend
-# term, which is the arithmetic that plot does minus one line.
+# This keeps the real trend_type for indexing, and switches the trend TERM on
+# or off with include_trend.
 #
-# Why drop the trend at all: a linear, log or saturating trend is not periodic,
-# so it has no place on a clock face — 08:00 on the first day and 08:00 on the
-# second are the same angle but different values, and the ring would not close.
-# The polar plot therefore shows the rhythm; the trend stays on the fit plot.
+# include_trend = FALSE gives the periodic part alone: MESOR + harmonics. That
+# is the only thing that can be drawn as a CLOSED ring, because a linear, log
+# or saturating trend is not periodic — 08:00 on the first day and 08:00 on the
+# second are the same angle but different values, so the ring cannot close.
+# It is also NOT the curve the fit plot draws, and the two will disagree by
+# exactly the trend at that time. Callers must label which one they are showing.
+#
+# include_trend = TRUE reproduces predict_from_coefs() exactly, so the polar
+# curve and the fit plot agree value-for-value — but then time_vec must be the
+# model's own ABSOLUTE time (mod$time_vec: 8, 9, ... 30), not a clock hour, and
+# the result is an open arc over the recording rather than a closed ring.
 # ==============================================================================
 fck_rhythm_from_coefs <- function(coefs, time_vec, period, n_harmonics,
-                                  trend_type = "none") {
+                                  trend_type = "none", include_trend = FALSE,
+                                  t_offset = 0) {
   if (is.logical(trend_type)) trend_type <- if (trend_type) "linear" else "none"
-  n_trend <- switch(as.character(trend_type),
+  trend_type <- as.character(trend_type)
+  n_trend <- switch(trend_type,
                     "none" = 0, "linear" = 1, "log" = 1, "exp_sat" = 2, 0)
   off <- 1 + n_trend
   pred <- rep(coefs[1], length(time_vec))          # MESOR
+
+  # Same arithmetic as predict_from_coefs() in server/72_harmonic.R. Kept in
+  # step with it deliberately: if these two ever disagree, the fit plot and its
+  # polar twin show different curves for the same model.
+  if (include_trend && trend_type != "none") {
+    tv <- switch(trend_type,
+                 "linear"  = coefs[2] * time_vec,
+                 "log"     = coefs[2] * log(time_vec - t_offset + 1),
+                 "exp_sat" = coefs[2] * (1 - exp(-(time_vec - t_offset) / coefs[3])),
+                 rep(0, length(time_vec)))
+    if (all(is.finite(tv))) pred <- pred + tv
+  }
+
   for (h in seq_len(n_harmonics)) {
     omega <- 2 * pi * h / period
     bc <- coefs[off + 2 * h - 1]
@@ -240,6 +262,28 @@ fck_rhythm_from_coefs <- function(coefs, time_vec, period, n_harmonics,
     pred <- pred + bc * cos(omega * time_vec) + bs * sin(omega * time_vec)
   }
   pred
+}
+
+# An open path (NOT a ring): points stay in the order given, nothing is sorted
+# and nothing is repeated to close a seam. fck_close_ring() sorts by clock hour,
+# which is right for a periodic ring and wrong for an arc that runs 08:00 ->
+# 06:00 through midnight: sorting would reorder it into 00:00 -> 23:00 and draw
+# the curve backwards through itself.
+fck_open_path <- function(hours, values) {
+  ok <- is.finite(hours) & is.finite(values)
+  hours <- hours[ok]; values <- values[ok]
+  if (length(hours) < 2) return(NULL)
+  list(hours = hours, values = values)
+}
+
+# The ribbon for an open path: out along the upper edge, back along the lower
+# edge reversed, again with no sorting.
+fck_band_path <- function(hours, lo, hi) {
+  ok <- is.finite(hours) & is.finite(lo) & is.finite(hi)
+  hours <- hours[ok]; lo <- lo[ok]; hi <- hi[ok]
+  if (length(hours) < 2) return(NULL)
+  list(hours  = c(hours, rev(hours), hours[1]),
+       values = c(hi,    rev(lo),    hi[1]))
 }
 
 # ==============================================================================

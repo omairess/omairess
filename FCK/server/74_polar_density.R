@@ -64,9 +64,23 @@ output$density_controls_ui <- renderUI({
       selected = if (is.null(mod) && has_clock) "profile" else "fit"),
     conditionalPanel(
       condition = "input.density_what == 'fit'",
+      radioButtons("density_fit_scope", "Curve shown:",
+        choices = c("The fit over the recording (trend included)" = "recording",
+                    "The rhythm only (trend removed)" = "rhythm"),
+        selected = "recording"),
       helpText(HTML("The fitted curves from <b>1. Fitted Curves</b>, wrapped onto
                      the clock: same coefficients, same band. Show/hide the band
-                     with the CI checkbox on that tab."))
+                     with the CI checkbox on that tab.<br><br>
+                     <b>The fit over the recording</b> is that plot exactly —
+                     hover a clock time here and you get the value it shows at
+                     the same time. Because a trend is not periodic, it is an
+                     open arc covering only the hours recorded, and the gap
+                     between its two ends IS the trend.<br>
+                     <b>The rhythm only</b> drops the trend and keeps
+                     MESOR + harmonics. That closes into a ring, but its values
+                     are lower or higher than the fit plot's by exactly the
+                     trend at that time. With no trend in the model the two are
+                     the same curve and this choice does nothing."))
     ),
     conditionalPanel(
       condition = "input.density_what == 'profile'",
@@ -156,9 +170,51 @@ fck_fit_rings <- function(input, values) {
   nh     <- mod$n_harmonics %||% 1L
   trend  <- mod$trend_type %||% "none"
 
-  # One full turn of the clock. A cosinor is defined everywhere, so this is
-  # exact for the rhythm even when the recording covered less than a period.
-  t <- seq(0, period, length.out = 361)
+  # WHICH curve goes on the clock face. These are genuinely different curves
+  # whenever the model has a trend, and the tab used to draw the second one
+  # while labelling its radius "fitted response", so its numbers could not be
+  # reconciled with the fit plot's.
+  #
+  #   "recording" -- the fit itself, trend included, evaluated on the model's
+  #                  own absolute time axis (mod$time_vec: 8, 9, ... 30) and
+  #                  placed on the dial at t %% 24. Agrees with the Fitted
+  #                  Curves tab value-for-value. It is an OPEN arc: it covers
+  #                  only the hours recorded, and where a trend makes the two
+  #                  ends differ, showing that gap is the point.
+  #   "rhythm"    -- MESOR + harmonics, trend removed. The periodic part alone,
+  #                  which is the only thing that closes into a ring.
+  #
+  # With trend_type = "none" the two coincide except that one is closed.
+  scope <- input$density_fit_scope %||% "recording"
+  if (identical(trend, "none")) scope <- "rhythm"
+  with_trend <- identical(scope, "recording")
+
+  tv <- mod$time_vec
+  if (with_trend && (is.null(tv) || !any(is.finite(tv)))) {
+    with_trend <- FALSE; scope <- "rhythm"
+  }
+
+  if (with_trend) {
+    t0 <- min(tv, na.rm = TRUE); t1 <- max(tv, na.rm = TRUE)
+    if (!is.finite(t0) || !is.finite(t1) || t1 <= t0) {
+      with_trend <- FALSE; scope <- "rhythm"
+    }
+  }
+
+  if (with_trend) {
+    # Absolute hours across the recording; the clock angle is t %% period, which
+    # runs continuously through midnight, so no seam handling is needed.
+    t_abs   <- seq(min(tv, na.rm = TRUE), max(tv, na.rm = TRUE), length.out = 361)
+    t_clock <- t_abs %% period
+    spans   <- (max(tv, na.rm = TRUE) - min(tv, na.rm = TRUE)) >= period
+  } else {
+    # One full turn of the clock. A cosinor is defined everywhere, so this is
+    # exact for the rhythm even when the recording covered less than a period.
+    t_abs <- seq(0, period, length.out = 361)
+    t_clock <- t_abs
+    spans <- FALSE
+  }
+  t <- t_abs
 
   band <- function(pred, mesor, amp_mean, amp_sd, n) {
     if (!isTRUE(input$harmonic_show_ci)) return(NULL)
@@ -176,10 +232,12 @@ fck_fit_rings <- function(input, values) {
     for (g in names(mod$group_fits)) {
       gf <- mod$group_fits[[g]]
       if (is.null(gf$mean_coefs)) next
-      pred <- fck_rhythm_from_coefs(gf$mean_coefs, t, period, nh, trend)
+      pred <- fck_rhythm_from_coefs(gf$mean_coefs, t, period, nh, trend,
+                                    include_trend = with_trend,
+                                    t_offset = mod$t_offset %||% 0)
       if (!any(is.finite(pred))) next
       b <- band(pred, gf$mean_mesor, gf$mean_amplitudes[1], gf$sd_amplitudes[1], gf$n)
-      out[[g]] <- list(hours = t, pred = pred, lower = b$lower, upper = b$upper,
+      out[[g]] <- list(hours = t_clock, pred = pred, lower = b$lower, upper = b$upper,
                        n = gf$n)
     }
   }
@@ -197,17 +255,22 @@ fck_fit_rings <- function(input, values) {
                    mean(params[[paste0("beta_sin_", h)]], na.rm = TRUE)))))
     }
     if (is.null(coefs)) return(NULL)
-    pred <- fck_rhythm_from_coefs(coefs, t, period, nh, trend)
+    pred <- fck_rhythm_from_coefs(coefs, t, period, nh, trend,
+                                  include_trend = with_trend,
+                                  t_offset = mod$t_offset %||% 0)
     if (!any(is.finite(pred))) return(NULL)
     b <- if (!is.null(params)) band(pred, coefs[1],
                                     mean(params$amplitude_1, na.rm = TRUE),
                                     stats::sd(params$amplitude_1, na.rm = TRUE),
                                     sum(!is.na(params$amplitude_1))) else NULL
-    out[["Population mean"]] <- list(hours = t, pred = pred,
+    out[["Population mean"]] <- list(hours = t_clock, pred = pred,
                                      lower = b$lower, upper = b$upper,
                                      n = if (!is.null(params)) nrow(params) else NA_integer_)
   }
-  if (!length(out)) NULL else list(rings = out, period = period, trend = trend, nh = nh)
+  if (!length(out)) return(NULL)
+  list(rings = out, period = period, trend = trend, nh = nh,
+       scope = scope, closed = !with_trend, spans_period = spans,
+       t_range = if (with_trend) range(tv, na.rm = TRUE) else NULL)
 }
 
 # The signal itself over the clock: mean of the smoothed curves at each clock
@@ -217,7 +280,15 @@ fck_profile_rings <- function(input, values) {
   Y <- values$smooth_data
   cum <- fck_cumulative_hours(values$time_labels)
   if (is.null(cum) || length(cum) != ncol(Y)) return(NULL)
-  w <- fck_wrap_to_clock(cum, 24)
+  # fck_cumulative_hours() returns ELAPSED hours from the first column (0, 1.5,
+  # 3, ...), not clock times. Wrapping that onto the dial put column 1 at 00:00
+  # whatever time the recording actually started, rotating the whole ring
+  # backwards by the start hour -- an 08:00 start moved the 04:00 peak to 20:00.
+  # The clock hour of each column is what fck_clock_hours() already parsed; cum
+  # is only needed for the day index.
+  clock <- fck_clock_hours(values$time_labels)
+  if (is.null(clock) || length(clock) != ncol(Y)) return(NULL)
+  w <- list(clock = clock, day = fck_wrap_to_clock(cum, 24)$day)
 
   gv <- input$harmonic_group_var
   grp <- if (!is.null(gv) && nzchar(gv) && !identical(gv, "_none_") &&
@@ -279,17 +350,28 @@ output$harmonic_density_plot <- renderPlotly({
     period <- fr$period
     vals <- unlist(lapply(fr$rings, function(r) c(r$pred, r$lower, r$upper)))
     lo <- min(vals, na.rm = TRUE); hi <- max(vals, na.rm = TRUE)
-    set_axis(lo, hi, "fitted response"); lo <- axis_lo
+    set_axis(lo, hi, if (isTRUE(fr$closed) && !identical(fr$trend, "none"))
+                       "fitted response, trend removed" else "fitted response")
+    lo <- axis_lo
+    fit_closed <- isTRUE(fr$closed)
+    fit_scope  <- fr$scope
+    fit_trend  <- fr$trend
+    fit_spans  <- isTRUE(fr$spans_period)
+    # A closed ring is sorted by clock hour and its first point repeated; an
+    # open arc must keep the order it was generated in, because it runs through
+    # midnight and sorting would draw it backwards through itself.
+    shape <- if (fit_closed) fck_close_ring else fck_open_path
+    ribbon <- if (fit_closed) fck_band_ring else fck_band_path
     for (nm2 in names(fr$rings)) {
       rr <- fr$rings[[nm2]]
-      cr <- fck_close_ring(rr$hours, rr$pred)
+      cr <- shape(rr$hours, rr$pred)
       if (is.null(cr)) next
       rings[[nm2]] <- list(hours = cr$hours, r = scale_r(cr$values, lo, hi),
-                           raw = cr$values, unit = "fitted")
+                           raw = cr$values, unit = "fitted", closed = fit_closed)
       if (!is.null(rr$lower) && !is.null(rr$upper)) {
-        b <- fck_band_ring(rr$hours, rr$lower, rr$upper)
-        eu <- fck_close_ring(rr$hours, rr$upper)
-        el <- fck_close_ring(rr$hours, rr$lower)
+        b <- ribbon(rr$hours, rr$lower, rr$upper)
+        eu <- shape(rr$hours, rr$upper)
+        el <- shape(rr$hours, rr$lower)
         bands[[nm2]] <- list(
           hours = if (!is.null(b)) b$hours else NULL,
           r     = if (!is.null(b)) scale_r(b$values, lo, hi) else NULL,
@@ -443,8 +525,18 @@ output$harmonic_density_plot <- renderPlotly({
     for (i in seq_along(rings)) {
       rg <- rings[[i]]
       col <- FCK_DENSITY_COLORS[((i - 1) %% length(FCK_DENSITY_COLORS)) + 1]
+      # A closed ring fills straight to itself. An open arc does not: 'toself'
+      # would shut it with a straight chord between the two ends, inventing a
+      # boundary across hours the recording never covered. Closing it back along
+      # the inner radius instead makes it an annular sector, so the uncovered
+      # hours read as empty rather than as a flat stretch of the curve.
+      fr_hours <- rg$hours; fr_r <- rg$r
+      if (!isTRUE(rg$closed %||% TRUE)) {
+        fr_hours <- c(rg$hours, rev(rg$hours), rg$hours[1])
+        fr_r     <- c(rg$r, rep(inner, length(rg$r)), inner)
+      }
       p <- add_trace(p, type = "scatterpolar", mode = "lines",
-                     r = rg$r, theta = fck_hour_to_theta(rg$hours, period),
+                     r = fr_r, theta = fck_hour_to_theta(fr_hours, period),
                      fill = "toself",
                      fillcolor = paste0(col, if (length(rings) == 1) "8C" else "33"),
                      line = list(color = "rgba(0,0,0,0)"),
@@ -579,10 +671,21 @@ output$harmonic_density_note <- renderText({
                     floor(troughs), (troughs %% 1) * 60,
                     vapply(fr$rings, function(r) as.character(r$n), "")),
             collapse = "\n"), "\n",
-      if (!identical(fr$trend, "none"))
-        sprintf("The %s trend is NOT drawn: it is not periodic, so 08:00 on two different days would sit at the same angle with different values and the ring would not close. This is the rhythm; the trend is on tab 1.\n", fr$trend)
+      if (identical(fr$trend, "none"))
+        ""
+      else if (isTRUE(fr$closed))
+        sprintf("Showing the RHYTHM ONLY: the %s trend is not drawn. Values here differ from tab 1 by exactly the trend at that time -- they are not the fitted values. Switch to 'the fit over the recording' to read the same numbers as tab 1.\n", fr$trend)
+      else
+        sprintf("Showing the FIT ITSELF, %s trend included, so every value matches tab 1 at the same clock time. A trend is not periodic, so this is an open arc over the %.1f h recorded (%02d:%02.0f to %02d:%02.0f) rather than a closed ring, and the gap between its two ends is the trend across the recording.\n",
+                fr$trend, diff(fr$t_range),
+                floor(fr$t_range[1] %% fr$period), (fr$t_range[1] %% 1) * 60,
+                floor(fr$t_range[2] %% fr$period), (fr$t_range[2] %% 1) * 60),
+      if (isTRUE(fr$spans_period))
+        "The recording is longer than one period, so the arc laps the dial and overlaps itself: two passes over the same clock hour at different values.\n"
       else "",
-      "A cosinor drawn in polar coordinates is a limacon: r = MESOR + amplitude*cos(angle - acrophase) traces an OFF-CENTRE RING, widest towards the acrophase. That offset is the rhythm, not a plotting artefact.\n",
+      if (isTRUE(fr$closed))
+        "A cosinor drawn in polar coordinates is a limacon: r = MESOR + amplitude*cos(angle - acrophase) traces an OFF-CENTRE RING, widest towards the acrophase. That offset is the rhythm, not a plotting artefact.\n"
+      else "",
       if (isTRUE(input$harmonic_show_ci))
         "The band is the approximation tab 1 draws -- the curve rescaled about the MESOR by the relative standard error of the first harmonic's amplitude. It is not a pointwise confidence interval.\n"
       else "",
