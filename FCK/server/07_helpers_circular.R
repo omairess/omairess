@@ -208,3 +208,36 @@ fck_band_ring <- function(hours, lo, hi) {
   list(hours  = c(hours, hours[1], rev(hours), hours[length(hours)]),
        values = c(hi,    hi[1],    rev(lo),    lo[length(lo)]))
 }
+
+# ==============================================================================
+# The rhythmic part of a fitted cosinor, for the polar version of the fit plot
+#
+# predict_from_coefs() lays coefficients out as
+#     c(mesor, [trend coefs...], beta_cos_1, beta_sin_1, beta_cos_2, ...)
+# and finds the harmonics at an offset that depends on trend_type. Calling it
+# with trend_type = "none" to drop a trend would therefore read the TREND
+# coefficients as the first harmonic — a silent, plausible-looking wrong curve.
+# This keeps the real trend_type for indexing and simply never adds the trend
+# term, which is the arithmetic that plot does minus one line.
+#
+# Why drop the trend at all: a linear, log or saturating trend is not periodic,
+# so it has no place on a clock face — 08:00 on the first day and 08:00 on the
+# second are the same angle but different values, and the ring would not close.
+# The polar plot therefore shows the rhythm; the trend stays on the fit plot.
+# ==============================================================================
+fck_rhythm_from_coefs <- function(coefs, time_vec, period, n_harmonics,
+                                  trend_type = "none") {
+  if (is.logical(trend_type)) trend_type <- if (trend_type) "linear" else "none"
+  n_trend <- switch(as.character(trend_type),
+                    "none" = 0, "linear" = 1, "log" = 1, "exp_sat" = 2, 0)
+  off <- 1 + n_trend
+  pred <- rep(coefs[1], length(time_vec))          # MESOR
+  for (h in seq_len(n_harmonics)) {
+    omega <- 2 * pi * h / period
+    bc <- coefs[off + 2 * h - 1]
+    bs <- coefs[off + 2 * h]
+    if (!is.finite(bc) || !is.finite(bs)) next
+    pred <- pred + bc * cos(omega * time_vec) + bs * sin(omega * time_vec)
+  }
+  pred
+}

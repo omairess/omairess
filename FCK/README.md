@@ -91,9 +91,10 @@ if any of these were missing):
     exponential-saturation trend, MESOR / amplitude / acrophase per subject,
     polar plots, circular statistics, group comparisons. The **Polar Density**
     tab draws a filled shape on a clock face — noon at the top, midnight at the
-    bottom, night shaded — carrying either a von Mises kernel density of the
-    acrophases (so a distribution straddling midnight reads as one peak, not
-    two) or the signal itself averaged over the clock.
+    bottom, night shaded — carrying the fitted cosinor curves from the
+    Fitted Curves tab (same coefficients, same band), a von Mises kernel density
+    of the acrophases (so a distribution straddling midnight reads as one peak,
+    not two), or the signal itself averaged over the clock.
 11. **Cosinor: pairwise tests** — pairwise group comparisons of any cosinor
     parameter, with corrections, effect sizes and confidence intervals.
 

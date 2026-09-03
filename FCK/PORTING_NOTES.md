@@ -346,8 +346,11 @@ and the lower half night, with the night sector shaded (the dusk/dawn bounds are
 adjustable). In plotly's angular convention that is
 `theta(h) = (270 - 15h) mod 360`.
 
-The radius carries either the acrophase density or the **signal itself averaged
-over the clock** (the smoothed curves wrapped onto one 24 h face). A recording
+The radius carries the **fitted harmonic-regression curves** (the default — the
+curves from tab 1 wrapped onto the clock, built from the same `mean_coefs` and
+the same band, so it is that plot in polar coordinates rather than a second
+opinion about the same data), the acrophase density, or the **signal itself
+averaged over the clock** (the smoothed curves wrapped onto one 24 h face). A recording
 longer than the period visits the same clock time twice — a 38 h protocol hits
 06:00 on both days — so the profile mode either averages the days at each clock
 time or draws one ring per day; it never silently folds them together. The shape
@@ -391,6 +394,36 @@ framing explicitly disclaimed.
 clock, and a mirrored clock still looks like a clock), the wrapping, that the
 density integrates to 1, that a very small bandwidth does not overflow, and the
 weighting behaviour.
+
+Two things about the fit mode are worth stating, because both look like bugs
+and are not:
+
+* **A cosinor in polar coordinates is a limaçon.** `r = MESOR + amplitude *
+  cos(angle - acrophase)` traces an *off-centre ring*, widest toward the
+  acrophase — not a lobed blob. The offset is the rhythm. The note says so.
+* **A trend is not drawn.** A linear, log or saturating trend is not periodic,
+  so 08:00 on two different days would sit at the same angle with different
+  values and the ring would not close. The polar plot shows the rhythm and says
+  where the trend is.
+
+The second needed care in the code. `predict_from_coefs()` lays coefficients out
+as `c(mesor, [trend...], beta_cos_1, beta_sin_1, ...)` and locates the harmonics
+at an offset that depends on `trend_type`, so calling it with
+`trend_type = "none"` to drop a trend would read the **trend** coefficient as the
+first harmonic — a silent, entirely plausible-looking wrong curve.
+`fck_rhythm_from_coefs()` keeps the real `trend_type` for indexing and simply
+never adds the trend term. `tests/circular_density_test.R` pins that it equals
+the fitted curve minus its trend, and explicitly that it is *not* what dropping
+`trend_type` would give.
+
+Also pinned there: a known amplitude and acrophase survive the round trip
+(a curve built to peak at 03:30 peaks at 03:30 on the clock), and a missing
+harmonic coefficient is skipped rather than poisoning the whole curve.
+
+A radial-baseline control chooses between measuring the radius from the smallest
+value plotted (stretches the shape, small differences visible) and from zero
+(proportional, but flattens a rhythm whose MESOR is far from zero). The note
+states which is in force, since neither is right for every reading.
 
 ## 5. Rename table
 

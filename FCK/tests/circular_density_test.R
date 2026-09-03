@@ -143,5 +143,70 @@ check("band goes out on the upper edge then back on the lower",
       identical(b$values[1:3], c(4, 5, 6)) && identical(b$values[5:7], c(6, 5, 4) * 0 + c(3, 2, 1)))
 check("band has 2n+2 vertices", length(b$hours) == 2 * 3 + 2)
 
+# --- the polar fit must be the SAME curve as the fitted-curves tab ----------
+# predict_from_coefs() as the harmonic tab defines it, reproduced here so the
+# two can be compared directly.
+predict_from_coefs <- function(coefs, time_vec, period, n_harmonics, trend_type = "none",
+                               t_offset = 0, t_center = 0) {
+  pred <- rep(coefs[1], length(time_vec))
+  n_trend <- switch(as.character(trend_type), "none"=0,"linear"=1,"log"=1,"exp_sat"=2,0)
+  off <- 1 + n_trend
+  if (trend_type != "none") {
+    pred <- pred + switch(as.character(trend_type),
+      "linear" = coefs[2]*time_vec,
+      "log"    = coefs[2]*log(time_vec - t_offset + 1),
+      "exp_sat"= coefs[2]*(1 - exp(-(time_vec - t_offset)/coefs[3])),
+      rep(0, length(time_vec)))
+  }
+  for (h in 1:n_harmonics) {
+    om <- 2*pi*h/period
+    pred <- pred + coefs[off + 2*h - 1]*cos(om*time_vec) + coefs[off + 2*h]*sin(om*time_vec)
+  }
+  pred
+}
+
+tt <- seq(0, 24, length.out = 97)
+
+# no trend: the polar curve must equal the fit plot's curve exactly
+co0 <- c(50, 12, -5, 3, 2)                      # mesor, bc1, bs1, bc2, bs2
+check("rhythm matches predict_from_coefs with no trend",
+      near(fck_rhythm_from_coefs(co0, tt, 24, 2, "none"),
+           predict_from_coefs(co0, tt, 24, 2, "none"), 1e-10))
+
+# with a trend: the polar curve must equal the fit plot's curve MINUS the trend,
+# not the curve you get by passing trend_type = "none" -- that reads the trend
+# coefficient as the first harmonic, which is the trap this guards.
+co1 <- c(50, 0.8, 12, -5, 3, 2)                 # mesor, slope, bc1, bs1, bc2, bs2
+full  <- predict_from_coefs(co1, tt, 24, 2, "linear")
+rhy   <- fck_rhythm_from_coefs(co1, tt, 24, 2, "linear")
+check("rhythm equals the fitted curve minus its trend",
+      near(rhy, full - co1[2]*tt, 1e-10))
+wrong <- predict_from_coefs(co1, tt, 24, 2, "none")   # the trap
+check("rhythm is NOT what dropping trend_type would give",
+      !near(rhy, wrong, 1e-6))
+
+# the rhythm is periodic, so the ring closes; the trended curve does not
+check("rhythm closes on the clock",
+      near(fck_rhythm_from_coefs(co1, 0, 24, 2, "linear"),
+           fck_rhythm_from_coefs(co1, 24, 24, 2, "linear"), 1e-10))
+check("the trended curve would NOT close",
+      !near(full[1], full[length(full)], 1e-6))
+
+# amplitude and acrophase survive the round trip: a pure first harmonic with
+# known amplitude and peak must peak where the cosinor says it does
+amp <- 9; peak <- 3.5                            # peaks at 03:30
+co2 <- c(40, amp*cos(2*pi*peak/24), amp*sin(2*pi*peak/24))
+fine <- seq(0, 24, length.out = 2881)            # 30 s resolution
+pk <- fine[which.max(fck_rhythm_from_coefs(co2, fine, 24, 1, "none"))]
+check("a known acrophase lands where it should", abs(pk - peak) < 0.02,
+      sprintf("peak at %.3f h", pk))
+check("a known amplitude is preserved",
+      abs(diff(range(fck_rhythm_from_coefs(co2, fine, 24, 1, "none"))) - 2*amp) < 1e-6)
+
+# non-finite coefficients must be skipped, not poison the whole curve
+co3 <- c(50, 12, -5, NA, NA)
+check("a missing harmonic is skipped, not propagated",
+      all(is.finite(fck_rhythm_from_coefs(co3, tt, 24, 2, "none"))))
+
 if (failures) { cat("\n", failures, " failure(s).\n", sep = ""); quit(status = 1) }
 cat("\nCircular density tests passed.\n")

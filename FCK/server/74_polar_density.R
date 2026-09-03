@@ -58,9 +58,16 @@ output$density_controls_ui <- renderUI({
   has_clock <- !is.null(values$time_clock) && !is.null(values$smooth_data)
   tagList(
     radioButtons("density_what", "Radius shows:",
-      choices = c("Density of fitted acrophases" = "acrophase",
+      choices = c("Harmonic regression fit" = "fit",
+                  "Density of fitted acrophases" = "acrophase",
                   "Signal averaged over the clock" = "profile"),
-      selected = if (is.null(mod) && has_clock) "profile" else "acrophase"),
+      selected = if (is.null(mod) && has_clock) "profile" else "fit"),
+    conditionalPanel(
+      condition = "input.density_what == 'fit'",
+      helpText(HTML("The fitted curves from <b>1. Fitted Curves</b>, wrapped onto
+                     the clock: same coefficients, same band. Show/hide the band
+                     with the CI checkbox on that tab."))
+    ),
     conditionalPanel(
       condition = "input.density_what == 'profile'",
       helpText("The smoothed curves themselves, averaged across subjects at each",
@@ -90,6 +97,14 @@ output$density_controls_ui <- renderUI({
     ),
     hr(),
     checkboxInput("density_fill", "Fill the shape", TRUE),
+    radioButtons("density_radial_from", "Radius measured from:",
+                 choices = c("The smallest value plotted" = "range",
+                             "Zero" = "zero"),
+                 selected = "range"),
+    helpText(HTML("From the smallest value, the shape is stretched to fill the
+                   circle and small differences are easy to see. <b>From zero the
+                   radius is proportional to the value</b>, which is the honest
+                   scale but flattens a rhythm whose MESOR is far from zero.")),
     sliderInput("density_inner", "Inner radius (0 = the shape may reach the centre):",
                 min = 0, max = 0.6, value = 0.15, step = 0.05),
     helpText(HTML("An inner radius keeps a low-density stretch of the clock from
@@ -109,6 +124,75 @@ output$density_controls_ui <- renderUI({
     )
   )
 })
+
+# The fitted cosinor curves from the "Fitted Curves" tab, on a clock face.
+#
+# Same coefficients, same CI construction, so this IS that plot in polar
+# coordinates rather than a second opinion about the same data. The band is
+# the app's own approximation -- the curve rescaled about the MESOR by the
+# relative standard error of the first harmonic's amplitude, which is what the
+# fit plot draws and calls a 95% CI. It is not a pointwise interval, and the
+# note says so.
+fck_fit_rings <- function(input, values) {
+  mod <- values$harmonic_model
+  if (is.null(mod)) return(NULL)
+  period <- mod$period %||% 24
+  nh     <- mod$n_harmonics %||% 1L
+  trend  <- mod$trend_type %||% "none"
+
+  # One full turn of the clock. A cosinor is defined everywhere, so this is
+  # exact for the rhythm even when the recording covered less than a period.
+  t <- seq(0, period, length.out = 361)
+
+  band <- function(pred, mesor, amp_mean, amp_sd, n) {
+    if (!isTRUE(input$harmonic_show_ci)) return(NULL)
+    if (!is.finite(amp_mean) || amp_mean == 0 || !is.finite(amp_sd) || !is.finite(n) || n < 2)
+      return(NULL)
+    amp_se <- amp_sd / sqrt(n)
+    up <- 1 + 1.96 * amp_se / amp_mean
+    lo <- max(0, 1 - 1.96 * amp_se / amp_mean)
+    list(lower = mesor + (pred - mesor) * lo,
+         upper = mesor + (pred - mesor) * up)
+  }
+
+  out <- list()
+  if (!is.null(mod$group_fits) && length(mod$group_fits) >= 1) {
+    for (g in names(mod$group_fits)) {
+      gf <- mod$group_fits[[g]]
+      if (is.null(gf$mean_coefs)) next
+      pred <- fck_rhythm_from_coefs(gf$mean_coefs, t, period, nh, trend)
+      if (!any(is.finite(pred))) next
+      b <- band(pred, gf$mean_mesor, gf$mean_amplitudes[1], gf$sd_amplitudes[1], gf$n)
+      out[[g]] <- list(hours = t, pred = pred, lower = b$lower, upper = b$upper,
+                       n = gf$n)
+    }
+  }
+  if (!length(out)) {
+    coefs <- mod$pop_mean_fit$mean_coefs
+    params <- mod$individual_params
+    if (is.null(coefs) && !is.null(params)) {
+      # Same population cosinor the app forms elsewhere: mean of the
+      # coefficients, never a mean of acrophases (those are circular).
+      coefs <- c(mean(params$mesor, na.rm = TRUE),
+                 rep(NA_real_, switch(as.character(trend), "none" = 0, "linear" = 1,
+                                      "log" = 1, "exp_sat" = 2, 0)),
+                 unlist(lapply(seq_len(nh), function(h) c(
+                   mean(params[[paste0("beta_cos_", h)]], na.rm = TRUE),
+                   mean(params[[paste0("beta_sin_", h)]], na.rm = TRUE)))))
+    }
+    if (is.null(coefs)) return(NULL)
+    pred <- fck_rhythm_from_coefs(coefs, t, period, nh, trend)
+    if (!any(is.finite(pred))) return(NULL)
+    b <- if (!is.null(params)) band(pred, coefs[1],
+                                    mean(params$amplitude_1, na.rm = TRUE),
+                                    stats::sd(params$amplitude_1, na.rm = TRUE),
+                                    sum(!is.na(params$amplitude_1))) else NULL
+    out[["Population mean"]] <- list(hours = t, pred = pred,
+                                     lower = b$lower, upper = b$upper,
+                                     n = if (!is.null(params)) nrow(params) else NA_integer_)
+  }
+  if (!length(out)) NULL else list(rings = out, period = period, trend = trend, nh = nh)
+}
 
 # The signal itself over the clock: mean of the smoothed curves at each clock
 # time, per day and per group. Returns NULL when clock times were not parsed.
@@ -150,20 +234,42 @@ fck_profile_rings <- function(input, values) {
 }
 
 output$harmonic_density_plot <- renderPlotly({
-  mode <- input$density_what %||% "acrophase"
+  mode <- input$density_what %||% "fit"
   inner <- input$density_inner %||% 0.15
   do_fill <- isTRUE(input$density_fill %||% TRUE)
   period <- 24
 
   # radius scaled into [inner, 1] so a low stretch does not collapse to a point
+  from_zero <- identical(input$density_radial_from %||% "range", "zero")
   scale_r <- function(v, lo, hi) {
+    if (from_zero) lo <- min(0, lo, na.rm = TRUE)
     if (!is.finite(hi) || hi <= lo) return(rep((inner + 1) / 2, length(v)))
     inner + (1 - inner) * pmax(0, pmin(1, (v - lo) / (hi - lo)))
   }
 
   rings <- list(); pts <- NULL; means <- list(); bands <- list()
 
-  if (identical(mode, "profile")) {
+  if (identical(mode, "fit")) {
+    fr <- fck_fit_rings(input, values)
+    validate(need(!is.null(fr),
+      "Run the harmonic regression first — this is its fitted curves on a clock face."))
+    period <- fr$period
+    vals <- unlist(lapply(fr$rings, function(r) c(r$pred, r$lower, r$upper)))
+    lo <- min(vals, na.rm = TRUE); hi <- max(vals, na.rm = TRUE)
+    for (nm2 in names(fr$rings)) {
+      rr <- fr$rings[[nm2]]
+      cr <- fck_close_ring(rr$hours, rr$pred)
+      if (is.null(cr)) next
+      rings[[nm2]] <- list(hours = cr$hours, r = scale_r(cr$values, lo, hi),
+                           raw = cr$values, unit = "fitted")
+      if (!is.null(rr$lower) && !is.null(rr$upper)) {
+        b <- fck_band_ring(rr$hours, rr$lower, rr$upper)
+        if (!is.null(b)) bands[[nm2]] <- list(hours = b$hours, r = scale_r(b$values, lo, hi))
+      }
+    }
+    validate(need(length(rings) > 0, "The fitted curves could not be drawn."))
+
+  } else if (identical(mode, "profile")) {
     pr <- fck_profile_rings(input, values)
     validate(need(!is.null(pr),
       "The signal profile needs smoothed curves and clock times parsed from the column names. Apply smoothing, or use the acrophase density."))
@@ -310,11 +416,38 @@ output$harmonic_density_plot <- renderPlotly({
 })
 
 output$harmonic_density_note <- renderText({
-  mode <- input$density_what %||% "acrophase"
+  mode <- input$density_what %||% "fit"
   inner <- input$density_inner %||% 0.15
+  from_zero <- identical(input$density_radial_from %||% "range", "zero")
   tail_note <- if (inner > 0)
-    sprintf("\nInner radius %.2f: the radius is NOT proportional to the value, so compare shape, not area. Set it to 0 for a faithful radial scale.\n", inner)
-  else "\nRadius is proportional to the value (inner radius 0).\n"
+    sprintf("\nInner radius %.2f%s: the radius is NOT proportional to the value, so compare shape, not area.\n",
+            inner, if (from_zero) "" else ", measured from the smallest value plotted")
+  else if (!from_zero)
+    "\nRadius is measured from the smallest value plotted, not from zero, so it is not proportional to the value.\n"
+  else "\nRadius is proportional to the value (from zero, inner radius 0).\n"
+
+  if (identical(mode, "fit")) {
+    fr <- fck_fit_rings(input, values)
+    if (is.null(fr)) return("")
+    peaks <- vapply(fr$rings, function(r) r$hours[which.max(r$pred)], numeric(1))
+    troughs <- vapply(fr$rings, function(r) r$hours[which.min(r$pred)], numeric(1))
+    return(paste0(
+      sprintf("The fitted curves from tab 1, on the clock. %d harmonic%s, period %g h.\n",
+              fr$nh, if (fr$nh == 1) "" else "s", fr$period),
+      paste(sprintf("  %-22s peak %02d:%02.0f, trough %02d:%02.0f (n = %s)",
+                    names(fr$rings), floor(peaks), (peaks %% 1) * 60,
+                    floor(troughs), (troughs %% 1) * 60,
+                    vapply(fr$rings, function(r) as.character(r$n), "")),
+            collapse = "\n"), "\n",
+      if (!identical(fr$trend, "none"))
+        sprintf("The %s trend is NOT drawn: it is not periodic, so 08:00 on two different days would sit at the same angle with different values and the ring would not close. This is the rhythm; the trend is on tab 1.\n", fr$trend)
+      else "",
+      "A cosinor drawn in polar coordinates is a limacon: r = MESOR + amplitude*cos(angle - acrophase) traces an OFF-CENTRE RING, widest towards the acrophase. That offset is the rhythm, not a plotting artefact.\n",
+      if (isTRUE(input$harmonic_show_ci))
+        "The band is the approximation tab 1 draws -- the curve rescaled about the MESOR by the relative standard error of the first harmonic's amplitude. It is not a pointwise confidence interval.\n"
+      else "",
+      tail_note))
+  }
 
   if (identical(mode, "profile")) {
     pr <- fck_profile_rings(input, values)
@@ -341,6 +474,9 @@ output$harmonic_density_note <- renderText({
   s <- fck_circular_summary(dd$hours, dd$period, weights)
   n_groups <- if (is.null(dd$group)) 1L else nlevels(dd$group)
 
+  # A sinusoid drawn in polar coordinates is a limacon -- r = a + b cos(theta)
+  # traces an off-centre ring, not a lobed shape -- which surprises people
+  # reading a cosinor on a clock for the first time.
   paste0(
     sprintf("Von Mises kernel density of the acrophases, bandwidth %.2f h (%s); n = %d.\n",
             bw, if (identical(input$density_bw_mode %||% "auto", "manual"))
