@@ -516,6 +516,56 @@ close and the fit to *not* close; and the elapsed-vs-clock distinction is
 asserted directly, including that the offset between them is exactly the start
 hour.
 
+**4.24 Harmonic-regression audit.** *(bug fixes + statistical changes)* A full
+audit of the cosinor pipeline — fitters, aggregation, reporting — against a
+supplied brief. Seven hard bugs and six statistical deficiencies were named in
+the brief; five more bugs were found in the code that were not. The complete
+changelog is at the top of `server/72_harmonic.R`; the shared arithmetic moved
+to the new `server/08_helpers_cosinor.R`, which carries its own.
+
+Highlights, in roughly the order they cost the most:
+
+* **The pooled fitted equation dropped the homeostatic term** for *every* trend
+  type, not just `exp_sat`. The pooled builder read `pop$indiv_means$A_sat` and
+  friends; `indiv_means` was never given a single trend parameter, so the
+  branch was dead. The group builder read a different structure, which is why
+  only the pooled line was wrong. One renderer now, `fck_format_equation()`.
+* **The Rayleigh test ran on the amplitude-weighted resultant** (0.824, Z = 886)
+  where it is defined on unit vectors (0.789, Z = 812). Both resultants are now
+  returned under names that cannot be swapped.
+* **The zero-amplitude F test credited the trend to the rhythm** — not in the
+  brief. The numerator was the whole model's SS over the harmonics' df alone.
+  This is a bigger contributor to the "95.3% significant" rate than the FDA
+  smoothing is.
+* **Convergence was never checked.** `nls(warnOnly = TRUE)` returns a fit at the
+  iteration limit rather than erroring, so every non-converged optimisation was
+  counted as a success — which is how `Successfully fitted: 1305 / 1305` sat
+  next to an R² range starting at 0.060.
+* **"LOOCV RMSE" in the nonlinear path was in-sample residual RMSE** — not in
+  the brief — while the linear path under the same label did real LOOCV.
+* **The MESOR was not a MESOR.** It is the fitted constant, now called the
+  intercept everywhere including the plots, the parameter table, the CSV export
+  and the pairwise comparisons. The rhythm-adjusted mean is computed by
+  integration and reported under the correct name. Note the brief's own sanity
+  figure was slightly off: the fitter anchors the trend at the *first
+  observation*, not midnight, so the mean S-factor over [8, 30] is 0.4975 and
+  the rhythm-adjusted mean is about 43.8, not the 50 an unshifted `t` would give.
+* **`acrophase_time_h` omitted the `/h` divisor** — not in the brief — putting
+  H2 on a 0–24 scale while the group summaries used 0–12, so the H2 group tests
+  ran on the wrong scale.
+
+Estimators deliberately changed: the Rayleigh Z, the variance decomposition
+(commonality, replacing overlapping marginals), the zero-amplitude F test, the
+nonlinear amplitude/acrophase SEs, and the nonlinear marginal R²_S.
+
+`tests/testthat/test-cosinor-audit.R` implements the brief's regression values;
+`tests/audit_test.R` runs that same file under a base-R shim, because testthat
+is not installable here and an unexecuted test is a claim rather than a check
+(298 assertions pass). `tests/report_harness.R` generates `report_OLD.txt` and
+`report_NEW.txt` from synthetic data with known ground truth — the real
+1305-subject file is not in this repository, so old and new are scored against
+truth rather than diffed against a re-run that could not be produced honestly.
+
 ## 5. Rename table
 
 | source | source app | merged app |

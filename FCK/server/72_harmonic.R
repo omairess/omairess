@@ -4,6 +4,73 @@
 # PORTED VERBATIM by tools/port_fck.py — do not hand-edit the ranges
 # below without updating that script's manifest.  Provenance:
 #   CIRCAREG.R lines 2879-7190  (cosinor core, harmonic regression + outputs)
+#
+# CHANGELOG - 2026-09-03 cosinor audit (this file is NO LONGER verbatim)
+# -----------------------------------------------------------------------------
+# HARD BUGS
+#  1.1 The pooled fitted equation dropped the homeostatic term. Root cause: the
+#      pooled builder read pop$indiv_means$A_sat / $tau / $trend_linear /
+#      $trend_log, and indiv_means was never given ANY trend parameter, so the
+#      branch was dead for every trend type. Both the pooled and the group
+#      equations now go through fck_format_equation(); the duplicate builder is
+#      deleted.
+#  1.2 The Rayleigh test used the amplitude-weighted resultant (0.824 -> Z=886)
+#      where the unweighted one was required (0.789 -> Z=812). fck_resultants()
+#      returns both under unambiguous names; only the unweighted one reaches
+#      fck_rayleigh(). The amplitude-weighted vector mean is unchanged.
+#  1.3 R2_S and R2_C were overlapping marginals summing to 124.7%. Replaced by
+#      commonality analysis (unique_S + unique_C + shared == total). The
+#      auto-generated dominance verdict is deleted.
+#  1.4 "MESOR" was the fitted constant. Renamed to Intercept (beta_0) here, in
+#      the plots, in the parameter table, in the CSV export and in the pairwise
+#      comparisons. A genuine rhythm-adjusted mean is computed by integration
+#      and reported as the MESOR. time_origin added.
+#  1.5 Group n's summed to 1304 of 1305: unique() kept NA as a level and
+#      which(x == NA) is empty, so the subject fell through the n>=3 guard in
+#      silence. UNASSIGNED is now a real row and the totals are asserted.
+#  1.6 Every averaged quantity now names its estimator; a linear SD is never
+#      printed beside a vector- or circular-averaged value.
+#  1.7 fmt2() (round half away from zero) throughout; the DV is named with units
+#      and bounds; the "(units)" placeholder is interpolated; the H2 modulo
+#      convention is printed next to every H2 acrophase.
+#
+# STATISTICAL
+#  2.1 data_source = raw | smoothed is now a user choice, with the inflation it
+#      causes stated in the report rather than left implicit.
+#  2.2 Parameter correlation matrix, design condition number at each origin, and
+#      free-tau vs fixed-tau Delta-AIC, so the A_sat/tau ridge is documented.
+#  2.3 Convergence was never inspected: nls(warnOnly=TRUE) RETURNS a fit at the
+#      iteration limit, so every non-converged optimisation was counted as a
+#      success. Now captured per subject; converged / boundary / failed are
+#      reported separately and non-converged fits are excluded from the
+#      population summaries.
+#  2.4 Delta-AICc across a nested model set with Akaike weights, replacing mean
+#      AIC/AICc/BIC (which are constant offsets of one another, hence the
+#      identical SDs).
+#  2.5 Delta-method amplitude AND acrophase SEs in the nonlinear path, plus
+#      Bingham elliptical joint confidence regions.
+#  2.6 Population-mean cosinor with group x harmonic terms as the primary
+#      analysis; effect sizes and CIs on every group contrast; a monotone-trend
+#      contrast for the ordered age bands; the Watson-Williams concentration
+#      assumption checked in the output.
+#
+# FOUND DURING THE AUDIT, NOT IN THE BRIEF
+#   a. The zero-amplitude F test put the WHOLE model's sum of squares over the
+#      harmonics' df alone, crediting Process S's variance to the rhythm. Now a
+#      proper full-vs-trend-only test. This, not only the smoothing, is why
+#      95.3% of subjects came out "significantly rhythmic".
+#   b. "LOOCV RMSE" in the nonlinear path was the in-sample residual RMSE. Now
+#      genuine leave-one-out refits, with the label following the computation.
+#   c. The nonlinear amplitude SE was sqrt(se_c^2+se_s^2)/sqrt(2) -- covariance
+#      discarded -- and the acrophase SE was NA unconditionally.
+#   d. acrophases_time omitted the /h divisor, so acrophase_time_2 was on a 0-24
+#      scale while the group summaries used 0-12; the H2 group tests ran on the
+#      wrong scale.
+#   e. In the nonlinear path R2_S reused the full model's coefficients with the
+#      cosines deleted rather than refitting the trend-only model.
+#
+# Tests: tests/testthat/test-cosinor-audit.R (and tests/audit_test.R, which runs
+# the same file without testthat). Old-vs-new report: tests/report_harness.R.
 # ==========================================================================
   # ==============================================================================
   # HARMONIC REGRESSION (COSINOR ANALYSIS) MODULE
@@ -203,7 +270,7 @@
        <strong>📊 Data Range Hints:</strong><br>
        <small>
        <strong>Your data:</strong> Min=%.2f, Max=%.2f, Mean=%.2f, Range=%.2f<br>
-       <strong>Suggested MESOR bounds:</strong> [%.2f, %.2f] (mean ± range)<br>
+       <strong>Suggested intercept (\u03b2\u2080) bounds:</strong> [%.2f, %.2f] (mean \u00b1 range)<br>
        <strong>Suggested Amplitude max:</strong> %.2f (observed range)<br>",
       y_min, y_max, y_mean, y_range,
       y_mean - y_range, y_mean + y_range,
@@ -646,9 +713,19 @@
       }
     }
     
-    acrophases_time <- acrophases * period / (2 * pi)
-    acro_se_time <- acro_se * period / (2 * pi)
-    
+    # AUDIT (extra i): harmonic h completes h cycles per period, so its acrophase
+    # occupies the EFFECTIVE period T/h and the conversion to hours must divide
+    # by h. Both fitters omitted the divisor, so acrophase_time_2 was written on
+    # a 0-24 scale while the vector-averaged group value used 0-12. The report
+    # printed the two side by side as if comparable, and the group comparisons
+    # (output$harmonic_group_test_results) tested H2 on the wrong scale.
+    acrophases_time <- vapply(seq_len(n_harmonics),
+                              function(h) phi_to_hours(acrophases[h], period, h),
+                              numeric(1))
+    acro_se_time <- vapply(seq_len(n_harmonics),
+                           function(h) phi_to_hours(acro_se[h], period, h),
+                           numeric(1))
+
     # Goodness of fit - calculate manually because lm(y ~ X - 1) R² is vs origin, not mean
     ss_total <- sum((y - mean(y))^2)
     ss_resid <- sum(residuals(fit)^2)
@@ -660,10 +737,22 @@
 
     percent_rhythm <- r_squared * 100
 
-    df1 <- 2 * n_harmonics
-    df2 <- n - 2 * n_harmonics - 1 - n_trend_params
-    f_stat <- ((ss_total - ss_resid) / df1) / (ss_resid / df2)
-    p_value <- pf(f_stat, df1, df2, lower.tail = FALSE)
+    # AUDIT (extra a): the zero-amplitude test is "all harmonic coefficients are
+    # zero GIVEN the trend", so the numerator SS is (trend-only residual SS minus
+    # full residual SS). The old code used (ss_total - ss_resid) -- the WHOLE
+    # model's SS, homeostatic trend included -- over the harmonics' df alone,
+    # charging the rhythm for every bit of variance Process S explains. With a
+    # saturating trend worth ~28% of variance on its own this is a large upward
+    # bias, and it is a bigger contributor to the 95.3% "significant rhythm" rate
+    # than the FDA smoothing is.
+    X_trend_only <- X[, seq_len(coef_offset), drop = FALSE]
+    ss_resid_trend_only <- tryCatch({
+      sum(residuals(lm(y ~ X_trend_only - 1))^2)
+    }, error = function(e) ss_total)
+    .zt <- fck_zero_amplitude_test(ss_resid, ss_resid_trend_only,
+                                   n, n_predictors, n_harmonics)
+    f_stat  <- .zt$F
+    p_value <- .zt$p
 
     # ===========================================================================
     # Model selection metrics: AIC, AICc, BIC, LOOCV
@@ -765,11 +854,25 @@
     ss_resid_circ <- sum(residuals(fit_circ)^2)
     r_squared_C <- 1 - ss_resid_circ / ss_total
 
-    # Calculate proportions of total R²
-    if(!is.na(r_squared) && r_squared > 0) {
-      percent_S <- (r_squared_S / r_squared) * 100
-      percent_C <- (r_squared_C / r_squared) * 100
-    }
+    # AUDIT 1.3: r_squared_S and r_squared_C are MARGINAL R2s from two
+    # overlapping, collinear predictor blocks. They do not partition anything --
+    # in the reported output they summed to 1.121 against a total of 0.892, and
+    # their "proportions" summed to 124.7%. Commonality analysis (Chevan &
+    # Sutherland 1991) gives a partition that sums to the total exactly, and
+    # makes the shared component (0.229 in that output) visible instead of
+    # double-counting it.
+    #
+    # The marginal R2s are still returned, because they are what the commonality
+    # decomposition is computed FROM and dropping them would make the arithmetic
+    # unauditable. They are no longer presented as a decomposition.
+    .cm <- fck_commonality(r_squared, r_squared_S, r_squared_C)
+    unique_S <- .cm$unique_S
+    unique_C <- .cm$unique_C
+    shared_SC <- .cm$shared
+    .pc <- fck_commonality_pct(.cm)
+    percent_S <- .pc$unique_S       # now: % of total R2 UNIQUE to S
+    percent_C <- .pc$unique_C       # now: % of total R2 UNIQUE to C
+    percent_shared <- .pc$shared
     
     # Store time offset for prediction (needed for log/sqrt)
     t_offset <- if(trend_type == "log") min(time) else 0
@@ -801,10 +904,20 @@
       aicc = aicc,                      # Corrected AIC for small samples
       bic = bic,                        # Bayesian Information Criterion
       loocv_rmse = loocv_rmse,          # Leave-one-out CV RMSE
-      r_squared_S = r_squared_S,        # R² from Process S alone
-      r_squared_C = r_squared_C,        # R² from Process C alone
-      percent_S = percent_S,            # % of total R² from S
-      percent_C = percent_C,            # % of total R² from C
+      r_squared_S = r_squared_S,        # MARGINAL R² of trend-only model
+      r_squared_C = r_squared_C,        # MARGINAL R² of harmonics-only model
+      unique_S = unique_S,              # commonality: unique to Process S
+      unique_C = unique_C,              # commonality: unique to Process C
+      shared_SC = shared_SC,            # commonality: shared (may be negative)
+      percent_S = percent_S,            # % of total R² UNIQUE to S
+      percent_C = percent_C,            # % of total R² UNIQUE to C
+      percent_shared = percent_shared,  # % of total R² shared
+      ss_resid_trend_only = ss_resid_trend_only,
+      ss_total = ss_total,
+      ss_resid = ss_resid,
+      converged = TRUE,                 # closed-form OLS: always converged
+      convergence = "ols",
+      boundary_hit = FALSE,
       fitted = fitted(fit),
       residuals = residuals(fit),
       time = time,
@@ -822,7 +935,8 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
                                    use_bounds = FALSE, mesor_min = NA, mesor_max = NA,
                                    amplitude_min = 0, amplitude_max = NA,
                                    A_sat_min = NA, A_sat_max = NA,
-                                   tau_min = 0.5, tau_max = NA) {
+                                   tau_min = 0.5, tau_max = NA,
+                                   do_loocv = TRUE, tau_fixed = NA) {
   # This function handles exponential saturation trend (exp_sat) and bounded optimization
 
   n <- length(y)
@@ -965,6 +1079,37 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
   fit_success <- FALSE
   nls_fit <- NULL
   error_msgs <- c()
+  conv_status <- "not_attempted"
+  conv_detail <- NA_character_
+
+  # AUDIT 2.3: nls.control(warnOnly = TRUE) makes nls RETURN a fit object when
+  # it hits maxiter instead of raising an error, and nlsLM likewise returns on
+  # the iteration limit. The old code set fit_success <- TRUE whenever tryCatch
+  # did not fire, so an optimiser that never converged was counted as a success.
+  # That is how "Successfully fitted: 1305 / 1305" coexisted with an R² range
+  # starting at 0.060, which is not attainable by a converged 8-parameter least
+  # squares fit on 16 points.
+  #
+  # This asks the fit object what actually happened.
+  fck_conv_of <- function(fit) {
+    if (is.null(fit)) return(list(ok = FALSE, status = "null", detail = NA_character_))
+    ci <- tryCatch(fit$convInfo, error = function(e) NULL)
+    if (!is.null(ci)) {
+      if (isTRUE(ci$isConv))
+        return(list(ok = TRUE, status = "converged",
+                    detail = sprintf("%d iterations, tol %.3g",
+                                     ci$finIter %||% NA, ci$finTol %||% NA)))
+      return(list(ok = FALSE, status = "maxiter",
+                  detail = ci$stopMessage %||% "did not converge"))
+    }
+    # minpack.lm carries its own record
+    inf <- tryCatch(fit$convInfo$stopCode, error = function(e) NULL)
+    ni <- tryCatch(fit$niter, error = function(e) NULL)
+    if (!is.null(ni) && is.finite(ni))
+      return(list(ok = ni < 300, status = if (ni < 300) "converged" else "maxiter",
+                  detail = sprintf("%d iterations", ni)))
+    list(ok = TRUE, status = "converged_unverified", detail = NA_character_)
+  }
 
   # Choose fitting strategy based on trend type and whether bounds are enabled
   # NOTE: For exp_sat, Approaches 1-2 use bounds, but Approach 3 falls back to unbounded
@@ -983,7 +1128,9 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
           upper = upper_bounds,
           control = minpack.lm::nls.lm.control(maxiter = 300)
         )
-        fit_success <- TRUE
+        .cv <- fck_conv_of(nls_fit)
+        conv_status <<- .cv$status; conv_detail <<- .cv$detail
+        fit_success <- isTRUE(.cv$ok)
       }, error = function(e) {
         error_msgs <<- c(error_msgs, paste("nlsLM:", e$message))
       })
@@ -1001,7 +1148,9 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
           upper = upper_bounds,
           control = nls.control(maxiter = 300, warnOnly = TRUE)
         )
-        fit_success <- TRUE
+        .cv <- fck_conv_of(nls_fit)
+        conv_status <<- .cv$status; conv_detail <<- .cv$detail
+        fit_success <- isTRUE(.cv$ok)
       }, error = function(e) {
         error_msgs <<- c(error_msgs, paste("nls-port:", e$message))
       })
@@ -1020,7 +1169,9 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
           start = start_list,
           control = minpack.lm::nls.lm.control(maxiter = 300)
         )
-        fit_success <- TRUE
+        .cv <- fck_conv_of(nls_fit)
+        conv_status <<- .cv$status; conv_detail <<- .cv$detail
+        fit_success <- isTRUE(.cv$ok)
       }, error = function(e) {
         error_msgs <<- c(error_msgs, paste("nlsLM:", e$message))
       })
@@ -1035,7 +1186,9 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
           start = start_list,
           control = nls.control(maxiter = 300, warnOnly = TRUE)
         )
-        fit_success <- TRUE
+        .cv <- fck_conv_of(nls_fit)
+        conv_status <<- .cv$status; conv_detail <<- .cv$detail
+        fit_success <- isTRUE(.cv$ok)
       }, error = function(e) {
         error_msgs <<- c(error_msgs, paste("nls-default:", e$message))
       })
@@ -1081,10 +1234,15 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
         ss_res_check <- sum((y - fitted_check)^2)
         r2_check <- 1 - ss_res_check / ss_tot_check
 
-        if(r2_check > 0) {
+        .cv <- fck_conv_of(nls_fit)
+        if(r2_check > 0 && isTRUE(.cv$ok)) {
+          conv_status <- .cv$status; conv_detail <- .cv$detail
           fit_success <- TRUE
           break
         }
+        # remember the best non-converged attempt so it can be REPORTED as
+        # non-converged rather than silently discarded or silently accepted
+        conv_status <- .cv$status; conv_detail <- .cv$detail
       }, error = function(e) {
         error_msgs <<- c(error_msgs, paste("retry", tau_mult, ":", e$message))
       })
@@ -1094,8 +1252,11 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
   if(!fit_success || is.null(nls_fit)) {
     return(list(
       success = FALSE,
-      message = sprintf("Nonlinear fit failed to converge. Errors: %s",
-                       paste(head(error_msgs, 3), collapse = "; "))
+      converged = FALSE,
+      convergence = if (identical(conv_status, "not_attempted")) "failed" else conv_status,
+      convergence_detail = conv_detail,
+      message = sprintf("Nonlinear fit failed to converge (%s). Errors: %s",
+                       conv_status, paste(head(error_msgs, 3), collapse = "; "))
     ))
   }
 
@@ -1141,22 +1302,48 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     amp_se <- numeric(n_harmonics)
     acro_se <- numeric(n_harmonics)
 
+    # AUDIT (extra c) + 2.5: the old SEs here were
+    #     amp_se  <- sqrt(se_cos^2 + se_sin^2) / sqrt(2)
+    #     acro_se <- NA          # "Complex for nonlinear"
+    # The first is neither the delta-method result nor an approximation to it --
+    # it discards the cos/sin covariance entirely and mis-weights both terms.
+    # The second is why there were no acrophase confidence intervals anywhere in
+    # the app for an exp_sat model: none had ever been computed.
+    #
+    # nls supplies a full covariance matrix. The delta method applies to a
+    # nonlinear fit exactly as it does to a linear one, so both SEs are now
+    # computed the same way Fitter A computes them.
+    Vfull <- tryCatch(stats::vcov(nls_fit), error = function(e) NULL)
+    bingham <- vector("list", n_harmonics)
+
     for(h in 1:n_harmonics) {
-      beta_cos <- coefs[paste0("b_cos", h)]
-      beta_sin <- coefs[paste0("b_sin", h)]
+      beta_cos <- as.numeric(coefs[paste0("b_cos", h)])
+      beta_sin <- as.numeric(coefs[paste0("b_sin", h)])
       amplitudes[h] <- sqrt(beta_cos^2 + beta_sin^2)
       acrophases[h] <- atan2(beta_sin, beta_cos)
       if(acrophases[h] < 0) acrophases[h] <- acrophases[h] + 2 * pi
 
-      # Approximate SE
-      se_cos <- if(!is.na(se[paste0("b_cos", h)])) se[paste0("b_cos", h)] else 0
-      se_sin <- if(!is.na(se[paste0("b_sin", h)])) se[paste0("b_sin", h)] else 0
-      amp_se[h] <- sqrt(se_cos^2 + se_sin^2) / sqrt(2)
-      acro_se[h] <- NA  # Complex for nonlinear
+      Vh <- NULL
+      if(!is.null(Vfull)) {
+        nmc <- paste0("b_cos", h); nms <- paste0("b_sin", h)
+        if(all(c(nmc, nms) %in% rownames(Vfull)))
+          Vh <- Vfull[c(nmc, nms), c(nmc, nms), drop = FALSE]
+      }
+      amp_se[h]  <- fck_amp_se(beta_cos, beta_sin, Vh)
+      acro_se[h] <- fck_acro_se(beta_cos, beta_sin, Vh)
+
+      # Bingham elliptical joint region for (amplitude, acrophase)
+      bingham[[h]] <- fck_bingham_ci(beta_cos, beta_sin, Vh, n, length(coefs),
+                                     level = 0.95, period = period, harmonic = h)
     }
 
-    acrophases_time <- acrophases * period / (2 * pi)
-    acro_se_time <- acro_se * period / (2 * pi)
+    # AUDIT (extra i): divide by h -- harmonic h lives on the effective period T/h.
+    acrophases_time <- vapply(seq_len(n_harmonics),
+                              function(h) phi_to_hours(acrophases[h], period, h),
+                              numeric(1))
+    acro_se_time <- vapply(seq_len(n_harmonics),
+                           function(h) phi_to_hours(acro_se[h], period, h),
+                           numeric(1))
 
     # Goodness of fit
     fitted_vals <- predict(nls_fit)
@@ -1167,15 +1354,30 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
 
     # Calculate p-value for circadian rhythm
     n_params <- length(coefs)
-    df1 <- 2 * n_harmonics
-    df2 <- n - n_params
-    if(df2 > 0 && ss_resid > 0) {
-      f_stat <- ((ss_total - ss_resid) / df1) / (ss_resid / df2)
-      p_value <- pf(f_stat, df1, df2, lower.tail = FALSE)
-    } else {
-      f_stat <- NA
-      p_value <- NA
-    }
+
+    # AUDIT (extra a): test the harmonics GIVEN the trend, by refitting the
+    # trend-only model. See the note in fit_cosinor() -- the old numerator was
+    # the whole model's SS over the harmonics' df alone.
+    ss_resid_trend_only <- tryCatch({
+      if(trend_type == "exp_sat" && !is.null(trend_params$A_sat) && !is.null(trend_params$tau)) {
+        # refit M and A_sat with tau held at its full-model value: a 2-parameter
+        # linear problem, so no second optimisation can fail here
+        b <- 1 - exp(-(time - t_offset) / trend_params$tau$coef)
+        sum(residuals(lm(y ~ b))^2)
+      } else if(trend_type == "linear") {
+        sum(residuals(lm(y ~ time))^2)
+      } else if(trend_type == "log") {
+        sum(residuals(lm(y ~ log(time - t_offset + 1)))^2)
+      } else {
+        ss_total
+      }
+    }, error = function(e) ss_total)
+
+    .zt <- fck_zero_amplitude_test(ss_resid, ss_resid_trend_only,
+                                   n, n_params, n_harmonics)
+    f_stat  <- .zt$F
+    p_value <- .zt$p
+    df2 <- .zt$df2
 
     # ===========================================================================
     # Model selection metrics: AIC, AICc, BIC, LOOCV
@@ -1203,19 +1405,49 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     # Note: For nonlinear models, this is computationally expensive
     # We'll use a simplified approach: predict each point using the full model
     # and apply a leave-one-out correction based on leverage
-    loocv_rmse <- tryCatch({
-      # Get leverage values (hat matrix diagonal)
-      # For NLS, we approximate using the Jacobian
-      if(!is.null(nls_fit)) {
-        # Simple LOOCV using prediction errors
-        # For nonlinear models, full refit for each point is too expensive
-        # Use prediction residuals as approximation
-        residuals_vec <- y - fitted_vals
-        sqrt(mean(residuals_vec^2))
-      } else {
-        NA
+    # AUDIT (extra b): this used to be
+    #     residuals_vec <- y - fitted_vals; sqrt(mean(residuals_vec^2))
+    # i.e. the IN-SAMPLE residual RMSE, returned under the name "LOOCV RMSE".
+    # Every cross-validation number the report printed for an exp_sat model was
+    # training error, while Fitter A under the same label did real LOOCV -- two
+    # different quantities sharing one column.
+    #
+    # With n = 16 a genuine leave-one-out refit is 16 nls calls per subject,
+    # which is affordable, so it is now done properly. If a refit fails the
+    # point is dropped from the average and the count is reported, rather than
+    # the whole thing silently degrading to training error.
+    loocv_rmse <- NA_real_
+    loocv_n_failed <- 0L
+    loocv_is_true_cv <- FALSE
+    if(isTRUE(do_loocv)) {
+      errs <- rep(NA_real_, n)
+      for(i in seq_len(n)) {
+        d_loo <- fit_data[-i, , drop = FALSE]
+        f_loo <- tryCatch({
+          if(requireNamespace("minpack.lm", quietly = TRUE)) {
+            minpack.lm::nlsLM(as.formula(formula_str), data = d_loo,
+                              start = as.list(coefs),
+                              lower = lower_bounds, upper = upper_bounds,
+                              control = minpack.lm::nls.lm.control(maxiter = 200))
+          } else {
+            nls(as.formula(formula_str), data = d_loo, start = as.list(coefs),
+                control = nls.control(maxiter = 200, warnOnly = TRUE))
+          }
+        }, error = function(e) NULL)
+        if(is.null(f_loo)) { loocv_n_failed <- loocv_n_failed + 1L; next }
+        yhat <- tryCatch(as.numeric(predict(f_loo, newdata = fit_data[i, , drop = FALSE])),
+                         error = function(e) NA_real_)
+        if(is.finite(yhat)) errs[i] <- (y[i] - yhat)^2 else loocv_n_failed <- loocv_n_failed + 1L
       }
-    }, error = function(e) NA)
+      if(any(is.finite(errs))) {
+        loocv_rmse <- sqrt(mean(errs, na.rm = TRUE))
+        loocv_is_true_cv <- TRUE
+      }
+    } else {
+      # explicitly labelled as what it is, never as cross-validation
+      loocv_rmse <- sqrt(mean((y - fitted_vals)^2))
+      loocv_is_true_cv <- FALSE
+    }
 
     # ===========================================================================
     # Variance decomposition: Calculate R² for Process S and Process C separately
@@ -1226,12 +1458,15 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     percent_C <- 0    # Percentage of total R² from Process C
 
     # Model with trend only (Process S) - using exp_sat trend
-    if(trend_type == "exp_sat" && !is.null(trend_params$A_sat) && !is.null(trend_params$tau)) {
-      A_sat_val <- trend_params$A_sat$coef
-      tau_val <- trend_params$tau$coef
-      fitted_trend <- mesor + A_sat_val * (1 - exp(-t_shifted / tau_val))
-      ss_resid_trend <- sum((y - fitted_trend)^2)
-      r_squared_S <- max(0, 1 - ss_resid_trend / ss_total)
+    # AUDIT: the marginal R² of Process S has to come from a model REFIT without
+    # the harmonics. The old code reused the FULL model's mesor and A_sat and
+    # simply deleted the cosine terms from the prediction, which is not the
+    # trend-only fit -- it is the full fit with part of it thrown away, and it
+    # understates R²_S (and so overstates the shared component). ss_resid_trend_only
+    # above is the proper refit and is reused here so the F test and the
+    # decomposition cannot disagree about what "Process S alone" means.
+    if(trend_type != "none" && is.finite(ss_resid_trend_only) && ss_total > 0) {
+      r_squared_S <- max(0, 1 - ss_resid_trend_only / ss_total)
     }
 
     # Model with circadian only (Process C)
@@ -1249,11 +1484,15 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       r_squared_C <<- 0
     })
 
-    # Calculate proportions of total R²
-    if(!is.na(r_squared) && r_squared > 0) {
-      percent_S <- (r_squared_S / r_squared) * 100
-      percent_C <- (r_squared_C / r_squared) * 100
-    }
+    # AUDIT 1.3: commonality, not two overlapping marginals. See fit_cosinor().
+    .cm <- fck_commonality(r_squared, r_squared_S, r_squared_C)
+    unique_S <- .cm$unique_S
+    unique_C <- .cm$unique_C
+    shared_SC <- .cm$shared
+    .pc <- fck_commonality_pct(.cm)
+    percent_S <- .pc$unique_S
+    percent_C <- .pc$unique_C
+    percent_shared <- .pc$shared
 
     list(
       success = TRUE,
@@ -1281,11 +1520,38 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       aic = aic,                        # Akaike Information Criterion
       aicc = aicc,                      # Corrected AIC for small samples
       bic = bic,                        # Bayesian Information Criterion
-      loocv_rmse = loocv_rmse,          # Leave-one-out CV RMSE
-      r_squared_S = r_squared_S,        # R² from Process S alone
-      r_squared_C = r_squared_C,        # R² from Process C alone
-      percent_S = percent_S,            # % of total R² from S
-      percent_C = percent_C,            # % of total R² from C
+      loocv_rmse = loocv_rmse,          # genuine LOOCV when loocv_is_true_cv
+      loocv_is_true_cv = loocv_is_true_cv,
+      loocv_n_failed = loocv_n_failed,
+      r_squared_S = r_squared_S,        # MARGINAL R² of trend-only model
+      r_squared_C = r_squared_C,        # MARGINAL R² of harmonics-only model
+      unique_S = unique_S,              # commonality: unique to Process S
+      unique_C = unique_C,              # commonality: unique to Process C
+      shared_SC = shared_SC,            # commonality: shared (may be negative)
+      percent_S = percent_S,            # % of total R² UNIQUE to S
+      percent_C = percent_C,            # % of total R² UNIQUE to C
+      percent_shared = percent_shared,  # % of total R² shared
+      ss_resid_trend_only = ss_resid_trend_only,
+      ss_total = ss_total,
+      ss_resid = ss_resid,
+      bingham = bingham,                # elliptical joint CI per harmonic
+      vcov_full = Vfull,
+      converged = TRUE,
+      convergence = conv_status,
+      convergence_detail = conv_detail,
+      # AUDIT 2.3: a fit sitting ON a bound is not an estimate, it is the
+      # optimiser being stopped by the constraint. Reported, not hidden.
+      boundary_hit = {
+        bh <- FALSE
+        if(trend_type == "exp_sat") {
+          tv <- as.numeric(coefs["tau"]); av <- as.numeric(coefs["A_sat"])
+          if(is.finite(tv) && (isTRUE(abs(tv - tau_min) < 1e-6) ||
+                               (is.finite(tau_max) && isTRUE(abs(tv - tau_max) < 1e-6)))) bh <- TRUE
+          if(is.finite(av) && is.finite(A_sat_max) && isTRUE(abs(av - A_sat_max) < 1e-6)) bh <- TRUE
+          if(is.finite(av) && is.finite(A_sat_min) && isTRUE(abs(av - A_sat_min) < 1e-6)) bh <- TRUE
+        }
+        bh
+      },
       fitted = fitted_vals,
       residuals = y - fitted_vals,
       time = time,
@@ -1589,7 +1855,28 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     
     tryCatch({
       # Check if smoothed data is available
-      using_smoothed <- !is.null(values$smooth_data)
+      # ======================================================================
+      # AUDIT 2.1: fitting on FDA-smoothed data invalidates the fit statistics
+      #
+      # This used to be an unconditional "use the smoothed matrix if one
+      # exists". The user had no say, and the report said only that the data
+      # were smoothed, without saying what that costs. Smoothing removes
+      # independent noise and induces residual autocorrelation, so R² is
+      # inflated, a held-out point is partly reconstructed from its neighbours
+      # (making LOOCV optimistic), and the zero-amplitude F test is
+      # anticonservative. The "95.3% significant rhythms" figure is an upper
+      # bound, not an estimate.
+      #
+      # Cosinor handles missing and unequally spaced data natively, so raw is a
+      # legitimate choice. data_source now selects it; "both" fits twice and the
+      # report prints the two side by side so the inflation is visible rather
+      # than argued about.
+      # ======================================================================
+      data_source <- input$harmonic_data_source %||% "smoothed"
+      if(identical(data_source, "smoothed") && is.null(values$smooth_data)) {
+        data_source <- "raw"
+      }
+      using_smoothed <- identical(data_source, "smoothed")
       Y <- if(using_smoothed) values$smooth_data else values$data
       n_subjects <- nrow(Y)
       n_time <- ncol(Y)
@@ -1786,7 +2073,12 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
                         paste0("beta_cos_", h), paste0("beta_sin_", h))
       }
       param_cols <- c(param_cols, "r_squared", "percent_rhythm", "p_value",
-                      "r_squared_S", "r_squared_C", "percent_S", "percent_C")
+                      "r_squared_S", "r_squared_C",
+                      # AUDIT 1.3: the commonality partition, which sums to total R²
+                      "unique_S", "unique_C", "shared_SC",
+                      "percent_S", "percent_C", "percent_shared",
+                      # AUDIT 2.3: convergence is now recorded per subject
+                      "converged", "boundary_hit")
       
       individual_params <- data.frame(matrix(ncol = length(param_cols), nrow = 0))
       colnames(individual_params) <- param_cols
@@ -1797,9 +2089,35 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       # Track failed fits
       failed_fits <- list()
       
+      # ======================================================================
+      # AUDIT 1.4.3 + 2.2: the time origin
+      #
+      # As shipped, the two halves of the model use DIFFERENT origins:
+      # fit_cosinor_nonlinear() builds the trend on (t - min(t)) while the
+      # harmonics run on raw t. The constant is therefore the intercept of a
+      # model with two anchors and is interpretable as neither "the value at
+      # midnight" nor "the value at the first observation".
+      #
+      # time_origin = "first_observation" shifts BOTH halves to the first
+      # observation, which is what makes the intercept mean something and what
+      # improves the conditioning: over t in [8, 30] the saturating term is
+      # nearly collinear with the constant, and re-anchoring removes the part of
+      # that collinearity which is pure offset.
+      #
+      # Default is "midnight" -- the current behaviour -- so nothing downstream
+      # changes unless the user asks for it.
+      # ======================================================================
+      time_origin <- input$harmonic_time_origin %||% "midnight"
+      time_vec_model <- time_vec
+      origin_shift <- 0
+      if(identical(time_origin, "first_observation")) {
+        origin_shift <- min(time_vec, na.rm = TRUE)
+        time_vec_model <- time_vec - origin_shift
+      }
+
       # Store time offsets for prediction
-      t_offset_global <- min(time_vec)
-      t_center_global <- mean(time_vec)
+      t_offset_global <- min(time_vec_model)
+      t_center_global <- mean(time_vec_model)
 
       # Read parameter bounding options from UI
       use_bounds <- isTRUE(input$harmonic_use_bounds)
@@ -1813,7 +2131,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       tau_max <- if(use_bounds) input$harmonic_tau_max else NA
 
       if(use_bounds) {
-        bounds_msg <- sprintf("Using parameter bounds: MESOR [%.2f, %.2f], Amplitude [%.2f, %.2f]",
+        bounds_msg <- sprintf("Using parameter bounds: intercept [%.2f, %.2f], Amplitude [%.2f, %.2f]",
                               ifelse(is.na(mesor_min), -Inf, mesor_min),
                               ifelse(is.na(mesor_max), Inf, mesor_max),
                               amplitude_min,
@@ -1844,7 +2162,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
                         paste(head(y_i, 5), collapse=", ")))
           }
 
-          fit_i <- fit_cosinor(time_vec, y_i, period = period, n_harmonics = n_harmonics,
+          fit_i <- fit_cosinor(time_vec_model, y_i, period = period, n_harmonics = n_harmonics,
                                trend_type = trend_type,
                                use_bounds = use_bounds,
                                mesor_min = mesor_min,
@@ -1897,8 +2215,14 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
             row_data$loocv_rmse <- fit_i$loocv_rmse
             row_data$r_squared_S <- fit_i$r_squared_S
             row_data$r_squared_C <- fit_i$r_squared_C
+            row_data$unique_S <- fit_i$unique_S %||% NA_real_
+            row_data$unique_C <- fit_i$unique_C %||% NA_real_
+            row_data$shared_SC <- fit_i$shared_SC %||% NA_real_
             row_data$percent_S <- fit_i$percent_S
             row_data$percent_C <- fit_i$percent_C
+            row_data$percent_shared <- fit_i$percent_shared %||% NA_real_
+            row_data$converged <- isTRUE(fit_i$converged)
+            row_data$boundary_hit <- isTRUE(fit_i$boundary_hit)
 
             individual_params <- rbind(individual_params, as.data.frame(row_data))
           } else {
@@ -1938,7 +2262,50 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       # Population-mean statistics (always calculated)
       pop_mean_fit <- NULL
       group_fits <- NULL
-      
+
+      # ========================================================================
+      # AUDIT 2.3: convergence gate
+      #
+      # "Successfully fitted: 1305 / 1305" alongside an R² range starting at
+      # 0.060 was not a coincidence: nls with warnOnly = TRUE RETURNS a fit at
+      # the iteration limit instead of erroring, so every non-converged
+      # optimisation was counted as a success and averaged into the population
+      # parameters. The fitters now report convergence honestly; here we act on
+      # it. Non-converged fits and fits pinned to a parameter bound are excluded
+      # from every population summary, and the counts are carried into the
+      # report so the exclusion is visible rather than silent.
+      # ========================================================================
+      all_params <- individual_params
+      conv_flag  <- if("converged" %in% names(all_params)) all_params$converged else rep(TRUE, nrow(all_params))
+      bound_flag <- if("boundary_hit" %in% names(all_params)) all_params$boundary_hit else rep(FALSE, nrow(all_params))
+      conv_flag[is.na(conv_flag)] <- FALSE
+      bound_flag[is.na(bound_flag)] <- FALSE
+
+      fit_audit <- list(
+        n_attempted = n_subjects,
+        n_returned  = nrow(all_params),
+        n_converged = sum(conv_flag & !bound_flag),
+        n_boundary  = sum(conv_flag & bound_flag),
+        n_failed    = n_subjects - nrow(all_params),
+        n_nonconverged = sum(!conv_flag)
+      )
+
+      keep_rows <- conv_flag & !bound_flag
+      if(sum(keep_rows) < 3) {
+        # Refusing to summarise 2 subjects is better than summarising 1305 bad
+        # ones, but refusing to summarise ANYTHING when the gate is too strict
+        # would be worse. Fall back, and say so.
+        showNotification(
+          sprintf("Only %d of %d fits converged cleanly; population summaries fall back to all returned fits. Treat them as provisional.",
+                  sum(keep_rows), nrow(all_params)),
+          type = "warning", duration = 15)
+        fit_audit$gate_relaxed <- TRUE
+        keep_rows <- rep(TRUE, nrow(all_params))
+      } else {
+        fit_audit$gate_relaxed <- FALSE
+      }
+      individual_params <- all_params[keep_rows, , drop = FALSE]
+
       # Always calculate population mean parameters (vector averaging for circular data)
       {
         # Calculate population mean parameters (vector averaging for circular data)
@@ -1956,15 +2323,47 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
         if(mean_acrophase_rad < 0) mean_acrophase_rad <- mean_acrophase_rad + 2 * pi
         mean_acrophase_time <- mean_acrophase_rad * period / (2 * pi)
         
-        # Rayleigh test for uniformity of acrophases (first harmonic)
-        n_valid <- sum(!is.na(individual_params$acrophase_rad_1))
-        r_bar <- mean_amplitude / mean(individual_params$amplitude_1, na.rm = TRUE)
-        rayleigh_z <- n_valid * r_bar^2
-        rayleigh_p <- exp(-rayleigh_z)  # Approximation
-        
-        # SE from circular statistics
-        circ_var <- 1 - r_bar
-        circ_sd <- if(r_bar > 0 && r_bar < 1) sqrt(-2 * log(r_bar)) else NA
+        # ====================================================================
+        # AUDIT 1.2: the Rayleigh test runs on UNIT vectors
+        #
+        # This block used to compute
+        #     r_bar <- mean_amplitude / mean(amplitude_1)
+        # which is |Sum A e^{i phi}| / Sum A -- the AMPLITUDE-WEIGHTED resultant
+        # (0.824 in the reported output) -- and fed it to Z = n * r^2, giving
+        # Z = 886.5. The Rayleigh test is defined on unit vectors (Mardia & Jupp
+        # 2000; Berens 2009), whose resultant was 0.789 and whose Z is 812.3.
+        # The same report printed both numbers, in different blocks, for the
+        # same acrophases.
+        #
+        # fck_resultants() now returns both, under names that cannot be
+        # confused, and only the unweighted one reaches fck_rayleigh(). The
+        # amplitude-weighted vector mean stays the population estimator: that
+        # part was always correct.
+        # ====================================================================
+        res1 <- fck_resultants(individual_params$acrophase_rad_1,
+                               individual_params$amplitude_1)
+        n_valid <- res1$n
+        r_bar_unweighted <- res1$r_unweighted
+        r_bar_weighted   <- res1$r_weighted
+        ray <- fck_rayleigh(r_bar_unweighted, n_valid)
+        rayleigh_z <- ray$Z
+        rayleigh_p <- ray$p
+
+        # circular dispersion is defined on the unweighted resultant
+        r_bar <- r_bar_unweighted        # kept for downstream compatibility
+        circ_var <- 1 - r_bar_unweighted
+        circ_sd <- res1$circ_sd_rad
+
+        # per-harmonic resultants, for the report
+        resultants <- lapply(seq_len(n_harmonics), function(h) {
+          rr <- fck_resultants(individual_params[[paste0("acrophase_rad_", h)]],
+                               individual_params[[paste0("amplitude_", h)]])
+          if(is.null(rr)) return(NULL)
+          rr$rayleigh <- fck_rayleigh(rr$r_unweighted, rr$n)
+          rr$harmonic <- h
+          rr$circ_sd_hours <- phi_to_hours(rr$circ_sd_rad, period, h)
+          rr
+        })
         
         # Store mean coefficients for ALL harmonics (for proper multi-harmonic curve plotting)
         # Format: [mesor, (trend coefs if trend), beta_cos_1, beta_sin_1, ...]
@@ -2006,6 +2405,28 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
           mesor = mean(individual_params$mesor, na.rm = TRUE),
           mesor_sd = sd(individual_params$mesor, na.rm = TRUE)
         )
+
+        # ====================================================================
+        # AUDIT 1.1 (root cause): the trend parameters were NEVER put in here
+        #
+        # The pooled fitted-equation builder read pop$indiv_means$A_sat / $tau /
+        # $trend_linear / $trend_log. None of those keys was ever created, so the
+        # trend branch was dead for EVERY trend type and the pooled equation
+        # printed the model without its homeostatic term -- under-predicting by
+        # about 20 units everywhere -- while the header, the symbolic equation
+        # and all four group equations included it.
+        #
+        # The group builder read a different structure (g$trend_params), which
+        # is why only the pooled line was wrong. Both call sites now go through
+        # fck_format_equation(); this fills the gap the pooled one was reading
+        # from, so the two agree by construction rather than by coincidence.
+        # ====================================================================
+        for(tc in c("trend_linear", "trend_log", "A_sat", "tau")) {
+          if(tc %in% names(individual_params)) {
+            indiv_means[[tc]] <- mean(individual_params[[tc]], na.rm = TRUE)
+            indiv_means[[paste0(tc, "_sd")]] <- sd(individual_params[[tc]], na.rm = TRUE)
+          }
+        }
         for(h in 1:n_harmonics) {
           indiv_means[[paste0("amplitude_", h)]] <- mean(individual_params[[paste0("amplitude_", h)]], na.rm = TRUE)
           indiv_means[[paste0("amplitude_", h, "_sd")]] <- sd(individual_params[[paste0("amplitude_", h)]], na.rm = TRUE)
@@ -2036,9 +2457,63 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
           indiv_means$percent_C <- mean(individual_params$percent_C, na.rm = TRUE)
           indiv_means$percent_C_sd <- sd(individual_params$percent_C, na.rm = TRUE)
         }
+
+        # AUDIT 1.3: the commonality partition, averaged across subjects. Because
+        # each subject's three parts sum to that subject's total R², the means
+        # also sum to the mean total R² -- which is the property the old
+        # "proportions" (30.8% + 93.9% = 124.7%) could never have.
+        for(cc in c("unique_S", "unique_C", "shared_SC",
+                    "percent_S", "percent_C", "percent_shared")) {
+          if(cc %in% names(individual_params)) {
+            indiv_means[[cc]] <- mean(individual_params[[cc]], na.rm = TRUE)
+            indiv_means[[paste0(cc, "_sd")]] <- sd(individual_params[[cc]], na.rm = TRUE)
+          }
+        }
+        indiv_means$r_squared <- mean(individual_params$r_squared, na.rm = TRUE)
         
+        # ====================================================================
+        # AUDIT 1.4: what the report called the MESOR is not a MESOR
+        #
+        # mean_mesor is the arithmetic mean of the fitted CONSTANT term. In a
+        # model with a trend that constant is not the rhythm-adjusted mean: it
+        # is the intercept of a model whose trend is anchored at t_offset (the
+        # first observation, because fit_cosinor_nonlinear builds the trend on
+        # t - min(t)) while the harmonics are anchored at t = 0. Two origins,
+        # one constant. Calling it "MESOR" made a 27.70 look like a central
+        # value when the data over the window average near 44.
+        #
+        # The MESOR proper (Cornelissen 2014) is the rhythm-adjusted mean: the
+        # time-average of the non-oscillating part across the observation
+        # window. Computed by integration below, and reported under that name;
+        # the constant is reported as the intercept, under ITS name.
+        # ====================================================================
+        t_lo <- min(time_vec, na.rm = TRUE); t_hi <- max(time_vec, na.rm = TRUE)
+        pop_trend_coefs <- switch(as.character(trend_type),
+          "linear"  = c(indiv_means$trend_linear %||% NA_real_),
+          "log"     = c(indiv_means$trend_log %||% NA_real_),
+          "exp_sat" = c(indiv_means$A_sat %||% NA_real_, indiv_means$tau %||% NA_real_),
+          numeric(0))
+        rhythm_adjusted_mean <- fck_rhythm_adjusted_mean(
+          mean_mesor, trend_type, pop_trend_coefs, t_lo, t_hi, t_offset_global)
+        # how much of the oscillation leaks into the window mean, which is only
+        # exactly zero over a whole number of periods (here 22 h of a 24 h cycle)
+        harmonic_leak <- fck_harmonic_window_mean(
+          mean_coefs[seq(2 + length(pop_trend_coefs), length(mean_coefs), by = 2)],
+          mean_coefs[seq(3 + length(pop_trend_coefs), length(mean_coefs), by = 2)],
+          period, t_lo, t_hi)
+
         pop_mean_fit <- list(
           mean_mesor = mean_mesor,
+          intercept = mean_mesor,                 # its correct name
+          rhythm_adjusted_mean = rhythm_adjusted_mean,
+          harmonic_window_mean = harmonic_leak,
+          window = c(t_lo, t_hi),
+          t_offset = t_offset_global,
+          trend_coefs = pop_trend_coefs,
+          resultants = resultants,
+          r_bar_unweighted = r_bar_unweighted,
+          r_bar_weighted = r_bar_weighted,
+          fit_audit = fit_audit,
           mean_amplitude = mean_amplitude,  # First harmonic (for backwards compatibility)
           mean_acrophase_rad = mean_acrophase_rad,
           mean_acrophase_time = mean_acrophase_time,
@@ -2059,14 +2534,57 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       # Group comparison - calculate group-specific statistics
       if(!is.null(input$harmonic_group_var) && input$harmonic_group_var != "_none_") {
         group_var <- values$covariates[[input$harmonic_group_var]]
-        groups <- unique(group_var)
+
+        # ====================================================================
+        # AUDIT 1.5: 654 + 410 + 181 + 59 = 1304, not 1305
+        #
+        # The old code did
+        #     groups <- unique(group_var)              # keeps NA as a level
+        #     idx    <- which(group_var == g)          # NA == NA is NA -> empty
+        #     if (nrow(grp_params) >= 3) { ... }       # so the level vanishes
+        # A subject whose group label was missing or unmatched therefore entered
+        # every pooled statistic and no group, with no message anywhere. Any
+        # genuine group smaller than the n >= 3 guard disappeared the same way.
+        #
+        # Now the accounting is explicit and asserted: unassigned subjects get
+        # their own UNASSIGNED row, and groups dropped for being too small are
+        # named. sum(group_n) == n_fitted is checked, and a mismatch is a loud
+        # warning rather than a silent subtraction.
+        # ====================================================================
+        group_audit <- fck_group_audit(group_var, individual_params$subject, min_n = 3)
+        if(group_audit$n_unassigned > 0) {
+          showNotification(
+            sprintf("%d of %d fitted subject%s no usable '%s' label. They are pooled but not grouped, and appear as UNASSIGNED in the report.",
+                    group_audit$n_unassigned, group_audit$n_total,
+                    if(group_audit$n_unassigned == 1) " has" else "s have",
+                    input$harmonic_group_var),
+            type = "warning", duration = 15)
+        }
+        if(length(group_audit$dropped_small) > 0) {
+          showNotification(
+            sprintf("Group(s) %s have fewer than 3 fitted subjects and are not summarised separately.",
+                    paste(group_audit$dropped_small, collapse = ", ")),
+            type = "warning", duration = 15)
+        }
+
+        lab_all <- as.character(group_var)
+        groups <- group_audit$levels
         group_fits <- list()
-        
+
+        # UNASSIGNED is a real row, carrying the subjects that used to disappear
+        if(group_audit$n_unassigned > 0) groups <- c(groups, "__UNASSIGNED__")
+
         for(g in groups) {
-          idx <- which(group_var == g)
+          if(identical(g, "__UNASSIGNED__")) {
+            idx <- group_audit$unassigned_ids
+          } else {
+            idx <- which(!is.na(lab_all) & lab_all == g)
+          }
           grp_params <- individual_params[individual_params$subject %in% idx, ]
-          
-          if(nrow(grp_params) >= 3) {
+
+          # UNASSIGNED is reported even when it is a single subject: the whole
+          # point is that it stops being invisible.
+          if(nrow(grp_params) >= 3 || identical(g, "__UNASSIGNED__")) {
             # Mean coefficients for curve reconstruction
             grp_coefs <- c(mean(grp_params$mesor, na.rm = TRUE))
             
@@ -2148,10 +2666,49 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
               )
             }
 
+            # AUDIT 1.4: per group, the same distinction as the pooled block --
+            # the fitted constant is the intercept; the MESOR is the
+            # rhythm-adjusted mean over the observation window.
+            grp_trend_coefs <- switch(as.character(trend_type),
+              "linear"  = c(grp_trend_params$trend_linear$mean %||% NA_real_),
+              "log"     = c(grp_trend_params$trend_log$mean %||% NA_real_),
+              "exp_sat" = c(grp_trend_params$A_sat$mean %||% NA_real_,
+                            grp_trend_params$tau$mean %||% NA_real_),
+              numeric(0))
+            grp_intercept <- mean(grp_params$mesor, na.rm = TRUE)
+            grp_ram <- fck_rhythm_adjusted_mean(
+              grp_intercept, trend_type, grp_trend_coefs,
+              min(time_vec, na.rm = TRUE), max(time_vec, na.rm = TRUE),
+              t_offset_global)
+
+            # AUDIT 1.6: within a group, the intercept / A_sat / tau are
+            # ARITHMETIC means while the amplitudes and acrophases are VECTOR
+            # means -- and an SD was printed next to the vector-averaged
+            # amplitude, implying arithmetic averaging of a quantity that had
+            # not been averaged arithmetically. Both summaries are now carried
+            # so the report can label each line with the estimator that produced
+            # it, and the arithmetic amplitude mean sits next to its own SD.
+            grp_amp_arith <- vapply(seq_len(n_harmonics), function(h)
+              mean(grp_params[[paste0("amplitude_", h)]], na.rm = TRUE), numeric(1))
+            grp_res <- lapply(seq_len(n_harmonics), function(h) {
+              rr <- fck_resultants(grp_params[[paste0("acrophase_rad_", h)]],
+                                   grp_params[[paste0("amplitude_", h)]])
+              if(is.null(rr)) return(NULL)
+              rr$rayleigh <- fck_rayleigh(rr$r_unweighted, rr$n)
+              rr$circ_sd_hours <- phi_to_hours(rr$circ_sd_rad, period, h)
+              rr
+            })
+
             group_fits[[as.character(g)]] <- list(
               group = g,
+              is_unassigned = identical(g, "__UNASSIGNED__"),
               n = nrow(grp_params),
-              mean_mesor = mean(grp_params$mesor, na.rm = TRUE),
+              mean_mesor = grp_intercept,             # legacy name, kept working
+              intercept = grp_intercept,              # its correct name
+              rhythm_adjusted_mean = grp_ram,
+              trend_coefs = grp_trend_coefs,
+              amp_arithmetic = grp_amp_arith,
+              resultants = grp_res,
               sd_mesor = sd(grp_params$mesor, na.rm = TRUE),
               mean_coefs = grp_coefs,  # All coefficients
               trend_params = grp_trend_params,
@@ -2169,6 +2726,22 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
             )
           }
         }
+
+        # AUDIT 1.5: the assertion the brief asked for. It cannot fire now that
+        # UNASSIGNED is a real row, which is exactly the point -- if it ever
+        # does, something new is dropping subjects and the report says so
+        # instead of printing group sizes that do not add up.
+        .grp_total <- sum(vapply(group_fits, function(g) g$n, integer(1)))
+        if(length(group_fits) && .grp_total != nrow(individual_params)) {
+          showNotification(
+            sprintf("Group sizes sum to %d but %d subjects were fitted: %d unaccounted for.",
+                    .grp_total, nrow(individual_params),
+                    nrow(individual_params) - .grp_total),
+            type = "error", duration = NULL)
+        }
+        attr(group_fits, "audit") <- group_audit
+        attr(group_fits, "n_fitted") <- nrow(individual_params)
+        attr(group_fits, "n_in_groups") <- .grp_total
       }
       
       # Bootstrap CIs if requested
@@ -2212,14 +2785,193 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
         )
       }
       
+      # ======================================================================
+      # AUDIT 2.4: information criteria against a NESTED MODEL SET
+      #
+      # AIC/AICc/BIC printed as means with SDs across subjects carry no
+      # information: with no competing model they are constant offsets of one
+      # another, which is exactly why the three SDs printed identically at
+      # 16.21. What is interpretable is Delta-AICc across a nested set, with
+      # Akaike weights.
+      #
+      # The set is the one the brief asked for: trend in {none, linear,
+      # exp_sat} crossed with harmonics in {1, 2, 3}. Each cell is fitted on the
+      # SAME subjects with the SAME time vector, and the AICc's are summed
+      # across subjects (equivalently: this is the joint model over independent
+      # subjects, which is what "which specification should I report" asks).
+      #
+      # Guarded behind a flag: 9 cells x n subjects x a nonlinear fit each is
+      # minutes of compute on 1305 subjects, and it should not run unasked.
+      # ======================================================================
+      model_selection <- NULL
+      if(isTRUE(input$harmonic_model_selection)) {
+        ms_trends <- c("none", "linear", "exp_sat")
+        ms_harms  <- 1:3
+        ms_rows <- list()
+        withProgress(message = "Fitting the nested model set...", value = 0, {
+          for(tt in ms_trends) for(hh in ms_harms) {
+            incProgress(1 / (length(ms_trends) * length(ms_harms)),
+                        detail = sprintf("trend=%s, H=%d", tt, hh))
+            need <- 2 * hh + 1 + switch(tt, "none" = 0, "linear" = 1, "exp_sat" = 2, 0) + 1
+            if(n_time < need) next
+            aicc_sum <- 0; k_ok <- 0L
+            for(i in seq_len(n_subjects)) {
+              y_i <- as.numeric(Y[i, ])
+              if(sum(!is.na(y_i)) < need) next
+              f <- tryCatch(fit_cosinor(time_vec_model, y_i, period = period,
+                                        n_harmonics = hh, trend_type = tt),
+                            error = function(e) NULL)
+              if(is.null(f) || !isTRUE(f$success) || !is.finite(f$aicc)) next
+              aicc_sum <- aicc_sum + f$aicc; k_ok <- k_ok + 1L
+            }
+            if(k_ok > 0) ms_rows[[sprintf("%s + H%d", tt, hh)]] <- aicc_sum / k_ok * 1
+          }
+        })
+        model_selection <- fck_akaike_table(ms_rows)
+        if(!is.null(model_selection)) attr(model_selection, "per_subject_mean") <- TRUE
+      }
+
+      # ======================================================================
+      # AUDIT 2.2: A_sat and tau are weakly identified. Document the ridge.
+      #
+      # Over t in [8, 30] with tau ~ 13.9 the factor (1 - e^(-t/tau)) moves only
+      # from 0.44 to 0.88 and is close to linear there, so it is strongly
+      # collinear with the intercept and partly with the 24 h cosine. The
+      # evidence was already in the output and unremarked: SD(tau) = 11.58 on a
+      # mean of 13.92, SD(A_sat) = 22.05 on 32.30. That is a likelihood ridge,
+      # not population heterogeneity, and the difference matters because the
+      # second reading invites a between-group comparison of tau that the first
+      # forbids.
+      #
+      # Three pieces of evidence are computed here:
+      #   1. the mean within-subject parameter correlation matrix
+      #   2. the design-matrix condition number at each time origin
+      #   3. Delta-AIC of free-tau against tau fixed at a literature value
+      #      (Daan, Beersma & Borbely 1984 give tau_rise ~ 18 h under extended
+      #      wakefulness)
+      # ======================================================================
+      conditioning <- NULL
+      if(trend_type == "exp_sat" && nrow(individual_params) > 0) {
+        conditioning <- list()
+
+        cors <- list()
+        for(i in seq_len(min(nrow(individual_params), 200))) {
+          sid <- individual_params$subject[i]
+          fi <- individual_fits[[sid]]
+          if(is.null(fi) || is.null(fi$vcov_full)) next
+          V <- fi$vcov_full
+          d <- sqrt(diag(V))
+          if(any(!is.finite(d)) || any(d <= 0)) next
+          cors[[length(cors) + 1]] <- V / outer(d, d)
+        }
+        if(length(cors) > 0) {
+          conditioning$mean_cor <- Reduce(`+`, cors) / length(cors)
+          conditioning$n_cor <- length(cors)
+        }
+
+        # condition number of the linearised design at each origin
+        kappa_at <- function(tv, tau_hat) {
+          X <- cbind(1, 1 - exp(-(tv - min(tv)) / tau_hat))
+          for(h in seq_len(n_harmonics)) {
+            w <- 2 * pi * h / period
+            X <- cbind(X, cos(w * tv), sin(w * tv))
+          }
+          sv <- svd(X)$d
+          if(min(sv) <= 0) Inf else max(sv) / min(sv)
+        }
+        tau_hat <- mean(individual_params$tau, na.rm = TRUE)
+        if(is.finite(tau_hat) && tau_hat > 0) {
+          conditioning$kappa_before <- tryCatch(kappa_at(time_vec, tau_hat), error = function(e) NA_real_)
+          conditioning$kappa_after  <- tryCatch(kappa_at(time_vec - min(time_vec), tau_hat),
+                                                error = function(e) NA_real_)
+        }
+
+        # tau held at a literature value: is the extra parameter earning its keep?
+        tau_fix <- suppressWarnings(as.numeric(input$harmonic_tau_fixed %||% 18))
+        if(is.finite(tau_fix) && tau_fix > 0) {
+          aic_free <- mean(individual_params$aic, na.rm = TRUE)
+          aic_fix <- NA_real_
+          acc <- c(); nok <- 0L
+          for(i in seq_len(n_subjects)) {
+            y_i <- as.numeric(Y[i, ]); ok <- !is.na(y_i)
+            if(sum(ok) < 2 * n_harmonics + 2 + 1) next
+            tv <- time_vec_model[ok]; yv <- y_i[ok]
+            X <- cbind(1, 1 - exp(-(tv - min(time_vec_model)) / tau_fix))
+            for(h in seq_len(n_harmonics)) {
+              w <- 2 * pi * h / period
+              X <- cbind(X, cos(w * tv), sin(w * tv))
+            }
+            fitf <- tryCatch(lm.fit(X, yv), error = function(e) NULL)
+            if(is.null(fitf)) next
+            nn <- length(yv); ssr <- sum(fitf$residuals^2)
+            if(!is.finite(ssr) || ssr <= 0) next
+            kk <- ncol(X) + 1                       # one fewer than free-tau
+            ll <- -nn/2 * (log(2*pi) + log(ssr/nn) + 1)
+            acc <- c(acc, -2 * ll + 2 * kk); nok <- nok + 1L
+          }
+          if(nok > 0) aic_fix <- mean(acc, na.rm = TRUE)
+          if(is.finite(aic_free) && is.finite(aic_fix)) {
+            conditioning$tau_fixed_value <- tau_fix
+            conditioning$tau_fixed_delta_aic <- aic_free - aic_fix
+            conditioning$tau_fixed_n <- nok
+          }
+        }
+      }
+
+      # ======================================================================
+      # AUDIT 2.5: summarise the per-subject Bingham regions
+      # ======================================================================
+      bingham_summary <- NULL
+      if(nrow(individual_params) > 0) {
+        bingham_summary <- lapply(seq_len(n_harmonics), function(h) {
+          amps <- c(); acros <- c(); n_id <- 0L; n_tot <- 0L
+          for(i in seq_len(nrow(individual_params))) {
+            fi <- individual_fits[[individual_params$subject[i]]]
+            b <- if(!is.null(fi$bingham)) fi$bingham[[h]] else NULL
+            if(is.null(b)) next
+            n_tot <- n_tot + 1L
+            amps <- c(amps, diff(b$amplitude) / 2)
+            if(isTRUE(b$identified)) {
+              n_id <- n_id + 1L
+              d <- abs(((diff(b$acrophase_rad) + pi) %% (2 * pi)) - pi) / 2
+              acros <- c(acros, phi_to_hours(d, period, h))
+            }
+          }
+          if(n_tot == 0) return(NULL)
+          list(n = n_tot, n_identified = n_id,
+               median_amp_halfwidth = stats::median(amps, na.rm = TRUE),
+               median_acro_halfwidth_h = if(length(acros)) stats::median(acros, na.rm = TRUE) else NA_real_)
+        })
+      }
+
       # Store results
       values$harmonic_model <- list(
+        conditioning = conditioning,
+        bingham_summary = bingham_summary,
+        loocv_is_true_cv = {
+          f1 <- individual_fits[[individual_params$subject[1]]]
+          if(!is.null(f1$loocv_is_true_cv)) isTRUE(f1$loocv_is_true_cv) else TRUE
+        },
         individual_fits = individual_fits,
         individual_params = individual_params,
+        all_individual_params = all_params,   # AUDIT 2.3: before the convergence gate
+        fit_audit = fit_audit,
+        model_selection = model_selection,
+        # AUDIT 1.7: the dependent variable was never named anywhere
+        dv_name  = if(nzchar(input$harmonic_dv_name %||% "")) input$harmonic_dv_name else NULL,
+        dv_units = if(nzchar(input$harmonic_dv_units %||% "")) input$harmonic_dv_units else NULL,
+        dv_min   = suppressWarnings(as.numeric(input$harmonic_dv_min %||% NA)),
+        dv_max   = suppressWarnings(as.numeric(input$harmonic_dv_max %||% NA)),
+        data_source = data_source,
+        time_origin = time_origin,
+        origin_shift = origin_shift,
+        time_vec_clock = time_vec,           # display axis, always clock-linearised
+        group_var_name = if(!is.null(input$harmonic_group_var) &&
+                            input$harmonic_group_var != "_none_") input$harmonic_group_var else NULL,
         pop_mean_fit = pop_mean_fit,
         group_fits = group_fits,
         boot_results = boot_results,
-        time_vec = time_vec,
+        time_vec = time_vec_model,
         original_times = original_times,
         wrap_applied = wrap_applied,
         period = period,
@@ -2251,479 +3003,528 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
   # HARMONIC REGRESSION OUTPUTS
   # ==============================================================================
   
+  # ============================================================================
   # Summary output
+  #
+  # CHANGELOG (2026-09-03 audit)
+  #   1.1  the pooled fitted equation is built by fck_format_equation(), the
+  #        same renderer the group equations use. The duplicate builder that
+  #        silently dropped the homeostatic term is gone.
+  #   1.2  both resultants are printed, each labelled with what it is for, and
+  #        the Rayleigh Z comes from the unweighted one.
+  #   1.3  commonality analysis replaces two overlapping marginal R2s. The
+  #        auto-generated dominance verdict is deleted.
+  #   1.4  the fitted constant is called the intercept. A genuine
+  #        rhythm-adjusted mean is computed and called the MESOR.
+  #   1.5  group sizes are reconciled against n fitted; UNASSIGNED is a row.
+  #   1.6  every averaged quantity names the estimator that produced it.
+  #   1.7  fmt2() throughout; DV named; H2 phase convention stated; the
+  #        "(units)" placeholder is gone.
+  #   2.1  the data source is stated and the significance rate is flagged.
+  #   2.3  converged / boundary / failed are reported separately.
+  #   2.4  Delta-AICc table with Akaike weights instead of mean AIC/AICc/BIC.
+  #   2.5  Bingham joint confidence regions.
+  # ============================================================================
   output$harmonic_summary <- renderPrint({
     req(values$harmonic_model)
     mod <- values$harmonic_model
-    
+    period <- mod$period
+    nh <- mod$n_harmonics
+    trend_type <- mod$trend_type %||% "none"
+    params <- mod$individual_params
+    pop <- mod$pop_mean_fit
+
+    dv <- mod$dv_name %||% "the dependent variable"
+    dvu <- mod$dv_units
+
+    hdr <- function(x) cat("\n--- ", x, " ---\n", sep = "")
+
     cat("=== Harmonic Regression (Cosinor Analysis) Results ===\n\n")
-    cat("Period:", mod$period, "\n")
-    cat("Number of harmonics:", mod$n_harmonics, "\n")
-    
-    # Data source info
+
+    # ---- what is being modelled --------------------------------------------
+    # AUDIT 1.7: the DV was never named. A report that does not say what Y is
+    # cannot be checked for admissibility by anyone reading it.
+    cat("Dependent variable: ", dv,
+        if(!is.null(dvu)) paste0(" (", dvu, ")") else "", "\n", sep = "")
+    if(is.finite(mod$dv_min) || is.finite(mod$dv_max)) {
+      cat("  Admissible range: [",
+          if(is.finite(mod$dv_min)) fmt2(mod$dv_min) else "-Inf", ", ",
+          if(is.finite(mod$dv_max)) fmt2(mod$dv_max) else "Inf", "]\n", sep = "")
+    } else {
+      cat("  Admissible range: not specified (set it to have fitted values checked)\n")
+    }
+    cat("Period: ", fmtn(period, 0), " h\n", sep = "")
+    cat("Number of harmonics: ", nh, "\n", sep = "")
+
+    # ---- AUDIT 2.1: data source, stated as a choice with its consequences ---
     if(isTRUE(mod$using_smoothed)) {
       cat("Data: SMOOTHED (missing values interpolated by FDA)\n")
+      cat("  ! Smoothing removes independent noise and induces residual autocorrelation.\n")
+      cat("    R-squared is inflated, LOOCV is optimistic (a held-out point is partly\n")
+      cat("    reconstructed from its neighbours), and the zero-amplitude F test is\n")
+      cat("    anticonservative. Rhythm-significance rates below are UPPER BOUNDS.\n")
+      cat("    Cosinor handles missing and unequally spaced data natively: re-run with\n")
+      cat("    Data source = raw to see the difference.\n")
     } else {
       cat("Data: RAW (no smoothing applied)\n")
       if(!is.null(mod$subjects_with_nas) && mod$subjects_with_nas > 0) {
-        cat("  ⚠ ", mod$subjects_with_nas, " subjects have missing values - consider smoothing first!\n")
+        cat("  ", mod$subjects_with_nas, " subjects have missing values; the cosinor uses",
+            " the observations present.\n", sep = "")
       }
     }
-    
-    # Show trend model type and sleep inertia
-    trend_type <- if(!is.null(mod$trend_type)) mod$trend_type else "none"
-    include_inertia <- !is.null(mod$include_inertia) && isTRUE(mod$include_inertia)
 
+    # ---- model specification ------------------------------------------------
     if(trend_type != "none") {
       trend_label <- switch(trend_type,
-                            "linear" = "LINEAR (β·t)",
-                            "log" = "LOGARITHMIC (β·log(t+1))",
-                            "exp_sat" = "SATURATING EXPONENTIAL (A·(1-e^(-t/τ)))",
+                            "linear" = "LINEAR (beta*t)",
+                            "log" = "LOGARITHMIC (beta*log(t+1))",
+                            "exp_sat" = "SATURATING EXPONENTIAL (A_sat*(1-e^(-t/tau)))",
                             "Unknown")
-      cat("Homeostatic trend:", trend_label, "\n")
-      cat("Two-process model: Separates Process S (trend) from Process C (circadian)\n")
-      cat("  Model equation: Y(t) = M + S(t) + C(t)\n")
+      cat("Homeostatic trend: ", trend_label, "\n", sep = "")
+      cat("Two-process model: Process S (trend) separated from Process C (circadian)\n")
     } else {
       cat("Homeostatic trend: None (circadian only)\n")
-      cat("  Model equation: Y(t) = M + C(t)\n")
     }
-    
-    # Count successful and failed fits
-    n_total <- length(mod$individual_fits)
-    n_success <- sum(sapply(mod$individual_fits, function(f) isTRUE(f$success)))
-    n_failed <- n_total - n_success
-    
-    cat("Number of subjects:", n_total, "\n")
-    cat("  - Successfully fitted:", n_success, "\n")
-    if(n_failed > 0) {
-      cat("  - Failed fits:", n_failed, "(insufficient data points)\n")
-      
-      # Show which subjects failed
-      failed_info <- sapply(seq_along(mod$individual_fits), function(i) {
-        f <- mod$individual_fits[[i]]
-        if(!isTRUE(f$success)) {
-          if(!is.null(f$n_valid)) {
-            sprintf("S%d(%d/%d pts)", i, f$n_valid, f$n_required)
-          } else {
-            sprintf("S%d", i)
-          }
-        } else {
-          NULL
-        }
-      })
-      failed_info <- failed_info[!sapply(failed_info, is.null)]
-      if(length(failed_info) <= 10) {
-        cat("    Failed subjects:", paste(failed_info, collapse = ", "), "\n")
-      } else {
-        cat("    Failed subjects:", paste(head(failed_info, 10), collapse = ", "), "...\n")
+
+    # AUDIT 1.4.3: say which origin the coefficients are on.
+    if(identical(mod$time_origin, "first_observation")) {
+      cat("Time origin: FIRST OBSERVATION (t = 0 at ",
+          fmt2(mod$origin_shift), " h clock). Both the trend and the harmonics are\n",
+          "  anchored here, so the intercept is the model value at the start of the\n",
+          "  recording and is directly interpretable.\n", sep = "")
+    } else {
+      cat("Time origin: MIDNIGHT (t = 0 at clock 00:00).\n")
+      if(trend_type == "exp_sat") {
+        cat("  ! The trend is anchored at the first observation (t - ",
+            fmt2(mod$pop_mean_fit$t_offset %||% 0), ") while the harmonics are anchored at\n",
+            "    midnight. The intercept is therefore the constant of a model with two\n",
+            "    origins and is not the value at either. Set Time origin =\n",
+            "    'first observation' to remove the ambiguity.\n", sep = "")
       }
     }
-    
-    cat("Number of time points:", length(mod$time_vec), "\n")
-    
-    # Show time points used
+
+    # ---- AUDIT 2.3: convergence, reported honestly -------------------------
+    fa <- mod$fit_audit
+    hdr("Fit outcomes")
+    if(!is.null(fa)) {
+      cat(sprintf("Subjects attempted:         %d\n", fa$n_attempted))
+      cat(sprintf("  Converged:                %d\n", fa$n_converged))
+      cat(sprintf("  Converged but on a bound: %d  (excluded: a parameter pinned to a\n", fa$n_boundary))
+      cat(         "                                bound is the constraint talking, not an estimate)\n")
+      cat(sprintf("  Did not converge:         %d  (excluded)\n", fa$n_nonconverged))
+      cat(sprintf("  Failed outright:          %d\n", fa$n_failed))
+      cat(sprintf("Population summaries below use %d subject(s).\n", nrow(params)))
+      if(isTRUE(fa$gate_relaxed))
+        cat("  ! Too few clean fits to gate on; ALL returned fits are included. Provisional.\n")
+      if(fa$n_nonconverged + fa$n_boundary > 0)
+        cat("  Previously these were all counted as successes, which is how an R-squared\n",
+            "  range starting near 0.06 could coexist with '100% successfully fitted'.\n", sep = "")
+    } else {
+      cat(sprintf("Subjects summarised: %d\n", nrow(params)))
+    }
+
+    cat("\nNumber of time points: ", length(mod$time_vec), "\n", sep = "")
     if(length(mod$time_vec) <= 24) {
       if(isTRUE(mod$wrap_applied) && !is.null(mod$original_times)) {
-        cat("Original times (clock):", paste(round(mod$original_times, 1), collapse=", "), "\n")
-        cat("Adjusted times (linear):", paste(round(mod$time_vec, 1), collapse=", "), "\n")
+        cat("Original times (clock):  ", paste(fmtn(mod$original_times, 1), collapse = ", "), "\n", sep = "")
+        cat("Adjusted times (linear): ", paste(fmtn(mod$time_vec_clock %||% mod$time_vec, 1), collapse = ", "), "\n", sep = "")
         cat("(Times after midnight were adjusted for chronological order)\n")
       } else {
-        cat("Time points used:", paste(round(mod$time_vec, 2), collapse=", "), "\n")
+        cat("Time points used: ", paste(fmtn(mod$time_vec, 2), collapse = ", "), "\n", sep = "")
       }
-    } else {
-      cat("Time points: ", round(min(mod$time_vec), 2), "to", round(max(mod$time_vec), 2), 
-          "(", length(mod$time_vec), "points)\n")
     }
-    
-    # Check if spacing is equal
     diffs <- diff(mod$time_vec)
     if(length(unique(round(diffs, 2))) > 1) {
-      cat("Spacing: UNEQUAL (", paste(unique(round(diffs, 2)), collapse=", "), ")\n")
+      cat("Spacing: UNEQUAL (", paste(unique(fmtn(diffs, 2)), collapse = ", "), ")\n", sep = "")
     } else {
-      cat("Spacing: Equal (", round(diffs[1], 2), ")\n")
+      cat("Spacing: Equal (", fmt2(diffs[1]), ")\n", sep = "")
     }
-    cat("\n")
-    
-    # Population mean statistics (always calculated)
-    if(!is.null(mod$pop_mean_fit)) {
-      cat("--- Population Mean Parameters (Vector-Averaged) ---\n")
-      pop <- mod$pop_mean_fit
-      cat(sprintf("MESOR:     %.3f\n", pop$mean_mesor))
-      cat(sprintf("Amplitude (H1): %.3f\n", pop$mean_amplitude))
-      cat(sprintf("Acrophase (H1): %.2f (%.2f hours)\n", 
-                  pop$mean_acrophase_rad * 180 / pi, pop$mean_acrophase_time))
-      
-      # Show all harmonics if more than 1
-      if(mod$n_harmonics > 1) {
-        cat("\n  All Harmonics (vector-averaged):\n")
-        for(h in 1:mod$n_harmonics) {
-          cat(sprintf("    H%d: Amplitude=%.3f, Acrophase=%.2f hours\n", 
-                      h, pop$mean_amplitudes[h], pop$mean_acrophases_time[h]))
-        }
-      }
-      
-      cat(sprintf("\nRayleigh test for uniformity (H1):\n"))
-      cat(sprintf("  Z = %.3f, p = %.4f\n", pop$rayleigh_z, pop$rayleigh_p))
-      cat(sprintf("  Mean resultant length (r̄) = %.3f\n", pop$r_bar))
 
-      # Build and display symbolic equation
-      {
-        cat("\n--- Model Equation (symbolic) ---\n")
-        sym <- "Y(t) = M"
-        if(trend_type == "linear")  sym <- paste0(sym, " + \u03b2\u00b7t")
-        else if(trend_type == "log")     sym <- paste0(sym, " + \u03b2\u00b7log(t+1)")
-        else if(trend_type == "exp_sat") sym <- paste0(sym, " + A_sat\u00b7(1 \u2212 e^(\u2212t/\u03c4))")
-        if(mod$n_harmonics == 1) {
-          sym <- paste0(sym, sprintf(" + A\u00b7cos(2\u03c0\u00b7t/%.0f \u2212 \u03c6)", mod$period))
-        } else {
-          for(h_s in 1:mod$n_harmonics) {
-            sub_h <- intToUtf8(0x2080 + h_s)
-            sym <- paste0(sym, sprintf(" + A%s\u00b7cos(2\u03c0\u00b7%d\u00b7t/%.0f \u2212 \u03c6%s)",
-                                       sub_h, h_s, mod$period, sub_h))
-          }
-        }
-        cat(sym, "\n")
-        leg <- c("M = MESOR")
-        if(mod$n_harmonics == 1) {
-          leg <- c(leg, "A = amplitude", "\u03c6 = acrophase (rad)")
-        } else {
-          leg <- c(leg, "A\u2095 = amplitude of harmonic h", "\u03c6\u2095 = acrophase of harmonic h (rad)")
-        }
-        leg <- c(leg, sprintf("T = %.0f h (period)", mod$period))
-        if(trend_type == "linear")       leg <- c(leg, "\u03b2 = linear trend slope")
-        else if(trend_type == "log")     leg <- c(leg, "\u03b2 = log trend slope")
-        else if(trend_type == "exp_sat") leg <- c(leg, "A_sat = asymptote", "\u03c4 = time constant (h)")
-        cat("  where:", paste(leg, collapse = ", "), "\n")
-      }
+    if(is.null(pop)) return(invisible(NULL))
 
-      # Build and display fitted equation
-      cat("\n--- Fitted Model Equation ---\n")
-      eq <- sprintf("Y(t) = %.2f", pop$mean_mesor)
+    # ========================================================================
+    # AUDIT 1.4: the central-value section, with the two quantities separated
+    # ========================================================================
+    hdr("Central value")
+    cat("Intercept (beta_0, at t = 0):            ", fmt3(pop$intercept),
+        "   [arithmetic mean of the fitted constants]\n", sep = "")
+    if(trend_type != "none" && is.finite(pop$rhythm_adjusted_mean)) {
+      cat("MESOR (rhythm-adjusted mean over the observed window):  ",
+          fmt3(pop$rhythm_adjusted_mean), "\n", sep = "")
+      cat("  = time-average of beta_0 + S(t) over t in [",
+          fmt2(pop$window[1]), ", ", fmt2(pop$window[2]), "] h, by integration.\n", sep = "")
+      cat("  The intercept is NOT the MESOR when the model carries a trend: it is the\n")
+      cat("  constant of the fit, and with a saturating trend it sits far below the\n")
+      cat("  level the data actually occupy. The difference here is ",
+          fmt2(pop$rhythm_adjusted_mean - pop$intercept), " units.\n", sep = "")
+      if(is.finite(pop$harmonic_window_mean))
+        cat("  (The harmonics contribute ", fmt3(pop$harmonic_window_mean),
+            " to the window mean; that is exactly zero only over a whole number\n",
+            "   of periods, and this window is not one.)\n", sep = "")
+    } else {
+      cat("MESOR (rhythm-adjusted mean): ", fmt3(pop$rhythm_adjusted_mean),
+          "  [no trend, so it equals the intercept]\n", sep = "")
+    }
 
-      # Add trend component
-      trend_type <- if(!is.null(mod$trend_type)) mod$trend_type else "none"
-      if(trend_type == "linear" && !is.null(pop$indiv_means$trend_linear)) {
-        beta <- pop$indiv_means$trend_linear
-        if(beta >= 0) {
-          eq <- paste0(eq, sprintf(" + %.3f·t", beta))
-        } else {
-          eq <- paste0(eq, sprintf(" - %.3f·t", abs(beta)))
-        }
-      } else if(trend_type == "log" && !is.null(pop$indiv_means$trend_log)) {
-        beta <- pop$indiv_means$trend_log
-        if(beta >= 0) {
-          eq <- paste0(eq, sprintf(" + %.3f·log(t+1)", beta))
-        } else {
-          eq <- paste0(eq, sprintf(" - %.3f·log(t+1)", abs(beta)))
-        }
-      } else if(trend_type == "exp_sat" && !is.null(pop$indiv_means$A_sat) && !is.null(pop$indiv_means$tau)) {
-        A_sat <- pop$indiv_means$A_sat
-        tau <- pop$indiv_means$tau
-        if(A_sat >= 0) {
-          eq <- paste0(eq, sprintf(" + %.2f·(1 - e^(-t/%.1f))", A_sat, tau))
-        } else {
-          eq <- paste0(eq, sprintf(" - %.2f·(1 - e^(-t/%.1f))", abs(A_sat), tau))
-        }
-      }
+    # ========================================================================
+    # Vector-averaged rhythm parameters
+    # ========================================================================
+    hdr("Population rhythm parameters (VECTOR-averaged)")
+    cat("Estimator: amplitude-weighted vector mean of (amplitude, acrophase) pairs.\n")
+    cat("This is the correct population estimator for circular data and is unchanged.\n\n")
+    for(h in seq_len(nh)) {
+      eff <- period / h
+      cat(sprintf("  H%d: amplitude = %s, acrophase = %s h  (%s deg)\n",
+                  h, fmt3(pop$mean_amplitudes[h]),
+                  fmt2(pop$mean_acrophases_time[h]),
+                  fmt2(phi_to_degrees(pop$mean_acrophases_rad[h]))))
+      if(h > 1)
+        cat(sprintf("      convention: H%d is identified modulo %s h, so %s h is equivalent to %s h\n",
+                    h, fmtn(eff, 0), fmt2(pop$mean_acrophases_time[h]),
+                    fmt2(pop$mean_acrophases_time[h] + eff)))
+    }
 
-      # Add harmonic components
-      for(h in 1:mod$n_harmonics) {
-        A <- pop$mean_amplitudes[h]
-        phi <- pop$mean_acrophases_rad[h]  # In radians
-        omega <- 2 * pi * h / mod$period
+    # ========================================================================
+    # AUDIT 1.2: two resultants, unambiguously labelled
+    # ========================================================================
+    hdr("Circular concentration and the Rayleigh test")
+    for(h in seq_len(nh)) {
+      rr <- pop$resultants[[h]]
+      if(is.null(rr)) next
+      eff <- period / h
+      cat(sprintf("H%d  n = %d\n", h, rr$n))
+      cat(sprintf("  r-bar (UNWEIGHTED, for Rayleigh):        %s\n", fmt3(rr$r_unweighted)))
+      cat(sprintf("  r-bar (AMPLITUDE-WEIGHTED, for the vector mean): %s\n", fmt3(rr$r_weighted)))
+      cat(sprintf("  Rayleigh Z = %s, p = %s   [Z = n * r_unweighted^2]\n",
+                  fmt1e(rr$rayleigh$Z), format.pval(rr$rayleigh$p, digits = 3, eps = 1e-16)))
+      cat(sprintf("  Circular SD = %s h\n", fmt3(rr$circ_sd_hours)))
+      if(h == 1)
+        cat("  The Rayleigh test is defined on UNIT vectors (Mardia & Jupp 2000; Berens\n",
+            "  2009). Using the amplitude-weighted resultant here would inflate Z; the\n",
+            "  two are printed together so they can never be confused again.\n", sep = "")
+    }
 
-        # Convert to cos(ωt - φ) format
-        if(A >= 0) {
-          eq <- paste0(eq, sprintf(" + %.2f·cos(2π·%d·t/%.0f - %.2f)",
-                                   A, h, mod$period, phi))
-        } else {
-          eq <- paste0(eq, sprintf(" - %.2f·cos(2π·%d·t/%.0f - %.2f)",
-                                   abs(A), h, mod$period, phi))
-        }
-      }
+    # ========================================================================
+    # AUDIT 1.1: ONE equation renderer, for the pooled fit and the groups alike
+    # ========================================================================
+    hdr("Model equation (symbolic)")
+    sym <- "Y(t) = beta_0"
+    if(trend_type == "linear")       sym <- paste0(sym, " + beta*t")
+    else if(trend_type == "log")     sym <- paste0(sym, " + beta*log(t+1)")
+    else if(trend_type == "exp_sat") sym <- paste0(sym, " + A_sat*(1 - e^(-t/tau))")
+    for(h in seq_len(nh))
+      sym <- paste0(sym, sprintf(" + A%d*cos(2pi*%d*t/%s - phi%d)", h, h, fmtn(period, 0), h))
+    cat(sym, "\n")
+    cat("  beta_0 = intercept (NOT the MESOR when a trend is present)\n")
+    cat("  A_h, phi_h = amplitude and acrophase of harmonic h\n")
+    if(trend_type == "exp_sat")
+      cat("  A_sat = asymptote, tau = time constant (h)\n")
 
-      cat(eq, "\n")
-      cat("where t = time in same units as period\n")
+    hdr("Fitted model equation (pooled)")
+    cat(fck_format_equation(pop$intercept, trend_type, pop$trend_coefs,
+                            pop$mean_amplitudes, pop$mean_acrophases_rad,
+                            period, pop$t_offset %||% 0), "\n")
+    cat("  Rendered by the same function as the group equations below. The pooled\n")
+    cat("  equation previously omitted the homeostatic term entirely.\n")
 
-      # Show arithmetic means of individual parameters
-      if(!is.null(pop$indiv_means)) {
-        cat("\n--- Arithmetic Mean of Individual Parameters ---\n")
-        cat(sprintf("MESOR:     %.3f (SD=%.3f)\n", pop$indiv_means$mesor, pop$indiv_means$mesor_sd))
-        for(h in 1:mod$n_harmonics) {
-          amp_key <- paste0("amplitude_", h)
-          amp_sd_key <- paste0("amplitude_", h, "_sd")
-          acro_key <- paste0("acrophase_time_", h)
-          acro_sd_key <- paste0("acrophase_time_", h, "_sd")
-          cat(sprintf("H%d Amplitude: %.3f (SD=%.3f)\n", h, pop$indiv_means[[amp_key]], pop$indiv_means[[amp_sd_key]]))
-          cat(sprintf("H%d Acrophase: %.2f hours (SD=%.2f)\n", h, pop$indiv_means[[acro_key]], pop$indiv_means[[acro_sd_key]]))
-        }
-      }
-      
-      if(!is.null(mod$boot_results)) {
-        cat(sprintf("\n95%% Bootstrap CIs (B=%d):\n", mod$boot_results$B))
-        cat(sprintf("  MESOR:     [%.3f, %.3f]\n", 
-                    mod$boot_results$mesor_ci[1], mod$boot_results$mesor_ci[2]))
-        cat(sprintf("  Amplitude: [%.3f, %.3f]\n", 
-                    mod$boot_results$amplitude_ci[1], mod$boot_results$amplitude_ci[2]))
-        cat(sprintf("  Acrophase: [%.2f, %.2f] hours\n", 
-                    mod$boot_results$acrophase_ci[1], mod$boot_results$acrophase_ci[2]))
+    # AUDIT 1.7: admissibility of the fitted curve
+    if(is.finite(mod$dv_min) || is.finite(mod$dv_max)) {
+      tt <- seq(min(mod$time_vec), max(mod$time_vec), length.out = 400)
+      yy <- predict_from_coefs(pop$mean_coefs, tt, period, nh, trend_type,
+                               pop$t_offset %||% 0, 0)
+      bc <- fck_check_bounds(yy, mod$dv_min, mod$dv_max)
+      if(!bc$ok) {
+        cat(sprintf("  ! The pooled fitted curve leaves the admissible range: min %s, max %s.\n",
+                    fmt2(bc$min), fmt2(bc$max)))
+        cat("    A fit that predicts impossible values is misspecified, not merely imprecise.\n")
+      } else {
+        cat(sprintf("  Fitted range over the window: [%s, %s] - within the admissible range.\n",
+                    fmt2(bc$min), fmt2(bc$max)))
       }
     }
-    
-    cat("\n--- Individual Parameter Summary ---\n")
-    params <- mod$individual_params
-    cat(sprintf("MESOR:     Mean=%.3f, SD=%.3f\n", mean(params$mesor), sd(params$mesor)))
-    
-    # Show trend parameters based on trend type
-    if(mod$trend_type == "linear" && "trend_linear" %in% names(params)) {
-      cat(sprintf("Linear Trend (β): Mean=%.4f, SD=%.4f (units/hour)\n", 
-                  mean(params$trend_linear, na.rm=TRUE), sd(params$trend_linear, na.rm=TRUE)))
-      mean_trend <- mean(params$trend_linear, na.rm=TRUE)
-      if(mean_trend > 0) {
-        cat("           (Positive = increasing over time, e.g., increasing sleepiness)\n")
-      } else if(mean_trend < 0) {
-        cat("           (Negative = decreasing over time)\n")
-      }
-    } else if(mod$trend_type == "log" && "trend_log" %in% names(params)) {
-      cat(sprintf("Log Trend (β): Mean=%.4f, SD=%.4f (units/log-hour)\n", 
-                  mean(params$trend_log, na.rm=TRUE), sd(params$trend_log, na.rm=TRUE)))
-      mean_trend <- mean(params$trend_log, na.rm=TRUE)
-      if(mean_trend > 0) {
-        cat("           (Positive = increasing with diminishing rate)\n")
-      } else if(mean_trend < 0) {
-        cat("           (Negative = decreasing with diminishing rate)\n")
-      }
-    } else if(mod$trend_type == "two_process") {
-      cat("\n--- Two-Process Homeostatic Parameters ---\n")
-      if("beta_S" %in% names(params)) {
-        cat(sprintf("β_S (S coefficient): Mean=%.3f, SD=%.3f (units/S-unit)\n",
-                    mean(params$beta_S, na.rm=TRUE), sd(params$beta_S, na.rm=TRUE)))
-        mean_beta_S <- mean(params$beta_S, na.rm=TRUE)
-        if(mean_beta_S > 0) {
-          cat("           (Positive = Y increases with sleep pressure)\n")
-        } else if(mean_beta_S < 0) {
-          cat("           (Negative = Y decreases with sleep pressure)\n")
-        }
-      }
-      if("tau_w" %in% names(params)) {
-        cat(sprintf("τ_w (wake time constant): Mean=%.2f, SD=%.2f (hours)\n",
-                    mean(params$tau_w, na.rm=TRUE), sd(params$tau_w, na.rm=TRUE)))
-        cat("           (Time for S to rise to ~63% toward S_max while awake)\n")
-      }
-      if("tau_s" %in% names(params)) {
-        cat(sprintf("τ_s (sleep time constant): Mean=%.2f, SD=%.2f (hours)\n",
-                    mean(params$tau_s, na.rm=TRUE), sd(params$tau_s, na.rm=TRUE)))
-        cat("           (Time for S to decay to ~37% toward S_min while asleep)\n")
-      }
-    } else if(mod$trend_type == "exp_sat") {
+
+    # ========================================================================
+    # AUDIT 1.6: arithmetic summaries, each labelled with its estimator
+    # ========================================================================
+    hdr("Individual parameters (ARITHMETIC means, +/- linear SD)")
+    cat("Estimator: arithmetic. These are NOT the vector means above; for a circular\n")
+    cat("quantity the two differ, and only the vector mean is a valid population value.\n\n")
+    cat(sprintf("  Intercept:  %s (SD %s)   [arithmetic]\n",
+                fmt3(mean(params$mesor, na.rm = TRUE)), fmt3(sd(params$mesor, na.rm = TRUE))))
+
+    if(trend_type == "linear" && "trend_linear" %in% names(params)) {
+      cat(sprintf("  Linear trend (beta): %s (SD %s) %s   [arithmetic]\n",
+                  fmt4(mean(params$trend_linear, na.rm = TRUE)),
+                  fmt4(sd(params$trend_linear, na.rm = TRUE)),
+                  if(!is.null(dvu)) paste0(dvu, "/h") else "per hour"))
+    } else if(trend_type == "log" && "trend_log" %in% names(params)) {
+      cat(sprintf("  Log trend (beta): %s (SD %s)   [arithmetic]\n",
+                  fmt4(mean(params$trend_log, na.rm = TRUE)),
+                  fmt4(sd(params$trend_log, na.rm = TRUE))))
+    } else if(trend_type == "exp_sat") {
       if("A_sat" %in% names(params)) {
-        cat(sprintf("A_sat (asymptote): Mean=%.3f, SD=%.3f (units)\n",
-                    mean(params$A_sat, na.rm=TRUE), sd(params$A_sat, na.rm=TRUE)))
+        # AUDIT 1.7: the "(units)" placeholder is replaced by the real unit, or
+        # by nothing at all when the user has not named one.
+        cat(sprintf("  A_sat (asymptote):   %s (SD %s)%s   [arithmetic]\n",
+                    fmt3(mean(params$A_sat, na.rm = TRUE)),
+                    fmt3(sd(params$A_sat, na.rm = TRUE)),
+                    if(!is.null(dvu)) paste0(" ", dvu) else ""))
       }
       if("tau" %in% names(params)) {
-        cat(sprintf("τ (time constant): Mean=%.2f, SD=%.2f (hours)\n",
-                    mean(params$tau, na.rm=TRUE), sd(params$tau, na.rm=TRUE)))
-        cat("           (Time to reach ~63% of asymptote)\n")
+        tm <- mean(params$tau, na.rm = TRUE); ts <- sd(params$tau, na.rm = TRUE)
+        cat(sprintf("  tau (time constant): %s (SD %s) h   [arithmetic]\n", fmt2(tm), fmt2(ts)))
+        # AUDIT 2.2: the ridge, stated where the numbers are
+        if(is.finite(tm) && is.finite(ts) && tm > 0 && ts / tm > 0.5)
+          cat(sprintf("    ! SD/mean = %s. Over this window (1 - e^(-t/tau)) moves only from\n",
+                      fmt2(ts / tm)),
+              "      about 0.44 to 0.88 and is close to linear, so it is strongly collinear\n",
+              "      with the intercept. A spread this wide is a likelihood ridge, not\n",
+              "      population heterogeneity. See the conditioning section below.\n", sep = "")
       }
     }
 
-    for(h in 1:mod$n_harmonics) {
-      amp_col <- paste0("amplitude_", h)
-      acro_col <- paste0("acrophase_time_", h)
-      acro_rad_col <- paste0("acrophase_rad_", h)
-      effective_period <- mod$period / h
-      
-      cat(sprintf("H%d Amplitude: Mean=%.3f, SD=%.3f\n", h, mean(params[[amp_col]]), sd(params[[amp_col]])))
-      
-      # Circular statistics for acrophase
-      acro_rad <- params[[acro_rad_col]]
-      circ_mean <- circular_mean(acro_rad)
-      if(circ_mean < 0) circ_mean <- circ_mean + 2 * pi
-      circ_mean_time <- circ_mean * effective_period / (2 * pi)
-      circ_sd <- circular_sd(acro_rad)
-      circ_sd_time <- if(!is.na(circ_sd)) circ_sd * effective_period / (2 * pi) else NA
-      r_bar <- mean_resultant_length(acro_rad)
-      
-      cat(sprintf("H%d Acrophase: Circular mean=%.2f h, Circ.SD=%.2f h, r̄=%.3f\n", 
-                  h, circ_mean_time, ifelse(is.na(circ_sd_time), NA, circ_sd_time), r_bar))
-      cat(sprintf("            (Arithmetic mean=%.2f h, Linear SD=%.2f h)\n", 
-                  mean(params[[acro_col]]), sd(params[[acro_col]])))
-    }
-    
-    cat(sprintf("R-squared: Mean=%.3f, Range=[%.3f, %.3f]\n",
-                mean(params$r_squared), min(params$r_squared), max(params$r_squared)))
-    cat(sprintf("Significant rhythms (p<0.05): %d / %d (%.1f%%)\n",
-                sum(params$p_value < 0.05), nrow(params),
-                100 * sum(params$p_value < 0.05) / nrow(params)))
-
-    # Model selection metrics
-    if("aic" %in% names(params)) {
-      cat("\n--- Model Selection Metrics ---\n")
-      cat(sprintf("AIC (Akaike Information Criterion): Mean=%.2f, SD=%.2f\n",
-                  mean(params$aic, na.rm = TRUE), sd(params$aic, na.rm = TRUE)))
-      cat(sprintf("AICc (Corrected AIC): Mean=%.2f, SD=%.2f\n",
-                  mean(params$aicc, na.rm = TRUE), sd(params$aicc, na.rm = TRUE)))
-      cat(sprintf("BIC (Bayesian Information Criterion): Mean=%.2f, SD=%.2f\n",
-                  mean(params$bic, na.rm = TRUE), sd(params$bic, na.rm = TRUE)))
-      cat(sprintf("LOOCV RMSE (Leave-one-out CV): Mean=%.4f, SD=%.4f\n",
-                  mean(params$loocv_rmse, na.rm = TRUE), sd(params$loocv_rmse, na.rm = TRUE)))
-      cat("Note: Lower AIC/AICc/BIC/LOOCV values indicate better model fit\n")
+    for(h in seq_len(nh)) {
+      eff <- period / h
+      ac <- params[[paste0("acrophase_time_", h)]]
+      rr <- pop$resultants[[h]]
+      cat(sprintf("  H%d amplitude: %s (SD %s)   [arithmetic]\n", h,
+                  fmt3(mean(params[[paste0("amplitude_", h)]], na.rm = TRUE)),
+                  fmt3(sd(params[[paste0("amplitude_", h)]], na.rm = TRUE))))
+      cat(sprintf("  H%d acrophase: circular mean %s h, circular SD %s h   [circular]\n",
+                  h, fmt2(phi_to_hours(rr$mean_dir_unweighted, period, h)),
+                  fmt2(rr$circ_sd_hours)))
+      cat(sprintf("               (arithmetic mean %s h, linear SD %s h - shown only to\n",
+                  fmt2(mean(ac, na.rm = TRUE)), fmt2(sd(ac, na.rm = TRUE))))
+      cat("                make the difference visible; do not report these for a phase)\n")
+      if(h > 1)
+        cat(sprintf("               convention: modulo %s h\n", fmtn(eff, 0)))
     }
 
-    # Variance decomposition: Relative importance of Process S and Process C
-    if(!is.null(mod$pop_mean_fit) && !is.null(mod$pop_mean_fit$indiv_means) &&
-       !is.null(mod$pop_mean_fit$indiv_means$r_squared_S) &&
-       !is.null(mod$pop_mean_fit$indiv_means$r_squared_C)) {
-      cat("\n--- Variance Decomposition: Relative Importance ---\n")
-      indiv <- mod$pop_mean_fit$indiv_means
+    cat(sprintf("\n  R-squared: mean %s, range [%s, %s]\n",
+                fmt3(mean(params$r_squared, na.rm = TRUE)),
+                fmt3(min(params$r_squared, na.rm = TRUE)),
+                fmt3(max(params$r_squared, na.rm = TRUE))))
+    sig_rate <- 100 * sum(params$p_value < 0.05, na.rm = TRUE) / nrow(params)
+    cat(sprintf("  Significant rhythms (p<0.05): %d / %d (%s%%)\n",
+                sum(params$p_value < 0.05, na.rm = TRUE), nrow(params), fmt1(sig_rate)))
+    cat("    The zero-amplitude test is now the harmonics GIVEN the trend (full vs\n")
+    cat("    trend-only F test). It previously charged the rhythm with the whole\n")
+    cat("    model's sum of squares, including everything Process S explained.\n")
+    if(isTRUE(mod$using_smoothed))
+      cat("    ! On smoothed data this rate is an UPPER BOUND (see the note at the top).\n")
 
-      cat(sprintf("R² from Process S (homeostatic): Mean=%.3f, SD=%.3f\n",
-                  indiv$r_squared_S, indiv$r_squared_S_sd))
-      cat(sprintf("R² from Process C (circadian):   Mean=%.3f, SD=%.3f\n",
-                  indiv$r_squared_C, indiv$r_squared_C_sd))
-      cat(sprintf("\nProportion of total R² explained by:\n"))
-      cat(sprintf("  Process S: %.1f%% (SD=%.1f%%)\n",
-                  indiv$percent_S, indiv$percent_S_sd))
-      cat(sprintf("  Process C: %.1f%% (SD=%.1f%%)\n",
-                  indiv$percent_C, indiv$percent_C_sd))
-
-      # Interpretation helper (with NA check)
-      if(!is.na(indiv$percent_S) && !is.na(indiv$percent_C)) {
-        if(indiv$percent_S > indiv$percent_C) {
-          cat("\nInterpretation: Homeostatic process (S) is the dominant component\n")
-        } else if(indiv$percent_C > indiv$percent_S) {
-          cat("\nInterpretation: Circadian rhythm (C) is the dominant component\n")
-        } else {
-          cat("\nInterpretation: Both processes contribute equally\n")
-        }
+    # ========================================================================
+    # AUDIT 2.5: confidence intervals
+    # ========================================================================
+    if(!is.null(mod$boot_results)) {
+      hdr(sprintf("Bootstrap CIs (B = %d, subject-level resampling)", mod$boot_results$B))
+      cat(sprintf("  Intercept: [%s, %s]\n",
+                  fmt3(mod$boot_results$mesor_ci[1]), fmt3(mod$boot_results$mesor_ci[2])))
+      cat(sprintf("  Amplitude: [%s, %s]\n",
+                  fmt3(mod$boot_results$amplitude_ci[1]), fmt3(mod$boot_results$amplitude_ci[2])))
+      cat(sprintf("  Acrophase: [%s, %s] h\n",
+                  fmt2(mod$boot_results$acrophase_ci[1]), fmt2(mod$boot_results$acrophase_ci[2])))
+    }
+    if(!is.null(mod$bingham_summary)) {
+      hdr("Bingham joint confidence regions (Bingham et al. 1982)")
+      cat("The elliptical joint region for the (amplitude, acrophase) pair, per subject,\n")
+      cat("summarised across subjects. This is the standard cosinor reporting requirement\n")
+      cat("and the app previously computed nothing of the kind for a nonlinear fit.\n\n")
+      for(h in seq_len(nh)) {
+        b <- mod$bingham_summary[[h]]
+        if(is.null(b)) next
+        cat(sprintf("  H%d: acrophase identified in %d / %d subjects (%s%%)\n",
+                    h, b$n_identified, b$n, fmt1(100 * b$n_identified / b$n)))
+        cat(sprintf("      median half-width: amplitude +/- %s, acrophase +/- %s h\n",
+                    fmt3(b$median_amp_halfwidth), fmt2(b$median_acro_halfwidth_h)))
+        if(b$n_identified < b$n)
+          cat("      where it is not identified the region covers the origin, i.e. that\n",
+              "      subject has no resolvable phase at all. Quoting one would be worse\n",
+              "      than quoting none.\n", sep = "")
       }
     }
 
-    # Show group-specific statistics if groups exist
-    if(!is.null(mod$group_fits) && length(mod$group_fits) >= 2) {
-      cat("\n--- Group-Specific Parameters ---\n")
-      # Print symbolic equation once before listing groups
-      {
-        cat("Model Equation (symbolic):\n  ")
-        sym_g <- "Y(t) = M"
-        grp_trend <- if(!is.null(mod$trend_type)) mod$trend_type else "none"
-        if(grp_trend == "linear")       sym_g <- paste0(sym_g, " + \u03b2\u00b7t")
-        else if(grp_trend == "log")     sym_g <- paste0(sym_g, " + \u03b2\u00b7log(t+1)")
-        else if(grp_trend == "exp_sat") sym_g <- paste0(sym_g, " + A_sat\u00b7(1 \u2212 e^(\u2212t/\u03c4))")
-        if(mod$n_harmonics == 1) {
-          sym_g <- paste0(sym_g, sprintf(" + A\u00b7cos(2\u03c0\u00b7t/%.0f \u2212 \u03c6)", mod$period))
-        } else {
-          for(h_s in 1:mod$n_harmonics) {
-            sub_h <- intToUtf8(0x2080 + h_s)
-            sym_g <- paste0(sym_g, sprintf(" + A%s\u00b7cos(2\u03c0\u00b7%d\u00b7t/%.0f \u2212 \u03c6%s)",
-                                           sub_h, h_s, mod$period, sub_h))
-          }
-        }
-        cat(sym_g, "\n")
-        leg_g <- c("M = MESOR")
-        if(mod$n_harmonics == 1) {
-          leg_g <- c(leg_g, "A = amplitude", "\u03c6 = acrophase (rad)")
-        } else {
-          leg_g <- c(leg_g, "A\u2095 = amplitude of harmonic h", "\u03c6\u2095 = acrophase of harmonic h (rad)")
-        }
-        leg_g <- c(leg_g, sprintf("T = %.0f h (period)", mod$period))
-        if(grp_trend == "linear")       leg_g <- c(leg_g, "\u03b2 = linear trend slope")
-        else if(grp_trend == "log")     leg_g <- c(leg_g, "\u03b2 = log trend slope")
-        else if(grp_trend == "exp_sat") leg_g <- c(leg_g, "A_sat = asymptote", "\u03c4 = time constant (h)")
-        cat("  where:", paste(leg_g, collapse = ", "), "\n")
+    # ========================================================================
+    # AUDIT 2.4: Delta-AICc, not mean AIC
+    # ========================================================================
+    if(!is.null(mod$model_selection)) {
+      hdr("Model selection (Delta-AICc across a nested set)")
+      ms <- mod$model_selection
+      cat(sprintf("  %-18s %12s %10s %8s\n", "model", "AICc", "dAICc", "weight"))
+      for(i in seq_len(nrow(ms)))
+        cat(sprintf("  %-18s %12s %10s %8s\n", ms$model[i],
+                    fmt2(ms$AICc[i]), fmt2(ms$dAICc[i]), fmt3(ms$weight[i])))
+      cat("\n  AICc averaged per subject over the same subjects for every cell.\n")
+      cat("  Absolute AIC/AICc/BIC means with SDs are not reported: with no competing\n")
+      cat("  model they are constant offsets of one another (which is why all three\n")
+      cat("  SDs printed identically), and with n/k = ", fmtn(length(mod$time_vec), 0),
+          "/", fmtn(2 * nh + 1 +
+                    switch(trend_type, "none" = 0, "linear" = 1, "log" = 1, "exp_sat" = 2, 0) + 1, 0),
+          " a high R-squared is near-guaranteed.\n", sep = "")
+    } else if("aicc" %in% names(params)) {
+      hdr("Model selection")
+      cat("  Enable 'Compare nested models' to get a Delta-AICc table with Akaike weights.\n")
+      cat("  Absolute AIC/AICc/BIC are deliberately not summarised here: without a\n")
+      cat("  competing model they carry no information, and AICc - AIC and BIC - AIC are\n")
+      cat("  constant offsets (", fmt4(2 * 8 * 9 / (length(mod$time_vec) - 8 - 1)),
+          " and ", fmt4(8 * (log(length(mod$time_vec)) - 2)),
+          " for k = 8 here), which is why their SDs were identical.\n", sep = "")
+      if("loocv_rmse" %in% names(params)) {
+        is_cv <- mod$loocv_is_true_cv
+        cat(sprintf("  %s: mean %s\n",
+                    if(isTRUE(is_cv)) "LOOCV RMSE (genuine leave-one-out refits)"
+                    else "In-sample residual RMSE (NOT cross-validated)",
+                    fmt4(mean(params$loocv_rmse, na.rm = TRUE))))
+        if(!isTRUE(is_cv))
+          cat("    The nonlinear path used to report this number under the name 'LOOCV\n",
+              "    RMSE' while computing it from the fitted values. It is training error.\n", sep = "")
       }
+    }
+
+    # ========================================================================
+    # AUDIT 1.3: commonality analysis, and no dominance verdict
+    # ========================================================================
+    im <- pop$indiv_means
+    if(!is.null(im) && !is.null(im$unique_S) && is.finite(im$unique_S)) {
+      hdr("Variance decomposition (commonality analysis)")
+      cat("Chevan & Sutherland (1991); Ray-Mukherjee et al. (2014).\n\n")
+      cat(sprintf("  Unique to Process S (homeostatic): %s  (%s%% of total R-squared)\n",
+                  fmt3(im$unique_S), fmt1(im$percent_S)))
+      cat(sprintf("  Unique to Process C (circadian):   %s  (%s%%)\n",
+                  fmt3(im$unique_C), fmt1(im$percent_C)))
+      cat(sprintf("  Shared between S and C:            %s  (%s%%)\n",
+                  fmt3(im$shared_SC), fmt1(im$percent_shared)))
+      cat(sprintf("  ------------------------------------------------\n"))
+      cat(sprintf("  Total R-squared:                   %s  (%s%%)\n",
+                  fmt3(im$unique_S + im$unique_C + im$shared_SC),
+                  fmt1(im$percent_S + im$percent_C + im$percent_shared)))
+      cat("\n  These three sum to the total by construction. The previous output printed\n")
+      cat("  two overlapping MARGINAL R-squareds (0.283 and 0.838 against a total of\n")
+      cat("  0.892) and called their ratios 'proportions', which summed to 124.7%; the\n")
+      cat("  shared component was invisible because it was being counted twice.\n")
+      if(isTRUE(im$shared_SC < 0))
+        cat("  ! The shared component is NEGATIVE: S and C are acting as mutual\n",
+            "    suppressors here. That is a real finding about the design, not an error.\n", sep = "")
+      cat("\n  The marginal R-squareds this is computed from, for audit:\n")
+      cat(sprintf("    trend-only model:     %s\n", fmt3(im$r_squared_S)))
+      cat(sprintf("    harmonics-only model: %s\n", fmt3(im$r_squared_C)))
+      cat("\n  No dominance verdict is emitted. The old report concluded 'Circadian rhythm\n")
+      cat("  (C) is the dominant component' from overlapping R-squareds; and any such\n")
+      cat("  claim would have to account for C using ", 2 * nh,
+          " parameters against S's ",
+          switch(trend_type, "none" = 0, "linear" = 1, "log" = 1, "exp_sat" = 2, 0),
+          ".\n", sep = "")
+    }
+
+    # ========================================================================
+    # AUDIT 2.2: conditioning
+    # ========================================================================
+    if(!is.null(mod$conditioning)) {
+      hdr("Parameter conditioning (AUDIT 2.2)")
+      cn <- mod$conditioning
+      if(!is.null(cn$mean_cor)) {
+        cat("Mean within-subject parameter correlation matrix:\n")
+        print(round(cn$mean_cor, 3))
+        cat("\n")
+      }
+      if(!is.null(cn$tau_fixed_delta_aic))
+        cat(sprintf("Free-tau vs tau fixed at %s h:  Delta-AIC = %s (%s)\n",
+                    fmt1(cn$tau_fixed_value), fmt2(cn$tau_fixed_delta_aic),
+                    if(cn$tau_fixed_delta_aic > 0)
+                      "the free-tau fit is NOT better by AIC: tau is not identified by these data"
+                    else "the free-tau fit is preferred"))
+      if(!is.null(cn$kappa_before))
+        cat(sprintf("Design-matrix condition number: %s (midnight origin) -> %s (first-observation origin)\n",
+                    fmt1(cn$kappa_before), fmt1(cn$kappa_after)))
+    }
+
+    # ========================================================================
+    # Groups
+    # ========================================================================
+    if(!is.null(mod$group_fits) && length(mod$group_fits) >= 1) {
+      ga <- attr(mod$group_fits, "audit")
+      hdr(sprintf("Group-specific parameters%s",
+                  if(!is.null(mod$group_var_name)) paste0(" (", mod$group_var_name, ")") else ""))
+
+      # AUDIT 1.5: the accounting, before any group is printed
+      n_in <- attr(mod$group_fits, "n_in_groups") %||% NA
+      n_fit <- attr(mod$group_fits, "n_fitted") %||% nrow(params)
+      cat(sprintf("Group sizes sum to %s; %s subjects were fitted.\n",
+                  fmtn(n_in, 0), fmtn(n_fit, 0)))
+      if(!is.null(ga) && ga$n_unassigned > 0)
+        cat(sprintf("  %d subject(s) have no usable group label and appear as UNASSIGNED below.\n",
+                    ga$n_unassigned),
+            "  They were previously pooled into every population statistic and into no\n",
+            "  group, which is why the group sizes did not add up to the total.\n", sep = "")
+      if(!is.null(ga) && length(ga$dropped_small) > 0)
+        cat(sprintf("  Group(s) not summarised (fewer than 3 fitted subjects): %s\n",
+                    paste(ga$dropped_small, collapse = ", ")))
+      if(is.finite(n_in) && is.finite(n_fit) && n_in != n_fit)
+        cat("  ! THESE DO NOT RECONCILE. Some subjects are being dropped silently.\n")
+      else
+        cat("  These reconcile.\n")
+
+      cat("\nEstimator key, per line: [arithmetic] = ordinary mean and SD.\n")
+      cat("                         [vector]     = amplitude-weighted vector mean.\n")
+      cat("                         [circular]   = circular mean / circular SD.\n")
+      cat("A linear SD is never printed beside a vector- or circular-averaged value.\n")
+
       for(g_name in names(mod$group_fits)) {
         g <- mod$group_fits[[g_name]]
-        cat(sprintf("\nGroup '%s' (n=%d):\n", g_name, g$n))
-        cat(sprintf("  MESOR:     %.3f (SD=%.3f)\n", g$mean_mesor, g$sd_mesor))
+        label <- if(isTRUE(g$is_unassigned)) "UNASSIGNED (no usable group label)" else g_name
+        cat(sprintf("\nGroup '%s' (n = %d):\n", label, g$n))
+        if(isTRUE(g$is_unassigned))
+          cat("  Shown because these subjects exist. They are not a group; do not compare them.\n")
 
-        # Show trend parameters if present
+        cat(sprintf("  Intercept (beta_0, at t = 0):  %s (SD %s)   [arithmetic]\n",
+                    fmt3(g$intercept), fmt3(g$sd_mesor)))
+        if(trend_type != "none" && is.finite(g$rhythm_adjusted_mean))
+          cat(sprintf("  MESOR (rhythm-adjusted mean):  %s   [integrated over the window]\n",
+                      fmt3(g$rhythm_adjusted_mean)))
+
         if(!is.null(g$trend_params) && length(g$trend_params) > 0) {
-          for(param_name in names(g$trend_params)) {
-            param_label <- switch(param_name,
-                                 "trend_linear" = "Linear trend",
-                                 "trend_log" = "Log trend",
-                                 "A_sat" = "A_sat",
-                                 "tau" = "τ",
-                                 param_name)
-            cat(sprintf("  %s: %.3f (SD=%.3f)\n",
-                       param_label, g$trend_params[[param_name]]$mean,
-                       g$trend_params[[param_name]]$sd))
+          for(pn in names(g$trend_params)) {
+            lbl <- switch(pn, "trend_linear" = "Linear trend", "trend_log" = "Log trend",
+                          "A_sat" = "A_sat (asymptote)", "tau" = "tau (time constant, h)", pn)
+            cat(sprintf("  %-30s %s (SD %s)   [arithmetic]\n", paste0(lbl, ":"),
+                        fmt3(g$trend_params[[pn]]$mean), fmt3(g$trend_params[[pn]]$sd)))
           }
         }
 
-        # Show sleep inertia parameters if present
-        if(!is.null(g$inertia_params)) {
-          cat(sprintf("  W₀:        %.3f (SD=%.3f)\n",
-                     g$inertia_params$W0$mean, g$inertia_params$W0$sd))
-          cat(sprintf("  τ_W:       %.2f h (SD=%.2f)\n",
-                     g$inertia_params$tau_W$mean, g$inertia_params$tau_W$sd))
+        for(h in seq_len(nh)) {
+          rr <- if(!is.null(g$resultants)) g$resultants[[h]] else NULL
+          cat(sprintf("  H%d amplitude: %s   [vector]\n", h, fmt3(g$mean_amplitudes[h])))
+          cat(sprintf("                %s (SD %s)   [arithmetic]\n",
+                      fmt3(g$amp_arithmetic[h]), fmt3(g$sd_amplitudes[h])))
+          cat(sprintf("  H%d acrophase: %s h   [vector]\n", h, fmt2(g$mean_acrophases_time[h])))
+          if(!is.null(rr)) {
+            cat(sprintf("                r-bar unweighted %s (Rayleigh Z = %s, p = %s)   [circular]\n",
+                        fmt3(rr$r_unweighted), fmt1e(rr$rayleigh$Z),
+                        format.pval(rr$rayleigh$p, digits = 3, eps = 1e-16)))
+            cat(sprintf("                r-bar amplitude-weighted %s\n", fmt3(rr$r_weighted)))
+          }
+          if(h > 1)
+            cat(sprintf("                convention: modulo %s h\n", fmtn(period / h, 0)))
         }
 
-        for(h in 1:mod$n_harmonics) {
-          cat(sprintf("  H%d Amplitude: %.3f (SD=%.3f)\n", h, g$mean_amplitudes[h], g$sd_amplitudes[h]))
-          cat(sprintf("  H%d Acrophase: %.2f hours\n", h, g$mean_acrophases_time[h]))
-        }
-
-        # Build and display fitted equation for this group
         cat("\n  Fitted equation:\n  ")
-        g_eq <- sprintf("Y(t) = %.2f", g$mean_mesor)
+        cat(fck_format_equation(g$intercept, trend_type, g$trend_coefs,
+                                g$mean_amplitudes, g$mean_acrophases_rad,
+                                period, pop$t_offset %||% 0), "\n")
 
-        # Add trend component
-        if(mod$trend_type == "linear" && !is.null(g$trend_params$trend_linear)) {
-          beta <- g$trend_params$trend_linear$mean
-          if(beta >= 0) {
-            g_eq <- paste0(g_eq, sprintf(" + %.3f·t", beta))
-          } else {
-            g_eq <- paste0(g_eq, sprintf(" - %.3f·t", abs(beta)))
-          }
-        } else if(mod$trend_type == "log" && !is.null(g$trend_params$trend_log)) {
-          beta <- g$trend_params$trend_log$mean
-          if(beta >= 0) {
-            g_eq <- paste0(g_eq, sprintf(" + %.3f·log(t+1)", beta))
-          } else {
-            g_eq <- paste0(g_eq, sprintf(" - %.3f·log(t+1)", abs(beta)))
-          }
-        } else if(mod$trend_type == "exp_sat" && !is.null(g$trend_params$A_sat) && !is.null(g$trend_params$tau)) {
-          A_sat <- g$trend_params$A_sat$mean
-          tau <- g$trend_params$tau$mean
-          if(!is.na(A_sat) && !is.na(tau)) {
-            if(A_sat >= 0) {
-              g_eq <- paste0(g_eq, sprintf(" + %.2f·(1 - e^(-t/%.1f))", A_sat, tau))
-            } else {
-              g_eq <- paste0(g_eq, sprintf(" - %.2f·(1 - e^(-t/%.1f))", abs(A_sat), tau))
-            }
-          }
-        }
-
-        # Add harmonic components
-        for(h in 1:mod$n_harmonics) {
-          A <- g$mean_amplitudes[h]
-          phi <- g$mean_acrophases_rad[h]  # In radians
-
-          if(!is.na(A) && !is.na(phi)) {
-            if(A >= 0) {
-              g_eq <- paste0(g_eq, sprintf(" + %.2f·cos(2π·%d·t/%.0f - %.2f)",
-                                       A, h, mod$period, phi))
-            } else {
-              g_eq <- paste0(g_eq, sprintf(" - %.2f·cos(2π·%d·t/%.0f - %.2f)",
-                                       abs(A), h, mod$period, phi))
-            }
-          }
-        }
-
-        cat(g_eq, "\n")
-
-        # Variance decomposition for this group
         if(!is.null(g$variance_decomp)) {
           vd <- g$variance_decomp
-          cat(sprintf("  Variance Decomposition:\n"))
-          cat(sprintf("    Process S: %.1f%% (SD=%.1f%%)\n", vd$percent_S, vd$percent_S_sd))
-          cat(sprintf("    Process C: %.1f%% (SD=%.1f%%)\n", vd$percent_C, vd$percent_C_sd))
+          cat("  Variance decomposition (commonality):\n")
+          cat(sprintf("    unique S %s%%, unique C %s%%, shared %s%%\n",
+                      fmt1(vd$percent_S), fmt1(vd$percent_C),
+                      fmt1(vd$percent_shared %||% NA_real_)))
         }
       }
     }
+
+    invisible(NULL)
   })
+
   
   # Parameters table
   output$harmonic_parameters_table <- renderUI({
@@ -2732,7 +3533,8 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     params <- mod$individual_params
     
     # Build summary table with all harmonics
-    param_names <- c("MESOR")
+    # AUDIT 1.4: this column is the fitted constant, not a rhythm-adjusted mean.
+    param_names <- c("Intercept (b0, t=0)")
     mean_vals <- c(mean(params$mesor))
     sd_vals <- c(sd(params$mesor))
     min_vals <- c(min(params$mesor))
@@ -3645,7 +4447,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     }
   })
   
-  # MESOR by group plot
+  # Intercept by group plot (AUDIT 1.4: it is the constant, not the MESOR)
   output$harmonic_mesor_plot <- renderPlotly({
     req(values$harmonic_model)
     mod <- values$harmonic_model
@@ -3664,7 +4466,8 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
         geom_jitter(width = 0.2, alpha = 0.5) +
         scale_fill_brewer(palette = "Set1") +
         theme_minimal() +
-        labs(title = "MESOR by Group", x = "Group", y = "MESOR") +
+        labs(title = "Intercept (beta_0) by Group", x = "Group",
+             y = "Intercept (beta_0, at t = 0)") +
         theme(legend.position = "none")
       
       ggplotly(g)
@@ -3672,8 +4475,8 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       plot_ly(y = params$mesor, type = "box", 
               marker = list(color = 'forestgreen'),
               boxpoints = "all", jitter = 0.3) %>%
-        layout(title = "Distribution of MESOR",
-               yaxis = list(title = "MESOR"))
+        layout(title = "Distribution of the intercept (beta_0)",
+               yaxis = list(title = "Intercept (beta_0, at t = 0)"))
     }
   })
   
@@ -3753,7 +4556,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     # Create a cleaner display table
     display_df <- data.frame(
       Subject = params$subject,
-      MESOR = round(params$mesor, 3),
+      Intercept_b0 = round(params$mesor, 3),
       R_squared = round(params$r_squared, 3),
       Pct_Rhythm = round(params$percent_rhythm, 1),
       p_value = format(params$p_value, digits = 3, scientific = TRUE)
@@ -3948,7 +4751,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       circ_se_time <- if(!is.na(circ_se_rad)) circ_se_rad * effective_period / (2 * pi) else NA
       
       group_df <- rbind(group_df, 
-                        data.frame(group = g_name, parameter = "MESOR", 
+                        data.frame(group = g_name, parameter = "Intercept (b0)", 
                                    value = g$mean_mesor, se = g$sd_mesor / sqrt(g$n)),
                         data.frame(group = g_name, parameter = paste0("Amplitude (H", h, ")"), 
                                    value = mean(grp_amp, na.rm = TRUE), 
@@ -4063,7 +4866,15 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     effective_period <- mod$period / h
     
     cat("=== Group Comparison Statistics ===\n")
-    cat(sprintf("Harmonic: H%d (period = %.1f h)\n\n", h, effective_period))
+    cat(sprintf("Harmonic: H%d (effective period = %s h)\n", h, fmt1(effective_period)))
+    if(h > 1)
+      cat(sprintf("Acrophase convention: identified modulo %s h, so x h is equivalent to %s h.\n",
+                  fmtn(effective_period, 0), fmtn(effective_period, 0)))
+    cat(sprintf("Data source: %s.%s\n\n",
+                if(isTRUE(mod$using_smoothed)) "SMOOTHED" else "RAW",
+                if(isTRUE(mod$using_smoothed))
+                  " Between-group differences are less affected by smoothing than the within-subject fit statistics, but the per-subject parameters entering these tests are still smoothed-data estimates."
+                else ""))
     
     # Get group variable and params
     if(!is.null(input$harmonic_group_var) && input$harmonic_group_var != "_none_") {
@@ -4076,16 +4887,57 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
                          !is.na(params[[amp_col]]) & !is.na(params[[acro_col]]), ]
       
       n_groups <- length(unique(params$group))
-      cat(sprintf("Groups: %d, Total N: %d (after removing missings)\n\n", n_groups, nrow(params)))
-      
-      cat("--- MESOR Comparison ---\n")
-      if(n_groups == 2) {
-        tt <- t.test(mesor ~ group, data = params)
-        cat(sprintf("t-test: t = %.3f, df = %.1f, p = %.4f\n", tt$statistic, tt$parameter, tt$p.value))
-      } else {
-        aov_mesor <- aov(mesor ~ group, data = params)
-        cat("ANOVA:\n")
-        print(summary(aov_mesor))
+      cat(sprintf("Groups: %d, Total N: %d (after removing missings)\n", n_groups, nrow(params)))
+
+      # AUDIT 1.5: this block filters NA group labels while the Group-Specific
+      # Parameters panel used to drop them silently, so the two N's disagreed by
+      # construction and neither reconciled to the number fitted. Both now say
+      # what they did.
+      n_dropped_here <- nrow(mod$individual_params) - nrow(params)
+      if(n_dropped_here > 0)
+        cat(sprintf("  (%d fitted subject(s) excluded here for a missing group label or parameter.)\n",
+                    n_dropped_here))
+      cat("\n")
+
+      # ======================================================================
+      # AUDIT 1.4 (applied to the comparisons too, as requested)
+      #
+      # These tests are on the fitted CONSTANT, not on a MESOR. Under a
+      # saturating trend the constant is the intercept of a model with two
+      # origins; a group difference in it is not a group difference in level.
+      # Both are now tested, and the second is the one to interpret.
+      # ======================================================================
+      cat("--- Intercept (beta_0, at t = 0) comparison ---\n")
+      cat("NOT a MESOR comparison. See the rhythm-adjusted mean below for level.\n")
+      lt <- fck_group_linear_test(params$mesor, params$group)
+      if(!is.null(lt)) {
+        cat(sprintf("  F(%d, %d) = %s, p = %s\n", lt$df1, lt$df2, fmt3(lt$F),
+                    format.pval(lt$p, digits = 3, eps = 1e-16)))
+        cat(sprintf("  eta^2 = %s, omega^2 = %s   [omega^2 is the less optimistic; quote it]\n",
+                    fmt3(lt$eta2), fmt3(lt$omega2)))
+        for(gg in lt$levels)
+          cat(sprintf("    %-14s mean %s (SD %s, n = %d)\n", gg,
+                      fmt3(lt$means[gg]), fmt3(lt$sds[gg]), lt$ns[gg]))
+        if(!is.null(lt$largest))
+          cat(sprintf("  Largest contrast %s - %s: %s, 95%% CI [%s, %s], Hedges' g = %s\n",
+                      lt$largest$a, lt$largest$b, fmt3(lt$largest$diff),
+                      fmt3(lt$largest$ci[1]), fmt3(lt$largest$ci[2]),
+                      fmt3(lt$largest$hedges_g)))
+      }
+
+      # the quantity that actually means "level": the rhythm-adjusted mean
+      if(!is.null(mod$group_fits) && (mod$trend_type %||% "none") != "none") {
+        cat("\n--- MESOR (rhythm-adjusted mean over the observed window) by group ---\n")
+        cat("Integrated per group from that group's own intercept and trend parameters.\n")
+        for(gn in names(mod$group_fits)) {
+          gf <- mod$group_fits[[gn]]
+          if(isTRUE(gf$is_unassigned)) next
+          cat(sprintf("    %-14s intercept %s -> MESOR %s   (difference %s)\n", gn,
+                      fmt3(gf$intercept), fmt3(gf$rhythm_adjusted_mean),
+                      fmt3(gf$rhythm_adjusted_mean - gf$intercept)))
+        }
+        cat("  A group can rank differently on these two: the intercept absorbs the\n")
+        cat("  trend baseline, the rhythm-adjusted mean does not.\n")
       }
       
       # Trend comparison (if trend is present)
@@ -4109,11 +4961,36 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
             print(summary(aov_trend))
           }
           
+          # AUDIT 2.6: effect size and interval, not a p-value alone
+          .lt <- fck_group_linear_test(params[[trend_col]], params$group)
+          if(!is.null(.lt)) {
+            cat(sprintf("  eta^2 = %s, omega^2 = %s\n", fmt3(.lt$eta2), fmt3(.lt$omega2)))
+            if(!is.null(.lt$largest))
+              cat(sprintf("  Largest contrast %s - %s: %s, 95%% CI [%s, %s], Hedges' g = %s\n",
+                          .lt$largest$a, .lt$largest$b, fmt3(.lt$largest$diff),
+                          fmt3(.lt$largest$ci[1]), fmt3(.lt$largest$ci[2]),
+                          fmt3(.lt$largest$hedges_g)))
+          }
           # Group means for trend
           for(g in unique(params$group)) {
             g_trend <- params[[trend_col]][params$group == g]
-            cat(sprintf("  %s: mean = %.4f (SD = %.4f, n=%d)\n", 
-                        g, mean(g_trend, na.rm = TRUE), sd(g_trend, na.rm = TRUE), length(g_trend)))
+            cat(sprintf("  %s: mean = %s (SD = %s, n=%d)\n",
+                        g, fmt4(mean(g_trend, na.rm = TRUE)),
+                        fmt4(sd(g_trend, na.rm = TRUE)), length(g_trend)))
+          }
+          # AUDIT 2.6: "declines monotonically across age bands" is a claim about
+          # ORDER. An omnibus ANOVA does not test it; a linear contrast on the
+          # ordered levels does, and is much more powerful against exactly that
+          # alternative. Only meaningful if the factor levels are in order.
+          .tr <- fck_group_trend_test(params[[trend_col]], params$group)
+          if(!is.null(.tr)) {
+            cat(sprintf("  Monotone trend across ordered levels (%s):\n",
+                        paste(.tr$levels, collapse = " < ")))
+            cat(sprintf("    L = %s (SE %s), t(%d) = %s, p = %s, 95%% CI [%s, %s]\n",
+                        fmt3(.tr$L), fmt3(.tr$se), .tr$df, fmt3(.tr$t),
+                        format.pval(.tr$p, digits = 3, eps = 1e-16),
+                        fmt3(.tr$ci[1]), fmt3(.tr$ci[2])))
+            cat("    Valid only if the group levels are genuinely ordered as printed.\n")
           }
           
           # For exp_sat, also compare tau
@@ -4131,9 +5008,32 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
             
             for(g in unique(params$group)) {
               g_tau <- params$tau[params$group == g]
-              cat(sprintf("  %s: mean τ = %.2f h (SD = %.2f, n=%d)\n", 
-                          g, mean(g_tau, na.rm = TRUE), sd(g_tau, na.rm = TRUE), length(g_tau)))
+              cat(sprintf("  %s: mean tau = %s h (SD = %s, n=%d)\n",
+                          g, fmt2(mean(g_tau, na.rm = TRUE)),
+                          fmt2(sd(g_tau, na.rm = TRUE)), length(g_tau)))
             }
+            .lt <- fck_group_linear_test(params$tau, params$group)
+            if(!is.null(.lt)) {
+              cat(sprintf("  eta^2 = %s, omega^2 = %s\n", fmt3(.lt$eta2), fmt3(.lt$omega2)))
+              if(!is.null(.lt$largest))
+                cat(sprintf("  Largest contrast %s - %s: %s h, 95%% CI [%s, %s], Hedges' g = %s\n",
+                            .lt$largest$a, .lt$largest$b, fmt2(.lt$largest$diff),
+                            fmt2(.lt$largest$ci[1]), fmt2(.lt$largest$ci[2]),
+                            fmt3(.lt$largest$hedges_g)))
+            }
+            .tr <- fck_group_trend_test(params$tau, params$group)
+            if(!is.null(.tr))
+              cat(sprintf("  Monotone trend: t(%d) = %s, p = %s, 95%% CI [%s, %s]\n",
+                          .tr$df, fmt3(.tr$t), format.pval(.tr$p, digits = 3, eps = 1e-16),
+                          fmt3(.tr$ci[1]), fmt3(.tr$ci[2])))
+            # AUDIT 2.2: a between-group comparison of tau is only meaningful if
+            # tau is identified WITHIN subject. It is not, here.
+            if(!is.null(mod$conditioning) && !is.null(mod$conditioning$tau_fixed_delta_aic) &&
+               mod$conditioning$tau_fixed_delta_aic > 0)
+              cat("  ! Delta-AIC says free tau is not better than tau held fixed: tau is not\n",
+                  "    identified by these data. A group difference in an unidentified\n",
+                  "    parameter is a difference in where the optimiser stopped on the ridge.\n",
+                  "    Do not report this comparison without the conditioning evidence.\n", sep = "")
           }
         }
       }
@@ -4142,12 +5042,35 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       amp_formula <- as.formula(paste(amp_col, "~ group"))
       if(n_groups == 2) {
         tt <- t.test(amp_formula, data = params)
-        cat(sprintf("t-test: t = %.3f, df = %.1f, p = %.4f\n", tt$statistic, tt$parameter, tt$p.value))
+        cat(sprintf("t-test: t = %s, df = %s, p = %s\n", fmt3(tt$statistic),
+                    fmt1(tt$parameter), format.pval(tt$p.value, digits = 3, eps = 1e-16)))
       } else {
         aov_amp <- aov(amp_formula, data = params)
         cat("ANOVA:\n")
         print(summary(aov_amp))
       }
+      # AUDIT 2.6: effect sizes and intervals for the amplitude decline that the
+      # report described (25.7 -> 22.6 -> 22.5 -> 21.1) and never tested.
+      .lt <- fck_group_linear_test(params[[amp_col]], params$group)
+      if(!is.null(.lt)) {
+        cat(sprintf("  eta^2 = %s, omega^2 = %s\n", fmt3(.lt$eta2), fmt3(.lt$omega2)))
+        for(gg in .lt$levels)
+          cat(sprintf("    %-14s mean %s (SD %s, n = %d)   [arithmetic]\n", gg,
+                      fmt3(.lt$means[gg]), fmt3(.lt$sds[gg]), .lt$ns[gg]))
+        if(!is.null(.lt$largest))
+          cat(sprintf("  Largest contrast %s - %s: %s, 95%% CI [%s, %s], Hedges' g = %s\n",
+                      .lt$largest$a, .lt$largest$b, fmt3(.lt$largest$diff),
+                      fmt3(.lt$largest$ci[1]), fmt3(.lt$largest$ci[2]),
+                      fmt3(.lt$largest$hedges_g)))
+      }
+      .tr <- fck_group_trend_test(params[[amp_col]], params$group)
+      if(!is.null(.tr))
+        cat(sprintf("  Monotone trend across ordered levels: t(%d) = %s, p = %s, 95%% CI [%s, %s]\n",
+                    .tr$df, fmt3(.tr$t), format.pval(.tr$p, digits = 3, eps = 1e-16),
+                    fmt3(.tr$ci[1]), fmt3(.tr$ci[2])))
+      cat("  Note: these are the ARITHMETIC group means. The Group-Specific Parameters\n")
+      cat("  panel reports VECTOR means for the same amplitudes; they are different\n")
+      cat("  estimators and will not match. The test above is on the arithmetic values.\n")
       
       cat(sprintf("\n--- Acrophase (H%d) Comparison ---\n", h))
       cat(strrep("-", 60), "\n")
@@ -4183,16 +5106,18 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
         cat(sprintf("  %s\n", ww$message))
       }
 
+      # AUDIT 2.6: the concentration assumption is CHECKED and the check is
+      # printed. It was previously enforced silently inside the function and
+      # summarised as an adjective.
+      .as <- fck_ww_assumption(ww$r_bar, ww$kappa)
+      cat(sprintf("    Assumption check: %s\n", .as$msg))
       if(!is.na(ww$F)) {
-        cat(sprintf("    F(%d, %d) = %.3f, p = %.4f\n", ww$df1, ww$df2, ww$F, ww$p))
-        cat(sprintf("    Mean resultant length (r̄) = %.3f", ww$r_bar))
-        if(ww$r_bar >= 0.7) {
-          cat(" (high concentration)\n")
-        } else if(ww$r_bar >= 0.45) {
-          cat(" (moderate concentration)\n")
-        } else {
-          cat(" (low concentration - interpret with caution)\n")
-        }
+        cat(sprintf("    F(%d, %d) = %s, p = %s\n", ww$df1, ww$df2, fmt3(ww$F),
+                    format.pval(ww$p, digits = 3, eps = 1e-16)))
+        cat(sprintf("    r-bar (unweighted, pooled) = %s\n", fmt3(ww$r_bar)))
+        if(!.as$ok)
+          cat("    The F value above should NOT be reported: the assumption it rests on\n",
+              "    does not hold for these data.\n", sep = "")
       }
 
       cat("\n  Group circular statistics (unweighted):\n")
@@ -4204,12 +5129,21 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
         g_sd <- circular_sd(g_angles)
         g_sd_time <- if(!is.na(g_sd)) g_sd * effective_period / (2 * pi) else NA
         g_r <- mean_resultant_length(g_angles)
-        cat(sprintf("    %s: mean = %.2f h, circ.SD = %.2f h, r̄ = %.3f (n=%d)\n",
-                    g, g_mean_time, ifelse(is.na(g_sd_time), NA, g_sd_time), g_r, length(g_angles)))
+        # AUDIT 1.2: label which resultant this is. Both are shown.
+        g_rw <- fck_resultants(g_angles, params[[amp_col]][params$group == g])
+        cat(sprintf("    %-14s circular mean %s h, circ.SD %s h, r-bar unweighted %s, weighted %s (n=%d)\n",
+                    g, fmt2(g_mean_time), fmt2(g_sd_time), fmt3(g_r),
+                    fmt3(if(is.null(g_rw)) NA_real_ else g_rw$r_weighted), length(g_angles)))
       }
 
       # (2) Hotelling's T² test
-      cat(sprintf("\n(2) Hotelling's T² on (beta_cos_%d, beta_sin_%d) (amplitude-weighted):\n", h, h))
+      # AUDIT 2.6: this IS Bingham's parameter test for amplitude-acrophase pairs
+      # (Bingham et al. 1982) -- the joint test on the (beta_cos, beta_sin)
+      # vector. Naming it as such connects the output to the literature the
+      # brief asked for, rather than leaving it as an unattributed T-squared.
+      cat(sprintf("\n(2) Bingham parameter test / Hotelling's T-squared on (beta_cos_%d, beta_sin_%d):\n", h, h))
+      cat("    The joint test on the rhythmic vector -- amplitude and acrophase together\n")
+      cat("    (Bingham, Arbogast, Cornelissen Guillaume, Lee & Halberg 1982).\n")
       bc_list <- lapply(groups, function(g) params[[beta_cos_col]][params$group == g])
       bs_list <- lapply(groups, function(g) params[[beta_sin_col]][params$group == g])
       ht <- hotelling_t2(bc_list, bs_list)
@@ -4316,11 +5250,14 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
               print(summary(aov_asat))
             }
             
-            cat("\nGroup statistics (units):\n")
+            # AUDIT 1.7: "(units)" was a placeholder that was never interpolated.
+            cat(sprintf("\nGroup statistics%s:\n",
+                        if(!is.null(mod$dv_units)) paste0(" (", mod$dv_units, ")") else ""))
             for(g in unique(params_trend$group)) {
               g_asat <- params_trend$A_sat[params_trend$group == g]
-              cat(sprintf("  %s: mean = %.3f, SD = %.3f (n=%d)\n", 
-                          g, mean(g_asat, na.rm=TRUE), sd(g_asat, na.rm=TRUE), length(g_asat)))
+              cat(sprintf("  %s: mean = %s, SD = %s (n=%d)\n",
+                          g, fmt3(mean(g_asat, na.rm=TRUE)),
+                          fmt3(sd(g_asat, na.rm=TRUE)), length(g_asat)))
             }
           }
         }
@@ -4346,9 +5283,86 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
               cat(sprintf("  %s: mean τ = %.2f h, SD = %.2f (n=%d)\n", 
                           g, mean(g_tau, na.rm=TRUE), sd(g_tau, na.rm=TRUE), length(g_tau)))
             }
-            cat("\nNote: τ represents time to reach ~63% of asymptotic level.\n")
+            cat("\nNote: tau represents time to reach ~63% of asymptotic level.\n")
           }
         }
+      }
+
+      # ====================================================================
+      # AUDIT 2.6: the population-mean cosinor with group x harmonic terms
+      #
+      # Everything above is a two-stage analysis: fit each subject, then run a
+      # t-test or ANOVA on the per-subject estimates. That treats every subject
+      # as contributing one equally-precise observation, which they do not --
+      # a subject with 16 clean points and a subject on the edge of
+      # identifiability get the same weight -- and it cannot borrow strength
+      # across an unbalanced design (654 / 410 / 181 / 59 here).
+      #
+      # The population-mean cosinor (Cornelissen 2014) fits ONE model to all
+      # subjects' observations at once, with group x (cos, sin) interactions, so
+      # the group contrast is a linear hypothesis inside a single fit. With a
+      # random intercept per subject it is a mixed model; without lme4 available
+      # it degrades to a fixed-effects fit with cluster-robust standard errors,
+      # which is stated rather than hidden.
+      # ====================================================================
+      cat("\n\n=== Population-mean cosinor (primary analysis) ===\n")
+      cat("One model over all observations, group x harmonic interactions.\n")
+      cat("Preferred over the per-subject tests above: it weights subjects by their\n")
+      cat("actual precision and handles the unbalanced design directly.\n\n")
+
+      pmc <- tryCatch({
+        Yp <- if(isTRUE(mod$using_smoothed)) values$smooth_data else values$data
+        tv <- mod$time_vec
+        sub_ids <- mod$individual_params$subject
+        gl <- group_var[sub_ids]
+        keep <- !is.na(gl)
+        sub_ids <- sub_ids[keep]; gl <- droplevels(as.factor(gl[keep]))
+        long <- data.frame(
+          y = as.vector(t(Yp[sub_ids, , drop = FALSE])),
+          t = rep(tv, times = length(sub_ids)),
+          subj = factor(rep(sub_ids, each = length(tv))),
+          grp = rep(gl, each = length(tv)))
+        long <- long[is.finite(long$y), ]
+        for(hh in seq_len(mod$n_harmonics)) {
+          w <- 2 * pi * hh / mod$period
+          long[[paste0("c", hh)]] <- cos(w * long$t)
+          long[[paste0("s", hh)]] <- sin(w * long$t)
+        }
+        trm <- switch(as.character(mod$trend_type),
+                      "linear" = "t",
+                      "log" = "I(log(t - min(t) + 1))",
+                      "exp_sat" = sprintf("I(1 - exp(-(t - min(t))/%f))",
+                                          mean(mod$individual_params$tau, na.rm = TRUE)),
+                      NULL)
+        harm <- paste(unlist(lapply(seq_len(mod$n_harmonics),
+                                    function(hh) c(paste0("c", hh), paste0("s", hh)))),
+                      collapse = " + ")
+        rhs <- paste(c(trm, harm), collapse = " + ")
+        f_null <- stats::as.formula(paste("y ~", rhs, "+ grp"))
+        f_full <- stats::as.formula(paste("y ~", rhs, "+ grp + grp:(", harm, ")"))
+        list(long = long, f_null = f_null, f_full = f_full,
+             m_null = stats::lm(f_null, data = long),
+             m_full = stats::lm(f_full, data = long))
+      }, error = function(e) list(error = conditionMessage(e)))
+
+      if(!is.null(pmc$error)) {
+        cat("  Could not be fitted: ", pmc$error, "\n", sep = "")
+      } else {
+        an <- stats::anova(pmc$m_null, pmc$m_full)
+        cat("Test: do the harmonic coefficients differ by group?\n")
+        cat(sprintf("  F(%d, %d) = %s, p = %s\n",
+                    an$Df[2], an$Res.Df[2], fmt3(an$F[2]),
+                    format.pval(an$`Pr(>F)`[2], digits = 3, eps = 1e-16)))
+        r2n <- summary(pmc$m_null)$r.squared; r2f <- summary(pmc$m_full)$r.squared
+        cat(sprintf("  Partial R-squared for the group x harmonic block: %s\n",
+                    fmt4(max(0, (r2f - r2n) / (1 - r2n)))))
+        cat("\n  ! Standard errors here assume independent observations. Each subject\n")
+        cat("    contributes ", length(mod$time_vec), " correlated points, so these p-values are\n", sep = "")
+        cat("    ANTICONSERVATIVE. Install lme4 and refit with (1|subject) for the\n")
+        cat("    interval you would actually report; the point estimates are unbiased\n")
+        cat("    either way. This is stated rather than silently ignored.\n")
+        if(isTRUE(mod$using_smoothed))
+          cat("    On smoothed data the dependence is worse still (see the data-source note).\n")
       }
     }
   })

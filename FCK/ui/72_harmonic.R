@@ -4,6 +4,12 @@
 # PORTED VERBATIM by tools/port_fck.py — do not hand-edit the ranges
 # below without updating that script's manifest.  Provenance:
 #   CIRCAREG.R lines 424-586  (Harmonic (cosinor) regression)
+#
+# CHANGELOG - 2026-09-03 cosinor audit (this file is NO LONGER verbatim)
+# Adds the DV name/units/bounds inputs (1.7), the raw-vs-smoothed data source
+# (2.1), the time-origin selector (1.4.3 / 2.2), the nested-model comparison and
+# fixed-tau controls (2.4 / 2.2), and renames the MESOR bound inputs to what
+# they actually bound: the intercept (1.4).
 # ==========================================================================
 ui_tab_harmonic <- tabItem(
         tabName = "harmonic",
@@ -12,8 +18,50 @@ ui_tab_harmonic <- tabItem(
             title = "Harmonic Regression Settings", status = "success", solidHeader = TRUE, width = 4,
             h4("Data Selection"),
             uiOutput("harmonic_var_select_ui"),
+
+            # ================================================================
+            # AUDIT 1.7 / 2.1 / 1.4.3: what is being modelled, and on what
+            # ================================================================
+            hr(),
+            h4("The dependent variable"),
+            helpText(HTML("The report never named the DV, so nobody reading it could
+                           check whether the fitted curve was even admissible.")),
+            textInput("harmonic_dv_name", "Name:", value = "", placeholder = "e.g. KSS sleepiness"),
+            textInput("harmonic_dv_units", "Units:", value = "", placeholder = "e.g. KSS points"),
+            fluidRow(
+              column(6, numericInput("harmonic_dv_min", "Lowest possible value:", value = NA, step = 1)),
+              column(6, numericInput("harmonic_dv_max", "Highest possible value:", value = NA, step = 1))
+            ),
+            helpText(HTML("Fitted values outside this range are flagged. With
+                           <i>M + A\u2081 + A\u2082</i> the trough of a reported pooled fit can
+                           sit below zero before the trend is added, which is
+                           structurally impossible for a non-negative scale.")),
+
+            hr(),
+            h4("Data source"),
+            radioButtons("harmonic_data_source", NULL,
+                         choices = c("Smoothed (FDA-interpolated)" = "smoothed",
+                                     "Raw (cosinor handles gaps natively)" = "raw"),
+                         selected = "smoothed"),
+            helpText(HTML("Fitting on smoothed data removes independent noise and
+                           induces residual autocorrelation: R\u00b2 is inflated, LOOCV is
+                           optimistic because a held-out point is partly rebuilt from
+                           its neighbours, and the zero-amplitude F test is
+                           anticonservative. <b>Run both</b> and compare \u2014 the gap is
+                           the inflation.")),
+
             hr(),
             h4("Model Specification"),
+            radioButtons("harmonic_time_origin", "Time origin (t = 0 at):",
+                         choices = c("Midnight (current behaviour)" = "midnight",
+                                     "First observation" = "first_observation"),
+                         selected = "midnight"),
+            helpText(HTML("With a saturating trend the fitter anchors <i>S(t)</i> at the
+                           first observation while the harmonics stay anchored at
+                           midnight \u2014 two origins, one constant, so the intercept is
+                           the value at neither. Re-anchoring both makes the intercept
+                           interpretable and improves the conditioning of the
+                           <i>A_sat</i>/<i>\u03c4</i> pair.")),
             numericInput("harmonic_period", "Fundamental Period (τ):", value = 24, min = 1, max = 168, step = 1),
             helpText("Period in the same units as your time variable (e.g., 24 for circadian)."),
             sliderInput("n_harmonics", "Number of Harmonics:", min = 1, max = 8, value = 1, step = 1),
@@ -48,6 +96,23 @@ ui_tab_harmonic <- tabItem(
             uiOutput("harmonic_group_var_ui"),
             helpText("Optional: Select a group variable to compare rhythms between groups."),
             hr(),
+            h4("Diagnostics"),
+            checkboxInput("harmonic_model_selection",
+                          "Compare nested models (\u0394AICc table)", FALSE),
+            helpText(HTML("Fits trend \u2208 {none, linear, saturating} \u00d7 harmonics \u2208 {1,2,3}
+                           and reports \u0394AICc with Akaike weights. Absolute AIC/AICc/BIC
+                           with no competing model are constant offsets of one another
+                           and carry no information. <b>Slow:</b> 9 fits per subject.")),
+            numericInput("harmonic_tau_fixed",
+                         "\u03c4 held at (h), for the free-vs-fixed \u0394AIC:", value = 18,
+                         min = 1, max = 72, step = 0.5),
+            helpText(HTML("Daan, Beersma & Borb\u00e9ly (1984) give \u03c4_rise \u2248 18 h under
+                           extended wakefulness. If free \u03c4 does not beat fixed \u03c4 on AIC,
+                           \u03c4 is not identified by these data and a between-group
+                           comparison of it is a comparison of where the optimiser
+                           stopped on a ridge.")),
+
+            hr(),
             h4("Bootstrap Options"),
             checkboxInput("harmonic_bootstrap", "Compute Bootstrap CIs", FALSE),
             conditionalPanel(
@@ -63,8 +128,8 @@ ui_tab_harmonic <- tabItem(
               uiOutput("harmonic_bounds_hints"),
               hr(),
               h5("Common Parameters"),
-              numericInput("harmonic_mesor_min", "MESOR Min:", value = NA, step = 0.1),
-              numericInput("harmonic_mesor_max", "MESOR Max:", value = NA, step = 0.1),
+              numericInput("harmonic_mesor_min", "Intercept (\u03b2\u2080) Min:", value = NA, step = 0.1),
+              numericInput("harmonic_mesor_max", "Intercept (\u03b2\u2080) Max:", value = NA, step = 0.1),
               numericInput("harmonic_amplitude_min", "Amplitude Min:", value = 0, step = 0.1),
               numericInput("harmonic_amplitude_max", "Amplitude Max:", value = NA, step = 0.1),
               conditionalPanel(

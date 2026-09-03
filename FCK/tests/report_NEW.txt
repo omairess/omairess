@@ -1,0 +1,129 @@
+============================================================================== 
+REPORT AFTER THE AUDIT
+============================================================================== 
+
+Dependent variable: synthetic sleepiness (KSS-like points)
+  Admissible range: [1.00, 100.00]
+Period: 24 h    Harmonics: 2    Trend: SATURATING EXPONENTIAL
+Data: RAW (no smoothing applied)
+Time origin: MIDNIGHT (t = 0 at clock 00:00).
+  ! The trend is anchored at the first observation (t - 8.00) while the
+    harmonics are anchored at midnight. The intercept is the constant of a
+    model with two origins and is not the value at either.
+
+--- Fit outcomes ---
+Subjects attempted:         1304
+  Converged:                1304
+  Did not converge:         0  (excluded)
+
+--- Central value ---
+Intercept (beta_0, at t = 0):                           26.997
+MESOR (rhythm-adjusted mean over the observed window):  42.041
+  = time-average of beta_0 + S(t) over t in [8.00, 30.00] h, by integration.
+  Difference: 15.04 units. The intercept is NOT the MESOR here.
+
+--- Population rhythm parameters (VECTOR-averaged) ---
+  H1: amplitude = 25.875, acrophase = 2.54 h
+  H2: amplitude = 7.439, acrophase = 4.07 h
+      convention: H2 is identified modulo 12 h, so 4.07 h == 16.07 h
+
+--- Circular concentration and the Rayleigh test ---
+H1  n = 1304
+  r-bar (UNWEIGHTED, for Rayleigh):                0.996
+  r-bar (AMPLITUDE-WEIGHTED, for the vector mean): 0.996
+  Rayleigh Z =  1293, p = <1e-16   [Z = n * r_unweighted^2]
+  Circular SD = 0.356 h
+H2  n = 1304
+  r-bar (UNWEIGHTED, for Rayleigh):                0.966
+  r-bar (AMPLITUDE-WEIGHTED, for the vector mean): 0.970
+  Rayleigh Z =  1217, p = <1e-16   [Z = n * r_unweighted^2]
+  Circular SD = 0.501 h
+
+--- Fitted model equation (pooled) ---
+Y(t) = 27.00 + 60.88·(1 - e^(-(t - 8)/36.8)) + 25.87·cos(2π·1·t/24 - 0.66) + 7.44·cos(2π·2·t/24 - 2.13) 
+
+--- Individual parameters (ARITHMETIC means, +/- linear SD) ---
+  Intercept:           26.997 (SD 5.297)   [arithmetic]
+  A_sat (asymptote):   60.876 (SD 47.380) KSS points   [arithmetic]
+  tau (time constant): 36.83 (SD 37.17) h   [arithmetic]
+    ! SD/mean is above 0.5: a likelihood ridge, not population heterogeneity.
+  H1 amplitude: 25.983 (SD 4.725)   [arithmetic]
+  H1 acrophase: circular mean 2.55 h, circular SD 0.36 h   [circular]
+  H2 amplitude: 7.672 (SD 2.101)   [arithmetic]
+  H2 acrophase: circular mean 4.05 h, circular SD 0.50 h   [circular]
+
+--- Variance decomposition (commonality analysis) ---
+  Unique to Process S (homeostatic): 0.025  (2.5%)
+  Unique to Process C (circadian):   0.429  (43.7%)
+  Shared between S and C:            0.528  (53.8%)
+  ------------------------------------------------
+  Total R-squared:                   0.982  (100.0%)
+  No dominance verdict is emitted.
+
+--- Group-specific parameters ---
+Group sizes sum to 1303; 1304 subjects were fitted.
+  1 subject(s) have no usable group label and appear as UNASSIGNED below.
+  These reconcile.
+
+Group 'YOUTH' (n = 653):
+  Intercept (beta_0, at t = 0):  26.281 (SD 5.219)   [arithmetic]
+  MESOR (rhythm-adjusted mean):  40.819   [integrated over the window]
+  H1 amplitude: 27.565   [vector]
+                27.663 (SD 4.295)   [arithmetic]
+  H1 acrophase: 2.53 h   [vector]
+
+  Fitted equation:
+  Y(t) = 26.28 + 60.07·(1 - e^(-(t - 8)/37.8)) + 27.57·cos(2π·1·t/24 - 0.66) + 7.73·cos(2π·2·t/24 - 2.13) 
+
+Group 'ADULT' (n = 410):
+  Intercept (beta_0, at t = 0):  27.137 (SD 5.181)   [arithmetic]
+  MESOR (rhythm-adjusted mean):  42.431   [integrated over the window]
+  H1 amplitude: 24.570   [vector]
+                24.685 (SD 4.366)   [arithmetic]
+  H1 acrophase: 2.57 h   [vector]
+
+  Fitted equation:
+  Y(t) = 27.14 + 59.77·(1 - e^(-(t - 8)/35.3)) + 24.57·cos(2π·1·t/24 - 0.67) + 7.22·cos(2π·2·t/24 - 2.14) 
+
+Group 'MIDDLE_AGE' (n = 181):
+  Intercept (beta_0, at t = 0):  29.044 (SD 5.255)   [arithmetic]
+  MESOR (rhythm-adjusted mean):  44.468   [integrated over the window]
+  H1 amplitude: 24.176   [vector]
+                24.284 (SD 4.470)   [arithmetic]
+  H1 acrophase: 2.49 h   [vector]
+
+  Fitted equation:
+  Y(t) = 29.04 + 61.28·(1 - e^(-(t - 8)/36.0)) + 24.18·cos(2π·1·t/24 - 0.65) + 7.29·cos(2π·2·t/24 - 2.11) 
+
+Group 'ELDERLY' (n = 59):
+  Intercept (beta_0, at t = 0):  27.728 (SD 5.432)   [arithmetic]
+  MESOR (rhythm-adjusted mean):  45.491   [integrated over the window]
+  H1 amplitude: 21.491   [vector]
+                21.650 (SD 5.077)   [arithmetic]
+  H1 acrophase: 2.58 h   [vector]
+
+  Fitted equation:
+  Y(t) = 27.73 + 75.04·(1 - e^(-(t - 8)/38.8)) + 21.49·cos(2π·1·t/24 - 0.68) + 6.29·cos(2π·2·t/24 - 2.10) 
+
+Group 'UNASSIGNED (no usable group label)' (n = 1):
+  Shown because these subjects exist. They are not a group; do not compare them.
+  Intercept (beta_0, at t = 0):  22.900 (SD NA)   [arithmetic]
+  MESOR (rhythm-adjusted mean):  39.666   [integrated over the window]
+  H1 amplitude: 23.846   [vector]
+                23.846 (SD NA)   [arithmetic]
+  H1 acrophase: 2.73 h   [vector]
+
+  Fitted equation:
+  Y(t) = 22.90 + 133.36·(1 - e^(-(t - 8)/80.0)) + 23.85·cos(2π·1·t/24 - 0.71) + 4.29·cos(2π·2·t/24 - 2.42) 
+
+--- Group comparisons (AUDIT 2.6) ---
+
+amp1:
+  F(3, 1299) = 72.329, p = <1e-16;  eta^2 = 0.143, omega^2 = 0.141
+  Largest contrast YOUTH - ELDERLY: 6.012, 95% CI [4.650, 7.374], Hedges' g = 1.376
+  Monotone trend: t(1299) = -10.083, p = <1e-16, 95% CI [-11.012, -7.425]
+
+tau:
+  F(3, 1299) = 0.459, p = 0.711;  eta^2 = 0.001, omega^2 = -0.001
+  Largest contrast ADULT - ELDERLY: -3.515, 95% CI [-13.864, 6.833], Hedges' g = -0.095
+  Monotone trend: t(1299) = 0.245, p = 0.806, 95% CI [-13.325, 17.136]

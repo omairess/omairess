@@ -1,0 +1,62 @@
+============================================================================== 
+REPORT AS THE CODE PRODUCED IT BEFORE THE AUDIT
+============================================================================== 
+
+--- Population Mean Parameters (Vector-Averaged) ---
+MESOR:     26.997
+Amplitude (H1): 25.875
+Acrophase (H1): 38.07 (2.54 hours)
+
+  All Harmonics (vector-averaged):
+    H1: Amplitude=25.875, Acrophase=2.54 hours
+    H2: Amplitude=7.439, Acrophase=4.07 hours
+
+Rayleigh test for uniformity (H1):
+  Z = 1293.182, p = 0.0000
+  Mean resultant length (r-bar) = 0.996
+
+--- Fitted Model Equation ---
+Y(t) = 27.00 + 25.87*cos(2pi*1*t/24 - 0.66) + 7.44*cos(2pi*2*t/24 - 2.13)
+
+--- Individual Parameter Summary ---
+MESOR:     Mean=26.997, SD=5.297
+A_sat (asymptote): Mean=60.876, SD=47.380 (units)
+tau (time constant): Mean=36.83, SD=37.17 (hours)
+H1 Amplitude: Mean=25.983, SD=4.725
+H1 Acrophase: Circular mean=2.55 h, r-bar=0.996
+H2 Acrophase: Circular mean=8.10 h
+
+--- Variance Decomposition: Relative Importance ---
+R2 from Process S (homeostatic): Mean=0.553
+R2 from Process C (circadian):   Mean=0.957
+
+Proportion of total R2 explained by:
+  Process S: 56.4%
+  Process C: 97.5%
+  [these sum to 153.8%]
+
+Interpretation: Circadian rhythm (C) is the dominant component
+
+--- Group-Specific Parameters ---
+
+Group 'YOUTH' (n=653):
+  MESOR:     26.281 (SD=5.219)
+  H1 Amplitude: 27.565 (SD=4.295)
+  H1 Acrophase: 2.53 hours
+
+Group 'ADULT' (n=410):
+  MESOR:     27.137 (SD=5.181)
+  H1 Amplitude: 24.570 (SD=4.366)
+  H1 Acrophase: 2.57 hours
+
+Group 'MIDDLE_AGE' (n=181):
+  MESOR:     29.044 (SD=5.255)
+  H1 Amplitude: 24.176 (SD=4.470)
+  H1 Acrophase: 2.49 hours
+
+Group 'ELDERLY' (n=59):
+  MESOR:     27.728 (SD=5.432)
+  H1 Amplitude: 21.491 (SD=5.077)
+  H1 Acrophase: 2.58 hours
+
+[group n's sum to 1303; 1304 subjects were fitted]
