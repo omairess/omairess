@@ -4003,7 +4003,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
             mean_pred <- predict_from_coefs(pop$mean_coefs, time_fine, mod$period, mod$n_harmonics, mod$trend_type, mod$t_offset, mod$t_center)
           }
           p <- p %>% add_lines(x = time_fine, y = mean_pred,
-                               line = list(color = 'red', width = 3), name = "Population Mean")
+                               line = list(color = FCK_EMPHASIS, width = 3), name = "Population Mean")
         } else {
           # Compute mean from individual parameters (for individual analysis type)
           params <- mod$individual_params
@@ -4028,7 +4028,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
             mean_pred <- predict_from_coefs(mean_coefs, time_fine, mod$period, mod$n_harmonics, mod$trend_type, mod$t_offset, mod$t_center)
           }
           p <- p %>% add_lines(x = time_fine, y = mean_pred,
-                               line = list(color = 'red', width = 3), name = "Population Mean")
+                               line = list(color = FCK_EMPHASIS, width = 3), name = "Population Mean")
         }
         
         # Show harmonic components for no-groups case
@@ -4047,7 +4047,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
                                mean(params[[paste0("beta_sin_", h)]], na.rm = TRUE))
           }
           
-          colors <- c("green", "orange", "purple", "brown", "pink", "cyan", "magenta", "olive")
+          colors <- fck_component_colors(max(mod$n_harmonics, 1))
           n_trend_coefs <- length(overall_trend_coefs)
           coef_offset <- 1 + n_trend_coefs
           
@@ -4286,7 +4286,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
         }
         
         p <- p %>% add_lines(x = time_fine, y = mean_pred,
-                             line = list(color = 'firebrick', width = 3), name = "Population Mean")
+                             line = list(color = FCK_EMPHASIS, width = 3), name = "Population Mean")
         
         # Add confidence band if requested (use SD of individual amplitudes)
         if(isTRUE(input$harmonic_show_ci)) {
@@ -4303,13 +4303,13 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
           
           p <- p %>% add_ribbons(x = time_fine, ymin = lower_pred, ymax = upper_pred,
                                  line = list(color = 'transparent'),
-                                 fillcolor = 'rgba(178, 34, 34, 0.2)',
+                                 fillcolor = fck_group_rgba(FCK_EMPHASIS, 0.18),
                                  name = "95% CI")
         }
         
         # Show harmonic components if requested
         if(isTRUE(input$harmonic_show_components) && mod$n_harmonics >= 1) {
-          colors <- c("green", "orange", "purple", "brown", "pink", "cyan", "magenta", "olive")
+          colors <- fck_component_colors(max(mod$n_harmonics, 1))
           n_trend_coefs <- length(mean_trend_coefs)
           coef_offset <- 1 + n_trend_coefs
           
@@ -4360,19 +4360,19 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
         pred_i <- predict_cosinor(fit_i, time_fine)
         
         p <- p %>% add_lines(x = time_fine, y = pred_i,
-                             line = list(color = 'steelblue', width = 2), 
+                             line = list(color = FCK_SERIES1, width = 2), 
                              name = paste("Subject", i))
         
         if(isTRUE(input$harmonic_show_data)) {
           p <- p %>% add_markers(x = fit_i$time, y = fit_i$y,
-                                 marker = list(color = 'steelblue', size = 6),
+                                 marker = list(color = FCK_SERIES1, size = 6),
                                  name = "Observed Data")
         }
         
         # Show harmonic components if requested
         if(isTRUE(input$harmonic_show_components) && mod$n_harmonics >= 1) {
           components <- get_harmonic_components(fit_i, time_fine)
-          colors <- c("green", "orange", "purple", "brown", "pink", "cyan", "magenta", "olive")
+          colors <- fck_component_colors(max(mod$n_harmonics, 1))
           for(h in 1:mod$n_harmonics) {
             comp_name <- paste0("harmonic_", h)
             comp_vals <- components$mesor[1] + components[[comp_name]]
@@ -4404,7 +4404,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
           text = fail_msg,
           showarrow = FALSE,
           xref = "paper", yref = "paper",
-          font = list(size = 14, color = "red")
+          font = list(size = 14, color = FCK_ALERT)
         )
       }
     }
@@ -4571,7 +4571,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       # No groups - show all points same color
       p <- p %>% add_trace(
         r = r, theta = theta_deg,
-        marker = list(size = 8, color = 'steelblue', opacity = 0.7),
+        marker = list(size = 8, color = FCK_SERIES1, opacity = 0.7),
         name = "Individual"
       )
 
@@ -4585,8 +4585,8 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
           r = c(0, pop$mean_amplitudes[h]),
           theta = c(0, acro_deg),
           mode = 'lines+markers',
-          line = list(color = 'red', width = 3),
-          marker = list(size = 12, color = 'red', symbol = 'diamond'),
+          line = list(color = FCK_EMPHASIS, width = 3),
+          marker = list(size = 12, color = FCK_EMPHASIS, symbol = 'diamond'),
           name = "Population Mean"
         )
       }
@@ -4640,7 +4640,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
           theta = ellipse_theta_deg,
           type = 'scatterpolar',
           mode = 'lines',
-          line = list(color = 'rgba(255, 0, 0, 0.5)', width = 2, dash = 'dot'),
+          line = list(color = fck_group_rgba(FCK_NEUTRAL, 0.75), width = 2, dash = 'dot'),
           name = "95% Confidence Ellipse",
           showlegend = TRUE
         )
@@ -4673,25 +4673,43 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     # o'clock labels. The subtitle is moved out to a paper-anchored annotation
     # under the title and the polar domain is pulled down to leave room, rather
     # than shrinking the font until it stops colliding.
+    #
+    # AUDIT (second pass): three things were still stacked at 12 o'clock. The
+    # radial axis was pinned at angle = 90 -- the top of the dial, once
+    # rotation = 90 and a clockwise direction are applied -- so its "Amplitude"
+    # title and its tick labels were drawn straight through the topmost angular
+    # label and up into the subtitle. The 12 angular ticks sit at 30 deg steps,
+    # so the radial axis moves to 45 deg: exactly midway between two of them,
+    # where nothing else is ever drawn. The legend was on plotly's default right
+    # edge, where a long group name eats into the dial; it goes underneath, as
+    # on the density tab, and the bottom margin makes room for it instead of the
+    # dial giving up width. uirevision keeps the reader's zoom and legend state
+    # across a re-render, as on the density tab.
+    polar_sub <- if(h > 1)
+        sprintf("clock times; each angle recurs every %s h", fmt1(effective_period))
+      else if(clock_o != 0)
+        sprintf("clock times; the model origin is %s",
+                fck_clock_label(clock_o, mod$period, show_day = FALSE))
+      else "clock times"
+
     p %>% layout(
+      uirevision = "fck-acrophase-polar",
+      # The subtitle is a second line of the TITLE, not a free-floating
+      # annotation. As an annotation at a paper y it had no idea where the dial
+      # ended, and the topmost angular label -- which plotly draws OUTSIDE the
+      # polar domain -- was written straight through it. As part of the title
+      # plotly stacks and reserves both lines itself.
       title = list(
-        text = sprintf("Acrophase polar plot - H%d (effective period %s h)", h,
-                       fmt1(effective_period)),
-        x = 0.5, xanchor = "center", y = 0.98, yanchor = "top",
+        text = sprintf("Acrophase polar plot - H%d (effective period %s h)<br><sub>%s</sub>",
+                       h, fmt1(effective_period), polar_sub),
+        x = 0.5, xanchor = "center", y = 0.97, yanchor = "top",
         font = list(size = 15)),
-      annotations = list(list(
-        text = if(h > 1)
-                 sprintf("clock times; each angle recurs every %s h", fmt1(effective_period))
-               else if(clock_o != 0)
-                 sprintf("clock times; the model origin is %s",
-                         fck_clock_label(clock_o, mod$period, show_day = FALSE))
-               else "clock times",
-        x = 0.5, y = 0.925, xref = "paper", yref = "paper",
-        xanchor = "center", yanchor = "top", showarrow = FALSE,
-        font = list(size = 11, color = "#52514e"))),
       polar = list(
-        domain = list(y = c(0, 0.88)),   # the room the title and subtitle need
-        radialaxis = list(title = "Amplitude", tickangle = 0, angle = 90),
+        # Top edge clears the two title lines AND the angular labels drawn
+        # outside the dial; bottom edge clears the legend under it.
+        domain = list(y = c(0.10, 0.83)),
+        radialaxis = list(title = list(text = "Amplitude", font = list(size = 11)),
+                          tickangle = 0, angle = 45, tickfont = list(size = 10)),
         angularaxis = list(
           direction = "clockwise",
           rotation = 90,
@@ -4700,7 +4718,10 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
           ticktext = tick_labels
         )
       ),
-      margin = list(t = 70, b = 40),
+      legend = list(orientation = "h", x = 0.5, xanchor = "center",
+                    y = -0.02, yanchor = "top", font = list(size = 11),
+                    uirevision = "fck-acrophase-polar-legend"),
+      margin = list(t = 88, b = 78),
       showlegend = TRUE
     )
   })
@@ -4736,7 +4757,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       ggplotly(g)
     } else {
       plot_ly(x = params[[amp_col]], type = "histogram", 
-              marker = list(color = 'steelblue', line = list(color = 'white', width = 1))) %>%
+              marker = list(color = FCK_SERIES1, line = list(color = 'white', width = 1))) %>%
         layout(title = paste0("Distribution of Amplitudes (H", h, ", period=", round(effective_period, 1), "h)"),
                xaxis = list(title = "Amplitude"),
                yaxis = list(title = "Count"))
@@ -4785,7 +4806,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       ggplotly(g)
     } else {
       plot_ly(x = params$acro_clock, type = "histogram",
-              marker = list(color = 'firebrick', line = list(color = 'white', width = 1))) %>%
+              marker = list(color = FCK_SERIES2, line = list(color = 'white', width = 1))) %>%
         layout(title = paste0("Distribution of acrophases (H", h, ")"),
                xaxis = list(title = x_lab, range = c(0, effective_period)),
                yaxis = list(title = "Count"))
@@ -4883,7 +4904,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
         } else {
           trend_vals <- trend_vals[!is.na(trend_vals)]
           plot_ly(y = trend_vals, type = "box", 
-                  marker = list(color = 'steelblue'),
+                  marker = list(color = FCK_SERIES1),
                   boxpoints = "all", jitter = 0.3) %>%
             layout(title = trend_title,
                    yaxis = list(title = trend_label))
@@ -4988,9 +5009,9 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     }
     
     plot_ly(x = all_fitted, y = all_resid, type = 'scatter', mode = 'markers',
-            marker = list(color = 'steelblue', opacity = 0.5, size = 4)) %>%
+            marker = list(color = FCK_SERIES1, opacity = 0.5, size = 4)) %>%
       add_segments(x = min(all_fitted), xend = max(all_fitted), y = 0, yend = 0,
-                   line = list(color = 'red', dash = 'dash')) %>%
+                   line = list(color = FCK_NEUTRAL, dash = 'dash')) %>%
       layout(title = "Residuals vs Fitted",
              xaxis = list(title = "Fitted Values"),
              yaxis = list(title = "Residuals"))
@@ -5011,9 +5032,9 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     qq <- qqnorm(all_resid, plot.it = FALSE)
     
     plot_ly(x = qq$x, y = qq$y, type = 'scatter', mode = 'markers',
-            marker = list(color = 'steelblue', size = 4)) %>%
+            marker = list(color = FCK_SERIES1, size = 4)) %>%
       add_lines(x = range(qq$x), y = range(qq$x) * sd(all_resid) + mean(all_resid),
-                line = list(color = 'red', dash = 'dash'), name = "Reference") %>%
+                line = list(color = FCK_NEUTRAL, dash = 'dash'), name = "Reference") %>%
       layout(title = "Q-Q Plot of Residuals",
              xaxis = list(title = "Theoretical Quantiles"),
              yaxis = list(title = "Sample Quantiles"))

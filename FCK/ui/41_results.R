@@ -121,6 +121,8 @@ ui_tab_results <- tabItem(
               column(6,
                      sliderInput("effect_n_comp", "Components to show:",
                                  min = 1, max = 10, value = 3, step = 1))
+              # The ceiling is retuned to nharm each time the PCA runs; see
+              # the observer in server/40_fpca.R.
             ),
             helpText(HTML("Was fixed at three. Beyond the fifth component hue
                            alone stops separating them reliably \u2014 solid/dash is

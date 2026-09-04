@@ -113,7 +113,12 @@ ui_tab_settings <- tabItem(
             solidHeader = TRUE,
             width = 12,
             numericInput("n_components", "Number of components to extract:",
-                         value = 3, min = 1, max = 10),
+                         value = 5, min = 1, max = 10),
+            helpText(HTML("Was three. Functional PCA components are nested \u2014
+                           extracting five leaves PC1\u2013PC3 numerically
+                           identical and simply makes PC4 and PC5 available, so
+                           the display controls downstream are not silently
+                           capped at three.")),
             actionButton("run_analysis", "Run Analysis", class = "btn-success")
           )
         )

@@ -456,7 +456,12 @@ cat(sprintf("  NEW printed equation:  %s\n", fmt2(y27(TRUE))))
 cat(sprintf("  Observed mean at 02:00 (nearest measured point): %s\n", fmt2(obs27)))
 cat(sprintf("  The old equation under-predicted by %s units.\n", fmt2(y27(TRUE) - y27(FALSE))))
 
-saveRDS(list(fits_summary = Pn, grp_pos = g_pos, grp_id = g_id, Y = Y, tlin = tlin),
+# g_pos/g_id only exist on the --join-sheets path; without it there is one
+# grouping vector, read from the one sheet the app reads.
+saveRDS(list(fits_summary = Pn,
+             grp_pos = if (exists("g_pos")) g_pos else grp,
+             grp_id  = if (exists("g_id"))  g_id  else NULL,
+             Y = Y, tlin = tlin),
         paste0(outp, "_fits.rds"))
 line()
 cat("Wrote ", outp, "_report_OLD.txt and ", outp, "_report_NEW.txt\n", sep = "")

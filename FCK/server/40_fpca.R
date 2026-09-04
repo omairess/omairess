@@ -33,9 +33,8 @@
       groups <- levels(values$group_labels)
       n_groups <- length(groups)
       
-      # Create scalable color palette
-      base_cols <- c("red","blue","green","orange","purple","brown","cyan","magenta","darkgray","gold")
-      colors <- colorRampPalette(base_cols)(n_groups)
+      # One palette app-wide, keyed by group NAME so filtering never repaints.
+      colors <- unname(fck_group_colors(groups)[groups])
       
       matplot(time_points, t(values$data), type = "l", 
               col = rgb(0.5, 0.5, 0.5, 0.1), lty = 1,
@@ -195,6 +194,22 @@
     })
   })
   
+  # AUDIT: the "Components to show" slider on the effect-of-scores plot went to
+  # 10 regardless of how many components the PCA had actually retained, so
+  # asking for 6 silently drew 3 and the title read "3 of 3". A display control
+  # must not promise more than the analysis produced: the slider's ceiling now
+  # follows nharm, and the plot says so when the two disagree.
+  observeEvent(values$pca_results, {
+    pr <- values$pca_results
+    if(is.null(pr) || is.null(pr$scores)) return()
+    n_avail <- min(ncol(pr$scores), length(pr$values), length(pr$harmonics))
+    if(!is.finite(n_avail) || n_avail < 1) return()
+    cur <- suppressWarnings(as.integer(isolate(input$effect_n_comp) %||% 3))
+    if(!is.finite(cur) || cur < 1) cur <- 3
+    updateSliderInput(session, "effect_n_comp",
+                      max = n_avail, value = min(cur, n_avail))
+  }, ignoreNULL = TRUE)
+
   # PCA status output - FIXED
   output$pca_status <- renderText({
     if(is.null(values$pca_results)) {
@@ -273,7 +288,7 @@
                   name = "Mean", 
                   line = list(color = 'black', width = 2))
       
-      colors <- c('red', 'blue', 'green', 'orange', 'purple')
+      colors <- fck_component_colors(5)
       n_comp <- min(ncol(pca_res$scores), 5, length(pca_res$harmonics))
       
       for(i in 1:n_comp) {
@@ -344,8 +359,8 @@
                   mode = 'lines+markers',
                   name = 'Cumulative',
                   yaxis = 'y2',
-                  line = list(color = 'red'),
-                  marker = list(color = 'red'))
+                  line = list(color = FCK_EMPHASIS),
+                  marker = list(color = FCK_EMPHASIS))
       
       p %>% layout(title = list(text = "Variance explained", x = 0.5, xanchor = "center"),
                    margin = list(t = 60),
@@ -437,13 +452,19 @@
         }
       }
       
+      # If the request exceeds what the PCA retained, name the remedy on the
+      # figure rather than silently drawing fewer curves than were asked for.
+      short_note <- if(n_req > n_avail)
+        sprintf("<br><sub>Only %d component%s extracted \u2014 raise \"Number of components to extract\" in PCA Settings and re-run to see more</sub>",
+                n_avail, if(n_avail == 1) " was" else "s were") else ""
       p <- p %>% layout(
-        title = list(text = sprintf("Effect of component scores (%d of %d component%s shown)",
-                                    n_show, n_avail, if(n_avail == 1) "" else "s"),
+        title = list(text = paste0(sprintf("Effect of component scores (%d of %d component%s shown)",
+                                           n_show, n_avail, if(n_avail == 1) "" else "s"),
+                                   short_note),
                      x = 0.5, xanchor = "center"),
         yaxis = list(title = "Value"),
         legend = list(orientation = "h", y = -0.18),
-        margin = list(t = 60))
+        margin = list(t = if(nzchar(short_note)) 84 else 60))
       p <- format_plotly_time_axis(p, time_points, tick_step_hours = as.numeric(input$tick_freq_results))
       p
       
@@ -804,12 +825,12 @@
           time_points <- values$warping_results$time_points
           
           matplot(time_points, warp_functions[,1:min(30, ncol(warp_functions))], 
-                  type = "l", col = rgb(0.4, 0.4, 0.8, 0.3), lty = 1,
+                  type = "l", col = fck_group_rgba(FCK_SERIES1, 0.30), lty = 1,
                   xlab = "Original Time", ylab = "Warped Time",
                   main = "Time Warping Functions")
-          lines(c(0,1), c(0,1), col = "red", lwd = 2, lty = 2)
+          lines(c(0,1), c(0,1), col = FCK_NEUTRAL, lwd = 2, lty = 2)
           legend("topleft", legend = c("Individual", "Identity"), 
-                 col = c("lightblue", "red"), lty = c(1, 2), lwd = c(1, 2))
+                 col = c(FCK_SERIES1, FCK_NEUTRAL), lty = c(1, 2), lwd = c(1, 2))
         } else {
           plot(1, type = "n", xlab = "", ylab = "", 
                main = "No warping functions available")
@@ -1485,7 +1506,7 @@
         type = 'scatter',
         mode = 'lines',
         name = "Identity (no warping)",
-        line = list(color = 'red', width = 2, dash = 'dash'),
+        line = list(color = FCK_NEUTRAL, width = 2, dash = 'dash'),
         hovertemplate = "Identity line<extra></extra>"
       )
       
@@ -1650,7 +1671,7 @@
           add_trace(x = time_points, y = mean_curve, 
                     type = 'scatter', mode = 'lines',
                     name = 'Mean curve',
-                    line = list(color = 'blue', width = 2))
+                    line = list(color = FCK_EMPHASIS, width = 2))
         
         title_text <- "Click to add landmarks on mean curve"
       } else {
@@ -1662,7 +1683,7 @@
           add_trace(x = time_points, y = subj_curve,
                     type = 'scatter', mode = 'lines',
                     name = paste('Subject', subj_idx),
-                    line = list(color = 'blue', width = 2))
+                    line = list(color = FCK_SERIES1, width = 2))
         
         title_text <- paste("Click to add landmarks for Subject", subj_idx)
       }
@@ -1672,7 +1693,7 @@
         p <- p %>% add_trace(x = values$landmark_points$x,
                              y = values$landmark_points$y,
                              type = 'scatter', mode = 'markers',
-                             marker = list(color = 'red', size = 10),
+                             marker = list(color = FCK_SERIES2, size = 10),
                              name = 'Landmarks')
       }
       

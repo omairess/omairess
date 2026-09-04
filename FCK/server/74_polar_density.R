@@ -826,7 +826,16 @@ output$harmonic_density_plot <- renderPlotly({
       x = 0, y = 1, xanchor = "left", yanchor = "top",
       font = list(size = 11, color = "#52514e"))) else NULL,
     showlegend = length(rings) > 1 || (ci_style %in% c("dotted", "both") && length(bands) > 0),
-    legend = list(orientation = "h", y = -0.08),
+    # AUDIT: every knob on this tab rebuilt the figure from scratch, so plotly
+    # threw away the zoom, the pan and the legend state on each keystroke -- you
+    # could not nudge one parameter and watch the same view change. A constant
+    # uirevision tells plotly the user's view survives a re-render. The legend
+    # gets its OWN revision, keyed on which series exist: hiding "20-29" should
+    # persist while you turn the bandwidth knob, but must not silently carry
+    # over to a different set of rings when the grouping variable changes.
+    uirevision = "fck-density",
+    legend = list(orientation = "h", y = -0.08,
+                  uirevision = paste(nm, collapse = "\u001f")),
     margin = list(t = 34, b = 60))
 })
 

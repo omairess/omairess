@@ -939,6 +939,11 @@ the reporter's case. Slot 4 became magenta `#b5309b`, slot 5 a saturated brown
       contrast WARN on the green -> relief is the legend and tables these
       figures already carry
 
+*(Superseded by 4.41: the reporter later supplied their own palette. The
+name-keyed lookup, the dash-past-the-prefix rule and everything else in this
+section still hold — only the hexes and the depth of the validated prefix
+changed.)*
+
 **Five is the honest maximum.** No sixth all-pairs-separable hue exists inside
 the lightness band — every candidate failed the normal-vision floor. Past five,
 dash carries identity alongside hue and the figures say so. Also `rainbow()` is
@@ -975,6 +980,88 @@ Two bugs found while testing this work, both mine and both in the new code:
 the sorted order the colours use, so a group's dash changed when levels arrived
 differently even though its colour did not; and `fck_warp_params()` assigned
 columns onto a zero-row `data.frame`, which throws rather than growing it.
+
+**4.41 The palette is the reporter's "Alternating Light/Dark Pairs" set.** Four
+hue families — blue `#00b0be`/`#8fd7d7`, pink `#f45f74`/`#ff8ca1`, green
+`#98c127`/`#bdd373`, orange `#ffb255`/`#ffcd8e` — each with a medium and a light
+member, replacing the five re-stepped hues of 4.37.
+
+**Ordering is not the order supplied.** Taken as listed, slots 1 and 2 would be
+the light and the medium *blue*: two series OKLab ΔE 14.9 apart, which read as
+one group split in two rather than as two groups. A palette of this shape is
+built to be used one row at a time, so the **mediums take slots 1–4 and the
+lights slots 5–8**. Slot *k* and slot *k+4* are then the two members of one
+family, and the common 2-, 3- and 4-group figures — including the reporter's
+four age bands — get the four maximally separated hues.
+
+**What the validator says, honestly.** In `--pairs all` light mode the four
+mediums FAIL two hard checks: `#ffb255` sits at L 0.820, above the 0.77
+lightness ceiling, and `#ffb255` against `#98c127` is ΔE **3.2** under
+protanopia — two of the four age bands are the same colour for roughly 1 in 12
+male readers. At eight slots it additionally fails the chroma floor (`#8fd7d7`
+C 0.072 and `#ffcd8e` C 0.098 read as gray) and every light/medium pair within
+a family falls below the 15 ΔE normal-vision floor (7.2 for the two oranges).
+That last one is not a defect: those pairs are *meant* to read as related. No
+subset of the eight is all-pairs separable at five slots, and no fifth hue
+outside the set clears all-pairs against the four mediums — the reporter's four
+families crowd three warm hues between 15° and 125°, where 4.37's palette had
+magenta and a low-lightness brown for room.
+
+**The palette ships as supplied, with the correction one constant away.**
+`FCK_PALETTE_VARIANT` is `"supplied"` — the eight hexes verbatim, because that
+is what was asked for and it is the reporter's call. Setting it to `"cvd_safe"`
+keeps the same four families with the orange deepened (`#ffb255` → `#d38400`,
+*identical* OKLCH hue angle 68.6, L 0.82 → 0.68) and the green nudged
+(`#98c127` → `#9ec055`), which clears every hard check: lightness PASS, chroma
+PASS, normal-vision PASS at worst 15.2, CVD at the 8.0 target boundary. Blue and
+pink are untouched in both.
+
+**Roles that are not groups moved out of the palette.** `'red'`, `'firebrick'`
+and `'steelblue'` were carrying population means, single series and reference
+lines across the harmonic and fPCA tabs. Red is now a problem specifically: slot
+2 is a pink, so a red population-mean line reads as a fifth group.
+`FCK_EMPHASIS` (dark neutral, the summary line), `FCK_NEUTRAL` (identity lines,
+the confidence ellipse), `FCK_SERIES1`/`FCK_SERIES2` (the ungrouped series) and
+`FCK_ALERT` (status *text*, not a series) are deliberately outside the
+categorical ramp. The harmonic-component cycle
+`c("green","orange","purple","brown",…)` — unvalidated CSS names — became
+`fck_component_colors()`, drawn from the same ramp so one screen never mixes two
+colour vocabularies.
+
+**4.42 Three figure-layout defects.**
+
+*The acrophase dial stacked three things at 12 o'clock.* The radial axis was
+pinned at `angle = 90` — the top of the dial, once `rotation = 90` and a
+clockwise direction are applied — so its "Amplitude" title and its tick numbers
+were drawn straight through the topmost angular label and up into the subtitle.
+The 12 angular ticks sit at 30° steps, so the radial axis moves to **45°**,
+exactly midway between two of them. The subtitle became a second line of the
+*title* rather than a paper-anchored annotation: at a fixed paper *y* it had no
+idea where the dial ended, and plotly draws angular labels *outside* the polar
+domain. The legend moved from plotly's default right edge — where a long group
+name eats into the dial — to underneath it, as on the density tab. Verified by
+rendering the before and after and looking at them, not by reasoning about the
+geometry.
+
+*Both polar figures reset on every keystroke.* plotly discards zoom, pan and
+legend state when Shiny re-renders, so no parameter could be nudged while
+watching the same view. A constant `uirevision` fixes it. The density legend
+gets its **own** revision keyed on which rings exist, so hiding one group
+persists while you turn the bandwidth knob but does not silently carry over to a
+different set of rings when the grouping variable changes.
+
+*The "Components to show" slider promised more than the PCA had computed.* It
+ran to 10 regardless of `nharm`, so asking for 6 drew 3 and the title read "3 of
+3". A display control must not outrun the analysis: the slider's ceiling is
+retuned to what the PCA actually retained each time it runs, and when the two
+still disagree the figure names the remedy instead of quietly drawing fewer
+curves. The extraction default went 3 → 5, which is numerically inert —
+functional PCA components are nested, so PC1–PC3 are bit-identical whether
+`nharm` is 3 or 5 — and simply stops the common case being capped at three.
+
+A bug found while testing this work, mine and in the test harness rather than
+the app: `tests/real_data_run.R` wrote `g_pos`/`g_id` into its `.rds` output
+unconditionally, but both only exist on the `--join-sheets` path.
 
 ## 5. Rename table
 
