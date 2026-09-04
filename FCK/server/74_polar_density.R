@@ -35,7 +35,13 @@ fck_density_data <- function(input, values) {
   amp_col  <- paste0("amplitude_", h)
   if (!(acro_col %in% names(params))) return(NULL)
 
-  hours <- as.numeric(params[[acro_col]])
+  # AUDIT: acrophase_time_h holds MODEL-elapsed hours. The density is drawn on
+  # a CLOCK dial, so the origin shift must be added before anything is placed on
+  # it -- otherwise every acrophase sits <shift> hours early and the night
+  # shading lines up with the wrong part of the distribution. Rotating by a
+  # constant leaves the density shape, the resultant length and the Rayleigh
+  # statistic untouched; only the mean direction moves, which is the point.
+  hours <- (as.numeric(params[[acro_col]]) + fck_clock_origin(mod)) %% (period / h)
   amps  <- if (amp_col %in% names(params)) as.numeric(params[[amp_col]]) else rep(1, length(hours))
 
   grp <- NULL

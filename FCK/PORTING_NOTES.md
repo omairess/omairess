@@ -821,6 +821,53 @@ down, and a button saves the whole thing as a text file. The panel and the file
 call one function, `.print_harmonic_summary()`, so the saved copy cannot drift
 from what is on screen.
 
+**4.33 Acrophases were reported in model coordinates as if they were clock
+times.** *(bug fix — reporting layer only)*
+
+The same class of error as 4.31, in the other half of the app. The harmonic
+coefficients are fitted against the model's axis, which under
+`time_origin = "first_observation"` is elapsed hours from the first
+observation. An acrophase of 19.18 there means *19.18 h after 08:00* — 03:11
+the next morning — and the reporting layer printed the elapsed number as a time
+of day. The fitted curves never leave model coordinates and were right
+throughout; only what was written next to them was wrong, and only when the
+origin is non-zero.
+
+One helper does the conversion now, `fck_acrophase_clock()` /
+`fck_acrophase_label()`, and no site does its own arithmetic. The reporter's
+four hand-checked values are the regression targets and all reproduce:
+
+| model-elapsed | clock |
+|---|---|
+| pooled H1 19.18 h | 03:11 |
+| group 1 H1 19.89 h | 03:53 |
+| group 2 H1 18.93 h | 02:56 |
+| H2 7.81 h | 15:49 **and** 03:49 |
+
+**Harmonic h has h maxima per day** and all are reported. H2 repeats every 12 h,
+so a single clock time is half the answer and which half matters depends on the
+hypothesis.
+
+**The H1 acrophase is not the peak of the fitted curve.** The curve also carries
+the homeostatic trend and the higher harmonics, so its maximum sits elsewhere —
+and it is the curve's maximum a reader sees on the plot, which is how a correct
+acrophase can look wrong against its own figure. `fck_curve_peak_clock()`
+reports the complete curve's maximum and minimum separately, per group as well
+as pooled, and flags a maximum sitting at the edge of the observed window as the
+boundary value it is rather than a peak the data contain.
+
+**What is invariant, and therefore untouched.** A constant rotation cannot
+change a dispersion or a difference. Circular SD, resultant length, the Rayleigh
+Z, Watson–Williams, the Bingham/Hotelling test and every between-group contrast
+are identical before and after, and tests assert it. The pairwise module is
+unchanged for the same reason — a difference of two acrophases is origin-free —
+but its column labels now say `elapsed h; differences are origin-free` so no one
+reads a group mean off that table as a time of day.
+
+Storage stays in model coordinates deliberately: converting at the source would
+put clock times into the circular statistics, and the conversion belongs at the
+display boundary where it can be applied once and audited.
+
 ## 5. Rename table
 
 | source | source app | merged app |

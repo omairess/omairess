@@ -1239,8 +1239,15 @@
         cat("--- Population Mean Parameters ---\n")
         cat(sprintf("MESOR:     %.4f\n", pop$mean_mesor))
         cat(sprintf("Amplitude: %.4f\n", pop$mean_amplitude))
-        cat(sprintf("Acrophase: %.4f radians (%.2f hours)\n", 
-                    pop$mean_acrophase_rad, pop$mean_acrophase_time))
+        # AUDIT: acrophases are exported in CLOCK time, through the same helper
+        # the on-screen report uses, with the model-elapsed value alongside so
+        # the export is self-explaining.
+        cat(sprintf("Acrophase: %s clock  (%.4f rad, %.2f h model-elapsed, origin %s)\n",
+                    fck_acrophase_label(hours = pop$mean_acrophase_time,
+                                        period = mod$period, harmonic = 1,
+                                        clock_origin = fck_clock_origin(mod)),
+                    pop$mean_acrophase_rad, pop$mean_acrophase_time,
+                    fck_clock_label(fck_clock_origin(mod), mod$period, show_day = FALSE)))
         cat(sprintf("Rayleigh Z: %.4f (p = %.4f)\n", pop$rayleigh_z, pop$rayleigh_p))
         cat("\n")
       }
@@ -1249,7 +1256,11 @@
       params <- mod$individual_params
       cat(sprintf("MESOR:     Mean=%.4f, SD=%.4f\n", mean(params$mesor), sd(params$mesor)))
       cat(sprintf("Amplitude (H1): Mean=%.4f, SD=%.4f\n", mean(params$amplitude_1), sd(params$amplitude_1)))
-      cat(sprintf("Acrophase (H1): Mean=%.2f hours\n", mean(params$acrophase_time_1)))
+      cat(sprintf("Acrophase (H1): arithmetic mean %s clock (%.2f h model-elapsed)\n",
+                  fck_acrophase_label(hours = mean(params$acrophase_time_1),
+                                      period = mod$period, harmonic = 1,
+                                      clock_origin = fck_clock_origin(mod), all = FALSE),
+                  mean(params$acrophase_time_1)))
       cat(sprintf("R-squared: Mean=%.4f, Range=[%.4f, %.4f]\n", 
                   mean(params$r_squared), min(params$r_squared), max(params$r_squared)))
       cat(sprintf("Significant rhythms (p<0.05): %d / %d\n",
@@ -1261,8 +1272,13 @@
                     mod$boot_results$mesor_ci[1], mod$boot_results$mesor_ci[2]))
         cat(sprintf("Amplitude: [%.4f, %.4f]\n", 
                     mod$boot_results$amplitude_ci[1], mod$boot_results$amplitude_ci[2]))
-        cat(sprintf("Acrophase: [%.2f, %.2f] hours\n", 
-                    mod$boot_results$acrophase_ci[1], mod$boot_results$acrophase_ci[2]))
+        cat(sprintf("Acrophase: [%s, %s] clock\n",
+                    fck_acrophase_label(hours = mod$boot_results$acrophase_ci[1],
+                                        period = mod$period, harmonic = 1,
+                                        clock_origin = fck_clock_origin(mod), all = FALSE),
+                    fck_acrophase_label(hours = mod$boot_results$acrophase_ci[2],
+                                        period = mod$period, harmonic = 1,
+                                        clock_origin = fck_clock_origin(mod), all = FALSE)))
       }
       sink()
     }

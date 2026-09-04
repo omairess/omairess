@@ -769,3 +769,121 @@ fck_model_clock_range <- function(mod) {
   if (is.null(tv) || !any(is.finite(tv))) return(NULL)
   range(fck_model_to_clock(tv, mod), na.rm = TRUE)
 }
+
+
+# ============================================================================
+# ACROPHASE: model coordinates -> clock time
+#
+# THE BUG THIS EXISTS TO PREVENT
+# ------------------------------
+# The harmonic coefficients are fitted against the model's time axis. With
+# time_origin = "first_observation" that axis is ELAPSED hours from the first
+# observation, so an acrophase of 19.18 h means "19.18 h after 08:00" -- which
+# is 03:11 the next morning, not 19:11 this evening. The reporting layer
+# printed the elapsed number as though it were a clock time, so every acrophase
+# in the app was off by the origin shift while the fitted curves, which never
+# left model coordinates, were right.
+#
+# The conversion is one line. What makes it worth a function is that there were
+# a dozen places doing phi * period / (2*pi) by hand, some with the harmonic
+# divisor and some without, and none of them adding the origin. One helper, and
+# no site does its own arithmetic.
+#
+# HARMONIC h HAS h MAXIMA PER PERIOD
+# ----------------------------------
+# Harmonic h repeats every period/h, so within one 24 h clock it peaks h times,
+# at clock_first + k * (period/h). Reporting only the first is not wrong but it
+# is half the answer: for H2 with an elapsed acrophase of 7.81 h and an origin
+# of 08:00 the maxima are 15:49 AND 03:49, and which one a reader cares about
+# depends entirely on their hypothesis. All of them are returned.
+#
+# NOT THE SAME AS THE PEAK OF THE FITTED CURVE
+# --------------------------------------------
+# The H1 acrophase is where the FIRST HARMONIC peaks. The fitted curve also
+# contains the homeostatic trend and the higher harmonics, so its maximum sits
+# somewhere else -- often hours away when the trend dominates, as it does here.
+# fck_curve_peak_clock() below reports that separately; conflating the two is
+# the reason a reported acrophase can look wrong against its own plot even when
+# both are right.
+# ============================================================================
+
+# The clock origin a model axis is measured from. Zero unless the fit was
+# re-anchored at the first observation.
+fck_clock_origin <- function(mod) {
+  if (is.null(mod)) return(0)
+  as.numeric(mod$origin_shift %||% 0)
+}
+
+# One acrophase, from either radians or model-elapsed hours, to clock time.
+#
+#   phi_rad  acrophase in radians, as atan2(beta_sin, beta_cos) returns it
+#   hours    OR the same thing already in model-elapsed hours on the
+#            harmonic's own effective period (period / harmonic)
+#
+# Returns the first maximum in [0, period), every maximum in [0, period), and
+# the model-elapsed value it came from, so a caller can show its working.
+fck_acrophase_clock <- function(phi_rad = NULL, hours = NULL, period = 24,
+                                harmonic = 1, clock_origin = 0) {
+  if (is.null(hours)) {
+    if (is.null(phi_rad)) return(NULL)
+    # phi occupies the effective period T/h, so the divisor is h
+    hours <- phi_rad * period / (2 * pi) / harmonic
+  }
+  ok <- is.finite(hours)
+  first <- rep(NA_real_, length(hours))
+  first[ok] <- (hours[ok] + clock_origin) %% period
+
+  eff <- period / harmonic
+  all_h <- if (harmonic >= 1)
+    lapply(first, function(f) if (!is.finite(f)) NA_real_
+           else sort(((f + eff * seq(0, harmonic - 1)) %% period))) else NULL
+
+  list(hours = first,          # first maximum on the clock
+       all_hours = all_h,      # every maximum within one period
+       elapsed = hours,        # what the model reported
+       effective_period = eff,
+       harmonic = harmonic,
+       clock_origin = clock_origin)
+}
+
+# "03:11", or "15:49 / 03:49" for a harmonic with several maxima.
+fck_acrophase_label <- function(phi_rad = NULL, hours = NULL, period = 24,
+                                harmonic = 1, clock_origin = 0, all = TRUE) {
+  a <- fck_acrophase_clock(phi_rad, hours, period, harmonic, clock_origin)
+  if (is.null(a)) return(NA_character_)
+  vapply(seq_along(a$hours), function(i) {
+    if (!is.finite(a$hours[i])) return(NA_character_)
+    if (!all || harmonic <= 1) return(fck_clock_label(a$hours[i], period, show_day = FALSE))
+    paste(fck_clock_label(a$all_hours[[i]], period, show_day = FALSE), collapse = " / ")
+  }, character(1))
+}
+
+# The maximum of the WHOLE fitted curve, over the observed window, in clock
+# time. This is what a reader sees peaking on the fit plot, and it is not the
+# H1 acrophase whenever a trend or a second harmonic is present.
+# NOTE: this calls fck_rhythm_from_coefs() from server/07_helpers_circular.R.
+# The app sources 07 before 08, so it is always in scope there; a script or test
+# using this function must source 07 as well.
+fck_curve_peak_clock <- function(coefs, mod, n_grid = 2001) {
+  tv <- mod$time_vec
+  if (is.null(coefs) || is.null(tv) || !any(is.finite(tv))) return(NULL)
+  period <- mod$period %||% 24
+  nh <- mod$n_harmonics %||% 1L
+  trend <- mod$trend_type %||% "none"
+  t_grid <- seq(min(tv, na.rm = TRUE), max(tv, na.rm = TRUE), length.out = n_grid)
+  y <- fck_rhythm_from_coefs(coefs, t_grid, period, nh, trend,
+                             include_trend = TRUE, t_offset = mod$t_offset %||% 0)
+  if (!any(is.finite(y))) return(NULL)
+  o <- fck_clock_origin(mod)
+  i_max <- which.max(y); i_min <- which.min(y)
+  list(peak_model = t_grid[i_max],
+       peak_clock = (t_grid[i_max] + o) %% period,
+       peak_value = y[i_max],
+       trough_model = t_grid[i_min],
+       trough_clock = (t_grid[i_min] + o) %% period,
+       trough_value = y[i_min],
+       # a peak at the very edge of the window is the trend still climbing, not
+       # a maximum the data actually contain
+       peak_at_edge = i_max <= 2 || i_max >= n_grid - 1,
+       trough_at_edge = i_min <= 2 || i_min >= n_grid - 1)
+}

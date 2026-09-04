@@ -338,9 +338,14 @@
       "amplitude_1" = "H1 Amplitude",
       "amplitude_2" = "H2 Amplitude",
       "amplitude_3" = "H3 Amplitude",
-      "acrophase_time_1" = "H1 Acrophase (hours)",
-      "acrophase_time_2" = "H2 Acrophase (hours)",
-      "acrophase_time_3" = "H3 Acrophase (hours)",
+      # AUDIT: these columns hold MODEL-elapsed hours. A DIFFERENCE between two
+      # groups is origin-free -- the shift cancels -- so the pairwise tests
+      # themselves need no conversion. The label says elapsed so nobody reads a
+      # group mean off this table as a time of day; clock acrophases are in the
+      # results panel.
+      "acrophase_time_1" = "H1 Acrophase (elapsed h; differences are origin-free)",
+      "acrophase_time_2" = "H2 Acrophase (elapsed h; differences are origin-free)",
+      "acrophase_time_3" = "H3 Acrophase (elapsed h; differences are origin-free)",
       "r_squared" = "R²",
       "A_sat" = "A_sat",
       "tau" = "τ (tau)",
@@ -531,9 +536,9 @@
             "amplitude_1" = "H1 Amplitude",
             "amplitude_2" = "H2 Amplitude",
             "amplitude_3" = "H3 Amplitude",
-            "acrophase_time_1" = "H1 Acrophase (hours)",
-            "acrophase_time_2" = "H2 Acrophase (hours)",
-            "acrophase_time_3" = "H3 Acrophase (hours)",
+            "acrophase_time_1" = "H1 Acrophase (elapsed h; differences are origin-free)",
+            "acrophase_time_2" = "H2 Acrophase (elapsed h; differences are origin-free)",
+            "acrophase_time_3" = "H3 Acrophase (elapsed h; differences are origin-free)",
             "r_squared" = "R²",
             "A_sat" = "A_sat",
             "tau" = "τ (tau)",

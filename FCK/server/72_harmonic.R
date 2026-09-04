@@ -2362,7 +2362,9 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
         mean_amplitude <- sqrt(mean_x^2 + mean_y^2)
         mean_acrophase_rad <- atan2(mean_y, mean_x)
         if(mean_acrophase_rad < 0) mean_acrophase_rad <- mean_acrophase_rad + 2 * pi
-        mean_acrophase_time <- mean_acrophase_rad * period / (2 * pi)
+        # MODEL-elapsed hours. phi_to_hours() is the single conversion; the
+        # clock origin is added only at display, by fck_acrophase_label().
+        mean_acrophase_time <- phi_to_hours(mean_acrophase_rad, period, 1)
         
         # ====================================================================
         # AUDIT 1.2: the Rayleigh test runs on UNIT vectors
@@ -2438,7 +2440,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
           acro_h <- atan2(mean(y_h, na.rm = TRUE), mean(x_h, na.rm = TRUE))
           if(acro_h < 0) acro_h <- acro_h + 2 * pi
           mean_acrophases_rad[h] <- acro_h
-          mean_acrophases_time[h] <- acro_h * period / (2 * pi) / h  # Adjust for harmonic number
+          mean_acrophases_time[h] <- phi_to_hours(acro_h, period, h)   # model-elapsed
         }
         
         # Also compute arithmetic means of individual parameters
@@ -2689,7 +2691,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
               acro_h <- atan2(mean(y_h, na.rm = TRUE), mean(x_h, na.rm = TRUE))
               if(acro_h < 0) acro_h <- acro_h + 2 * pi
               grp_acrophases_rad[h] <- acro_h
-              grp_acrophases_time[h] <- acro_h * period / (2 * pi) / h
+              grp_acrophases_time[h] <- phi_to_hours(acro_h, period, h)  # model-elapsed
             }
 
             # Variance decomposition for this group (if columns exist)
@@ -2818,7 +2820,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
         boot_results <- list(
           mesor_ci = quantile(boot_mesor, c(0.025, 0.975)),
           amplitude_ci = quantile(boot_amplitude, c(0.025, 0.975)),
-          acrophase_ci = quantile(boot_acrophase * period / (2 * pi), c(0.025, 0.975)),
+          acrophase_ci = quantile(phi_to_hours(boot_acrophase, period, 1), c(0.025, 0.975)),
           boot_mesor = boot_mesor,
           boot_amplitude = boot_amplitude,
           boot_acrophase = boot_acrophase,
@@ -3103,6 +3105,9 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
 
     dv <- mod$dv_name %||% "the dependent variable"
     dvu <- mod$dv_units
+    # The clock time that model t = 0 corresponds to. Every acrophase printed
+    # below is converted through it exactly once, by fck_acrophase_label().
+    clock_o <- fck_clock_origin(mod)
 
     hdr <- function(x) cat("\n--- ", x, " ---\n", sep = "")
 
@@ -3307,16 +3312,46 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     hdr("Population rhythm parameters (VECTOR-averaged)")
     cat("Estimator: amplitude-weighted vector mean of (amplitude, acrophase) pairs.\n")
     cat("This is the correct population estimator for circular data and is unchanged.\n\n")
+    # AUDIT: acrophases are printed in CLOCK time. They are estimated on the
+    # model's axis, which under time_origin = "first_observation" is elapsed
+    # hours from the first observation -- so 19.18 there is 03:11 on the clock,
+    # and printing the elapsed number as a time of day was wrong by the origin
+    # shift. fck_acrophase_label() is the only place that arithmetic happens.
     for(h in seq_len(nh)) {
       eff <- period / h
-      cat(sprintf("  H%d: amplitude = %s, acrophase = %s h  (%s deg)\n",
+      cat(sprintf("  H%d: amplitude = %s, acrophase = %s  (%s deg)\n",
                   h, fmt3(pop$mean_amplitudes[h]),
-                  fmt2(pop$mean_acrophases_time[h]),
+                  fck_acrophase_label(hours = pop$mean_acrophases_time[h],
+                                      period = period, harmonic = h,
+                                      clock_origin = clock_o),
                   fmt2(phi_to_degrees(pop$mean_acrophases_rad[h]))))
+      if(clock_o != 0)
+        cat(sprintf("      (model-elapsed %s h + %s h origin)\n",
+                    fmt2(pop$mean_acrophases_time[h]), fmt1(clock_o)))
       if(h > 1)
-        cat(sprintf("      convention: H%d is identified modulo %s h, so %s h is equivalent to %s h\n",
-                    h, fmtn(eff, 0), fmt2(pop$mean_acrophases_time[h]),
-                    fmt2(pop$mean_acrophases_time[h] + eff)))
+        cat(sprintf("      H%d repeats every %s h, so it has %d maxima per day; all are shown.\n",
+                    h, fmtn(eff, 0), h))
+    }
+
+    # AUDIT: the H1 acrophase is where the FIRST HARMONIC peaks. The fitted
+    # curve also carries the trend and the higher harmonics, so its maximum sits
+    # elsewhere -- and it is the curve's maximum a reader sees on the plot.
+    # Reporting both stops the acrophase looking wrong against its own figure.
+    cpk <- fck_curve_peak_clock(pop$mean_coefs, mod)
+    if(!is.null(cpk)) {
+      cat(sprintf("\n  Maximum of the COMPLETE fitted curve: %s (value %s)\n",
+                  fck_clock_label(cpk$peak_clock, period, show_day = FALSE),
+                  fmt2(cpk$peak_value)))
+      cat(sprintf("  Minimum of the complete fitted curve: %s (value %s)\n",
+                  fck_clock_label(cpk$trough_clock, period, show_day = FALSE),
+                  fmt2(cpk$trough_value)))
+      cat("  NOT the H1 acrophase: the curve also contains ",
+          if(trend_type != "none") "the homeostatic trend" else "no trend",
+          if(nh > 1) " and the higher harmonics" else "", ".\n", sep = "")
+      if(isTRUE(cpk$peak_at_edge))
+        cat("  ! The maximum sits at the edge of the observed window: the curve was\n",
+            "    still rising when the recording stopped, so this is a boundary value,\n",
+            "    not a peak the data contain.\n", sep = "")
     }
 
     # ========================================================================
@@ -3425,14 +3460,20 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       cat(sprintf("  H%d amplitude: %s (SD %s)   [arithmetic]\n", h,
                   fmt3(mean(params[[paste0("amplitude_", h)]], na.rm = TRUE)),
                   fmt3(sd(params[[paste0("amplitude_", h)]], na.rm = TRUE))))
-      cat(sprintf("  H%d acrophase: circular mean %s h, circular SD %s h   [circular]\n",
-                  h, fmt2(phi_to_hours(rr$mean_dir_unweighted, period, h)),
+      # Circular SD is a DISPERSION and is invariant to the origin shift, so it
+      # is printed as-is. Only the mean DIRECTION moves with the origin.
+      cat(sprintf("  H%d acrophase: circular mean %s, circular SD %s h   [circular]\n",
+                  h, fck_acrophase_label(phi_rad = rr$mean_dir_unweighted,
+                                         period = period, harmonic = h,
+                                         clock_origin = clock_o),
                   fmt2(rr$circ_sd_hours)))
-      cat(sprintf("               (arithmetic mean %s h, linear SD %s h - shown only to\n",
-                  fmt2(mean(ac, na.rm = TRUE)), fmt2(sd(ac, na.rm = TRUE))))
+      cat(sprintf("               (arithmetic mean %s, linear SD %s h - shown only to\n",
+                  fck_acrophase_label(hours = mean(ac, na.rm = TRUE), period = period,
+                                      harmonic = h, clock_origin = clock_o, all = FALSE),
+                  fmt2(sd(ac, na.rm = TRUE))))
       cat("                make the difference visible; do not report these for a phase)\n")
       if(h > 1)
-        cat(sprintf("               convention: modulo %s h\n", fmtn(eff, 0)))
+        cat(sprintf("               H%d has %d maxima per day, all shown above\n", h, h))
     }
 
     cat(sprintf("\n  R-squared: mean %s, range [%s, %s]\n",
@@ -3457,8 +3498,13 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
                   fmt3(mod$boot_results$mesor_ci[1]), fmt3(mod$boot_results$mesor_ci[2])))
       cat(sprintf("  Amplitude: [%s, %s]\n",
                   fmt3(mod$boot_results$amplitude_ci[1]), fmt3(mod$boot_results$amplitude_ci[2])))
-      cat(sprintf("  Acrophase: [%s, %s] h\n",
-                  fmt2(mod$boot_results$acrophase_ci[1]), fmt2(mod$boot_results$acrophase_ci[2])))
+      cat(sprintf("  Acrophase: [%s, %s]   (H1, clock time)\n",
+                  fck_acrophase_label(hours = mod$boot_results$acrophase_ci[1],
+                                      period = period, harmonic = 1,
+                                      clock_origin = clock_o, all = FALSE),
+                  fck_acrophase_label(hours = mod$boot_results$acrophase_ci[2],
+                                      period = period, harmonic = 1,
+                                      clock_origin = clock_o, all = FALSE)))
     }
     if(!is.null(mod$bingham_summary)) {
       hdr("Bingham joint confidence regions (Bingham et al. 1982)")
@@ -3472,6 +3518,8 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
                     h, b$n_identified, b$n, fmt1(100 * b$n_identified / b$n)))
         cat(sprintf("      median half-width: amplitude +/- %s, acrophase +/- %s h\n",
                     fmt3(b$median_amp_halfwidth), fmt2(b$median_acro_halfwidth_h)))
+        cat("      Half-widths are durations and carry no origin; the acrophases they\n")
+        cat("      bracket are the clock times reported above.\n")
         if(b$n_identified < b$n)
           cat("      where it is not identified the region covers the origin, i.e. that\n",
               "      subject has no resolvable phase at all. Quoting one would be worse\n",
@@ -3631,7 +3679,10 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
           cat(sprintf("  H%d amplitude: %s   [vector]\n", h, fmt3(g$mean_amplitudes[h])))
           cat(sprintf("                %s (SD %s)   [arithmetic]\n",
                       fmt3(g$amp_arithmetic[h]), fmt3(g$sd_amplitudes[h])))
-          cat(sprintf("  H%d acrophase: %s h   [vector]\n", h, fmt2(g$mean_acrophases_time[h])))
+          cat(sprintf("  H%d acrophase: %s   [vector]\n", h,
+                      fck_acrophase_label(hours = g$mean_acrophases_time[h],
+                                          period = period, harmonic = h,
+                                          clock_origin = clock_o)))
           if(!is.null(rr)) {
             cat(sprintf("                r-bar unweighted %s (Rayleigh Z = %s, p = %s)   [circular]\n",
                         fmt3(rr$r_unweighted), fmt1e(rr$rayleigh$Z),
@@ -3639,8 +3690,15 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
             cat(sprintf("                r-bar amplitude-weighted %s\n", fmt3(rr$r_weighted)))
           }
           if(h > 1)
-            cat(sprintf("                convention: modulo %s h\n", fmtn(period / h, 0)))
+            cat(sprintf("                H%d has %d maxima per day, all shown\n", h, h))
         }
+
+        gpk <- fck_curve_peak_clock(g$mean_coefs, mod)
+        if(!is.null(gpk))
+          cat(sprintf("  Complete fitted curve peaks at %s (value %s), troughs at %s\n",
+                      fck_clock_label(gpk$peak_clock, period, show_day = FALSE),
+                      fmt2(gpk$peak_value),
+                      fck_clock_label(gpk$trough_clock, period, show_day = FALSE)))
 
         cat("\n  Fitted equation:\n  ")
         cat(fck_format_equation(g$intercept, trend_type, g$trend_coefs,
@@ -3680,11 +3738,17 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       amp_col <- paste0("amplitude_", h)
       acro_col <- paste0("acrophase_time_", h)
       
-      param_names <- c(param_names, paste0("Amplitude H", h), paste0("Acrophase H", h, " (hours)"))
-      mean_vals <- c(mean_vals, mean(params[[amp_col]]), mean(params[[acro_col]]))
+      # AUDIT: acrophase columns hold MODEL-elapsed hours; the table reports
+      # clock time. The mean is converted; the SD is a dispersion, carries no
+      # origin, and is left alone.
+      .co <- fck_clock_origin(mod)
+      .to_clock <- function(v) (v + .co) %% mod$period
+      param_names <- c(param_names, paste0("Amplitude H", h),
+                       paste0("Acrophase H", h, " (clock h)"))
+      mean_vals <- c(mean_vals, mean(params[[amp_col]]), .to_clock(mean(params[[acro_col]])))
       sd_vals <- c(sd_vals, sd(params[[amp_col]]), sd(params[[acro_col]]))
-      min_vals <- c(min_vals, min(params[[amp_col]]), min(params[[acro_col]]))
-      max_vals <- c(max_vals, max(params[[amp_col]]), max(params[[acro_col]]))
+      min_vals <- c(min_vals, min(params[[amp_col]]), .to_clock(min(params[[acro_col]])))
+      max_vals <- c(max_vals, max(params[[amp_col]]), .to_clock(max(params[[acro_col]])))
     }
     
     param_names <- c(param_names, "R²", "% Rhythm")
@@ -4391,7 +4455,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     acro_rad_col <- paste0("acrophase_rad_", h)
     
     # Convert to degrees for polar plot
-    theta_deg <- params[[acro_rad_col]] * 180 / pi
+    theta_deg <- phi_to_degrees(params[[acro_rad_col]])
     r <- params[[amp_col]]
     
     p <- plot_ly(type = 'scatterpolar', mode = 'markers')
@@ -4419,7 +4483,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
 
         # Add group mean vector for selected harmonic
         g_fit <- mod$group_fits[[g_name]]
-        acro_deg <- g_fit$mean_acrophases_rad[h] * 180 / pi
+        acro_deg <- phi_to_degrees(g_fit$mean_acrophases_rad[h])
         if(acro_deg < 0) acro_deg <- acro_deg + 360
 
         p <- p %>% add_trace(
@@ -4435,7 +4499,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       # Add population mean vector if requested (even when groups present)
       if(isTRUE(input$polar_show_mean) && !is.null(mod$pop_mean_fit)) {
         pop <- mod$pop_mean_fit
-        acro_deg <- pop$mean_acrophases_rad[h] * 180 / pi
+        acro_deg <- phi_to_degrees(pop$mean_acrophases_rad[h])
         if(acro_deg < 0) acro_deg <- acro_deg + 360
 
         p <- p %>% add_trace(
@@ -4459,7 +4523,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       # Add mean vector if requested
       if(isTRUE(input$polar_show_mean) && !is.null(mod$pop_mean_fit)) {
         pop <- mod$pop_mean_fit
-        acro_deg <- pop$mean_acrophases_rad[h] * 180 / pi
+        acro_deg <- phi_to_degrees(pop$mean_acrophases_rad[h])
         if(acro_deg < 0) acro_deg <- acro_deg + 360
 
         p <- p %>% add_trace(
@@ -4512,7 +4576,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
         # Convert back to polar coordinates
         ellipse_r <- sqrt(ellipse_x^2 + ellipse_y^2)
         ellipse_theta_rad <- atan2(ellipse_y, ellipse_x)
-        ellipse_theta_deg <- ellipse_theta_rad * 180 / pi
+        ellipse_theta_deg <- phi_to_degrees(ellipse_theta_rad)
         ellipse_theta_deg[ellipse_theta_deg < 0] <- ellipse_theta_deg[ellipse_theta_deg < 0] + 360
 
         # Add ellipse as a trace
@@ -4530,14 +4594,37 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     
     # Adjust angular axis based on harmonic
     # For H2 (12h period), show 12 hours; for H3, show 8 hours, etc.
+    # AUDIT: the angular positions are MODEL phase, and the point cloud, the
+    # group vectors and the ellipse all share that frame -- so the geometry is
+    # right and nothing here is moved. Only the axis LABELS were wrong: they
+    # read elapsed hours as if they were clock times. Relabelled through the
+    # same origin the rest of the app uses.
+    #
+    # A dial for harmonic h spans period/h, so every angle on it corresponds to
+    # h different clock times. The labels show the first and the subtitle says
+    # how often it recurs, rather than silently picking one.
+    clock_o <- fck_clock_origin(mod)
     effective_period <- mod$period / h
     n_ticks <- min(12, effective_period)
     tick_step <- effective_period / n_ticks
     tick_vals <- seq(0, 360 - 360/n_ticks, by = 360/n_ticks)
-    tick_labels <- sprintf("%.1fh", seq(0, effective_period - tick_step, by = tick_step))
-    
+    tick_elapsed <- seq(0, effective_period - tick_step, by = tick_step)
+    tick_labels <- vapply(tick_elapsed, function(e)
+      fck_clock_label((e + clock_o) %% mod$period, mod$period, show_day = FALSE),
+      character(1))
+
     p %>% layout(
-      title = paste("Acrophase Polar Plot - Harmonic", h, "(period =", round(effective_period, 1), "h)"),
+      title = list(
+        text = sprintf("Acrophase polar plot - H%d (effective period %s h)%s", h,
+                       fmt1(effective_period),
+                       if(h > 1)
+                         sprintf("<br><sub>clock times; each angle recurs every %s h</sub>",
+                                 fmt1(effective_period))
+                       else if(clock_o != 0)
+                         sprintf("<br><sub>clock times; the model origin is %s</sub>",
+                                 fck_clock_label(clock_o, mod$period, show_day = FALSE))
+                       else "<br><sub>clock times</sub>"),
+        x = 0.5),
       polar = list(
         radialaxis = list(title = "Amplitude"),
         angularaxis = list(
@@ -4603,30 +4690,38 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     
     acro_col <- paste0("acrophase_time_", h)
     effective_period <- period / h
-    
-    # Check if we have groups
-    if(!is.null(mod$group_fits) && length(mod$group_fits) >= 1 && 
+
+    # AUDIT: acrophase_time_h holds MODEL-elapsed hours. Plotted raw it reads as
+    # a clock, which is wrong by the origin shift. Converted here through the
+    # same origin as every other acrophase in the app.
+    clock_o <- fck_clock_origin(mod)
+    params$acro_clock <- (params[[acro_col]] + clock_o) %% effective_period
+    x_lab <- if(h > 1)
+      sprintf("Acrophase (clock h, modulo %s h - H%d has %d maxima per day)",
+              fmt1(effective_period), h, h)
+    else "Acrophase (clock h)"
+
+    if(!is.null(mod$group_fits) && length(mod$group_fits) >= 1 &&
        !is.null(input$harmonic_group_var) && input$harmonic_group_var != "_none_") {
-      
+
       group_var <- values$covariates[[input$harmonic_group_var]]
       params$group <- group_var[params$subject]
       params <- params[!is.na(params$group), ]  # Remove NAs
-      
-      g <- ggplot(params, aes(x = .data[[acro_col]], fill = as.factor(group))) +
+
+      g <- ggplot(params, aes(x = .data[["acro_clock"]], fill = as.factor(group))) +
         geom_histogram(alpha = 0.6, position = "identity", bins = 12) +
         scale_fill_brewer(palette = "Set1", name = "Group") +
         scale_x_continuous(limits = c(0, effective_period)) +
         theme_minimal() +
-        labs(title = paste0("Distribution of Acrophases (H", h, ") by Group"), 
-             x = paste("Acrophase (hours, period =", round(effective_period, 1), ")"), y = "Count")
-      
+        labs(title = paste0("Distribution of acrophases (H", h, ") by group"),
+             x = x_lab, y = "Count")
+
       ggplotly(g)
     } else {
-      plot_ly(x = params[[acro_col]], type = "histogram",
+      plot_ly(x = params$acro_clock, type = "histogram",
               marker = list(color = 'firebrick', line = list(color = 'white', width = 1))) %>%
-        layout(title = paste0("Distribution of Acrophases (H", h, ")"),
-               xaxis = list(title = paste("Acrophase (hours, period =", round(effective_period, 1), ")"),
-                            range = c(0, effective_period)),
+        layout(title = paste0("Distribution of acrophases (H", h, ")"),
+               xaxis = list(title = x_lab, range = c(0, effective_period)),
                yaxis = list(title = "Count"))
     }
   })
@@ -5062,9 +5157,11 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     
     cat("=== Group Comparison Statistics ===\n")
     cat(sprintf("Harmonic: H%d (effective period = %s h)\n", h, fmt1(effective_period)))
+    cat(sprintf("Acrophases below are CLOCK times (model origin %s).\n",
+                fck_clock_label(fck_clock_origin(mod), mod$period, show_day = FALSE)))
     if(h > 1)
-      cat(sprintf("Acrophase convention: identified modulo %s h, so x h is equivalent to %s h.\n",
-                  fmtn(effective_period, 0), fmtn(effective_period, 0)))
+      cat(sprintf("H%d repeats every %s h, so each acrophase has %d equivalent clock times.\n",
+                  h, fmtn(effective_period, 0), h))
     cat(sprintf("Data source: %s.%s\n\n",
                 if(isTRUE(mod$using_smoothed)) "SMOOTHED" else "RAW",
                 if(isTRUE(mod$using_smoothed))
@@ -5384,8 +5481,12 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
         g_r <- mean_resultant_length(g_angles)
         # AUDIT 1.2: label which resultant this is. Both are shown.
         g_rw <- fck_resultants(g_angles, params[[amp_col]][params$group == g])
-        cat(sprintf("    %-14s circular mean %s h, circ.SD %s h, r-bar unweighted %s, weighted %s (n=%d)\n",
-                    g, fmt2(g_mean_time), fmt2(g_sd_time), fmt3(g_r),
+        # AUDIT: circular MEAN is a direction and moves with the origin; circular
+        # SD is a dispersion and does not.
+        cat(sprintf("    %-14s circular mean %s, circ.SD %s h, r-bar unweighted %s, weighted %s (n=%d)\n",
+                    g, fck_acrophase_label(hours = g_mean_time, period = mod$period,
+                                           harmonic = h, clock_origin = fck_clock_origin(mod)),
+                    fmt2(g_sd_time), fmt3(g_r),
                     fmt3(if(is.null(g_rw)) NA_real_ else g_rw$r_weighted), length(g_angles)))
       }
 
@@ -5418,10 +5519,14 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
         y_h <- sqrt(bc_ok^2 + bs_ok^2) * sin(atan2(bs_ok, bc_ok))
         acro_h <- atan2(mean(y_h), mean(x_h))
         if(acro_h < 0) acro_h <- acro_h + 2 * pi
-        acro_time <- acro_h * effective_period / (2 * pi)
+        # AUDIT: acro_h is a model-frame direction; report it as a clock time
+        # through the one helper, like every other acrophase in the app.
         amp_mean <- sqrt(mean(bc_ok)^2 + mean(bs_ok)^2)
-        cat(sprintf("    %s: amplitude-weighted mean = %.2f h, mean amplitude = %.3f (n=%d)\n",
-                    g, acro_time, amp_mean, sum(ok)))
+        cat(sprintf("    %s: amplitude-weighted mean = %s, mean amplitude = %s (n=%d)\n",
+                    g, fck_acrophase_label(phi_rad = acro_h, period = mod$period,
+                                           harmonic = h,
+                                           clock_origin = fck_clock_origin(mod)),
+                    fmt3(amp_mean), sum(ok)))
       }
       
       cat("\n--- R-squared Comparison ---\n")
