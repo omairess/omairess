@@ -16,10 +16,13 @@
 # three slots clear the all-pairs gates (worst CVD dE 9.2, normal-vision 24.0).
 # Past three, line dash carries identity as well as hue — see the note the plot
 # shows for itself.
-FCK_DENSITY_COLORS <- c("#2a78d6", "#eb6834", "#1baf7a",
-                        "#eda100", "#e87ba4", "#008300", "#4a3aa7", "#e34948")
-FCK_DENSITY_DASH   <- c("solid", "dash", "dot", "dashdot",
-                        "longdash", "longdashdot", "solid", "dash")
+# AUDIT: this tab's palette became the app's palette, in
+# server/02b_helpers_palette.R -- but slot 4 had to be re-stepped first. The old
+# amber (#eda100) FAILED the all-pairs normal-vision check against the orange
+# (dE 13.7, floor 15), which matters here because the reporter's data has four
+# groups and a polar overlay compares every pair, not just neighbours.
+FCK_DENSITY_COLORS <- c(FCK_GROUP_COLORS, FCK_GROUP_COLORS_EXTRA)
+FCK_DENSITY_DASH   <- FCK_GROUP_DASH
 
 # The acrophases to plot, plus the weights and grouping that go with them.
 fck_density_data <- function(input, values) {
@@ -636,6 +639,22 @@ output$harmonic_density_plot <- renderPlotly({
   }
 
   nm <- names(rings)
+  # AUDIT: colours were assigned by POSITION, so hiding one ring repainted the
+  # rest and the same group was a different colour in another tab. Keyed on the
+  # series NAME through the shared palette instead. A ring split by day carries
+  # its parent group's colour, so the days of one group read as one family.
+  .ring_key <- function(x) sub(" - .*$", "", as.character(x))
+  .ring_levels <- unique(.ring_key(nm))
+  .ring_pal <- fck_group_colors(.ring_levels)
+  .ring_dsh <- fck_group_dashes(.ring_levels)
+  .ring_col <- function(x) {
+    v <- unname(.ring_pal[[.ring_key(x)]])
+    if (is.null(v) || is.na(v)) "#6f6f6f" else v
+  }
+  .ring_dash <- function(x) {
+    v <- unname(.ring_dsh[[.ring_key(x)]])
+    if (is.null(v) || is.na(v)) "solid" else v
+  }
   ci_style <- input$density_ci_style %||% "dotted"
 
   # --- uncertainty: shaded ribbon and/or dotted edges ------------------------
@@ -644,7 +663,7 @@ output$harmonic_density_plot <- renderPlotly({
   # the default here and the ribbon is not.
   for (i in seq_along(bands)) {
     b <- bands[[nm[i]]]; if (is.null(b)) next
-    col <- FCK_DENSITY_COLORS[((i - 1) %% length(FCK_DENSITY_COLORS)) + 1]
+    col <- .ring_col(nm[i])
     if (ci_style %in% c("shaded", "both")) {
       p <- add_trace(p, type = "scatterpolar", mode = "lines",
                      r = b$r, theta = fck_hour_to_theta(b$hours, period),
@@ -682,7 +701,7 @@ output$harmonic_density_plot <- renderPlotly({
   if (do_fill) {
     for (i in seq_along(rings)) {
       rg <- rings[[i]]
-      col <- FCK_DENSITY_COLORS[((i - 1) %% length(FCK_DENSITY_COLORS)) + 1]
+      col <- .ring_col(nm[i])
       # A closed ring fills straight to itself. An open arc does not: 'toself'
       # would shut it with a straight chord between the two ends, inventing a
       # boundary across hours the recording never covered. Closing it back along
@@ -704,12 +723,12 @@ output$harmonic_density_plot <- renderPlotly({
   }
   for (i in seq_along(rings)) {
     rg <- rings[[i]]
-    col <- FCK_DENSITY_COLORS[((i - 1) %% length(FCK_DENSITY_COLORS)) + 1]
+    col <- .ring_col(nm[i])
     p <- add_trace(p, type = "scatterpolar", mode = "lines",
                    r = rg$r, theta = fck_hour_to_theta(rg$hours, period),
                    name = nm[i], legendgroup = nm[i],
                    line = list(color = col, width = 2.5,
-                               dash = FCK_DENSITY_DASH[((i - 1) %% length(FCK_DENSITY_DASH)) + 1]),
+                               dash = .ring_dash(nm[i])),
                    hoverinfo = "text",
                    text = sprintf("%s<br>%02d:%02.0f<br>%s %.3f", nm[i],
                                   floor(rg$hours %% period), (rg$hours %% 1) * 60,
@@ -720,7 +739,7 @@ output$harmonic_density_plot <- renderPlotly({
   if (!is.null(pts)) {
     for (i in seq_along(pts$groups)) {
       idx <- pts$groups[[i]]
-      col <- FCK_DENSITY_COLORS[((i - 1) %% length(FCK_DENSITY_COLORS)) + 1]
+      col <- .ring_col(nm[i])
       p <- add_trace(p, type = "scatterpolar", mode = "markers",
                      r = rep(1.05, length(idx)),
                      theta = fck_hour_to_theta(pts$hours[idx], period),
@@ -738,7 +757,7 @@ output$harmonic_density_plot <- renderPlotly({
   # --- mean direction, length = R-bar (acrophase mode) -----------------------
   for (i in seq_along(means)) {
     s <- means[[i]]
-    col <- FCK_DENSITY_COLORS[((i - 1) %% length(FCK_DENSITY_COLORS)) + 1]
+    col <- .ring_col(nm[i])
     p <- add_trace(p, type = "scatterpolar", mode = "lines+markers",
                    r = c(inner, inner + (1 - inner) * s$r_bar),
                    theta = rep(fck_hour_to_theta(s$mean_hour, period), 2),

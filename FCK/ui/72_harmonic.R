@@ -205,7 +205,11 @@ ui_tab_harmonic <- tabItem(
             ),
             tabPanel("2. Polar Plot (Acrophase)", icon = icon("compass"),
                      fluidRow(
-                       column(8, plotlyOutput("harmonic_polar_plot", height = "500px")),
+                       # Same height as the Polar Density tab next door, so the
+                       # two dials are directly comparable when you flip between
+                       # them rather than one appearing to have a tighter spread
+                       # purely because it is drawn smaller.
+                       column(8, plotlyOutput("harmonic_polar_plot", height = "540px")),
                        column(4,
                               h4("Polar Plot Settings"),
                               uiOutput("harmonic_selector_polar"),

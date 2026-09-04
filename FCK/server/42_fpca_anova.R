@@ -155,6 +155,34 @@ observeEvent(input$run_pca_anova, {
   res$group_var <- gvar
   res$warped <- !is.null(values$warping_results)
   res$warping_method <- if (res$warped) values$warping_results$method else NULL
+
+  # AUDIT: registration splits a curve into phase and amplitude. The scores are
+  # the amplitude half; the warping functions are the phase half, and stopping
+  # at the scores discards exactly the half that answers "do the groups differ
+  # in TIMING". The warping parameters get the same machinery, as their own
+  # multiplicity family -- pooling them with the components would let one
+  # question borrow the other's correction.
+  res$warp <- NULL
+  if (res$warped) {
+    wp <- fck_warp_params(values$warping_results)
+    if (!is.null(wp) && nrow(wp) == length(g)) {
+      res$warp <- fck_pc_anova_all(
+        scores = as.matrix(wp), g = g,
+        posthoc_method = input$pca_anova_posthoc %||% "holm",
+        across_pc_correction = input$pca_anova_across %||% "holm",
+        posthoc_gate = suppressWarnings(as.numeric(input$pca_anova_gate %||% 0.05)),
+        conf = suppressWarnings(as.numeric(input$pca_anova_conf %||% 0.95)),
+        subject_ids = values$subject_ids, use_welch = use_welch)
+      if (!is.null(res$warp)) res$warp$names <- colnames(wp)
+    } else if (!is.null(wp)) {
+      res$warp_note <- sprintf(
+        "The warping parameters have %d rows but %d curves entered the PCA, so they could not be aligned. No phase comparison is shown rather than a guessed one.",
+        nrow(wp), length(g))
+    } else {
+      res$warp_note <- "The warping produced no parameter that varies between curves (every curve was left where it was), so there is nothing to compare."
+    }
+  }
+
   values$pca_anova <- res
 
   n_sig <- sum(res$p_omnibus_adj < res$posthoc_gate, na.rm = TRUE)
@@ -322,6 +350,55 @@ output$pca_anova_results <- renderPrint({
     cat("\n  The interval is on the score scale, at the confidence level you set. A\n")
     cat("  difference whose interval spans zero is not distinguishable from none,\n")
     cat("  whatever the adjusted p says.\n")
+  }
+
+  # ---- the phase half ------------------------------------------------------
+  if (!is.null(res$warp_note)) {
+    hdr("Warping parameters")
+    cat(res$warp_note, "\n")
+  } else if (!is.null(res$warp)) {
+    hdr("Warping parameters (the PHASE half of the registration)")
+    cat("The component scores above describe AMPLITUDE variation, because they\n")
+    cat("were computed on the registered curves. These are what registration took\n")
+    cat("OUT -- how far each curve had to be moved to align it. If the groups\n")
+    cat("differ in timing rather than in magnitude, this is where it shows.\n")
+    cat("Corrected as their own family (", res$warp$k,
+        " test(s), ", res$warp$across_pc_correction,
+        "), not pooled with the components: 'do groups differ in phase' is a\n",
+        "different question from 'do they differ in the k-th mode of amplitude'.\n", sep = "")
+
+    cat(sprintf("\n%-52s %11s %12s %9s\n", "parameter", "p", "p adj", "omega2"))
+    cat(strrep("-", 88), "\n")
+    for (j in seq_len(res$warp$k)) {
+      o <- res$warp$omnibus[[j]]
+      nmj <- res$warp$names[j]
+      lbl <- FCK_WARP_LABELS[[nmj]] %||% nmj
+      if (is.null(o)) { cat(sprintf("%-52s  (not testable)\n", lbl)); next }
+      cat(sprintf("%-52s %11s %12s %9s\n", lbl,
+                  format.pval(res$warp$p_omnibus[j], digits = 3, eps = 1e-16),
+                  format.pval(res$warp$p_omnibus_adj[j], digits = 3, eps = 1e-16),
+                  fmt3(o$omega2)))
+      for (lv in o$levels)
+        cat(sprintf("    %-16s mean %10s (SD %9s, n = %d)\n", lv,
+                    fmt4(o$means[lv]), fmt4(o$sds[lv]), o$ns[lv]))
+      ph <- res$warp$posthoc[[j]]
+      if (!is.null(ph)) {
+        cat(sprintf("    %-14s %-14s %11s %22s %11s %9s\n",
+                    "group A", "group B", "diff", "CI", "p adj", "Hedges g"))
+        for (i in seq_len(nrow(ph))) {
+          r <- ph[i, ]
+          cat(sprintf("    %-14s %-14s %11s %22s %11s %9s\n", r$a, r$b, fmt4(r$diff),
+                      sprintf("[%s, %s]", fmt4(r$ci_lo), fmt4(r$ci_hi)),
+                      format.pval(if (isTRUE(r$already_adjusted)) r$p_raw else r$p_adj,
+                                  digits = 3, eps = 1e-16),
+                      fmt2(r$hedges_g)))
+        }
+      }
+    }
+    cat("\n  A shift is in the units of the registration's time axis (the app warps\n")
+    cat("  on a 0-1 range, so 0.01 is 1% of the recording). Warp amplitude is the\n")
+    cat("  RMS distance of h(t) from the identity and is defined for any method,\n")
+    cat("  including nonlinear warps where a single shift does not exist.\n")
   }
 
   # ---- what has been corrected for ---------------------------------------

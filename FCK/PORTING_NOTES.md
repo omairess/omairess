@@ -913,6 +913,69 @@ colliding. The polar-density radial scale now renders horizontally
 wherever it is put it will sometimes cross the data. And 49 result boxes across
 13 tabs are `collapsible`.
 
+**4.37 One group palette, keyed by name.** *(new module + fix)*
+`server/02b_helpers_palette.R`. Seven palettes were in use — `rainbow()` in the
+pairwise boxplots, `red/blue/green` in fPCA, Set1 in FoSR, a Brewer set in
+clustering, firebrick/steelblue in the harmonic fit, a pastel set in its overlay,
+and `FCK_DENSITY_COLORS` in the polar density — so the same age band was a
+different colour in every figure.
+
+The subtler half: every one indexed by **position**. Filter a group out, or sort
+levels differently in one tab, and the survivors are repainted, so "the blue
+group" means different things in two figures on the same screen.
+`fck_group_colors()` keys on the level **name** through a stable sorted
+reference, so a group keeps its colour under any filtering or reordering — the
+"colour follows the entity, never its rank" rule.
+
+The palette itself was re-stepped, not just centralised. Run through the dataviz
+validator in `--pairs all` mode — the right mode here, since an overlay compares
+every pair — the old one **FAILED at four groups**: amber `#eda100` against
+orange `#eb6834`, normal-vision ΔE 13.7 against a floor of 15. That is exactly
+the reporter's case. Slot 4 became magenta `#b5309b`, slot 5 a saturated brown
+`#8a5a12`:
+
+    light, --pairs all, 5 slots: ALL CHECKS PASS
+      worst CVD ΔE 9.2 (green/orange, deutan) · worst normal-vision ΔE 19.1
+      contrast WARN on the green -> relief is the legend and tables these
+      figures already carry
+
+**Five is the honest maximum.** No sixth all-pairs-separable hue exists inside
+the lightness band — every candidate failed the normal-vision floor. Past five,
+dash carries identity alongside hue and the figures say so. Also `rainbow()` is
+gone: a rainbow ramp used as a categorical palette implies an order that is not
+there and is not CVD-separable.
+
+**4.38 Group comparisons report the MESOR, not R².** R² is a fit-quality number,
+not a parameter: it says how well each subject's curve was described, not what
+the group's rhythm is. Replaced by the MESOR, which sits naturally beside β₀ —
+β₀ is the fitted constant, the MESOR is the rhythm-adjusted mean, and a group can
+rank differently on the two.
+
+**4.39 Warping parameters get the same ANOVA as the scores.** Registration splits
+a curve into **where** it happens and **how big** it is. The component scores are
+the amplitude half, computed on the registered curves; the warping functions are
+the phase half, and stopping at the scores discards exactly the half that answers
+"do the groups differ in timing". `fck_warp_params()` extracts the per-curve
+shift and the warp amplitude (RMS distance of h(t) from the identity — defined
+for any method, including nonlinear warps where no single shift exists), and they
+run through the same omnibus/post-hoc machinery as **their own multiplicity
+family**. Pooling them with the components would let one question borrow the
+other's correction. A warp that moved nothing is reported as having nothing to
+test, rather than an ANOVA on a constant.
+
+**4.40 Smaller fixes.** The component-scores plot was capped at three PCs with a
+red/blue/green palette; the cap is now a slider and the palette the shared one,
+with `legendgroup` so a click hides both traces of a component. The acrophase
+polar plot matches the density plot's height (540 px) so the two dials are
+comparable. Three fPCA plots got a reserved top margin — a centred title with
+plotly's default margin lands on the topmost trace.
+
+Two bugs found while testing this work, both mine and both in the new code:
+`fck_group_dashes()` took its reference order from the *input* order rather than
+the sorted order the colours use, so a group's dash changed when levels arrived
+differently even though its colour did not; and `fck_warp_params()` assigned
+columns onto a zero-row `data.frame`, which throws rather than growing it.
+
 ## 5. Rename table
 
 | source | source app | merged app |

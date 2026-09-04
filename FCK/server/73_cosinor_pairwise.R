@@ -362,6 +362,7 @@
     # Prepare data
     groups <- levels(params$group)
     n_groups <- length(groups)
+    .pal <- fck_group_colors(groups)
     plot_data <- list()
     for(g in groups) {
       plot_data[[as.character(g)]] <- params[[param]][params$group == g]
@@ -372,8 +373,12 @@
             main = paste("Group Comparison:", param_label),
             ylab = param_label,
             xlab = "Group",
-            col = rainbow(n_groups, alpha = 0.3),
-            border = rainbow(n_groups),
+            # AUDIT: was rainbow(), which is a rainbow ramp used as a
+            # categorical palette -- unordered hues that imply an order, and not
+            # colourblind-separable. The shared palette is keyed by group NAME,
+            # so a group is the same colour here as in every other figure.
+            col = fck_group_fill(unname(.pal[groups]), 0.30),
+            border = unname(.pal[groups]),
             notch = TRUE,
             las = 1,
             cex.axis = 1.2,
@@ -386,7 +391,7 @@
       vals <- params[[param]][params$group == g]
       vals <- vals[!is.na(vals)]
       points(jitter(rep(i, length(vals)), amount = 0.1), vals,
-             col = rainbow(n_groups, alpha = 0.5)[i],
+             col = fck_group_fill(unname(.pal[[as.character(g)]]), 0.55),
              pch = 19, cex = 0.8)
     }
 
@@ -553,6 +558,7 @@
 
           groups <- levels(params$group)
           n_groups <- length(groups)
+          .pal <- fck_group_colors(groups)
           plot_data <- list()
           for(g in groups) {
             plot_data[[as.character(g)]] <- params[[param]][params$group == g]
@@ -563,8 +569,8 @@
                   main = paste("Group Comparison:", param_label),
                   ylab = param_label,
                   xlab = "Group",
-                  col = rainbow(n_groups, alpha = 0.3),
-                  border = rainbow(n_groups),
+                  col = fck_group_fill(unname(.pal[groups]), 0.30),
+                  border = unname(.pal[groups]),
                   notch = TRUE,
                   las = 1,
                   cex.axis = 1.2,
@@ -576,7 +582,7 @@
             vals <- params[[param]][params$group == g]
             vals <- vals[!is.na(vals)]
             points(jitter(rep(i, length(vals)), amount = 0.1), vals,
-                   col = rainbow(n_groups, alpha = 0.5)[i],
+                   col = fck_group_fill(unname(.pal[[as.character(g)]]), 0.55),
                    pch = 19, cex = 0.8)
             points(i, mean(vals), pch = 18, cex = 2.5, col = "black")
           }

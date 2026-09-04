@@ -288,8 +288,12 @@
         }
       }
       
-      p <- p %>% layout(title = "Principal Component Loadings",
-                        yaxis = list(title = "Loading"))
+      # A centred title with plotly's default top margin lands on the topmost
+      # trace. Reserve the space rather than shrinking the title.
+      p <- p %>% layout(title = list(text = "Principal component loadings",
+                                     x = 0.5, xanchor = "center"),
+                        yaxis = list(title = "Loading"),
+                        margin = list(t = 60))
 
       p <- format_plotly_time_axis(p, time_points, tick_step_hours = as.numeric(input$tick_freq_results))
       p
@@ -343,7 +347,8 @@
                   line = list(color = 'red'),
                   marker = list(color = 'red'))
       
-      p %>% layout(title = "Variance Explained",
+      p %>% layout(title = list(text = "Variance explained", x = 0.5, xanchor = "center"),
+                   margin = list(t = 60),
                    xaxis = list(title = "Component", dtick = 1),
                    yaxis = list(title = "Variance Explained (%)"),
                    yaxis2 = list(title = "Cumulative Variance (%)",
@@ -386,8 +391,21 @@
                   name = "Mean", 
                   line = list(color = 'black', width = 3))
       
-      colors <- c('red', 'blue', 'green')
-      n_show <- min(3, ncol(pca_res$scores), length(pca_res$values))
+      # AUDIT: capped at three components with a red/blue/green palette. The cap
+      # is now the user's (up to whatever the PCA retained) and the palette is
+      # the app's shared one, so a component is the same colour here as in the
+      # component-ANOVA figure. Past five, dash carries identity alongside hue --
+      # see server/02b_helpers_palette.R.
+      n_avail <- min(ncol(pca_res$scores), length(pca_res$values), length(pca_res$harmonics))
+      n_req <- suppressWarnings(as.integer(input$effect_n_comp %||% 3))
+      if(!is.finite(n_req) || n_req < 1) n_req <- 3
+      n_show <- min(n_req, n_avail)
+      # solid/dash already carries the SIGN of the deviation (+2SD vs -2SD), so
+      # it is not available to carry component identity as well. Hue is the only
+      # channel left, and the validated ramp has five all-pairs-separable slots:
+      # past that the note under the plot says so rather than pretending eight
+      # components are distinguishable.
+      colors <- fck_group_ramp(max(n_show, 1))
       
       for(i in 1:n_show) {
         if(i <= length(pca_res$harmonics) && !is.null(pca_res$harmonics[i])) {
@@ -401,6 +419,7 @@
             type = 'scatter',
             mode = 'lines',
             name = paste("PC", i, "+2SD"),
+            legendgroup = paste0("PC", i),
             line = list(color = colors[i], dash = 'solid')
           )
           
@@ -412,13 +431,19 @@
             type = 'scatter',
             mode = 'lines',
             name = paste("PC", i, "-2SD"),
+            legendgroup = paste0("PC", i),
             line = list(color = colors[i], dash = 'dash')
           )
         }
       }
       
-      p <- p %>% layout(title = "Effect of Component Scores",
-                        yaxis = list(title = "Value"))
+      p <- p %>% layout(
+        title = list(text = sprintf("Effect of component scores (%d of %d component%s shown)",
+                                    n_show, n_avail, if(n_avail == 1) "" else "s"),
+                     x = 0.5, xanchor = "center"),
+        yaxis = list(title = "Value"),
+        legend = list(orientation = "h", y = -0.18),
+        margin = list(t = 60))
       p <- format_plotly_time_axis(p, time_points, tick_step_hours = as.numeric(input$tick_freq_results))
       p
       
@@ -1479,7 +1504,11 @@
       }
       
       p %>% layout(
-        title = "Time Warping Functions",
+        # Reserve room under the title: the warping functions run the full
+        # height of the panel, so a title with the default top margin sits on
+        # the topmost curve.
+        title = list(text = "Time warping functions", x = 0.5, xanchor = "center"),
+        margin = list(t = 60),
         xaxis = list(title = "Original Time (t)", range = c(0, 1)),
         yaxis = list(title = "Warped Time h(t)", range = c(0, 1)),
         hovermode = 'x'

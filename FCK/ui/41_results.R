@@ -114,8 +114,18 @@ ui_tab_results <- tabItem(
             plotlyOutput("variance_plot", height = "300px"),
             hr(),
             h4("Component Scores"),
-            sliderInput("effect_size", "Effect Size Multiplier:",
-                        min = 0.5, max = 3, value = 1, step = 0.1),
+            fluidRow(
+              column(6,
+                     sliderInput("effect_size", "Effect Size Multiplier:",
+                                 min = 0.5, max = 3, value = 1, step = 0.1)),
+              column(6,
+                     sliderInput("effect_n_comp", "Components to show:",
+                                 min = 1, max = 10, value = 3, step = 1))
+            ),
+            helpText(HTML("Was fixed at three. Beyond the fifth component hue
+                           alone stops separating them reliably \u2014 solid/dash is
+                           already spoken for by the sign of the deviation \u2014 so
+                           read a long list with the legend, or show fewer.")),
             plotlyOutput("scores_plot", height = "400px"),
             hr(),
             DTOutput("scores_table")

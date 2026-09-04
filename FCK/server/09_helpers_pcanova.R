@@ -333,3 +333,63 @@ fck_pc_anova_all <- function(scores, g, eigenvalues = NULL, varprop = NULL,
        independence = fck_pc_independence_check(subject_ids),
        levels = levels(g))
 }
+
+
+# ---------------------------------------------------- warping parameters
+
+# WHY WARPING PARAMETERS DESERVE THE SAME TEST AS THE SCORES
+#
+# Registration splits a curve into WHERE it happens (phase) and HOW BIG it is
+# (amplitude). The component scores describe the amplitude half, because they
+# are computed on the registered curves. The warping functions are the phase
+# half, and they are discarded by every analysis that stops at the scores --
+# which is exactly the wrong half to throw away when the question is whether
+# groups differ in TIMING.
+#
+# Two parameters, both defined for any warping method:
+#   shift           the per-curve time shift, when the method produces one
+#   warp_amplitude  RMS deviation of h(t) from the identity, i.e. how far this
+#                   curve had to be moved to align it. Method-agnostic, and the
+#                   only one available for a nonlinear warp.
+#
+# They are their OWN multiplicity family, not extra components: "do the groups
+# differ in phase" is a different question from "do they differ in the k-th mode
+# of amplitude variation", and pooling the two families would let one borrow the
+# other's correction.
+fck_warp_params <- function(warping_results, time_points = NULL) {
+  if (is.null(warping_results)) return(NULL)
+  wf <- warping_results$warp_functions
+  sh <- warping_results$shifts
+  tp <- time_points %||% warping_results$time_points
+
+  amp <- NULL
+  if (!is.null(wf) && !is.null(tp) && nrow(wf) == length(tp)) {
+    amp <- apply(wf, 2, function(h) sqrt(mean((h - tp)^2, na.rm = TRUE)))
+  }
+  if (is.null(sh) && is.null(amp)) return(NULL)
+
+  n <- max(length(sh), length(amp))
+  # Build the columns first: assigning into a zero-row data.frame throws
+  # "replacement has n rows, data has 0" rather than growing it.
+  cols <- list()
+  if (!is.null(sh) && length(sh) == n) cols$shift <- as.numeric(sh)
+  if (!is.null(amp) && length(amp) == n) cols$warp_amplitude <- as.numeric(amp)
+  if (!length(cols)) return(NULL)
+  out <- as.data.frame(cols, stringsAsFactors = FALSE)
+
+  # A warp that never moved anything is not a parameter worth testing: it is a
+  # constant, and an ANOVA on a constant is undefined rather than null.
+  keep <- vapply(out, function(v) {
+    v <- v[is.finite(v)]
+    length(v) > 1 && stats::sd(v) > .Machine$double.eps^0.5
+  }, logical(1))
+  if (!any(keep)) return(NULL)
+  out[, keep, drop = FALSE]
+}
+
+# Human labels for the warping parameters, so the report does not print a
+# column name at a reader.
+FCK_WARP_LABELS <- c(
+  shift = "Time shift (how far this curve was moved)",
+  warp_amplitude = "Warp amplitude (RMS distance of h(t) from the identity)"
+)

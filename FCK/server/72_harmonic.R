@@ -3836,10 +3836,11 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     
     if(subject_select == "all") {
       # Overlay all subjects - colored by group if available
-      group_colors_hex <- c('#B22222', '#4682B4', '#228B22', '#800080', '#FF8C00', '#8B4513')
-      group_colors_rgba <- c('rgba(178,34,34,', 'rgba(70,130,180,', 'rgba(34,139,34,', 
-                             'rgba(128,0,128,', 'rgba(255,140,0,', 'rgba(139,69,19,')
-      
+      # AUDIT: one palette for the whole app, keyed by group NAME so a group
+      # keeps its colour across every figure and is not repainted when another
+      # group is filtered out. See server/02b_helpers_palette.R.
+      .glv <- names(mod$group_fits)
+      group_colors_hex <- fck_group_colors(.glv)
       if(!is.null(mod$group_fits) && length(mod$group_fits) >= 1 && 
          !is.null(input$harmonic_group_var) && input$harmonic_group_var != "_none_") {
         
@@ -3851,8 +3852,8 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
           if(!is.null(fit_i) && fit_i$success) {
             pred_i <- predict_cosinor(fit_i, time_fine)
             grp <- as.character(group_var[i])
-            grp_idx <- which(groups == grp)
-            line_color <- if(length(grp_idx) > 0) paste0(group_colors_rgba[grp_idx], '0.4)') else 'rgba(100,100,100,0.3)'
+            .c <- group_colors_hex[[grp]] %||% NA_character_
+            line_color <- if(!is.na(.c)) fck_group_rgba(.c, 0.4) else 'rgba(100,100,100,0.3)'
             
             p <- p %>% add_lines(x = time_fine, y = pred_i, 
                                  line = list(color = line_color, width = 1),
@@ -3877,7 +3878,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
           }
           
           p <- p %>% add_lines(x = time_fine, y = g_pred,
-                               line = list(color = group_colors_hex[g_idx], width = 3), 
+                               line = list(color = unname(group_colors_hex[[g_name]]), width = 3),
                                name = paste("Mean:", g_name))
         }
         
@@ -3887,7 +3888,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
           params$group <- group_var[params$subject]
           
           # Lighter versions of group colors for components
-          group_comp_colors <- c('#FF6B6B', '#87CEEB', '#90EE90', '#DDA0DD', '#FFB347', '#D2B48C')
+          group_comp_colors <- fck_group_colors(names(mod$group_fits))
           
           # Show group-specific harmonic components
           for(g_idx in seq_along(groups)) {
@@ -3918,7 +3919,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
                 comp_vals <- grp_mesor + beta_cos * cos(omega * time_fine) + beta_sin * sin(omega * time_fine)
                 
                 p <- p %>% add_lines(x = time_fine, y = comp_vals,
-                                     line = list(color = group_comp_colors[g_idx], width = 1.5, dash = 'dot'),
+                                     line = list(color = unname(group_comp_colors[[g_name]]), width = 1.5, dash = 'dot'),
                                      name = paste0("H", h, " (", g_name, ")"))
               }
               
@@ -3932,7 +3933,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
               }
               if(!is.null(trend_line)) {
                 p <- p %>% add_lines(x = time_fine, y = trend_line,
-                                     line = list(color = group_colors_hex[g_idx], width = 1.5, dash = 'dash'),
+                                     line = list(color = unname(group_colors_hex[[g_name]]), width = 1.5, dash = 'dash'),
                                      name = paste0(get_trend_label(mod$trend_type), " (", g_name, ")"))
               }
             }
@@ -4082,9 +4083,11 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       # Check if we have group fits
       if(!is.null(mod$group_fits) && length(mod$group_fits) >= 1) {
         # Show each group's mean curve - use hex colors for proper transparency
-        group_colors_hex <- c('#B22222', '#4682B4', '#228B22', '#800080', '#FF8C00', '#8B4513')  # firebrick, steelblue, forestgreen, purple, orange, brown
-        group_colors_rgba <- c('rgba(178,34,34,', 'rgba(70,130,180,', 'rgba(34,139,34,', 
-                               'rgba(128,0,128,', 'rgba(255,140,0,', 'rgba(139,69,19,')
+        # AUDIT: one palette for the whole app, keyed by group NAME so a group
+      # keeps its colour across every figure and is not repainted when another
+      # group is filtered out. See server/02b_helpers_palette.R.
+      .glv <- names(mod$group_fits)
+      group_colors_hex <- fck_group_colors(.glv)
         color_idx <- 1
         
         for(g_name in names(mod$group_fits)) {
@@ -4105,7 +4108,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
           # Only add line if predictions are valid (not all NA/NaN/Inf)
           if(any(is.finite(g_pred))) {
             p <- p %>% add_lines(x = time_fine, y = g_pred,
-                                 line = list(color = group_colors_hex[color_idx], width = 3),
+                                 line = list(color = unname(group_colors_hex[[g_name]]), width = 3),
                                  name = paste("Group:", g_name))
           }
           
@@ -4120,7 +4123,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
             g_lower <- g_fit$mean_mesor + (g_pred - g_fit$mean_mesor) * scale_lower
             
             # Use rgba with 0.25 transparency for confidence band
-            ci_color <- paste0(group_colors_rgba[color_idx], '0.25)')
+            ci_color <- fck_group_rgba(group_colors_hex[[g_name]], 0.25)
             
             # Add ribbon with legend entry so it can be toggled
             p <- p %>% add_ribbons(x = time_fine, ymin = g_lower, ymax = g_upper,
@@ -4141,7 +4144,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
           params$group <- group_var[params$subject]
           
           # Lighter versions of group colors for components
-          group_comp_colors <- c('#FF6B6B', '#87CEEB', '#90EE90', '#DDA0DD', '#FFB347', '#D2B48C')
+          group_comp_colors <- fck_group_colors(names(mod$group_fits))
           
           # Show group-specific harmonic components
           g_idx <- 1
@@ -4174,7 +4177,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
                 comp_vals <- grp_mesor + beta_cos * cos(omega * time_fine) + beta_sin * sin(omega * time_fine)
                 
                 p <- p %>% add_lines(x = time_fine, y = comp_vals,
-                                     line = list(color = group_comp_colors[g_idx], width = 1.5, dash = 'dot'),
+                                     line = list(color = unname(group_comp_colors[[g_name]]), width = 1.5, dash = 'dot'),
                                      name = paste0("H", h, " (", g_name, ")"))
               }
               
@@ -4188,7 +4191,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
               }
               if(!is.null(grp_trend_line)) {
                 p <- p %>% add_lines(x = time_fine, y = grp_trend_line,
-                                     line = list(color = group_colors_hex[g_idx], width = 1.5, dash = 'dash'),
+                                     line = list(color = unname(group_colors_hex[[g_name]]), width = 1.5, dash = 'dash'),
                                      name = paste0(get_trend_label(mod$trend_type), " (", g_name, ")"))
               }
             }
@@ -4244,7 +4247,8 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
             if(!is.null(fit_i) && fit_i$success) {
               grp <- as.character(group_var[i])
               grp_idx <- which(names(mod$group_fits) == grp)
-              pt_color <- if(length(grp_idx) > 0) paste0(group_colors_rgba[grp_idx], '0.3)') else 'rgba(100,100,100,0.2)'
+              .c <- group_colors_hex[[grp]] %||% NA_character_
+              pt_color <- if(!is.na(.c)) fck_group_rgba(.c, 0.3) else 'rgba(100,100,100,0.2)'
               
               p <- p %>% add_markers(x = fit_i$time, y = fit_i$y,
                                      marker = list(color = pt_color, size = 3),
@@ -4516,7 +4520,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
        !is.null(input$harmonic_group_var) && input$harmonic_group_var != "_none_") {
 
       group_var <- values$covariates[[input$harmonic_group_var]]
-      group_colors <- c('firebrick', 'steelblue', 'forestgreen', 'purple', 'orange', 'brown')
+      group_colors <- fck_group_colors(names(mod$group_fits))
 
       groups <- names(mod$group_fits)
       for(g_idx in seq_along(groups)) {
@@ -4527,7 +4531,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
           p <- p %>% add_trace(
             r = r[g_mask], theta = theta_deg[g_mask],
             type = 'scatterpolar', mode = 'markers',
-            marker = list(size = 8, color = group_colors[g_idx], opacity = 0.7),
+            marker = list(size = 8, color = unname(group_colors[[g_name]]), opacity = 0.7),
             name = paste("Group:", g_name)
           )
         }
@@ -4541,8 +4545,8 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
           r = c(0, g_fit$mean_amplitudes[h]),
           theta = c(0, acro_deg),
           type = 'scatterpolar', mode = 'lines+markers',
-          line = list(color = group_colors[g_idx], width = 3),
-          marker = list(size = 12, color = group_colors[g_idx], symbol = 'diamond'),
+          line = list(color = unname(group_colors[[g_name]]), width = 3),
+          marker = list(size = 12, color = unname(group_colors[[g_name]]), symbol = 'diamond'),
           name = paste("Mean:", g_name)
         )
       }
@@ -5086,10 +5090,18 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     for(g_name in names(mod$group_fits)) {
       g <- mod$group_fits[[g_name]]
       
-      # Get R-squared stats for this group
-      grp_rsq <- params$r_squared[params$group == g_name]
-      rsq_mean <- mean(grp_rsq, na.rm = TRUE)
-      rsq_se <- sd(grp_rsq, na.rm = TRUE) / sqrt(length(grp_rsq))
+      # AUDIT: R-squared was here, which is a fit-quality number rather than a
+      # parameter -- it says how well each subject's curve was described, not
+      # what the group's rhythm is, so it does not belong in a panel of
+      # parameter comparisons. Replaced by the MESOR, which sits naturally
+      # beside beta_0: beta_0 is the fitted constant, the MESOR is the
+      # rhythm-adjusted mean over the window, and a group can rank differently
+      # on the two.
+      grp_mesor <- params$mesor_adj[params$group == g_name]
+      grp_mesor <- grp_mesor[is.finite(grp_mesor)]
+      mesor_mean <- if(length(grp_mesor)) mean(grp_mesor) else NA_real_
+      mesor_se <- if(length(grp_mesor) > 1)
+        sd(grp_mesor) / sqrt(length(grp_mesor)) else NA_real_
       
       # Get amplitude and acrophase for selected harmonic from individual params
       grp_amp <- params[[amp_col]][params$group == g_name]
@@ -5119,8 +5131,8 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
                                    se = sd(grp_amp, na.rm = TRUE) / sqrt(length(grp_amp))),
                         data.frame(group = g_name, parameter = paste0("Acrophase (H", h, ")"), 
                                    value = circ_mean_time, se = circ_se_time),
-                        data.frame(group = g_name, parameter = "R-squared", 
-                                   value = rsq_mean, se = rsq_se))
+                        data.frame(group = g_name, parameter = "MESOR (rhythm-adjusted)",
+                                   value = mesor_mean, se = mesor_se))
       
       # Add trend parameters based on trend type
       if(mod$trend_type == "linear" && "trend_linear" %in% names(params)) {
@@ -5188,10 +5200,10 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       }
     }
 
-    # Build named color vector matching the line graph palette
-    group_colors_hex <- c('#B22222', '#4682B4', '#228B22', '#800080', '#FF8C00', '#8B4513')
+    # The shared palette, keyed by group name, so this figure agrees with the
+    # fitted curves, the polar plots and the pairwise boxplots.
     group_names <- names(mod$group_fits)
-    named_colors <- setNames(group_colors_hex[seq_along(group_names)], group_names)
+    named_colors <- fck_group_colors(group_names)
 
     # Faceted bar plot
     g <- ggplot(group_df, aes(x = group, y = value, fill = group)) +
