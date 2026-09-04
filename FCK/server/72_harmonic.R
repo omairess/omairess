@@ -4154,40 +4154,78 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       }
     }
     
-    # Create better x-axis with clock time labels
-    time_range <- range(mod$time_vec)
-    
-    # Generate tick values and labels
-    if(max(mod$time_vec) > mod$period) {
-      # Times wrap around - create clock-style labels (modulo period)
-      tick_interval <- if(mod$period <= 12) 1 else if(mod$period <= 24) 2 else if(mod$period <= 48) 4 else mod$period / 12
-      tick_vals <- seq(floor(time_range[1]), ceiling(time_range[2]), by = tick_interval)
-      tick_text <- sapply(tick_vals, function(t) {
-        t_mod <- t %% mod$period
-        if(mod$period == 24) {
-          paste0(t_mod, ":00")
-        } else {
-          round(t_mod, 1)
-        }
-      })
-      x_title <- paste0("Time (period = ", mod$period, ", spanning wrap-around)")
-    } else {
-      tick_vals <- NULL
-      tick_text <- NULL
-      x_title <- paste("Time (period =", mod$period, ")")
-    }
-    
-    x_axis <- list(title = x_title)
-    if(!is.null(tick_vals)) {
+    # ========================================================================
+    # X AXIS: linear time underneath, CLOCK TIME on the labels and the hover
+    #
+    # The model is fitted on unwrapped linear time (8, 9, ... 30) and has to be:
+    # the harmonics would not care -- cos(2*pi*h*t/T) gives the same value at
+    # t = 3 and t = 27 -- but the TREND is not periodic, so 08:00 on day one and
+    # 08:00 on day two must be different values of t or the two days collapse
+    # onto one point and the homeostatic rise cannot be estimated at all.
+    #
+    # So linear time stays the computational axis and clock time is purely a
+    # display transform, applied here and in the hover text. Nothing in this
+    # block feeds a fit.
+    #
+    # What was wrong before: labels appeared only when the recording happened to
+    # wrap past the period, so a within-day recording got bare numbers; the
+    # label was built as paste0(t %% period, ":00"), which renders a half-past
+    # tick as "8.5:00"; there was no zero padding and no day marker, so 08:00 on
+    # the first day and on the second were indistinguishable; and the HOVER was
+    # never converted at all, which is why pointing at the curve reported
+    # 27.01508 instead of 03:01.
+    # ========================================================================
+    time_range <- range(mod$time_vec, na.rm = TRUE)
+    ticks <- fck_clock_ticks(time_range, mod$period)
+
+    x_axis <- list(
+      title = if (mod$period == 24) "Clock time" else sprintf("Time (period = %g)", mod$period)
+    )
+    if (!is.null(ticks)) {
       x_axis$tickmode <- "array"
-      x_axis$tickvals <- tick_vals
-      x_axis$ticktext <- tick_text
+      x_axis$tickvals <- ticks$vals
+      x_axis$ticktext <- ticks$text
     }
-    
+    # A recording that crosses midnight has two 08:00s on the same axis. Mark
+    # each period boundary so the reader can see which day a point belongs to.
+    day_lines <- list()
+    if (diff(time_range) > mod$period * 0.5) {
+      bnds <- seq(ceiling(time_range[1] / mod$period) * mod$period,
+                  time_range[2], by = mod$period)
+      bnds <- bnds[bnds > time_range[1] & bnds < time_range[2]]
+      day_lines <- lapply(bnds, function(b) list(
+        type = "line", x0 = b, x1 = b, yref = "paper", y0 = 0, y1 = 1,
+        line = list(color = "rgba(11,11,11,0.25)", width = 1, dash = "dot")))
+    }
+
+    # Convert the hover on EVERY trace that carries an x in model time. Traces
+    # already carrying their own text (the CI band, annotations) are left alone.
+    for (i in seq_along(p$x$attrs)) {
+      a <- p$x$attrs[[i]]
+      if (is.null(a$x)) next
+      xv <- tryCatch(as.numeric(a$x), warning = function(w) NULL, error = function(e) NULL)
+      if (is.null(xv) || !any(is.finite(xv))) next
+      # The whole hover string goes in `text` with hoverinfo = "text", rather
+      # than a hovertemplate: plotly recycles a scalar template to one copy per
+      # point (I() does not prevent it), and `text` is an array we need anyway.
+      yv <- tryCatch(as.numeric(a$y), warning = function(w) NULL, error = function(e) NULL)
+      nm <- if (!is.null(a$name)) as.character(a$name) else "fit"
+      dvl <- if (!is.null(mod$dv_name)) mod$dv_name else "Response"
+      p$x$attrs[[i]]$text <- if (is.null(yv) || length(yv) != length(xv))
+        sprintf("%s<br>%s", fck_clock_label(xv, mod$period), nm)
+      else
+        sprintf("%s<br>%s: %s<br>%s", fck_clock_label(xv, mod$period), dvl, fmt2(yv), nm)
+      p$x$attrs[[i]]$hoverinfo <- "text"
+    }
+
     p %>% layout(
       title = "Harmonic Regression Fit",
       xaxis = x_axis,
-      yaxis = list(title = "Response"),
+      yaxis = list(title = if (!is.null(mod$dv_name))
+        paste0(mod$dv_name, if (!is.null(mod$dv_units)) paste0(" (", mod$dv_units, ")") else "")
+        else "Response"),
+      shapes = day_lines,
+      hovermode = "closest",
       showlegend = TRUE
     )
   })
@@ -4886,8 +4924,88 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       params <- params[!is.na(params$group) & !is.na(params$mesor) & 
                          !is.na(params[[amp_col]]) & !is.na(params[[acro_col]]), ]
       
-      n_groups <- length(unique(params$group))
+      # ======================================================================
+      # BUG FIX: "grouping factor must have exactly 2 levels"
+      #
+      # n_groups was computed ONCE here, on the full params frame, then reused
+      # to choose t-test vs ANOVA inside blocks that had since taken a SUBSET:
+      #
+      #     params_trend <- params[!is.na(params$A_sat), ]
+      #     if (n_groups == 2) t.test(A_sat ~ group, data = params_trend)
+      #
+      # If that filter leaves only one group with usable values, the branch and
+      # the data disagree and t.test stops. n_groups says 2; the subset does not.
+      #
+      # It became reachable when the convergence gate started excluding
+      # non-converged fits (audit 2.3): on the Circaflex data that removes 938
+      # of 1305 subjects, and a sparse group can lose every member that had a
+      # usable trend parameter. The latent bug is older; that change exposed it.
+      #
+      # NOTE on a wrong first guess, recorded so nobody re-derives it: this is
+      # NOT about a factor keeping unused levels. t.test.formula() calls
+      # factor() on the grouping column, which drops unused levels itself, so an
+      # undropped 4-level factor holding 2 values works fine (verified on R
+      # 4.3.3). droplevels() below is still correct hygiene -- it makes
+      # nlevels() and length(unique()) agree downstream, and length(unique())
+      # also counts NA as a group -- but it is not what fixes the crash.
+      #
+      # The fix is .group_test(): it reads the number of groups off the data it
+      # is ACTUALLY handed, so the branch and the test can never disagree again,
+      # whatever filter ran in between.
+      # ======================================================================
+      params$group <- droplevels(as.factor(params$group))
+      n_groups <- nlevels(params$group)
+
+      if(n_groups < 2) {
+        cat(sprintf("Groups: %d, Total N: %d (after removing missings)\n\n", n_groups, nrow(params)))
+        cat("Fewer than two groups remain after dropping subjects with a missing\n")
+        cat("group label or a missing parameter", if(isTRUE(mod$fit_audit$n_nonconverged > 0) ||
+              isTRUE(mod$fit_audit$n_boundary > 0))
+              ", and after the convergence gate excluded\nnon-converged fits" else "",
+            ". There is nothing to compare.\n", sep = "")
+        if(!is.null(mod$fit_audit))
+          cat(sprintf("\n  Of %d subjects: %d converged, %d were pinned to a parameter bound,\n  %d did not converge, %d failed outright.\n",
+                      mod$fit_audit$n_attempted, mod$fit_audit$n_converged,
+                      mod$fit_audit$n_boundary, mod$fit_audit$n_nonconverged,
+                      mod$fit_audit$n_failed))
+        return(invisible(NULL))
+      }
       cat(sprintf("Groups: %d, Total N: %d (after removing missings)\n", n_groups, nrow(params)))
+
+      # One entry point for every two-or-more-group comparison in this block.
+      # It decides t-test vs ANOVA from the data in front of it, after dropping
+      # unused levels, so the decision and the test can never disagree.
+      .group_test <- function(formula, data, label = NULL) {
+        gv <- droplevels(as.factor(data[[all.vars(formula)[2]]]))
+        data[[all.vars(formula)[2]]] <- gv
+        yv <- data[[all.vars(formula)[1]]]
+        keep <- !is.na(gv) & is.finite(yv)
+        data <- data[keep, , drop = FALSE]
+        data[[all.vars(formula)[2]]] <- droplevels(data[[all.vars(formula)[2]]])
+        k <- nlevels(data[[all.vars(formula)[2]]])
+        if(k < 2) {
+          cat(sprintf("  Only %d group%s usable values here; nothing to compare.\n",
+                      k, if(k == 1) " has" else "s have"))
+          return(invisible(NULL))
+        }
+        if(any(table(data[[all.vars(formula)[2]]]) < 2)) {
+          cat("  At least one group has fewer than 2 usable values; no test is run.\n")
+          return(invisible(NULL))
+        }
+        if(k == 2) {
+          tt <- tryCatch(stats::t.test(formula, data = data), error = function(e) NULL)
+          if(is.null(tt)) { cat("  The t-test could not be computed.\n"); return(invisible(NULL)) }
+          # Welch by default (t.test's own default), which is right for the
+          # unbalanced, unequal-variance groups this app routinely produces.
+          cat(sprintf("Welch t-test: t = %s, df = %s, p = %s\n", fmt3(tt$statistic),
+                      fmt1(tt$parameter), format.pval(tt$p.value, digits = 3, eps = 1e-16)))
+        } else {
+          av <- tryCatch(stats::aov(formula, data = data), error = function(e) NULL)
+          if(is.null(av)) { cat("  The ANOVA could not be computed.\n"); return(invisible(NULL)) }
+          cat("ANOVA:\n"); print(summary(av))
+        }
+        invisible(NULL)
+      }
 
       # AUDIT 1.5: this block filters NA group labels while the Group-Specific
       # Parameters panel used to drop them silently, so the two N's disagreed by
@@ -4952,14 +5070,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
         if(!is.null(trend_col) && trend_col %in% names(params)) {
           cat(sprintf("\n--- %s Comparison ---\n", get_trend_label(trend_type)))
           trend_formula <- as.formula(paste(trend_col, "~ group"))
-          if(n_groups == 2) {
-            tt <- t.test(trend_formula, data = params)
-            cat(sprintf("t-test: t = %.3f, df = %.1f, p = %.4f\n", tt$statistic, tt$parameter, tt$p.value))
-          } else {
-            aov_trend <- aov(trend_formula, data = params)
-            cat("ANOVA:\n")
-            print(summary(aov_trend))
-          }
+          .group_test(trend_formula, params)
           
           # AUDIT 2.6: effect size and interval, not a p-value alone
           .lt <- fck_group_linear_test(params[[trend_col]], params$group)
@@ -4997,14 +5108,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
           if(trend_type == "exp_sat" && "tau" %in% names(params)) {
             cat("\n--- Time Constant (τ) Comparison ---\n")
             tau_formula <- as.formula("tau ~ group")
-            if(n_groups == 2) {
-              tt <- t.test(tau_formula, data = params)
-              cat(sprintf("t-test: t = %.3f, df = %.1f, p = %.4f\n", tt$statistic, tt$parameter, tt$p.value))
-            } else {
-              aov_tau <- aov(tau_formula, data = params)
-              cat("ANOVA:\n")
-              print(summary(aov_tau))
-            }
+            .group_test(tau_formula, params)
             
             for(g in unique(params$group)) {
               g_tau <- params$tau[params$group == g]
@@ -5040,15 +5144,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
 
       cat(sprintf("\n--- Amplitude (H%d) Comparison ---\n", h))
       amp_formula <- as.formula(paste(amp_col, "~ group"))
-      if(n_groups == 2) {
-        tt <- t.test(amp_formula, data = params)
-        cat(sprintf("t-test: t = %s, df = %s, p = %s\n", fmt3(tt$statistic),
-                    fmt1(tt$parameter), format.pval(tt$p.value, digits = 3, eps = 1e-16)))
-      } else {
-        aov_amp <- aov(amp_formula, data = params)
-        cat("ANOVA:\n")
-        print(summary(aov_amp))
-      }
+      .group_test(amp_formula, params)
       # AUDIT 2.6: effect sizes and intervals for the amplitude decline that the
       # report described (25.7 -> 22.6 -> 22.5 -> 21.1) and never tested.
       .lt <- fck_group_linear_test(params[[amp_col]], params$group)
@@ -5172,14 +5268,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       }
       
       cat("\n--- R-squared Comparison ---\n")
-      if(n_groups == 2) {
-        tt <- t.test(r_squared ~ group, data = params)
-        cat(sprintf("t-test: t = %.3f, df = %.1f, p = %.4f\n", tt$statistic, tt$parameter, tt$p.value))
-      } else {
-        aov_rsq <- aov(r_squared ~ group, data = params)
-        cat("ANOVA:\n")
-        print(summary(aov_rsq))
-      }
+      .group_test(r_squared ~ group, params)
       
       # Trend parameter comparison based on trend type
       if(mod$trend_type == "linear" && "trend_linear" %in% names(params)) {
@@ -5187,21 +5276,19 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
         params_trend <- params[!is.na(params$trend_linear), ]
         
         if(nrow(params_trend) >= 4) {
-          if(n_groups == 2) {
-            tt <- t.test(trend_linear ~ group, data = params_trend)
-            cat(sprintf("t-test: t = %.3f, df = %.1f, p = %.4f\n", tt$statistic, tt$parameter, tt$p.value))
-            
-            # Effect size (Cohen's d)
-            groups <- unique(params_trend$group)
-            g1 <- params_trend$trend_linear[params_trend$group == groups[1]]
-            g2 <- params_trend$trend_linear[params_trend$group == groups[2]]
-            pooled_sd <- sqrt(((length(g1)-1)*sd(g1)^2 + (length(g2)-1)*sd(g2)^2) / (length(g1)+length(g2)-2))
-            cohens_d <- (mean(g1) - mean(g2)) / pooled_sd
-            cat(sprintf("Cohen's d = %.3f\n", cohens_d))
-          } else {
-            aov_trend <- aov(trend_linear ~ group, data = params_trend)
-            cat("ANOVA:\n")
-            print(summary(aov_trend))
+          .group_test(trend_linear ~ group, params_trend)
+          # Effect size and interval come from fck_group_linear_test() below,
+          # which handles any number of groups; the hand-rolled two-group
+          # Cohen's d that used to sit here only ran in the k = 2 branch.
+          .lt <- fck_group_linear_test(params_trend[[all.vars(trend_linear ~ group)[1]]],
+                                       params_trend$group)
+          if(!is.null(.lt)) {
+            cat(sprintf("  eta^2 = %s, omega^2 = %s\n", fmt3(.lt$eta2), fmt3(.lt$omega2)))
+            if(!is.null(.lt$largest))
+              cat(sprintf("  Largest contrast %s - %s: %s, 95%%%% CI [%s, %s], Hedges' g = %s\n",
+                          .lt$largest$a, .lt$largest$b, fmt3(.lt$largest$diff),
+                          fmt3(.lt$largest$ci[1]), fmt3(.lt$largest$ci[2]),
+                          fmt3(.lt$largest$hedges_g)))
           }
           
           cat("\nGroup statistics (units/hour):\n")
@@ -5217,14 +5304,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
         params_trend <- params[!is.na(params$trend_log), ]
         
         if(nrow(params_trend) >= 4) {
-          if(n_groups == 2) {
-            tt <- t.test(trend_log ~ group, data = params_trend)
-            cat(sprintf("t-test: t = %.3f, df = %.1f, p = %.4f\n", tt$statistic, tt$parameter, tt$p.value))
-          } else {
-            aov_trend <- aov(trend_log ~ group, data = params_trend)
-            cat("ANOVA:\n")
-            print(summary(aov_trend))
-          }
+          .group_test(trend_log ~ group, params_trend)
           
           cat("\nGroup statistics (units/log-hour):\n")
           for(g in unique(params_trend$group)) {
@@ -5241,14 +5321,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
           params_trend <- params[!is.na(params$A_sat), ]
           
           if(nrow(params_trend) >= 4) {
-            if(n_groups == 2) {
-              tt <- t.test(A_sat ~ group, data = params_trend)
-              cat(sprintf("t-test: t = %.3f, df = %.1f, p = %.4f\n", tt$statistic, tt$parameter, tt$p.value))
-            } else {
-              aov_asat <- aov(A_sat ~ group, data = params_trend)
-              cat("ANOVA:\n")
-              print(summary(aov_asat))
-            }
+            .group_test(A_sat ~ group, params_trend)
             
             # AUDIT 1.7: "(units)" was a placeholder that was never interpolated.
             cat(sprintf("\nGroup statistics%s:\n",
@@ -5268,14 +5341,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
           params_trend <- params[!is.na(params$tau), ]
           
           if(nrow(params_trend) >= 4) {
-            if(n_groups == 2) {
-              tt <- t.test(tau ~ group, data = params_trend)
-              cat(sprintf("t-test: t = %.3f, df = %.1f, p = %.4f\n", tt$statistic, tt$parameter, tt$p.value))
-            } else {
-              aov_tau <- aov(tau ~ group, data = params_trend)
-              cat("ANOVA:\n")
-              print(summary(aov_tau))
-            }
+            .group_test(tau ~ group, params_trend)
             
             cat("\nGroup statistics (hours):\n")
             for(g in unique(params_trend$group)) {

@@ -624,6 +624,59 @@ true and the claims are corrected here rather than left standing:
   tree — the shipped code, not a copy. `tests/real_fpca_anova.R` does the same
   for the component ANOVA.
 
+**4.27 Two user-reported defects in the harmonic tab.** *(bug fixes)*
+
+**`Error in t.test.formula: grouping factor must have exactly 2 levels`.**
+`n_groups` was computed once on the full `params` frame and then reused to
+choose t-test vs ANOVA inside blocks that had since taken a *subset* of it —
+`params_trend <- params[!is.na(params$A_sat), ]`, and similarly for `tau`. If
+that filter leaves only one group with a usable trend parameter, the branch and
+the data disagree: `n_groups` says 2, the subset does not, and `t.test` stops.
+
+It became reachable when the convergence gate (4.24 / audit 2.3) started
+excluding non-converged fits. On the Circaflex file that removes 938 of 1305
+subjects, and a sparse age band can lose every member that had a usable
+`A_sat`. The latent bug is older than that change; that change is what exposed
+it, which is mine to own.
+
+Worth recording: the obvious diagnosis is wrong. This is **not** about a factor
+keeping unused levels — `t.test.formula()` calls `factor()` on the grouping
+column, which drops them itself, so an undropped 4-level factor holding 2
+values works fine (verified on R 4.3.3). A test asserts that, so nobody
+re-derives it. A second genuine route exists and is also pinned:
+`length(unique())` counts `NA` as a group, so one real group plus missing
+labels reads as two.
+
+The fix is structural rather than another guard. Every comparison in the block
+now goes through one `.group_test()` entry point that reads the number of
+groups off the data it is *actually handed*, after dropping unused levels and
+rows with missing values, so the branch and the test can never disagree again
+whatever filter ran in between. It declines politely (with a reason) at fewer
+than two usable groups or fewer than two observations in any group, instead of
+stopping the whole report. The block also returns early, naming the convergence
+counts, when fewer than two groups survive at all. Six hand-rolled
+t-test/ANOVA pairs collapsed into it; the two-group-only Cohen's d they carried
+is replaced by `fck_group_linear_test()`, which handles any number of groups.
+
+**The fit plot showed linear model time on its axis and hover.** Pointing at
+the curve reported `27.01508` instead of `03:01`. The model is fitted on
+unwrapped linear time and has to be — the harmonics would not care, since
+`cos(2πht/T)` is identical at t = 3 and t = 27, but a **non-periodic trend
+needs 08:00 on two different days to be two different values of t**, or the
+days collapse onto one point and the homeostatic rise cannot be estimated. So
+linear time stays the computational axis and clock time is purely a display
+transform: `fck_clock_label()` and `fck_clock_ticks()` in
+`server/08_helpers_cosinor.R`, applied to the axis ticks and to the hover text
+of every trace. Nothing in that path feeds a fit.
+
+Four things were wrong with the old labelling, all fixed: labels appeared only
+when the recording happened to wrap past the period, so a within-day recording
+got bare numbers; the label was `paste0(t %% period, ":00")`, which renders a
+half-past tick as `8.5:00`; there was no zero padding and no day marker, so
+08:00 on the first day and on the second were indistinguishable; and the hover
+was never converted at all. Midnight crossings now get a dotted vertical rule,
+and the y axis picks up the DV name and units when they have been declared.
+
 ## 5. Rename table
 
 | source | source app | merged app |

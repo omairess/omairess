@@ -611,3 +611,62 @@ fck_ww_assumption <- function(r_bar, kappa = NA) {
          sprintf("r-bar = %s (>= 0.45) and kappa = %s (>= 2): the concentration assumption holds.",
                  fmt3(r_bar), fmt2(kappa)))
 }
+
+
+# --------------------------------------------------- clock labels for a linear axis
+
+# WHY THE MODEL RUNS ON LINEAR TIME AND THE AXIS DOES NOT
+#
+# The harmonic part does not need it: cos(2*pi*h*t/T) is periodic, so t = 3 and
+# t = 27 give identical values and a wrapped clock axis would serve.
+#
+# The TREND does need it. A linear, log or saturating S(t) is not periodic, so
+# 08:00 on the first day and 08:00 on the second must be different values of t
+# or the two days collapse onto one point and the homeostatic rise cannot be
+# estimated at all. That is why the fitter unwraps 8..23,0..6 to 8..30, and why
+# it must keep doing so.
+#
+# So linear time is a computational requirement and clock time is a DISPLAY
+# concern. These convert one to the other for axes and hover text only; nothing
+# here ever feeds a fit.
+fck_clock_label <- function(t, period = 24, show_day = TRUE, with_minutes = TRUE) {
+  out <- rep(NA_character_, length(t))
+  ok <- is.finite(t)
+  if (!any(ok)) return(out)
+  tt <- t[ok]
+  day <- floor(tt / period)
+  hr <- tt %% period
+  h <- floor(hr)
+  m <- round((hr - h) * 60)
+  # 59.7 minutes must roll the hour, not print as ":60"
+  roll <- m >= 60
+  m[roll] <- 0; h[roll] <- h[roll] + 1
+  wrap <- h >= period
+  h[wrap] <- h[wrap] - period; day[wrap] <- day[wrap] + 1
+
+  lab <- if (with_minutes) sprintf("%02d:%02d", h, m) else sprintf("%02d:00", h)
+  if (show_day && any(day != day[1])) {
+    d0 <- min(day)
+    suffix <- ifelse(day == d0, "", sprintf(" (+%dd)", day - d0))
+    lab <- paste0(lab, suffix)
+  }
+  out[ok] <- lab
+  out
+}
+
+# Tick positions on the LINEAR axis, labelled in clock time. Returns NULL when
+# the range is degenerate, so a caller can fall back to plotly's own ticks.
+fck_clock_ticks <- function(t_range, period = 24, target_n = 12) {
+  if (!all(is.finite(t_range)) || diff(t_range) <= 0) return(NULL)
+  span <- diff(t_range)
+  # pick a step from the usual clock-friendly set
+  cand <- c(0.25, 0.5, 1, 2, 3, 4, 6, 12, 24)
+  step <- cand[which.min(abs(span / cand - target_n))]
+  first <- ceiling(t_range[1] / step) * step
+  vals <- seq(first, t_range[2], by = step)
+  if (length(vals) < 2) return(NULL)
+  list(vals = vals,
+       text = fck_clock_label(vals, period, show_day = FALSE,
+                              with_minutes = step < 1),
+       step = step)
+}
