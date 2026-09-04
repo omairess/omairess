@@ -868,6 +868,51 @@ Storage stays in model coordinates deliberately: converting at the source would
 put clock times into the circular statistics, and the conversion belongs at the
 display boundary where it can be applied once and audited.
 
+**4.34 Unlabelled subjects are excluded from group analyses.** *(bug fix +
+design reversal)* Reported as `Error in if: missing value where TRUE/FALSE
+needed` from the group-comparison plot, with one subject missing `AGEcategory`.
+
+4.24 / audit 1.5 carried unlabelled subjects as an `UNASSIGNED` pseudo-group so
+they could not vanish silently. That was the wrong remedy: their group column is
+`NA`, so `params$group == "__UNASSIGNED__"` matched nothing, the angle vector
+came back empty, `circular_mean()` of an empty vector is `atan2(NaN, NaN)` =
+`NaN`, and `if (NaN < 0)` is an error rather than `FALSE`.
+
+A label-less group of one is not a group — it has no circular mean, and every
+comparison built on it is undefined. They are now **excluded** from every group
+analysis and counted in the audit, so the accounting still closes
+(grouped + unlabelled + too-small = fitted) without poisoning the arithmetic.
+Note the distinction: excluding *unlabelled* subjects is not excluding *small*
+groups — a labelled group of one has a perfectly good mean direction, just an
+imprecise one, and the `n >= 3` guard handles that separately. A defensive guard
+also stays in the plot, since a group can still be emptied by an upstream filter.
+
+**4.35 beta_0 is a coefficient, not a starting level.** "Intercept (β₀, at
+t = 0)" invited reading the constant as the value the response started at. It is
+not: at the first observation the harmonics are generally non-zero, and with a
+saturating trend anchored there `S(t_min) = 0` exactly, so the two differ by the
+harmonic sum. Now reported as three named quantities, pooled and per group:
+
+* **Constant term (β₀)** — the fitted coefficient.
+* **MESOR (rhythm-adjusted mean over the window)** — where the data sit once the
+  homeostatic rise is counted.
+* **Predicted value at the first observation** — the starting level, with its
+  clock time.
+
+All three are also stored per subject (`mesor`, `mesor_adj`, `value_at_start`)
+and offered in the pairwise-comparison picker, since a group can rank
+differently on each.
+
+**4.36 Polar layout and collapsible boxes.** The acrophase polar plot's title
+sat on the dial — a polar trace fills its plotting area edge to edge, so a
+centred title with no reserved space lands on the 11–13 o'clock labels. The
+subtitle moved to a paper-anchored annotation and the polar domain was pulled to
+`y = c(0, 0.88)` to leave room, rather than shrinking the font until it stopped
+colliding. The polar-density radial scale now renders horizontally
+(`tickangle = 0`) and its spoke is a control rather than a constant, because
+wherever it is put it will sometimes cross the data. And 49 result boxes across
+13 tabs are `collapsible`.
+
 ## 5. Rename table
 
 | source | source app | merged app |

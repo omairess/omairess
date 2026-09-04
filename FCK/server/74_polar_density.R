@@ -152,6 +152,13 @@ output$density_controls_ui <- renderUI({
                 choices = c("hour" = 1, "2 hours" = 2, "3 hours" = 3, "6 hours" = 6),
                 selected = 1),
     checkboxInput("density_radial_labels", "Show the value scale on the radius", TRUE),
+    conditionalPanel(
+      condition = "input.density_radial_labels == true",
+      sliderInput("density_radial_angle", "Put the value scale at (clock hour):",
+                  min = 0, max = 23, value = 10, step = 1),
+      helpText("The scale has to sit on some spoke, and wherever it sits it will",
+               "sometimes cross the data. Move it rather than fight it.")
+    ),
     radioButtons("density_radial_from", "Radius measured from:",
                  choices = c("The smallest value plotted" = "range",
                              "Zero" = "zero"),
@@ -771,7 +778,13 @@ output$harmonic_density_plot <- renderPlotly({
         tickvals = scale_r(vt, axis_lo, axis_hi),
         ticktext = formatC(vt, format = "g", digits = 4),
         tickfont = list(size = 10, color = "#52514e"),
-        angle = 112.5,          # between 12:00 and 09:00, clear of the hour ring
+        # The radial scale sat at a fixed 112.5 deg and rendered its numbers
+        # ROTATED along the spoke, which is unreadable at a glance. They are
+        # horizontal now, and the spoke they sit on is a control rather than a
+        # constant, because wherever it is put it will sometimes land on the
+        # data.
+        angle = fck_hour_to_theta(
+          suppressWarnings(as.numeric(input$density_radial_angle %||% 10)), period),
         tickangle = 0,
         showline = FALSE, ticks = "outside", ticklen = 3,
         gridcolor = "rgba(11,11,11,0.10)")

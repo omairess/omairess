@@ -10,6 +10,7 @@ ui_tab_settings <- tabItem(
         fluidRow(
           box(
             title = "PCA Type",
+            collapsible = TRUE, collapsed = FALSE,
             status = "success",
             solidHeader = TRUE,
             width = 12,
@@ -26,6 +27,7 @@ ui_tab_settings <- tabItem(
           fluidRow(
             box(
               title = "Warping Method",
+              collapsible = TRUE, collapsed = FALSE,
               status = "primary",
               solidHeader = TRUE,
               width = 12,
@@ -106,6 +108,7 @@ ui_tab_settings <- tabItem(
         fluidRow(
           box(
             title = "PCA Settings",
+            collapsible = TRUE, collapsed = FALSE,
             status = "success",
             solidHeader = TRUE,
             width = 12,

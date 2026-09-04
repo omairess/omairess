@@ -10,6 +10,7 @@ ui_tab_sofr <- tabItem(
         fluidRow(
           box(
             title = "SoFR Settings (Response: Scalar)", status = "warning", solidHeader = TRUE, width = 4,
+            collapsible = TRUE, collapsed = FALSE,
             uiOutput("sofr_var_select_ui"),
             selectInput("sofr_method", "Method:", choices = c("Penalized Functional Regression (pfr)" = "pfr")),
             hr(),
@@ -48,6 +49,7 @@ ui_tab_sofr <- tabItem(
           ),
           box(
             title = "Inference & Summary", status = "info", solidHeader = TRUE, width = 8,
+            collapsible = TRUE, collapsed = FALSE,
             verbatimTextOutput("sofr_inference_summary"),
             hr(),
             uiOutput("sofr_model_diagnostics")

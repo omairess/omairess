@@ -334,7 +334,9 @@
 
     # Get parameter label
     param_labels <- c(
-      "mesor" = "MESOR",
+      "mesor" = "Constant term (b0)",
+      "mesor_adj" = "MESOR (rhythm-adjusted mean)",
+      "value_at_start" = "Predicted value at the first observation",
       "amplitude_1" = "H1 Amplitude",
       "amplitude_2" = "H2 Amplitude",
       "amplitude_3" = "H3 Amplitude",
@@ -532,7 +534,9 @@
 
         if(param %in% names(params)) {
           param_labels <- c(
-            "mesor" = "MESOR",
+            "mesor" = "Constant term (b0)",
+      "mesor_adj" = "MESOR (rhythm-adjusted mean)",
+      "value_at_start" = "Predicted value at the first observation",
             "amplitude_1" = "H1 Amplitude",
             "amplitude_2" = "H2 Amplitude",
             "amplitude_3" = "H3 Amplitude",

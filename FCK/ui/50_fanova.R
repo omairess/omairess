@@ -10,6 +10,7 @@ ui_tab_fanova <- tabItem(
         fluidRow(
           box(
             title = "Functional ANOVA Settings",
+            collapsible = TRUE, collapsed = FALSE,
             status = "primary",
             solidHeader = TRUE,
             width = 12,
@@ -65,6 +66,7 @@ ui_tab_fanova <- tabItem(
         fluidRow(
           box(
             title = "Global Test Results",
+            collapsible = TRUE, collapsed = FALSE,
             status = "success",
             solidHeader = TRUE,
             width = 12,
@@ -76,6 +78,7 @@ ui_tab_fanova <- tabItem(
         fluidRow(
           box(
             title = "Group Mean Functions",
+            collapsible = TRUE, collapsed = FALSE,
             status = "info",
             solidHeader = TRUE,
             width = 12,
@@ -101,6 +104,7 @@ ui_tab_fanova <- tabItem(
         fluidRow(
           box(
             title = "Pointwise Test Statistics",
+            collapsible = TRUE, collapsed = FALSE,
             status = "warning",
             solidHeader = TRUE,
             width = 12,
@@ -112,6 +116,7 @@ ui_tab_fanova <- tabItem(
         fluidRow(
           box(
             title = "Effect Size Analysis",
+            collapsible = TRUE, collapsed = FALSE,
             status = "primary",
             solidHeader = TRUE,
             width = 12,

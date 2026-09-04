@@ -10,6 +10,7 @@ ui_tab_posthoc <- tabItem(
         fluidRow(
           box(
             title = "Pairwise Comparison Settings",
+            collapsible = TRUE, collapsed = FALSE,
             status = "primary",
             solidHeader = TRUE,
             width = 12,
@@ -45,6 +46,7 @@ ui_tab_posthoc <- tabItem(
         fluidRow(
           box(
             title = "Pairwise Comparison Summary",
+            collapsible = TRUE, collapsed = FALSE,
             status = "success",
             solidHeader = TRUE,
             width = 12,
@@ -59,6 +61,7 @@ ui_tab_posthoc <- tabItem(
         fluidRow(
           box(
             title = "Select Comparison",
+            collapsible = TRUE, collapsed = FALSE,
             status = "info",
             solidHeader = TRUE,
             width = 12,
@@ -82,6 +85,7 @@ ui_tab_posthoc <- tabItem(
         fluidRow(
           box(
             title = "All Pairwise Differences",
+            collapsible = TRUE, collapsed = FALSE,
             status = "warning",
             solidHeader = TRUE,
             width = 12,
@@ -92,6 +96,7 @@ ui_tab_posthoc <- tabItem(
         fluidRow(
           box(
             title = "Significant Time Regions",
+            collapsible = TRUE, collapsed = FALSE,
             status = "primary",
             solidHeader = TRUE,
             width = 12,

@@ -16,6 +16,7 @@ ui_tab_harmonic <- tabItem(
         fluidRow(
           box(
             title = "Harmonic Regression Settings", status = "success", solidHeader = TRUE, width = 4,
+            collapsible = TRUE, collapsed = FALSE,
             h4("Data Selection"),
             uiOutput("harmonic_var_select_ui"),
 

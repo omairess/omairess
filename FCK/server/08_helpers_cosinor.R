@@ -887,3 +887,20 @@ fck_curve_peak_clock <- function(coefs, mod, n_grid = 2001) {
        peak_at_edge = i_max <= 2 || i_max >= n_grid - 1,
        trough_at_edge = i_min <= 2 || i_min >= n_grid - 1)
 }
+
+
+# The fitted value at a given model time, in the DV's own units.
+#
+# "Constant term" answers "what is beta_0", which is a coefficient. Readers
+# usually want "what does the model say the response was at the start", which is
+# a different number whenever the harmonics are non-zero there -- and with a
+# saturating trend anchored at the first observation they differ by exactly the
+# harmonic sum, since S(t_min) = 0. Reporting both stops beta_0 being read as a
+# starting level it never was.
+fck_value_at <- function(coefs, mod, t_model) {
+  if (is.null(coefs) || !is.finite(t_model)) return(NA_real_)
+  v <- fck_rhythm_from_coefs(coefs, t_model, mod$period %||% 24,
+                             mod$n_harmonics %||% 1L, mod$trend_type %||% "none",
+                             include_trend = TRUE, t_offset = mod$t_offset %||% 0)
+  as.numeric(v[1])
+}

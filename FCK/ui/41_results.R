@@ -10,6 +10,7 @@ ui_tab_results <- tabItem(
         fluidRow(
           box(
             title = "PCA Status",
+            collapsible = TRUE, collapsed = FALSE,
             status = "info",
             solidHeader = TRUE,
             width = 12,
@@ -22,6 +23,7 @@ ui_tab_results <- tabItem(
             condition = "input.pca_type == 'twpca'",
             box(
               title = "Time Warping Results",
+              collapsible = TRUE, collapsed = FALSE,
               status = "primary",
               solidHeader = TRUE,
               width = 12,
@@ -96,6 +98,7 @@ ui_tab_results <- tabItem(
           ),
           box(
             title = "PCA Results",
+            collapsible = TRUE, collapsed = FALSE,
             status = "success",
             solidHeader = TRUE,
             width = 12,

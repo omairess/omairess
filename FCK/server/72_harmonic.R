@@ -2057,7 +2057,14 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       individual_fits <- list()
       
       # Build column names for all harmonics
-      param_cols <- c("subject", "mesor", "mesor_se")
+      # AUDIT: beta_0 and the MESOR are different quantities and both are
+      # comparable between groups, so both are stored per subject. beta_0 is the
+      # fitted constant -- the rhythm's own level, the thing a trend-free cosinor
+      # would call the MESOR. mesor_adj is the rhythm-adjusted mean: the
+      # time-average of beta_0 + S(t) across the observed window, which is where
+      # the data actually sit once the homeostatic rise is counted. A group can
+      # rank differently on the two.
+      param_cols <- c("subject", "mesor", "mesor_se", "mesor_adj", "value_at_start")
 
       # Add trend columns based on type
       if(trend_type == "linear") {
@@ -2182,6 +2189,24 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
 
             # Build row with all harmonic parameters
             row_data <- list(subject = i, mesor = fit_i$mesor, mesor_se = fit_i$mesor_se)
+
+            # the rhythm-adjusted mean and the fitted value at the first
+            # observation, per subject, from this subject's own coefficients
+            .tc <- switch(as.character(trend_type),
+                          "linear"  = c(fit_i$trend_params$trend_linear$coef %||% NA_real_),
+                          "log"     = c(fit_i$trend_params$trend_log$coef %||% NA_real_),
+                          "exp_sat" = c(fit_i$trend_params$A_sat$coef %||% NA_real_,
+                                        fit_i$trend_params$tau$coef %||% NA_real_),
+                          numeric(0))
+            row_data$mesor_adj <- fck_rhythm_adjusted_mean(
+              fit_i$mesor, trend_type, .tc,
+              min(time_vec_model, na.rm = TRUE), max(time_vec_model, na.rm = TRUE),
+              fit_i$t_offset %||% 0)
+            row_data$value_at_start <- tryCatch(
+              as.numeric(fck_rhythm_from_coefs(
+                fit_i$coefs, min(time_vec_model, na.rm = TRUE), period, n_harmonics,
+                trend_type, include_trend = TRUE, t_offset = fit_i$t_offset %||% 0)),
+              error = function(e) NA_real_)
 
             # Add trend parameters based on type
             if(trend_type != "none" && !is.null(fit_i$trend_params)) {
@@ -2614,20 +2639,22 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
         groups <- group_audit$levels
         group_fits <- list()
 
-        # UNASSIGNED is a real row, carrying the subjects that used to disappear
-        if(group_audit$n_unassigned > 0) groups <- c(groups, "__UNASSIGNED__")
-
+        # A subject with no usable group label is EXCLUDED from every group
+        # analysis. An earlier version carried them as an "UNASSIGNED" row so
+        # they could not disappear silently -- but a label-less group of one is
+        # not a group: it has no circular mean, and every comparison built on it
+        # produced NaN, which is what crashed the group-comparison plot
+        # (circular_mean of an empty vector -> NaN -> `if (NaN < 0)`).
+        #
+        # Visibility is kept where it belongs: the count of excluded subjects is
+        # carried in the audit and printed by the report and the comparison
+        # panel, so the number still reconciles against n fitted. They are named,
+        # not analysed.
         for(g in groups) {
-          if(identical(g, "__UNASSIGNED__")) {
-            idx <- group_audit$unassigned_ids
-          } else {
-            idx <- which(!is.na(lab_all) & lab_all == g)
-          }
+          idx <- which(!is.na(lab_all) & nzchar(lab_all) & lab_all == g)
           grp_params <- individual_params[individual_params$subject %in% idx, ]
 
-          # UNASSIGNED is reported even when it is a single subject: the whole
-          # point is that it stops being invisible.
-          if(nrow(grp_params) >= 3 || identical(g, "__UNASSIGNED__")) {
+          if(nrow(grp_params) >= 3) {
             # Mean coefficients for curve reconstruction
             grp_coefs <- c(mean(grp_params$mesor, na.rm = TRUE))
             
@@ -2744,7 +2771,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
 
             group_fits[[as.character(g)]] <- list(
               group = g,
-              is_unassigned = identical(g, "__UNASSIGNED__"),
+              is_unassigned = FALSE,
               n = nrow(grp_params),
               mean_mesor = grp_intercept,             # legacy name, kept working
               intercept = grp_intercept,              # its correct name
@@ -2775,12 +2802,17 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
         # does, something new is dropping subjects and the report says so
         # instead of printing group sizes that do not add up.
         .grp_total <- sum(vapply(group_fits, function(g) g$n, integer(1)))
-        if(length(group_fits) && .grp_total != nrow(individual_params)) {
+        .excluded <- nrow(individual_params) - .grp_total
+        if(length(group_fits) && .excluded > 0) {
           showNotification(
-            sprintf("Group sizes sum to %d but %d subjects were fitted: %d unaccounted for.",
-                    .grp_total, nrow(individual_params),
-                    nrow(individual_params) - .grp_total),
-            type = "error", duration = NULL)
+            sprintf("%d fitted subject%s excluded from the group analyses: %d with no usable '%s' label%s. They remain in every pooled statistic.",
+                    .excluded, if(.excluded == 1) " is" else "s are",
+                    group_audit$n_unassigned, input$harmonic_group_var,
+                    if(length(group_audit$dropped_small))
+                      sprintf(", and %d in group(s) with fewer than 3 fits (%s)",
+                              group_audit$n_dropped_small,
+                              paste(group_audit$dropped_small, collapse = ", ")) else ""),
+            type = "warning", duration = 15)
         }
         attr(group_fits, "audit") <- group_audit
         attr(group_fits, "n_fitted") <- nrow(individual_params)
@@ -3286,8 +3318,20 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     # AUDIT 1.4: the central-value section, with the two quantities separated
     # ========================================================================
     hdr("Central value")
-    cat("Intercept (beta_0, at t = 0):            ", fmt3(pop$intercept),
+    # AUDIT: beta_0 is a COEFFICIENT, not a level. Calling it "the intercept at
+    # t = 0" invited reading it as the value the response started at, which it
+    # is not: at the first observation the harmonics are generally non-zero, and
+    # with a saturating trend anchored there S(t_min) = 0 exactly, so the two
+    # differ by the harmonic sum. Both are reported, under names that say what
+    # they are.
+    cat("Constant term (beta_0):                  ", fmt3(pop$intercept),
         "   [arithmetic mean of the fitted constants]\n", sep = "")
+    .v0 <- fck_value_at(pop$mean_coefs, mod, min(mod$time_vec, na.rm = TRUE))
+    if(is.finite(.v0))
+      cat("Predicted value at the first observation (",
+          fck_clock_label(fck_clock_origin(mod) + min(mod$time_vec, na.rm = TRUE),
+                          period, show_day = FALSE), "): ",
+          fmt2(.v0), if(!is.null(dvu)) paste0(" ", dvu) else "", "\n", sep = "")
     if(trend_type != "none" && is.finite(pop$rhythm_adjusted_mean)) {
       cat("MESOR (rhythm-adjusted mean over the observed window):  ",
           fmt3(pop$rhythm_adjusted_mean), "\n", sep = "")
@@ -3654,13 +3698,20 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
 
       for(g_name in names(mod$group_fits)) {
         g <- mod$group_fits[[g_name]]
-        label <- if(isTRUE(g$is_unassigned)) "UNASSIGNED (no usable group label)" else g_name
-        cat(sprintf("\nGroup '%s' (n = %d):\n", label, g$n))
-        if(isTRUE(g$is_unassigned))
-          cat("  Shown because these subjects exist. They are not a group; do not compare them.\n")
+        cat(sprintf("\nGroup '%s' (n = %d):\n", g_name, g$n))
 
-        cat(sprintf("  Intercept (beta_0, at t = 0):  %s (SD %s)   [arithmetic]\n",
+        # AUDIT: "Intercept (at t = 0)" invited reading beta_0 as a starting
+        # level. It is a coefficient; the starting level is the fitted value at
+        # the first observation, and the two differ by the harmonic sum there.
+        cat(sprintf("  Constant term (beta_0):        %s (SD %s)   [arithmetic]\n",
                     fmt3(g$intercept), fmt3(g$sd_mesor)))
+        .gv0 <- fck_value_at(g$mean_coefs, mod, min(mod$time_vec, na.rm = TRUE))
+        if(is.finite(.gv0))
+          cat(sprintf("  Predicted value at start (%s): %s%s\n",
+                      fck_clock_label(fck_clock_origin(mod) +
+                                        min(mod$time_vec, na.rm = TRUE), period,
+                                      show_day = FALSE),
+                      fmt2(.gv0), if(!is.null(dvu)) paste0(" ", dvu) else ""))
         if(trend_type != "none" && is.finite(g$rhythm_adjusted_mean))
           cat(sprintf("  MESOR (rhythm-adjusted mean):  %s   [integrated over the window]\n",
                       fmt3(g$rhythm_adjusted_mean)))
@@ -4613,20 +4664,30 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       fck_clock_label((e + clock_o) %% mod$period, mod$period, show_day = FALSE),
       character(1))
 
+    # The title sat on top of the dial: a polar trace fills its plotting area
+    # edge to edge, so a centred title with no reserved space lands on the 11-13
+    # o'clock labels. The subtitle is moved out to a paper-anchored annotation
+    # under the title and the polar domain is pulled down to leave room, rather
+    # than shrinking the font until it stops colliding.
     p %>% layout(
       title = list(
-        text = sprintf("Acrophase polar plot - H%d (effective period %s h)%s", h,
-                       fmt1(effective_period),
-                       if(h > 1)
-                         sprintf("<br><sub>clock times; each angle recurs every %s h</sub>",
-                                 fmt1(effective_period))
-                       else if(clock_o != 0)
-                         sprintf("<br><sub>clock times; the model origin is %s</sub>",
-                                 fck_clock_label(clock_o, mod$period, show_day = FALSE))
-                       else "<br><sub>clock times</sub>"),
-        x = 0.5),
+        text = sprintf("Acrophase polar plot - H%d (effective period %s h)", h,
+                       fmt1(effective_period)),
+        x = 0.5, xanchor = "center", y = 0.98, yanchor = "top",
+        font = list(size = 15)),
+      annotations = list(list(
+        text = if(h > 1)
+                 sprintf("clock times; each angle recurs every %s h", fmt1(effective_period))
+               else if(clock_o != 0)
+                 sprintf("clock times; the model origin is %s",
+                         fck_clock_label(clock_o, mod$period, show_day = FALSE))
+               else "clock times",
+        x = 0.5, y = 0.925, xref = "paper", yref = "paper",
+        xanchor = "center", yanchor = "top", showarrow = FALSE,
+        font = list(size = 11, color = "#52514e"))),
       polar = list(
-        radialaxis = list(title = "Amplitude"),
+        domain = list(y = c(0, 0.88)),   # the room the title and subtitle need
+        radialaxis = list(title = "Amplitude", tickangle = 0, angle = 90),
         angularaxis = list(
           direction = "clockwise",
           rotation = 90,
@@ -4635,6 +4696,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
           ticktext = tick_labels
         )
       ),
+      margin = list(t = 70, b = 40),
       showlegend = TRUE
     )
   })
@@ -5033,15 +5095,24 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       grp_amp <- params[[amp_col]][params$group == g_name]
       grp_acro_rad <- params[[acro_rad_col]][params$group == g_name]
       
-      # Compute circular mean and SE for acrophase
+      # A group with no usable angles has no circular mean: circular_mean() of
+      # an empty vector is atan2(NaN, NaN) = NaN, and `if (NaN < 0)` is the
+      # error that crashed this plot. Unlabelled subjects no longer reach here,
+      # but a group can still be emptied by a filter upstream, so the guard
+      # stays and the group is skipped rather than poisoning the frame.
+      grp_acro_rad <- grp_acro_rad[is.finite(grp_acro_rad)]
+      if(length(grp_acro_rad) < 1) next
       circ_mean_rad <- circular_mean(grp_acro_rad)
+      if(!is.finite(circ_mean_rad)) next
       if(circ_mean_rad < 0) circ_mean_rad <- circ_mean_rad + 2 * pi
-      circ_mean_time <- circ_mean_rad * effective_period / (2 * pi)
+      # reported in CLOCK time, like every other acrophase in the app
+      circ_mean_time <- (phi_to_hours(circ_mean_rad, mod$period, h) +
+                           fck_clock_origin(mod)) %% effective_period
       circ_se_rad <- circular_se(grp_acro_rad)
-      circ_se_time <- if(!is.na(circ_se_rad)) circ_se_rad * effective_period / (2 * pi) else NA
+      circ_se_time <- if(!is.na(circ_se_rad)) phi_to_hours(circ_se_rad, mod$period, h) else NA
       
       group_df <- rbind(group_df, 
-                        data.frame(group = g_name, parameter = "Intercept (b0)", 
+                        data.frame(group = g_name, parameter = "Constant term (b0)",
                                    value = g$mean_mesor, se = g$sd_mesor / sqrt(g$n)),
                         data.frame(group = g_name, parameter = paste0("Amplitude (H", h, ")"), 
                                    value = mean(grp_amp, na.rm = TRUE), 

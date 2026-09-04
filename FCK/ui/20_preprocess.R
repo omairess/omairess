@@ -19,6 +19,7 @@ ui_tab_preprocess <- tabItem(
   fluidRow(
     box(
       title = "Smoothing Options",
+      collapsible = TRUE, collapsed = FALSE,
       status = "warning",
       solidHeader = TRUE,
       width = 6,
@@ -137,6 +138,7 @@ ui_tab_preprocess <- tabItem(
 
     box(
       title = "Data Visualization",
+      collapsible = TRUE, collapsed = FALSE,
       status = "info",
       solidHeader = TRUE,
       width = 6,

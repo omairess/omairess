@@ -39,6 +39,7 @@ ui_tab_import <- tabItem(
   fluidRow(
     box(
       title = "1. Upload Data",
+      collapsible = TRUE, collapsed = FALSE,
       status = "primary",
       solidHeader = TRUE,
       width = 4,
@@ -83,6 +84,7 @@ ui_tab_import <- tabItem(
 
     box(
       title = "2. Variable Selection",
+      collapsible = TRUE, collapsed = FALSE,
       status = "warning",
       solidHeader = TRUE,
       width = 8,
@@ -116,6 +118,7 @@ ui_tab_import <- tabItem(
   fluidRow(
     box(
       title = "Data Preview",
+      collapsible = TRUE, collapsed = FALSE,
       status = "primary",
       width = 12,
       fluidRow(

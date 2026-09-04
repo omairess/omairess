@@ -10,6 +10,7 @@ ui_tab_fosr <- tabItem(
         fluidRow(
           box(
             title = "FoSR Settings (Response: Curve)", status = "primary", solidHeader = TRUE, width = 4,
+            collapsible = TRUE, collapsed = FALSE,
             uiOutput("fosr_var_select_ui"),
             selectInput("reg_method", "Method:", 
                         choices = c("Pointwise OLS (Raw)" = "OLS_nosmooth",
@@ -31,6 +32,7 @@ ui_tab_fosr <- tabItem(
           ),
           box(
             title = "Model Summary", status = "info", solidHeader = TRUE, width = 8,
+            collapsible = TRUE, collapsed = FALSE,
             verbatimTextOutput("fosr_model_summary")
           )
         ),

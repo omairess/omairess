@@ -21,6 +21,7 @@ ui_tab_export <- tabItem(
   fluidRow(
     box(
       title = "Export Options",
+      collapsible = TRUE, collapsed = FALSE,
       status = "info",
       solidHeader = TRUE,
       width = 12,
@@ -93,6 +94,7 @@ ui_tab_export <- tabItem(
   fluidRow(
     box(
       title = "Session", status = "success", solidHeader = TRUE, width = 12,
+      collapsible = TRUE, collapsed = FALSE,
       h4("Save this session"),
       helpText("Writes one .rds holding the data, the variable selection, the",
                "smoothed curves and every result you have run, plus the exact",

@@ -10,6 +10,7 @@ ui_tab_clustering <- tabItem(
         fluidRow(
           box(
             title = "Optimal Number of Clusters",
+            collapsible = TRUE, collapsed = FALSE,
             status = "warning",
             solidHeader = TRUE,
             width = 12,
@@ -81,6 +82,7 @@ ui_tab_clustering <- tabItem(
         fluidRow(
           box(
             title = "Clustering Settings",
+            collapsible = TRUE, collapsed = FALSE,
             status = "primary",
             solidHeader = TRUE,
             width = 4,
@@ -166,6 +168,7 @@ ui_tab_clustering <- tabItem(
           ),
           box(
             title = "Cluster Statistics",
+            collapsible = TRUE, collapsed = FALSE,
             status = "success",
             solidHeader = TRUE,
             width = 8,
@@ -179,6 +182,7 @@ ui_tab_clustering <- tabItem(
         fluidRow(
           box(
             title = "Cluster Membership",
+            collapsible = TRUE, collapsed = FALSE,
             status = "info",
             solidHeader = TRUE,
             width = 12,
@@ -211,6 +215,7 @@ ui_tab_clustering <- tabItem(
         fluidRow(
           box(
             title = "Group Composition by Cluster",
+            collapsible = TRUE, collapsed = FALSE,
             status = "success",
             solidHeader = TRUE,
             width = 12,
@@ -234,6 +239,7 @@ ui_tab_clustering <- tabItem(
         fluidRow(
           box(
             title = "Cluster Mean Functions",
+            collapsible = TRUE, collapsed = FALSE,
             status = "warning",
             solidHeader = TRUE,
             width = 12,
@@ -248,6 +254,7 @@ ui_tab_clustering <- tabItem(
         fluidRow(
           box(
             title = "Individual Curves by Cluster",
+            collapsible = TRUE, collapsed = FALSE,
             status = "info",
             solidHeader = TRUE,
             width = 12,
@@ -257,6 +264,7 @@ ui_tab_clustering <- tabItem(
         fluidRow(
           box(
             title = "Detailed Silhouette Analysis",
+            collapsible = TRUE, collapsed = FALSE,
             status = "primary",
             solidHeader = TRUE,
             width = 12,
@@ -270,6 +278,7 @@ ui_tab_clustering <- tabItem(
           fluidRow(
             box(
               title = "Dendrogram",
+              collapsible = TRUE, collapsed = FALSE,
               status = "success",
               solidHeader = TRUE,
               width = 12,

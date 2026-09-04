@@ -10,6 +10,7 @@ ui_tab_smooth_diag <- tabItem(
         fluidRow(
           box(
             title = "Smoothing Parameter Exploration",
+            collapsible = TRUE, collapsed = FALSE,
             status = "info",
             solidHeader = TRUE,
             width = 12,
@@ -20,6 +21,7 @@ ui_tab_smooth_diag <- tabItem(
         fluidRow(
           box(
             title = "1. GAM REML Analysis",
+            collapsible = TRUE, collapsed = FALSE,
             status = "primary",
             solidHeader = TRUE,
             width = 6,
@@ -46,6 +48,7 @@ ui_tab_smooth_diag <- tabItem(
           
           box(
             title = "2. Smoothing Parameter Selection",
+            collapsible = TRUE, collapsed = FALSE,
             status = "warning",
             solidHeader = TRUE,
             width = 6,
@@ -72,6 +75,7 @@ ui_tab_smooth_diag <- tabItem(
         fluidRow(
           box(
             title = "3. REML Profile",
+            collapsible = TRUE, collapsed = FALSE,
             status = "primary",
             solidHeader = TRUE,
             width = 6,
@@ -86,6 +90,7 @@ ui_tab_smooth_diag <- tabItem(
           
           box(
             title = "4. Cross-Validation Curve",
+            collapsible = TRUE, collapsed = FALSE,
             status = "success",
             solidHeader = TRUE,
             width = 6,
@@ -102,6 +107,7 @@ ui_tab_smooth_diag <- tabItem(
         fluidRow(
           box(
             title = "5. Comparison Summary",
+            collapsible = TRUE, collapsed = FALSE,
             status = "info",
             solidHeader = TRUE,
             width = 12,
