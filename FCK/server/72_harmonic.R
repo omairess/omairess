@@ -3044,6 +3044,30 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
   # HARMONIC REGRESSION OUTPUTS
   # ==============================================================================
   
+  # The scrollable wrapper around the summary. The height is a slider rather
+  # than a fixed value because how much of this you want on screen depends
+  # entirely on whether you are reading it or working past it.
+  output$harmonic_summary_box <- renderUI({
+    h <- suppressWarnings(as.numeric(input$harmonic_summary_height %||% 600))
+    if(!is.finite(h) || h < 100) h <- 600
+    tagList(
+      div(style = sprintf("max-height:%dpx; overflow-y:auto; overflow-x:auto; border:1px solid #e5e5e5; border-radius:3px; padding:6px;", as.integer(h)),
+          verbatimTextOutput("harmonic_summary")),
+      hr(),
+      uiOutput("harmonic_parameters_table")
+    )
+  })
+
+  # The same text as a file. Both this and the on-screen panel call ONE
+  # function, .print_harmonic_summary(), so the file cannot drift from what you
+  # read -- which is the whole reason to have it.
+  output$download_harmonic_summary <- downloadHandler(
+    filename = function() sprintf("harmonic_summary_%s.txt", Sys.Date()),
+    content = function(file) {
+      writeLines(utils::capture.output(.print_harmonic_summary()), file)
+    }
+  )
+
   # ============================================================================
   # Summary output
   #
@@ -3066,7 +3090,9 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
   #   2.4  Delta-AICc table with Akaike weights instead of mean AIC/AICc/BIC.
   #   2.5  Bingham joint confidence regions.
   # ============================================================================
-  output$harmonic_summary <- renderPrint({
+  # The report body lives in a plain function so the on-screen panel and the
+  # text download share it verbatim.
+  .print_harmonic_summary <- function() {
     req(values$harmonic_model)
     mod <- values$harmonic_model
     period <- mod$period
@@ -3129,10 +3155,12 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
 
     # AUDIT 1.4.3: say which origin the coefficients are on.
     if(identical(mod$time_origin, "first_observation")) {
-      cat("Time origin: FIRST OBSERVATION (t = 0 at ",
-          fmt2(mod$origin_shift), " h clock). Both the trend and the harmonics are\n",
-          "  anchored here, so the intercept is the model value at the start of the\n",
-          "  recording and is directly interpretable.\n", sep = "")
+      cat("Time origin: FIRST OBSERVATION. t = 0 in the model is ",
+          fck_clock_label(mod$origin_shift, mod$period), " on the clock.\n",
+          "  Both the trend and the harmonics are anchored there, so the intercept is\n",
+          "  the model value at the start of the recording and is directly\n",
+          "  interpretable. Axes and hover text still read in CLOCK time: the plots add\n",
+          "  the ", fmt1(mod$origin_shift), " h shift back before labelling.\n", sep = "")
     } else {
       cat("Time origin: MIDNIGHT (t = 0 at clock 00:00).\n")
       if(trend_type == "exp_sat") {
@@ -3230,8 +3258,15 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
         cat("Adjusted times (linear): ", paste(fmtn(mod$time_vec_clock %||% mod$time_vec, 1), collapse = ", "), "\n", sep = "")
         cat("(Times after midnight were adjusted for chronological order)\n")
       } else {
-        cat("Time points used: ", paste(fmtn(mod$time_vec, 2), collapse = ", "), "\n", sep = "")
+        cat("Time points used: ",
+            paste(fmtn(mod$time_vec_clock %||% mod$time_vec, 2), collapse = ", "), "\n", sep = "")
       }
+      if(isTRUE(mod$origin_shift > 0))
+        cat("Model times (t = 0 at the first observation): ",
+            paste(fmtn(mod$time_vec, 2), collapse = ", "), "\n",
+            "  The times above are CLOCK times; these are what the coefficients were\n",
+            "  fitted on. They differ by the ", fmt1(mod$origin_shift),
+            " h origin shift, and every plot converts\n  back before labelling its axis.\n", sep = "")
     }
     diffs <- diff(mod$time_vec)
     if(length(unique(round(diffs, 2))) > 1) {
@@ -3623,9 +3658,10 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     }
 
     invisible(NULL)
-  })
+  }
 
-  
+  output$harmonic_summary <- renderPrint({ .print_harmonic_summary() })
+
   # Parameters table
   output$harmonic_parameters_table <- renderUI({
     req(values$harmonic_model)
@@ -4275,24 +4311,33 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     # never converted at all, which is why pointing at the curve reported
     # 27.01508 instead of 03:01.
     # ========================================================================
+    # The plot's x coordinates are MODEL time. Under
+    # time_origin = "first_observation" that starts at 0 while the recording
+    # started at 08:00, so the labels must add the shift back or the axis reads
+    # eight hours early -- which is exactly what it did: the fit appeared to
+    # start at midnight, and flipping the toggle looked like it inverted the
+    # setting. The shift is applied to the TICK TEXT and the hover only; the
+    # tick POSITIONS stay on the model's own axis, because that is where the
+    # data are drawn.
+    shift <- mod$origin_shift %||% 0
     time_range <- range(mod$time_vec, na.rm = TRUE)
-    ticks <- fck_clock_ticks(time_range, mod$period)
+    ticks <- fck_clock_ticks(time_range + shift, mod$period)
 
     x_axis <- list(
       title = if (mod$period == 24) "Clock time" else sprintf("Time (period = %g)", mod$period)
     )
     if (!is.null(ticks)) {
       x_axis$tickmode <- "array"
-      x_axis$tickvals <- ticks$vals
+      x_axis$tickvals <- ticks$vals - shift      # back onto the model axis
       x_axis$ticktext <- ticks$text
     }
     # A recording that crosses midnight has two 08:00s on the same axis. Mark
     # each period boundary so the reader can see which day a point belongs to.
     day_lines <- list()
     if (diff(time_range) > mod$period * 0.5) {
-      bnds <- seq(ceiling(time_range[1] / mod$period) * mod$period,
-                  time_range[2], by = mod$period)
-      bnds <- bnds[bnds > time_range[1] & bnds < time_range[2]]
+      cr <- time_range + shift                   # midnight is a CLOCK event
+      bnds <- seq(ceiling(cr[1] / mod$period) * mod$period, cr[2], by = mod$period)
+      bnds <- bnds[bnds > cr[1] & bnds < cr[2]] - shift
       day_lines <- lapply(bnds, function(b) list(
         type = "line", x0 = b, x1 = b, yref = "paper", y0 = 0, y1 = 1,
         line = list(color = "rgba(11,11,11,0.25)", width = 1, dash = "dot")))
@@ -4311,10 +4356,11 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       yv <- tryCatch(as.numeric(a$y), warning = function(w) NULL, error = function(e) NULL)
       nm <- if (!is.null(a$name)) as.character(a$name) else "fit"
       dvl <- if (!is.null(mod$dv_name)) mod$dv_name else "Response"
+      xc <- xv + shift                           # model time -> clock time
       p$x$attrs[[i]]$text <- if (is.null(yv) || length(yv) != length(xv))
-        sprintf("%s<br>%s", fck_clock_label(xv, mod$period), nm)
+        sprintf("%s<br>%s", fck_clock_label(xc, mod$period), nm)
       else
-        sprintf("%s<br>%s: %s<br>%s", fck_clock_label(xv, mod$period), dvl, fmt2(yv), nm)
+        sprintf("%s<br>%s: %s<br>%s", fck_clock_label(xc, mod$period), dvl, fmt2(yv), nm)
       p$x$attrs[[i]]$hoverinfo <- "text"
     }
 

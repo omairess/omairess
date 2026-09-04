@@ -236,15 +236,25 @@ fck_fit_rings <- function(input, values) {
     # every point (asserted in tests/polar_agreement_test.R). lap_mode = "per_lap"
     # splits it into one trace per turn of the clock, each labelled with its day,
     # so the reader can follow the curve round instead of guessing.
+    # The angle a point sits at is a CLOCK time, so model time must have the
+    # origin shift added back before the modulo. Under
+    # time_origin = "first_observation" the model runs 0..31 for a recording
+    # that began at 08:00; without the shift every point lands eight hours
+    # early on the dial. Display only -- the prediction below still uses model
+    # time, which is what the coefficients were fitted on.
+    shift   <- mod$origin_shift %||% 0
     n_pts   <- if (isTRUE((max(tv, na.rm = TRUE) - min(tv, na.rm = TRUE)) > period)) 721 else 361
     t_abs   <- seq(min(tv, na.rm = TRUE), max(tv, na.rm = TRUE), length.out = n_pts)
-    t_clock <- t_abs %% period
+    t_clock <- (t_abs + shift) %% period
     spans   <- (max(tv, na.rm = TRUE) - min(tv, na.rm = TRUE)) >= period
   } else {
     # One full turn of the clock. A cosinor is defined everywhere, so this is
     # exact for the rhythm even when the recording covered less than a period.
+    # t_abs is MODEL time and t_clock is where it lands on the dial; they differ
+    # by the origin shift, exactly as in the branch above.
+    shift <- mod$origin_shift %||% 0
     t_abs <- seq(0, period, length.out = 361)
-    t_clock <- t_abs
+    t_clock <- (t_abs + shift) %% period
     spans <- FALSE
   }
   t <- t_abs
@@ -308,7 +318,7 @@ fck_fit_rings <- function(input, values) {
     split_out <- list()
     for (nm2 in names(out)) {
       rr <- out[[nm2]]
-      lap <- floor(t_abs / period)
+      lap <- floor((t_abs + shift) / period)
       lap <- lap - min(lap) + 1L
       for (L in sort(unique(lap))) {
         k <- which(lap == L)

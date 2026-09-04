@@ -44,6 +44,13 @@
 # ==============================================================================
 
 
+# This module uses %||%, which server/00_state.R defines for the app. Defining
+# it here too (only when absent) makes the file self-contained, so it can be
+# sourced on its own by a test or a script without silently failing inside a
+# helper that looks unrelated.
+if (!exists("%||%", mode = "function")) `%||%` <- function(a, b) if (is.null(a)) b else a
+
+
 # ------------------------------------------------------------------ formatting
 
 # R's round() uses banker's rounding on the underlying binary double, so
@@ -736,4 +743,29 @@ fck_bounds_summary <- function(bounds_list, subject_ids = NULL) {
   list(n = n, n_any = sum(counts > 0), n_multi = length(multi),
        per_bound = per_bound, per_count = per_count, multi = multi_tbl,
        counts = counts)
+}
+
+
+# ------------------------------------- model time -> clock time, for DISPLAY
+
+# THE BUG THIS EXISTS TO PREVENT
+#
+# time_origin = "first_observation" re-anchors the model: the fit runs on
+# t = 0, 1, ... 31 while the recording actually began at 08:00. mod$time_vec
+# then holds MODEL time, and anything that labels it as a clock reads t = 0 as
+# midnight -- so the fit plot started at 00:00 for a recording that started at
+# 08:00, and the axis appeared to invert when the toggle was flipped.
+#
+# The shift back is one addition and it must happen at EVERY display boundary:
+# axis ticks, hover text, and the angle a polar plot puts a point at. Never in
+# a fit: the model keeps its own origin, which is the whole point of the option.
+fck_model_to_clock <- function(t, mod) {
+  t + (mod$origin_shift %||% 0)
+}
+
+# The clock range a model axis covers, for tick generation.
+fck_model_clock_range <- function(mod) {
+  tv <- mod$time_vec
+  if (is.null(tv) || !any(is.finite(tv))) return(NULL)
+  range(fck_model_to_clock(tv, mod), na.rm = TRUE)
 }

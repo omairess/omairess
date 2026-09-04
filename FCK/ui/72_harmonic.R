@@ -163,11 +163,28 @@ ui_tab_harmonic <- tabItem(
             hr(),
             actionButton("run_harmonic", "Run Harmonic Regression", class = "btn-success", icon = icon("play"))
           ),
+          # The summary grew a great deal during the audit -- fit outcomes, bound
+          # tables, commonality, conditioning, per-group detail. All of it earns
+          # its place when you are checking a model, and none of it does when you
+          # are not, so the box collapses and its text scrolls inside a fixed
+          # height instead of pushing the rest of the tab off the screen.
           box(
             title = "Model Summary", status = "info", solidHeader = TRUE, width = 8,
-            verbatimTextOutput("harmonic_summary"),
-            hr(),
-            uiOutput("harmonic_parameters_table")
+            collapsible = TRUE, collapsed = FALSE,
+            fluidRow(
+              column(7,
+                     sliderInput("harmonic_summary_height", "Panel height (px):",
+                                 min = 200, max = 2000, value = 600, step = 100,
+                                 width = "100%")),
+              column(5,
+                     br(),
+                     downloadButton("download_harmonic_summary",
+                                    "Save the summary as text", class = "btn-sm"))
+            ),
+            helpText(HTML("<small>Collapse the box with the <b>\u2212</b> in its header.
+                           The summary is long by design \u2014 it is the audit trail \u2014
+                           so it scrolls here rather than pushing the tab down.</small>")),
+            uiOutput("harmonic_summary_box")
           )
         ),
         fluidRow(

@@ -778,6 +778,49 @@ For this file there is no join to worry about: `slaperigheid` carries
 variable can be chosen from the same sheet. (Note that column holds some
 non-numeric entries — `17j`, `v` — which will need cleaning before banding.)
 
+**4.31 The time-origin toggle appeared to work backwards.** *(bug fix)*
+Reported: with `Time origin = first observation` the fit plot started at 00:00
+for a recording that began at 08:00, while `midnight` looked right.
+
+The toggle was correct; the **display** was not, and only in one direction.
+`first_observation` re-anchors the model, so `mod$time_vec` holds 0, 1, … 31
+for a recording running 08:00 → 15:00 two days later. The axis labeller read
+that as clock time and put t = 0 at midnight — eight hours early. Under
+`midnight` the shift is zero and model time *is* clock time, which is why only
+one of the two settings looked wrong and the whole thing read as inverted.
+
+The fix is one addition at every **display** boundary and never inside a fit:
+`fck_model_to_clock()`. Applied to the fit plot's tick text (positions stay on
+the model axis, only the labels shift), its hover text, the midnight rules —
+which are clock events, so on a shifted axis they no longer sit at multiples of
+24 — and the polar tab, where the angle a point is drawn at is a clock time and
+the lap split counts clock days. Without the shift the polar dial placed every
+point eight hours early and split the laps at 08:00 instead of midnight.
+
+The report now also prints the model axis separately from the clock axis when
+they differ, so the two are never confused again, and says explicitly that the
+plots convert back before labelling.
+
+`tests/testthat/test-time-origin.R` pins both halves on the reporter's own
+19-point axis: the model keeps its origin (elapsed time, and therefore the
+trend, is unchanged by the shift), and everything shown to a reader converts
+back — the first observation reads 08:00 under **either** setting, which is the
+invariant the bug broke.
+
+While writing those tests: `server/08_helpers_cosinor.R` used `%||%` without
+defining it, relying on `00_state.R` having been sourced first. Sourced alone
+by a test or a script it failed inside a helper that looked unrelated. It now
+defines `%||%` when absent, so the module stands on its own.
+
+**4.32 The model summary is collapsible.** It grew a great deal across the
+audit — fit outcomes, bound tables, commonality, conditioning, per-group
+detail — and all of it earns its place when checking a model and none of it
+when working past one. The box is now `collapsible`, its text scrolls inside a
+height set by a slider (200–2000 px) rather than pushing the rest of the tab
+down, and a button saves the whole thing as a text file. The panel and the file
+call one function, `.print_harmonic_summary()`, so the saved copy cannot drift
+from what is on screen.
+
 ## 5. Rename table
 
 | source | source app | merged app |
