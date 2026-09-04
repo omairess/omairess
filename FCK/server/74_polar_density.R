@@ -68,6 +68,19 @@ output$density_controls_ui <- renderUI({
         choices = c("The fit over the recording (trend included)" = "recording",
                     "The rhythm only (trend removed)" = "rhythm"),
         selected = "recording"),
+      conditionalPanel(
+        condition = "input.density_fit_scope == 'recording'",
+        radioButtons("density_lap_mode", "When the recording laps the dial:",
+          choices = c("One continuous spiral" = "spiral",
+                      "One trace per day" = "per_lap"),
+          selected = "spiral"),
+        helpText(HTML("A recording longer than 24 h passes over each clock hour
+                       more than once. Drawn as one path the passes overlap and
+                       cannot be told apart, which is why this plot can look
+                       nothing like the 2-D fit <i>even though every value is
+                       identical</i> \u2014 the note below reports the largest
+                       disagreement, computed live."))
+      ),
       helpText(HTML("The fitted curves from <b>1. Fitted Curves</b>, wrapped onto
                      the clock: same coefficients, same band. Show/hide the band
                      with the CI checkbox on that tab.<br><br>
@@ -86,8 +99,20 @@ output$density_controls_ui <- renderUI({
       condition = "input.density_what == 'profile'",
       helpText("The smoothed curves themselves, averaged across subjects at each",
                "clock time. Needs clock times parsed at import."),
-      checkboxInput("density_avg_days",
-                    "Average repeated days together (otherwise one ring per day)", TRUE),
+      radioButtons("density_profile_mode", "A recording longer than 24 h is shown as:",
+        choices = c("A spiral over every time point (nothing averaged)" = "spiral",
+                    "One ring per day" = "per_day",
+                    "Folded onto one dial, repeated clock times averaged" = "average"),
+        selected = "spiral"),
+      helpText(HTML("<b>Spiral</b> is the 2-D plot in polar coordinates: every
+                     column in time order, nothing averaged, nothing dropped, and
+                     the gap between successive passes over the same clock hour
+                     <i>is</i> the homeostatic rise.<br>
+                     <b>Averaging</b> makes 08:00 on day 1 and 08:00 on day 2 into
+                     one number. Under extended wakefulness those two differ by
+                     the whole trend, so the average is a level that occurred on
+                     neither day. Use it only when an 'average day' is the
+                     question.")),
       checkboxInput("density_band", "Shade +/- 1 SD across subjects", TRUE)
     ),
     conditionalPanel(
@@ -204,7 +229,15 @@ fck_fit_rings <- function(input, values) {
   if (with_trend) {
     # Absolute hours across the recording; the clock angle is t %% period, which
     # runs continuously through midnight, so no seam handling is needed.
-    t_abs   <- seq(min(tv, na.rm = TRUE), max(tv, na.rm = TRUE), length.out = 361)
+    #
+    # A recording longer than one period LAPS the dial. Drawn as one path the
+    # two passes overlap and cannot be told apart -- which is why this plot can
+    # look nothing like the 2-D fit even though the values are identical at
+    # every point (asserted in tests/polar_agreement_test.R). lap_mode = "per_lap"
+    # splits it into one trace per turn of the clock, each labelled with its day,
+    # so the reader can follow the curve round instead of guessing.
+    n_pts   <- if (isTRUE((max(tv, na.rm = TRUE) - min(tv, na.rm = TRUE)) > period)) 721 else 361
+    t_abs   <- seq(min(tv, na.rm = TRUE), max(tv, na.rm = TRUE), length.out = n_pts)
     t_clock <- t_abs %% period
     spans   <- (max(tv, na.rm = TRUE) - min(tv, na.rm = TRUE)) >= period
   } else {
@@ -268,8 +301,53 @@ fck_fit_rings <- function(input, values) {
                                      n = if (!is.null(params)) nrow(params) else NA_integer_)
   }
   if (!length(out)) return(NULL)
+
+  # ---- optionally split each arc into one trace per lap of the dial ---------
+  lap_mode <- input$density_lap_mode %||% "spiral"
+  if (with_trend && spans && identical(lap_mode, "per_lap")) {
+    split_out <- list()
+    for (nm2 in names(out)) {
+      rr <- out[[nm2]]
+      lap <- floor(t_abs / period)
+      lap <- lap - min(lap) + 1L
+      for (L in sort(unique(lap))) {
+        k <- which(lap == L)
+        if (length(k) < 2) next
+        lbl <- if (length(unique(lap)) > 1) sprintf("%s - day %d", nm2, L) else nm2
+        split_out[[lbl]] <- list(
+          hours = rr$hours[k], pred = rr$pred[k],
+          lower = if (!is.null(rr$lower)) rr$lower[k] else NULL,
+          upper = if (!is.null(rr$upper)) rr$upper[k] else NULL,
+          n = rr$n, lap = L, parent = nm2)
+      }
+    }
+    if (length(split_out)) out <- split_out
+  }
+
+  # ---- the agreement check, computed rather than asserted -------------------
+  # The tab claims to be the Fitted Curves plot in polar coordinates. That claim
+  # is checkable, so it is checked here and the result is printed in the note:
+  # the same coefficients evaluated the same way must give the same number.
+  agreement <- NA_real_
+  if (with_trend && !is.null(mod$group_fits) && length(mod$group_fits)) {
+    g1 <- mod$group_fits[[1]]
+    if (!is.null(g1$mean_coefs)) {
+      chk <- fck_rhythm_from_coefs(g1$mean_coefs, t_abs, period, nh, trend,
+                                   include_trend = TRUE, t_offset = mod$t_offset %||% 0)
+      ref <- out[[1]]
+      base_pred <- if (!is.null(ref$parent)) {
+        # rings were split into laps; rebuild the parent's full prediction
+        fck_rhythm_from_coefs(mod$group_fits[[ref$parent]]$mean_coefs, t_abs,
+                              period, nh, trend, include_trend = TRUE,
+                              t_offset = mod$t_offset %||% 0)
+      } else ref$pred
+      if (length(base_pred) == length(chk)) agreement <- max(abs(base_pred - chk))
+    }
+  }
+
   list(rings = out, period = period, trend = trend, nh = nh,
        scope = scope, closed = !with_trend, spans_period = spans,
+       lap_mode = lap_mode, agreement = agreement,
        t_range = if (with_trend) range(tv, na.rm = TRUE) else NULL)
 }
 
@@ -297,13 +375,57 @@ fck_profile_rings <- function(input, values) {
     droplevels(as.factor(values$covariates[[gv]]))
   } else NULL
 
-  day_sets <- if (isTRUE(input$density_avg_days %||% TRUE)) {
-    list(`all days` = seq_len(ncol(Y)))
-  } else split(seq_len(ncol(Y)), paste("day", w$day))
+  # ==========================================================================
+  # HOW A RECORDING LONGER THAN 24 h IS PUT ON A 24 h DIAL
+  #
+  # There is no single right answer, and the wrong default silently destroys
+  # the thing you are looking at, so this is a choice rather than a convention.
+  #
+  #   "average"  fold the recording onto one dial and AVERAGE the columns that
+  #              share a clock time. 08:00 on day 1 and 08:00 on day 2 become
+  #              one number. That is what you want if the question is "what
+  #              does an average day look like" -- and it is exactly wrong if
+  #              the two days differ, because under extended wakefulness they
+  #              differ by the whole homeostatic rise. Averaging then reports a
+  #              level that occurs on neither day.
+  #   "spiral"   plot EVERY column in time order as one continuous path that
+  #              laps the dial. Nothing is averaged and nothing is dropped:
+  #              this is the 2-D plot in polar coordinates, and the gap between
+  #              successive passes over the same clock hour IS the trend.
+  #   "per_day"  one ring per day, so the passes can be compared directly.
+  #
+  # Default is "spiral" whenever the recording actually spans more than one
+  # period, and "average" when it does not (where the three coincide anyway).
+  # ==========================================================================
+  n_periods <- (max(cum, na.rm = TRUE) - min(cum, na.rm = TRUE)) / 24
+  mode <- input$density_profile_mode %||% (if (n_periods > 1) "spiral" else "average")
+  # honour the old checkbox if the new control has not been rendered yet
+  if (is.null(input$density_profile_mode) && !is.null(input$density_avg_days))
+    mode <- if (isTRUE(input$density_avg_days)) "average" else "per_day"
 
   rows <- if (is.null(grp)) list(all = seq_len(nrow(Y))) else split(seq_len(nrow(Y)), grp)
 
   out <- list()
+
+  if (identical(mode, "spiral")) {
+    # Column order IS time order; keep it, average across SUBJECTS only.
+    ord <- order(cum)
+    for (rn in names(rows)) {
+      sub <- Y[rows[[rn]], ord, drop = FALSE]
+      m   <- colMeans(sub, na.rm = TRUE)
+      sd_ <- apply(sub, 2, stats::sd, na.rm = TRUE)
+      label <- if (is.null(grp)) "Mean" else rn
+      out[[label]] <- list(hours = w$clock[ord], mean = as.numeric(m),
+                           sd = as.numeric(sd_), spiral = TRUE,
+                           day = w$day[ord], cum = cum[ord])
+    }
+    return(if (!length(out)) NULL else out)
+  }
+
+  day_sets <- if (identical(mode, "average")) {
+    list(`all days` = seq_len(ncol(Y)))
+  } else split(seq_len(ncol(Y)), paste("day", w$day))
+
   for (rn in names(rows)) for (dn in names(day_sets)) {
     cols <- day_sets[[dn]]
     if (length(cols) < 3) next
@@ -312,10 +434,12 @@ fck_profile_rings <- function(input, values) {
     # several columns can share a clock time once days are averaged
     m  <- tapply(seq_along(hrs), hrs, function(k) mean(sub[, k, drop = FALSE], na.rm = TRUE))
     sd_ <- tapply(seq_along(hrs), hrs, function(k) stats::sd(as.vector(sub[, k, drop = FALSE]), na.rm = TRUE))
+    n_folded <- tapply(seq_along(hrs), hrs, length)
     h  <- as.numeric(names(m))
     label <- paste(c(if (!is.null(grp)) rn, if (length(day_sets) > 1) dn), collapse = " - ")
     if (!nzchar(label)) label <- "Mean"
-    out[[label]] <- list(hours = h, mean = as.numeric(m), sd = as.numeric(sd_))
+    out[[label]] <- list(hours = h, mean = as.numeric(m), sd = as.numeric(sd_),
+                         spiral = FALSE, n_folded = as.integer(n_folded))
   }
   if (!length(out)) NULL else out
 }
@@ -391,14 +515,21 @@ output$harmonic_density_plot <- renderPlotly({
     set_axis(lo, hi, "response"); lo <- axis_lo
     for (nm in names(pr)) {
       p <- pr[[nm]]
-      r <- fck_close_ring(p$hours, p$mean)
+      # A spiral keeps time order and must NOT be sorted or closed: sorting it
+      # would fold day 2 back onto day 1, which is the very averaging the mode
+      # exists to avoid, and closing it would join the last observation to the
+      # first across a gap that was never measured.
+      is_spiral <- isTRUE(p$spiral)
+      shape  <- if (is_spiral) fck_open_path else fck_close_ring
+      ribbon <- if (is_spiral) fck_band_path else fck_band_ring
+      r <- shape(p$hours, p$mean)
       if (is.null(r)) next
       rings[[nm]] <- list(hours = r$hours, r = scale_r(r$values, lo, hi),
-                          raw = r$values, unit = "value")
+                          raw = r$values, unit = "value", closed = !is_spiral)
       if (isTRUE(input$density_band) && any(is.finite(p$sd))) {
-        b  <- fck_band_ring(p$hours, p$mean - p$sd, p$mean + p$sd)
-        eu <- fck_close_ring(p$hours, p$mean + p$sd)
-        el <- fck_close_ring(p$hours, p$mean - p$sd)
+        b  <- ribbon(p$hours, p$mean - p$sd, p$mean + p$sd)
+        eu <- shape(p$hours, p$mean + p$sd)
+        el <- shape(p$hours, p$mean - p$sd)
         bands[[nm]] <- list(
           hours = if (!is.null(b)) b$hours else NULL,
           r     = if (!is.null(b)) scale_r(b$values, lo, hi) else NULL,
@@ -457,12 +588,16 @@ output$harmonic_density_plot <- renderPlotly({
       # worst where they overlap. Starting at the inner radius keeps the
       # intensity even along the arc and the hub clean.
       night_base <- max(inner, 0.12)
+      # A background that competes with the data is a failed background. The
+      # wedges are drawn at partial opacity so the curves stay the most salient
+      # thing on the plot; the gradient still reads, it just stops shouting.
       p <- add_trace(p, type = "barpolar",
                      r = rep(1.10 - night_base, nrow(gr)),
                      base = night_base,
                      theta = fck_hour_to_theta(gr$hour, period),
                      width = gr$width * (360 / period),
-                     marker = list(color = gr$color, line = list(width = 0)),
+                     marker = list(color = gr$color, line = list(width = 0),
+                                   opacity = 0.55),
                      hoverinfo = "skip", showlegend = FALSE)
     }
   } else if (identical(night_style, "block")) {
@@ -681,7 +816,18 @@ output$harmonic_density_note <- renderText({
                 floor(fr$t_range[1] %% fr$period), (fr$t_range[1] %% 1) * 60,
                 floor(fr$t_range[2] %% fr$period), (fr$t_range[2] %% 1) * 60),
       if (isTRUE(fr$spans_period))
-        "The recording is longer than one period, so the arc laps the dial and overlaps itself: two passes over the same clock hour at different values.\n"
+        sprintf("The recording is longer than one period (%s h), so the curve LAPS the dial: it passes over each clock hour more than once, at different values, and the gap between the passes is the trend. %s\n",
+                fmt1(diff(fr$t_range)),
+                if (identical(fr$lap_mode, "per_lap"))
+                  "Split into one trace per day, so the passes can be told apart."
+                else
+                  "Drawn as one continuous spiral; switch to 'one trace per day' to tell the passes apart.")
+      else "",
+      # The tab claims to be tab 1 in polar coordinates. That is checkable, so
+      # it is checked on every render rather than asserted in a comment.
+      if (is.finite(fr$agreement))
+        sprintf("Agreement with tab 1: largest difference over the whole arc = %s (identical to machine precision means the two plots ARE the same curve; if this plot still looks unlike the 2-D one, that is the lapping above, not a disagreement).\n",
+                format(fr$agreement, digits = 3, scientific = TRUE))
       else "",
       if (isTRUE(fr$closed))
         "A cosinor drawn in polar coordinates is a limacon: r = MESOR + amplitude*cos(angle - acrophase) traces an OFF-CENTRE RING, widest towards the acrophase. That offset is the rhythm, not a plotting artefact.\n"
@@ -702,9 +848,21 @@ output$harmonic_density_note <- renderText({
               length(pr), if (length(pr) == 1) "" else "s", rng[1], rng[2]),
       paste(sprintf("  %s peaks at %02d:%02.0f", names(pr),
                     floor(unlist(peak)), (unlist(peak) %% 1) * 60), collapse = "\n"), "\n",
-      if (isTRUE(input$density_avg_days %||% TRUE))
-        "Repeated days are averaged together at each clock time.\n"
-      else "One ring per day of the recording.\n",
+      {
+        pm <- input$density_profile_mode %||% "spiral"
+        sp <- any(vapply(pr, function(z) isTRUE(z$spiral), logical(1)))
+        if (sp)
+          "Every time point, in time order, as a spiral. Nothing is averaged across days: successive passes over the same clock hour keep their own values, and the gap between them is the homeostatic rise.\n"
+        else if (identical(pm, "per_day"))
+          "One ring per day of the recording; the days are directly comparable.\n"
+        else {
+          nf <- unlist(lapply(pr, function(z) z$n_folded))
+          if (!is.null(nf) && any(nf > 1))
+            sprintf("Folded onto one dial: %d clock time(s) had %d observations averaged together. Under a rising homeostatic trend those observations differ by the whole rise, so the averaged value occurred on neither day. Switch to the spiral to see them separately.\n",
+                    sum(nf > 1), max(nf))
+          else "Folded onto one dial; no clock time was observed twice, so nothing was averaged.\n"
+        }
+      },
       tail_note))
   }
 

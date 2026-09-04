@@ -677,6 +677,53 @@ half-past tick as `8.5:00`; there was no zero padding and no day marker, so
 was never converted at all. Midnight crossings now get a dotted vertical rule,
 and the y axis picks up the DV name and units when they have been declared.
 
+**4.28 A recording longer than 24 h on a 24 h dial.** *(display fix + new
+option)* Reported as "the harmonic fit and the circular plot of the harmonic
+fit don't match again".
+
+**They do match.** `tests/testthat/test-polar-laps.R` evaluates both paths from
+the same coefficients and asserts equality at every point, per group: the
+largest difference is 0 to machine precision, and the peak and trough clock
+times agree. What differs is what a recording longer than one period *looks
+like* on a 24 h dial — it **laps**, passing over each clock hour more than
+once at different values, so the drawn shape resembles nothing in the 2-D plot
+even though the numbers are identical. Three changes follow from that:
+
+* The note now prints the agreement as a **computed number** ("largest
+  difference over the whole arc = 1.2e-14") rather than claiming it in prose.
+  A checkable claim should be checked on every render.
+* `density_lap_mode` splits the arc into **one trace per day**, labelled, so
+  the passes can be told apart. A test asserts the split loses no points.
+* The evaluation grid doubles to 721 points when the recording exceeds a
+  period, so two overlapping passes are each drawn smoothly.
+
+**The averaging that distorted the profile.** Folding a >24 h recording onto
+one dial averaged the columns sharing a clock time — 08:00 on day 1 and day 2
+became one number. Under extended wakefulness those two differ by the whole
+homeostatic rise, so the average is a level that occurred on **neither day**;
+a test asserts exactly that (the folded value lies strictly between the two
+real ones and equals neither). `density_profile_mode` now offers:
+
+* **spiral** *(new default whenever the recording spans more than a period)* —
+  every column in time order as one continuous lapping path. Nothing averaged,
+  nothing dropped: this is the 2-D plot in polar coordinates, and the gap
+  between successive passes over a clock hour *is* the trend.
+* **per_day** — one ring per day, directly comparable.
+* **average** — the old fold, now saying how many clock times were averaged and
+  how many observations went into the worst one.
+
+The spiral must not be sorted or closed: sorting folds day 2 back onto day 1,
+which is the averaging the mode exists to avoid, and closing joins the last
+observation to the first across a gap that was never measured. It therefore
+routes through `fck_open_path`/`fck_band_path` rather than
+`fck_close_ring`/`fck_band_ring`, and a test asserts the clock hours are
+deliberately non-monotone. The old `density_avg_days` checkbox still selects
+the old behaviour, also pinned by a test.
+
+Also: the night gradient was drawn at full strength and dominated the data.
+It is now at 0.55 opacity — a background that competes with the data is a
+failed background.
+
 ## 5. Rename table
 
 | source | source app | merged app |
