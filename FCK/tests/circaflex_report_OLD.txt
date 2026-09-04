@@ -45,24 +45,4 @@ Interpretation: Circadian rhythm (C) is the dominant component
 
 --- Group-Specific Parameters ---
 
-Group 'YOUTH' (n=654):
-  MESOR:     159.071 (SD=159.296)
-  H1 Amplitude: 98.610 (SD=67.392)
-  H1 Acrophase: 2.81 hours
-
-Group 'ADULT' (n=410):
-  MESOR:     131.207 (SD=149.676)
-  H1 Amplitude: 93.836 (SD=65.411)
-  H1 Acrophase: 2.43 hours
-
-Group 'MIDDLE_AGE' (n=181):
-  MESOR:     153.913 (SD=166.385)
-  H1 Amplitude: 79.245 (SD=62.029)
-  H1 Acrophase: 1.87 hours
-
-Group 'ELDERLY' (n=59):
-  MESOR:     177.603 (SD=155.646)
-  H1 Amplitude: 108.978 (SD=73.953)
-  H1 Acrophase: 2.55 hours
-
-[group n's sum to 1304; 1305 subjects were fitted]
+[group n's sum to 0; 1305 subjects were fitted]

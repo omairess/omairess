@@ -96,6 +96,22 @@ ui_tab_harmonic <- tabItem(
             uiOutput("harmonic_group_var_ui"),
             helpText("Optional: Select a group variable to compare rhythms between groups."),
             hr(),
+            h4("Which fits enter the summaries"),
+            checkboxInput("harmonic_include_boundary",
+                          "Include fits that hit a parameter bound", TRUE),
+            helpText(HTML("A fit pinned to a constraint converged to the <b>edge of
+                           the feasible region</b>, not to an interior optimum: the
+                           value is where the optimiser was stopped and its standard
+                           error is meaningless there. Including them keeps the whole
+                           sample and lets the bound show through the mean; excluding
+                           them gives a cleaner summary of a smaller, possibly biased
+                           set. Either way the report tables <b>which</b> bound each
+                           fit hit and <b>which fits hit more than one</b> \u2014 two
+                           pinned parameters usually means a ridge.<br><br>
+                           Non-converged fits are always excluded: there is no
+                           solution to average.")),
+
+            hr(),
             h4("Diagnostics"),
             checkboxInput("harmonic_model_selection",
                           "Compare nested models (\u0394AICc table)", FALSE),

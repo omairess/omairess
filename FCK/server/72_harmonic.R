@@ -1494,6 +1494,9 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     percent_C <- .pc$unique_C
     percent_shared <- .pc$shared
 
+    # which bounds, if any, this fit ended up sitting on
+    .bh <- fck_bounds_hit(coefs, lower_bounds, upper_bounds)
+
     list(
       success = TRUE,
       mesor = as.numeric(mesor),
@@ -1539,19 +1542,19 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       converged = TRUE,
       convergence = conv_status,
       convergence_detail = conv_detail,
-      # AUDIT 2.3: a fit sitting ON a bound is not an estimate, it is the
-      # optimiser being stopped by the constraint. Reported, not hidden.
-      boundary_hit = {
-        bh <- FALSE
-        if(trend_type == "exp_sat") {
-          tv <- as.numeric(coefs["tau"]); av <- as.numeric(coefs["A_sat"])
-          if(is.finite(tv) && (isTRUE(abs(tv - tau_min) < 1e-6) ||
-                               (is.finite(tau_max) && isTRUE(abs(tv - tau_max) < 1e-6)))) bh <- TRUE
-          if(is.finite(av) && is.finite(A_sat_max) && isTRUE(abs(av - A_sat_max) < 1e-6)) bh <- TRUE
-          if(is.finite(av) && is.finite(A_sat_min) && isTRUE(abs(av - A_sat_min) < 1e-6)) bh <- TRUE
-        }
-        bh
-      },
+      # AUDIT 2.3: a fit sitting ON a bound is not an estimate -- it is the
+      # optimiser being stopped by the constraint, and the standard error is
+      # meaningless there. Reported per PARAMETER rather than as one logical,
+      # because "tau ran to its ceiling" and "the amplitude hit its cap" are
+      # different problems, and because a bound that catches most of the sample
+      # is a badly chosen bound rather than a sample full of odd subjects.
+      # Whether these fits are excluded is the user's choice, not this
+      # function's: it only reports what happened.
+      bounds_hit = .bh,
+      n_bounds_hit = length(.bh),
+      boundary_hit = length(.bh) > 0,
+      bounds_lower = lower_bounds,
+      bounds_upper = upper_bounds,
       fitted = fitted_vals,
       residuals = y - fitted_vals,
       time = time,
@@ -2281,22 +2284,55 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       conv_flag[is.na(conv_flag)] <- FALSE
       bound_flag[is.na(bound_flag)] <- FALSE
 
+      # Which bounds each returned fit sits on, per parameter.
+      bounds_list <- lapply(seq_len(nrow(all_params)), function(i) {
+        f <- individual_fits[[all_params$subject[i]]]
+        if (is.null(f) || is.null(f$bounds_hit)) character(0) else f$bounds_hit
+      })
+      bounds_summary <- fck_bounds_summary(
+        bounds_list,
+        subject_ids = if (!is.null(values$subject_ids))
+          values$subject_ids[all_params$subject] else all_params$subject)
+
       fit_audit <- list(
         n_attempted = n_subjects,
         n_returned  = nrow(all_params),
         n_converged = sum(conv_flag & !bound_flag),
         n_boundary  = sum(conv_flag & bound_flag),
         n_failed    = n_subjects - nrow(all_params),
-        n_nonconverged = sum(!conv_flag)
+        n_nonconverged = sum(!conv_flag),
+        bounds = bounds_summary
       )
 
-      keep_rows <- conv_flag & !bound_flag
+      # ======================================================================
+      # WHO ENTERS THE POPULATION SUMMARIES
+      #
+      # Non-converged fits are always excluded: the optimiser stopped without
+      # finding a solution, so there is no estimate to average.
+      #
+      # Fits pinned to a BOUND are a judgement call, and it is the user's, not
+      # this code's. The value is real -- the optimiser did converge to it --
+      # but it is the edge of the feasible region rather than an interior
+      # optimum, so its standard error is meaningless and averaging it pulls the
+      # mean toward whatever the bound happens to be. Excluding them makes the
+      # summary cleaner and the sample smaller and possibly biased; including
+      # them keeps everyone and lets the bound speak through the mean.
+      #
+      # Default is to INCLUDE, with the bound table shown, because a silently
+      # shrunken sample is the worse failure. The table names which bound each
+      # fit hit and which fits hit more than one, so the cost of including them
+      # is visible rather than assumed.
+      # ======================================================================
+      include_boundary <- isTRUE(input$harmonic_include_boundary %||% TRUE)
+      keep_rows <- conv_flag & (include_boundary | !bound_flag)
+      fit_audit$include_boundary <- include_boundary
+
       if(sum(keep_rows) < 3) {
         # Refusing to summarise 2 subjects is better than summarising 1305 bad
-        # ones, but refusing to summarise ANYTHING when the gate is too strict
-        # would be worse. Fall back, and say so.
+        # ones, but refusing to summarise ANYTHING would be worse. Fall back,
+        # and say so.
         showNotification(
-          sprintf("Only %d of %d fits converged cleanly; population summaries fall back to all returned fits. Treat them as provisional.",
+          sprintf("Only %d of %d fits pass the current gate; population summaries fall back to all returned fits. Treat them as provisional.",
                   sum(keep_rows), nrow(all_params)),
           type = "warning", duration = 15)
         fit_audit$gate_relaxed <- TRUE
@@ -2304,7 +2340,12 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       } else {
         fit_audit$gate_relaxed <- FALSE
       }
+      fit_audit$n_summarised <- sum(keep_rows)
       individual_params <- all_params[keep_rows, , drop = FALSE]
+      fit_audit$bounds_kept <- fck_bounds_summary(
+        bounds_list[keep_rows],
+        subject_ids = if (!is.null(values$subject_ids))
+          values$subject_ids[all_params$subject[keep_rows]] else all_params$subject[keep_rows])
 
       # Always calculate population mean parameters (vector averaging for circular data)
       {
@@ -3108,17 +3149,76 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     hdr("Fit outcomes")
     if(!is.null(fa)) {
       cat(sprintf("Subjects attempted:         %d\n", fa$n_attempted))
-      cat(sprintf("  Converged:                %d\n", fa$n_converged))
-      cat(sprintf("  Converged but on a bound: %d  (excluded: a parameter pinned to a\n", fa$n_boundary))
-      cat(         "                                bound is the constraint talking, not an estimate)\n")
-      cat(sprintf("  Did not converge:         %d  (excluded)\n", fa$n_nonconverged))
+      cat(sprintf("  Converged, interior:      %d\n", fa$n_converged))
+      cat(sprintf("  Converged, on a bound:    %d  (%s)\n", fa$n_boundary,
+                  if(isTRUE(fa$include_boundary)) "INCLUDED - see the bound table below"
+                  else "excluded by your choice"))
+      cat(sprintf("  Did not converge:         %d  (always excluded: no solution to average)\n",
+                  fa$n_nonconverged))
       cat(sprintf("  Failed outright:          %d\n", fa$n_failed))
       cat(sprintf("Population summaries below use %d subject(s).\n", nrow(params)))
       if(isTRUE(fa$gate_relaxed))
-        cat("  ! Too few clean fits to gate on; ALL returned fits are included. Provisional.\n")
+        cat("  ! Too few fits pass the gate; ALL returned fits are included. Provisional.\n")
       if(fa$n_nonconverged + fa$n_boundary > 0)
-        cat("  Previously these were all counted as successes, which is how an R-squared\n",
-            "  range starting near 0.06 could coexist with '100% successfully fitted'.\n", sep = "")
+        cat("  The original code counted all of these as successes, which is how an\n",
+            "  R-squared range starting near 0.06 coexisted with '100% successfully fitted'.\n", sep = "")
+
+      # ====================================================================
+      # WHICH bounds, and who hit more than one
+      #
+      # A fit pinned to a constraint converged to the EDGE of the feasible
+      # region, not to an interior optimum: the value is where the optimiser
+      # was stopped, and its standard error is meaningless. That is worth
+      # seeing per parameter, because a bound catching most of the sample is a
+      # badly chosen bound rather than a sample full of odd subjects -- and a
+      # subject pinned on TWO parameters at once is usually a ridge, where the
+      # two trade off against each other along a flat direction of the
+      # likelihood.
+      # ====================================================================
+      bs <- if(isTRUE(fa$include_boundary)) fa$bounds_kept else fa$bounds
+      if(!is.null(bs) && bs$n_any > 0) {
+        hdr("Parameter bounds hit")
+        cat(sprintf("%d of %d summarised fit(s) sit on at least one bound (%s%%).\n",
+                    bs$n_any, bs$n, fmt1(100 * bs$n_any / bs$n)))
+        if(!is.null(bs$per_bound)) {
+          cat("\nWhich bound:\n")
+          cat(sprintf("  %-26s %8s %8s\n", "bound", "n", "% of n"))
+          for(i in seq_len(nrow(bs$per_bound)))
+            cat(sprintf("  %-26s %8d %7s%%\n", bs$per_bound$bound[i],
+                        bs$per_bound$n[i], fmt1(bs$per_bound$pct[i])))
+        }
+        cat("\nHow many bounds per fit:\n")
+        cat(sprintf("  %-12s %10s %8s\n", "bounds hit", "n fits", "% of n"))
+        for(i in seq_len(nrow(bs$per_count)))
+          cat(sprintf("  %-12d %10d %7s%%\n", bs$per_count$n_bounds[i],
+                      bs$per_count$n_subjects[i], fmt1(bs$per_count$pct[i])))
+
+        if(!is.null(bs$multi)) {
+          cat(sprintf("\n%d fit(s) hit MORE THAN ONE bound. Two parameters pinned at once is\n",
+                      nrow(bs$multi)))
+          cat("usually a ridge: they trade off along a flat direction of the likelihood,\n")
+          cat("so neither is separately identified and a group comparison of either is a\n")
+          cat("comparison of where the optimiser stopped.\n\n")
+          cat(sprintf("  %-16s %6s %10s   %s\n", "subject", "row", "n bounds", "bounds"))
+          show_n <- min(nrow(bs$multi), 40)
+          for(i in seq_len(show_n))
+            cat(sprintf("  %-16s %6d %10d   %s\n", bs$multi$subject[i], bs$multi$row[i],
+                        bs$multi$n_bounds[i], bs$multi$bounds[i]))
+          if(nrow(bs$multi) > show_n)
+            cat(sprintf("  ... and %d more (the full list is in the parameter CSV export).\n",
+                        nrow(bs$multi) - show_n))
+        }
+
+        if(isTRUE(fa$include_boundary))
+          cat("\nThese fits ARE included in everything below. Their values are real -- the\n",
+              "optimiser did converge to them -- but they are the edge of the feasible\n",
+              "region, so their SEs are meaningless and they pull the mean toward the\n",
+              "bound. Untick 'Include fits that hit a parameter bound' to exclude them\n",
+              "and see how much the summaries move.\n", sep = "")
+        else
+          cat("\nThese fits are EXCLUDED from everything below, which makes the sample\n",
+              "smaller and possibly biased toward subjects the model happened to suit.\n", sep = "")
+      }
     } else {
       cat(sprintf("Subjects summarised: %d\n", nrow(params)))
     }
@@ -4595,6 +4695,17 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     display_df <- data.frame(
       Subject = params$subject,
       Intercept_b0 = round(params$mesor, 3),
+      # AUDIT: which bounds this fit sits on, so the CSV carries the same
+      # caveat the report shows rather than losing it on export.
+      bounds_hit = vapply(params$subject, function(sid) {
+        f <- mod$individual_fits[[sid]]
+        if (is.null(f) || is.null(f$bounds_hit) || !length(f$bounds_hit)) ""
+        else paste(f$bounds_hit, collapse = "; ")
+      }, character(1)),
+      n_bounds_hit = vapply(params$subject, function(sid) {
+        f <- mod$individual_fits[[sid]]
+        if (is.null(f) || is.null(f$bounds_hit)) 0L else length(f$bounds_hit)
+      }, integer(1)),
       R_squared = round(params$r_squared, 3),
       Pct_Rhythm = round(params$percent_rhythm, 1),
       p_value = format(params$p_value, digits = 3, scientific = TRUE)

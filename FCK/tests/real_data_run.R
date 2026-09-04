@@ -7,8 +7,20 @@
 # runs the pipeline end to end, producing the old and the new report from the
 # same fits.
 #
+# IMPORTANT, because an earlier version of this script caused real confusion:
+# THE APP DOES NOT DO WHAT THIS SCRIPT USED TO DO. The app reads exactly ONE
+# sheet, chosen in the import tab's sheet picker, and never joins sheets. This
+# harness read two and joined them by row position, which is where the
+# 654/410/181/59 group split came from -- an artefact of the harness, not of the
+# app.
+#
+# It now defaults to a single sheet, like the app. The cross-sheet join is
+# available only with --join-sheets, and it prints both joins and their
+# disagreement rather than quietly picking one.
+#
 # Usage:
-#   Rscript tests/real_data_run.R <path-to-xlsx> [out-prefix]
+#   Rscript tests/real_data_run.R <xlsx> [out-prefix] [--sheet=NAME] [--group=COL]
+#                                        [--join-sheets]
 # ==============================================================================
 
 suppressWarnings(suppressMessages({
@@ -16,8 +28,16 @@ suppressWarnings(suppressMessages({
 }))
 
 args <- commandArgs(trailingOnly = TRUE)
-xlsx <- if (length(args) >= 1) args[1] else stop("give the xlsx path")
-outp <- if (length(args) >= 2) args[2] else "tests/real"
+pos  <- args[!grepl("^--", args)]
+flag <- function(k, d = NULL) {
+  m <- grep(paste0("^--", k, "="), args, value = TRUE)
+  if (length(m)) sub(paste0("^--", k, "="), "", m[1]) else d
+}
+xlsx <- if (length(pos) >= 1) pos[1] else stop("give the xlsx path")
+outp <- if (length(pos) >= 2) pos[2] else "tests/real"
+sheet_time <- flag("sheet", "slaperigheid")
+group_col  <- flag("group", NULL)
+join_sheets <- "--join-sheets" %in% args
 
 app_dir <- if (dir.exists("server")) "." else "FCK"
 `%||%` <- function(a, b) if (is.null(a)) b else a
@@ -67,9 +87,11 @@ fit_cosinor <- get("fit_cosinor", envir = fenv)
 cat("Extracted the app's own fitters from server/72_harmonic.R\n")
 
 # ---- the data ---------------------------------------------------------------
-sh_time <- "slaperigheid"; sh_cov <- "Algemene variabelen"
-d <- suppressWarnings(suppressMessages(read_excel(xlsx, sheet = sh_time, .name_repair = "unique")))
-a <- suppressWarnings(suppressMessages(read_excel(xlsx, sheet = sh_cov,  .name_repair = "unique")))
+d <- suppressWarnings(suppressMessages(read_excel(xlsx, sheet = sheet_time, .name_repair = "unique")))
+cat(sprintf("Sheet: %s   (%d rows x %d columns)\n", sheet_time, nrow(d), ncol(d)))
+a <- if (join_sheets)
+  suppressWarnings(suppressMessages(read_excel(xlsx, sheet = "Algemene variabelen",
+                                               .name_repair = "unique"))) else NULL
 
 tc <- c("8H","9H","10H","11H","12H","14H","16H","18H","20H","21H","22H","23H","0H","2H","4H","6H")
 stopifnot(all(tc %in% names(d)))
@@ -82,23 +104,52 @@ cat(sprintf("\nData: %d rows x %d time points. DV range [%s, %s], %.2f%% missing
             nrow(Y), ncol(Y), fmt1(min(Y, na.rm = TRUE)), fmt1(max(Y, na.rm = TRUE)),
             100 * mean(is.na(Y))))
 
-# ---- THE JOIN ---------------------------------------------------------------
-# The two sheets are NOT in the same order and their ID columns do not agree.
-# Both joins are computed and both are reported, because choosing silently
-# would decide a substantive question about the data on the analyst's behalf.
-g_pos <- as.character(a$AGEcategory)                       # by row position
-g_id  <- as.character(a$AGEcategory)[match(d$ID, a$ID)]    # by ID
-cat("\n--- THE GROUP JOIN ---\n")
-cat("Row-position join: "); print(table(g_pos, useNA = "ifany"))
-cat("ID join:           "); print(table(g_id,  useNA = "ifany"))
-cat(sprintf("The two agree for %d of %d rows (%.1f%%).\n",
-            sum(g_pos == g_id, na.rm = TRUE), nrow(d),
-            100 * mean(g_pos == g_id, na.rm = TRUE)))
-cat(sprintf("slaperigheid has %d rows but only %d distinct IDs (%d repeats).\n",
-            nrow(d), length(unique(d$ID)), sum(duplicated(d$ID))))
-cat("The app joins by ROW POSITION, which is what reproduces the reported\n")
-cat("654/410/181/59. Whether that is CORRECT is a question about the file.\n")
-grp <- g_pos
+# ---- the grouping variable --------------------------------------------------
+# Default: a column FROM THE SAME SHEET, exactly as the app works. No join, no
+# ambiguity, nothing to get wrong.
+if (!join_sheets) {
+  if (is.null(group_col)) {
+    cand <- grep("leeftijd|age|geslacht|sex", names(d), ignore.case = TRUE, value = TRUE)
+    group_col <- if (length(cand)) cand[1] else NULL
+  }
+  if (is.null(group_col) || !(group_col %in% names(d))) {
+    cat("\nNo grouping column given or found in this sheet; running ungrouped.\n")
+    cat("   Pass --group=COLUMN to pick one. Candidates:\n     ",
+        paste(head(grep("leeftijd|age|geslacht|sex|categ", names(d),
+                        ignore.case = TRUE, value = TRUE), 8), collapse = " | "), "\n")
+    grp <- rep(NA_character_, nrow(d))
+  } else {
+    cat(sprintf("\nGrouping by '%s', from the SAME sheet -- no cross-sheet join.\n", group_col))
+    gv <- d[[group_col]]
+    # a continuous age column is banded so it can serve as a grouping factor
+    if (is.numeric(gv) && length(unique(gv[!is.na(gv)])) > 12) {
+      grp <- cut(gv, breaks = c(-Inf, 25, 45, 65, Inf),
+                 labels = c("YOUTH", "ADULT", "MIDDLE_AGE", "ELDERLY"))
+      cat("   Continuous; banded at 25/45/65.\n")
+      grp <- as.character(grp)
+    } else grp <- as.character(gv)
+    print(table(grp, useNA = "ifany"))
+  }
+} else {
+  # ---- the cross-sheet join, only when explicitly asked for -----------------
+  # The two sheets are NOT in the same order and their ID columns do not agree,
+  # so BOTH joins are computed and both are reported. Choosing silently would
+  # decide a substantive question about the file on the analyst's behalf.
+  cat("\n--- CROSS-SHEET JOIN (--join-sheets) ---\n")
+  cat("The app never does this. It reads one sheet. This is the harness only.\n\n")
+  g_pos <- as.character(a$AGEcategory)                       # by row position
+  g_id  <- as.character(a$AGEcategory)[match(d$ID, a$ID)]    # by ID
+  cat("Row-position join: "); print(table(g_pos, useNA = "ifany"))
+  cat("ID join:           "); print(table(g_id,  useNA = "ifany"))
+  cat(sprintf("The two agree for %d of %d rows (%.1f%%).\n",
+              sum(g_pos == g_id, na.rm = TRUE), nrow(d),
+              100 * mean(g_pos == g_id, na.rm = TRUE)))
+  cat(sprintf("'%s' has %d rows but only %d distinct IDs (%d repeats).\n",
+              sheet_time, nrow(d), length(unique(d$ID)), sum(duplicated(d$ID))))
+  cat("Using the row-position join, which is what reproduced the 654/410/181/59\n")
+  cat("in the original report. Whether it is CORRECT is a question about the file.\n")
+  grp <- g_pos
+}
 
 # ---- fit every subject with the app's own fitter -----------------------------
 cat("\nFitting", nrow(Y), "subjects (exp_sat, 2 harmonics, raw data)...\n")
@@ -116,8 +167,23 @@ bnd  <- vapply(fits, function(f) isTRUE(f$success) && isTRUE(f$boundary_hit), lo
 cat(sprintf("\nreturned a fit: %d   converged: %d   on a bound: %d   failed: %d\n",
             sum(okv), sum(conv & !bnd), sum(bnd), sum(!okv)))
 
+# which bounds, and who hit more than one
+bl <- lapply(which(okv), function(i)
+  if (is.null(fits[[i]]$bounds_hit)) character(0) else fits[[i]]$bounds_hit)
+bsum <- fck_bounds_summary(bl, subject_ids = which(okv))
+if (!is.null(bsum) && bsum$n_any > 0) {
+  cat(sprintf("\n%d of %d fits sit on at least one bound (%.1f%%).\n",
+              bsum$n_any, bsum$n, 100 * bsum$n_any / bsum$n))
+  cat("\nWhich bound:\n"); print(bsum$per_bound, row.names = FALSE)
+  cat("\nHow many bounds per fit:\n"); print(bsum$per_count, row.names = FALSE)
+  if (!is.null(bsum$multi))
+    cat(sprintf("\n%d fit(s) hit more than one bound -- usually a ridge.\n",
+                nrow(bsum$multi)))
+}
+
+# Boundary fits are INCLUDED by default now: the user's call, not the code's.
 keep_old <- which(okv)              # what the old code summarised
-keep_new <- which(conv & !bnd)      # what the audited code summarises
+keep_new <- which(conv)             # converged, bounds included
 
 P <- function(idx) {
   f <- fits[idx]

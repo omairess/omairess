@@ -724,6 +724,60 @@ Also: the night gradient was drawn at full strength and dominated the data.
 It is now at 0.55 opacity — a background that competes with the data is a
 failed background.
 
+**4.29 Bound-hit fits are included by default, and the report says which
+bound.** *(behaviour change + new table)*
+
+4.24 / audit 2.3 excluded every fit pinned to a parameter bound from the
+population summaries. That was the wrong shape of answer twice over: it
+silently shrank the Circaflex sample from 1305 to 367, and it reported one
+number ("938 on a bound") that could not distinguish a badly chosen constraint
+from a sample full of odd subjects.
+
+Now: **`harmonic_include_boundary`, default ON.** Non-converged fits are still
+always excluded — there is no solution to average — but a bound-hit fit is a
+real converged value at the edge of the feasible region, and whether to average
+it is the analyst's call. The report states which choice is in force and what
+it costs either way.
+
+`fck_bounds_hit()` reports bounds **per parameter and per side**, on a relative
+tolerance so a ceiling of 110 and a floor of 0.5 are judged alike;
+`fck_bounds_summary()` rolls the per-subject lists into the two tables the
+report prints — how often each individual bound was hit, and how many fits hit
+1, 2, 3+ — plus a listing of every fit on more than one bound. Two pinned
+parameters usually means a ridge: they trade off along a flat direction of the
+likelihood, so neither is separately identified. `bounds_hit` and
+`n_bounds_hit` also go into the parameter CSV, so the caveat survives export.
+
+On the real data this sharpens the earlier finding considerably. It is not
+"938 fits hit a bound" but:
+
+| bound | n | % |
+|---|---|---|
+| `tau (upper)` | 851 | 65.2 |
+| `tau (lower)` | 87 | 6.7 |
+
+A_sat never, and **no fit on two bounds at once**. τ's ceiling there is
+`t_max * 5` = 110 h — a numerical guard, not a physiological claim — so two
+thirds of the sample want a τ the constraint will not give them, which is the
+identifiability problem stated as a fact rather than inferred from an SD.
+
+**4.30 Correcting the record on the sheet join.** Earlier notes and messages
+said "the app joins the two sheets by row position". **That was wrong.** The
+app has had an Excel sheet picker since the port (`output$excel_sheet_selector`,
+ported from CIRCAREG; WaPaa always took the first sheet) and reads exactly
+**one** sheet. It never opens a second and never joins.
+
+The row-position join, and therefore the 654/410/181/59 split, came from
+`tests/real_data_run.R` — my harness, not the app. The harness now defaults to
+a single sheet like the app, takes `--sheet=` and `--group=`, and only performs
+the cross-sheet join under an explicit `--join-sheets`, where it prints both
+joins and their 38% disagreement instead of quietly picking one.
+
+For this file there is no join to worry about: `slaperigheid` carries
+`Leeftijd (in jaren)` and `Geslacht` alongside the 16 time columns, so a group
+variable can be chosen from the same sheet. (Note that column holds some
+non-numeric entries — `17j`, `v` — which will need cleaning before banding.)
+
 ## 5. Rename table
 
 | source | source app | merged app |

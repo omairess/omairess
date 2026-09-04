@@ -670,3 +670,70 @@ fck_clock_ticks <- function(t_range, period = 24, target_n = 12) {
                               with_minutes = step < 1),
        step = step)
 }
+
+
+# ----------------------------------------------------------- parameter bounds
+
+# WHICH bounds a fit ended up sitting on, not merely whether it sat on one.
+#
+# A parameter pinned to a constraint is the optimiser being stopped by the
+# constraint rather than by the data: the reported value is the edge of the
+# feasible region, and its standard error is meaningless there. That is worth
+# knowing per parameter -- "tau ran to its ceiling" and "the amplitude hit its
+# cap" are different problems with different fixes -- and worth counting across
+# subjects, because a bound that catches 70% of the sample is a badly chosen
+# bound, not 70% of subjects behaving oddly.
+#
+# Compared on a RELATIVE scale, so a tau ceiling of 110 and a tau floor of 0.5
+# are judged with the same sensitivity.
+fck_bounds_hit <- function(coefs, lower = NULL, upper = NULL, tol = 1e-6) {
+  nm <- names(coefs)
+  if (is.null(nm) || !length(coefs)) return(character(0))
+  hit <- character(0)
+  near <- function(v, b) {
+    if (!is.finite(v) || !is.finite(b)) return(FALSE)
+    scale <- max(abs(b), abs(v), 1)
+    abs(v - b) <= tol * scale
+  }
+  for (p in nm) {
+    v <- as.numeric(coefs[[p]])
+    if (!is.null(lower) && p %in% names(lower) && near(v, lower[[p]]))
+      hit <- c(hit, paste0(p, " (lower)"))
+    if (!is.null(upper) && p %in% names(upper) && near(v, upper[[p]]))
+      hit <- c(hit, paste0(p, " (upper)"))
+  }
+  hit
+}
+
+# Roll the per-subject bound lists into the two tables the report prints:
+# how often each individual bound was hit, and how many subjects hit 1, 2, 3+.
+fck_bounds_summary <- function(bounds_list, subject_ids = NULL) {
+  n <- length(bounds_list)
+  if (!n) return(NULL)
+  counts <- vapply(bounds_list, length, integer(1))
+  all_b <- unlist(bounds_list, use.names = FALSE)
+
+  per_bound <- if (length(all_b)) {
+    tb <- sort(table(all_b), decreasing = TRUE)
+    data.frame(bound = names(tb), n = as.integer(tb),
+               pct = 100 * as.integer(tb) / n, stringsAsFactors = FALSE)
+  } else NULL
+
+  k <- table(factor(counts, levels = 0:max(1L, max(counts))))
+  per_count <- data.frame(n_bounds = as.integer(names(k)), n_subjects = as.integer(k),
+                          pct = 100 * as.integer(k) / n, stringsAsFactors = FALSE)
+
+  multi <- which(counts >= 2)
+  multi_tbl <- if (length(multi)) {
+    data.frame(
+      subject = if (!is.null(subject_ids)) as.character(subject_ids)[multi] else as.character(multi),
+      row = multi,
+      n_bounds = counts[multi],
+      bounds = vapply(bounds_list[multi], paste, character(1), collapse = ", "),
+      stringsAsFactors = FALSE)
+  } else NULL
+
+  list(n = n, n_any = sum(counts > 0), n_multi = length(multi),
+       per_bound = per_bound, per_count = per_count, multi = multi_tbl,
+       counts = counts)
+}
