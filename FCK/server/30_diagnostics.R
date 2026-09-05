@@ -516,44 +516,56 @@
   })
   outputOptions(output, "diagnostics_available", suspendWhenHidden = FALSE)
   
-  # Apply diagnostic lambda to smoothing factor
+  # Apply a lambda to the smoothing factor.
+  #
+  # AUDIT (P1.7): this observer used to take the optimal smoothing parameter
+  # from the REML profile (an mgcv::gam fit with s(t, bs="cr")) or from the
+  # leave-one-subject-out CV, and hand it to fda::fdPar() as lambda. Those are
+  # different quantities. mgcv's sp multiplies a penalty built from a cubic
+  # regression-spline basis with mgcv's own scaling; fda's lambda multiplies an
+  # integrated squared second-derivative penalty on a B-spline basis. The number
+  # transferred cleanly; its meaning did not. The CV had a second problem: it
+  # scored lambda for predicting a held-out subject from the population mean,
+  # which is not the problem the smoothing module then solves (smoothing each
+  # subject's own trajectory).
+  #
+  # Since P0.2 the app has a GCV search that uses the production smoother, so
+  # the transfer is unnecessary as well as wrong. The button now runs that
+  # search. The REML and CV panels remain as diagnostics about how much
+  # structure the data support -- they no longer set the estimator's lambda.
   observeEvent(input$use_diagnostic_lambda, {
-    if(is.null(values$reml_profile) && is.null(values$cv_results)) {
-      showNotification("No diagnostic results available. Please run REML Profile or Cross-Validation first.", 
-                       type = "warning", duration = 5)
+    req(values$data)
+    dat    <- values$data
+    n_time <- ncol(dat)
+    cyclic <- isTRUE(input$is_cyclic)
+
+    nb <- if(!is.null(input$n_basis)) input$n_basis else 20
+    nb <- max(4, min(nb, n_time))
+    basis <- if(cyclic)
+      create.fourier.basis(rangeval = c(1, n_time), nbasis = min(n_time, 13))
+    else
+      create.bspline.basis(rangeval = c(1, n_time), nbasis = nb)
+
+    al <- tryCatch(fck_auto_lambda(dat, seq_len(n_time), basis,
+                                   min_points_needed = if(cyclic) 3 else 4),
+                   error = function(e) NULL)
+    if(is.null(al)) {
+      showNotification(
+        "Could not score GCV for any subject with the current basis (too few observed points). Set a lambda by hand.",
+        type = "warning", duration = 10)
       return()
     }
-    
-    # Determine which lambda to use
-    # Priority: CV optimal > REML optimal
-    lambda_to_use <- NULL
-    lambda_source <- NULL
-    
-    if(!is.null(values$cv_results)) {
-      lambda_to_use <- values$cv_results$optimal_lambda
-      lambda_source <- "CV optimal"
-    } else if(!is.null(values$reml_profile)) {
-      lambda_to_use <- values$reml_profile$optimal_lambda
-      lambda_source <- "REML profile optimal"
-    }
-    
-    # Convert lambda to smoothing factor
-    # lambda = 10^(-smooth_factor) → smooth_factor = -log10(lambda)
-    smooth_factor <- -log10(lambda_to_use)
-    
-    # Clamp to slider range [0.1, 10]
-    smooth_factor <- max(0.1, min(10, smooth_factor))
-    
-    # Update slider
+
+    smooth_factor <- max(0.1, min(10, -log10(al$lambda)))
     updateSliderInput(session, "smooth_factor", value = smooth_factor)
-    
-    # Also switch to manual mode if not already
     updateRadioButtons(session, "smooth_method", selected = "manual")
-    
+
     showNotification(
-      sprintf("Smoothing factor set to %.2f (lambda = %.2e) from %s",
-              smooth_factor, lambda_to_use, lambda_source),
-      type = "message", duration = 8)
+      sprintf(paste0("GCV search on the actual smoother: lambda = %.3g (smoothing factor %.2f), ",
+                     "from %d subjects. Set as a manual value so you can adjust it; ",
+                     "'Automatic smoothing (GCV)' performs the same search on every run."),
+              al$lambda, smooth_factor, al$n_used),
+      type = "message", duration = 12)
   })
 
   # ===== GCV vs n-BASIS SWEEP =====

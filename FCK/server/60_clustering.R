@@ -129,15 +129,25 @@
 
             cluster_assignments <- fkm_result$cluster
 
-            # Calculate cluster means
+            # AUDIT (P1.6): the centres used to come from values$fd_obj, which is
+            # ALWAYS on the original scale, while cluster_members below come from
+            # data_matrix, which may have been standardized. WCSS then subtracted
+            # a raw-units centre from standardized observations, so WCSS, R^2,
+            # between-SS and Calinski-Harabasz were computed in no consistent
+            # geometry at all -- and between_ss = total_ss - within_ss could come
+            # out negative. The objective centres must live in the same space as
+            # the points they are centring. The original-scale means are kept
+            # separately for display.
             cluster_means <- matrix(0, nrow = k, ncol = ncol(data_matrix))
+            cluster_means_raw <- matrix(NA_real_, nrow = k, ncol = ncol(data_matrix))
 
             for(j in 1:k) {
               cluster_idx <- which(cluster_assignments == j)
               if(length(cluster_idx) > 0) {
-                cluster_fd <- values$fd_obj[cluster_idx]
-                cluster_mean_fd <- mean.fd(cluster_fd)
-                cluster_means[j, ] <- eval.fd(time_grid, cluster_mean_fd)
+                cluster_means[j, ] <- colMeans(data_matrix[cluster_idx, , drop = FALSE])
+                cluster_means_raw[j, ] <- tryCatch(
+                  as.vector(eval.fd(time_grid, mean.fd(values$fd_obj[cluster_idx]))),
+                  error = function(e) cluster_means[j, ])
               }
             }
 
@@ -739,15 +749,25 @@
         # Extract cluster assignments
         cluster_assignments <- fkm_result$cluster
 
-        # Calculate cluster means by evaluating fd object for each cluster
+        # AUDIT (P1.6): the centres used to come from values$fd_obj, which is
+        # ALWAYS on the original scale, while cluster_members below come from
+        # data_matrix, which may have been standardized. WCSS then subtracted
+        # a raw-units centre from standardized observations, so WCSS, R^2,
+        # between-SS and Calinski-Harabasz were computed in no consistent
+        # geometry at all -- and between_ss = total_ss - within_ss could come
+        # out negative. The objective centres must live in the same space as
+        # the points they are centring. The original-scale means are kept
+        # separately for display.
         cluster_means <- matrix(0, nrow = k, ncol = ncol(data_matrix))
+        cluster_means_raw <- matrix(NA_real_, nrow = k, ncol = ncol(data_matrix))
 
         for(i in 1:k) {
           cluster_idx <- which(cluster_assignments == i)
           if(length(cluster_idx) > 0) {
-            cluster_fd <- values$fd_obj[cluster_idx]
-            cluster_mean_fd <- mean.fd(cluster_fd)
-            cluster_means[i, ] <- eval.fd(time_grid, cluster_mean_fd)
+            cluster_means[i, ] <- colMeans(data_matrix[cluster_idx, , drop = FALSE])
+            cluster_means_raw[i, ] <- tryCatch(
+              as.vector(eval.fd(time_grid, mean.fd(values$fd_obj[cluster_idx]))),
+              error = function(e) cluster_means[i, ])
           }
         }
 
@@ -875,6 +895,10 @@
       values$clustering_results <- list(
         kmeans = kmeans_result,
         cluster_means = cluster_means,
+        # P1.6: original-units means, for display when standardisation is on.
+        # cluster_means above is in the geometry the objective was computed in.
+        cluster_means_raw = if (exists("cluster_means_raw")) cluster_means_raw else cluster_means,
+        standardize = if (!is.null(input$cluster_standardize)) input$cluster_standardize else "none",
         cluster_assignments = kmeans_result$cluster,
         cluster_sizes = kmeans_result$size,
         wcss_per_cluster = wcss_per_cluster,

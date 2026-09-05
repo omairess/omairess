@@ -81,12 +81,18 @@ ui_tab_preprocess <- tabItem(
                        - Typical: 10-20 for most datasets<br>
                        - Max recommended: n_time_points - 2<br>
                        <br><b>💡 Tip:</b> Use 'Smoothing Diagnostics' tab to find optimal values!")),
-        conditionalPanel(
-          condition = "output.diagnostics_available",
+        # No longer gated on the REML/CV diagnostics having been run: the search
+        # is the production estimator now, not a transfer from them (P1.7).
+        tagList(
           hr(),
-          actionButton("use_diagnostic_lambda", "📊 Use Diagnostic Results",
+          actionButton("use_diagnostic_lambda", "Find lambda by GCV",
                        class = "btn-info btn-sm"),
-          helpText("Sets the manual smoothing factor from the diagnostics tab. Note that tab fits an mgcv model, whose smoothing parameter is not on the same scale as fda's lambda; treat the transferred value as a starting point, not a selection.")
+          helpText(HTML("Runs a GCV search with the smoother the app actually uses and
+                        writes the result into the manual factor above. This used to
+                        copy a smoothing parameter out of the REML/CV diagnostics,
+                        which fit an <code>mgcv</code> model whose penalty is not on
+                        the same scale as <code>fda</code>'s lambda &mdash; the number
+                        transferred, its meaning did not."))
         )
       ),
       conditionalPanel(

@@ -238,13 +238,14 @@
     }
   })
   
-  # Repeated Measures Functional ANOVA function using rmfanova package
+  # Pointwise repeated-measures functional ANOVA with within-subject,
+  # curve-wise permutation. (Named for what it does: it does NOT call the
+  # rmfanova package -- see P1.b below.)
   perform_rm_fanova <- function(fd_obj, subject_id, rm_factor, n_permutations = 200, alpha = 0.05) {
     
-    # Check rmfanova package is available (should be auto-loaded at startup)
-    if (!requireNamespace("rmfanova", quietly = TRUE)) {
-      stop("Package 'rmfanova' is required but not installed. Please install it using: install.packages('rmfanova')")
-    }
+    # AUDIT (P1.b): this used to refuse to run without the rmfanova package,
+    # which the code then never successfully called. The procedure below has no
+    # such dependency.
     
     n_time <- 100
     time_points <- seq(0, 1, length.out = n_time)
@@ -252,7 +253,7 @@
     # Evaluate functional data at time points
     curves <- eval.fd(time_points, fd_obj)  # n_time x n_curves
     
-    # Prepare data for rmfanova
+    # Prepare the design
     subject_id <- as.factor(subject_id)
     rm_factor <- as.factor(rm_factor)
     
@@ -265,43 +266,20 @@
     cat("Number of visits/conditions:", n_visits, "\n")
     cat("Visits:", paste(visits, collapse = ", "), "\n")
     
-    # Try different rmfanova function signatures
+    # AUDIT (P1.b): this used to try rmfanova::rmfanova(curves, id=, visit=),
+    # then the same call positionally, then exists() probes for rm.fanova and
+    # rmfANOVA, before falling through to the implementation below. None of
+    # those signatures is the package's: rmfanova() takes a LIST of
+    # condition-specific n x p matrices. So the package branch could never
+    # succeed, and the app ran its own procedure while the UI said otherwise.
+    #
+    # Guessing at an API in a tryCatch cascade is not a fallback, it is a way of
+    # not knowing which estimator produced your numbers. The speculative calls
+    # are removed and the procedure is named for what it is. Adapting the data
+    # to the real rmfanova API is a worthwhile separate change; it is not this
+    # one, and pretending it already happened was the defect.
     tryCatch({
-      
-      # Try to call rmfanova with different possible syntaxes
-      # The actual syntax depends on package version
-      
-      # Attempt 1: Standard syntax from examples
-      rm_results <- tryCatch({
-        rmfanova::rmfanova(curves, id = subject_id, visit = rm_factor)
-      }, error = function(e1) {
-        
-        # Attempt 2: Without named arguments
-        tryCatch({
-          rmfanova::rmfanova(curves, subject_id, rm_factor)
-        }, error = function(e2) {
-          
-          # Attempt 3: Check if function is actually called something else
-          tryCatch({
-            # Try rm.fanova or rmfANOVA
-            if(exists("rm.fanova", where = "package:rmfanova")) {
-              rm.fanova(curves, id = subject_id, visit = rm_factor)
-            } else if(exists("rmfANOVA", where = "package:rmfanova")) {
-              rmfANOVA(curves, id = subject_id, visit = rm_factor)
-            } else {
-              stop("Could not find rmfanova function. Available functions: ", 
-                   paste(ls("package:rmfanova"), collapse = ", "))
-            }
-          }, error = function(e3) {
-            
-            # If all attempts fail, use manual implementation
-            cat("Note: Using manual RM-ANOVA implementation (rmfanova function not compatible)\n")
-            return(NULL)
-          })
-        })
-      })
-      
-      # If rmfanova call failed or returned NULL, use manual implementation
+      rm_results <- NULL
       if(is.null(rm_results)) {
         cat("Performing manual repeated measures functional ANOVA...\n")
         
@@ -355,6 +333,7 @@
         # First pass: Calculate observed F-statistics and build data matrices
         F_stat <- numeric(n_time)
         Y_matrices <- vector("list", n_time)  # Store for permutation testing
+        Y_rows     <- vector("list", n_time)  # subject indices behind each Y_complete
 
         cat("=== Y_MATRIX CONSTRUCTION DIAGNOSTIC ===\n")
 
@@ -387,8 +366,12 @@
             cat("  Are columns identical?", all.equal(Y_complete[,1], Y_complete[,2]), "\n")
           }
 
-          # Store for permutation testing
+          # Store for permutation testing. The SUBJECT INDICES are kept too:
+          # the complete-case set differs between time points, and a curve-wise
+          # permutation has to apply one subject's relabelling wherever that
+          # subject appears (P1.a).
           Y_matrices[[t]] <- Y_complete
+          Y_rows[[t]] <- which(complete_rows)
 
           if(nrow(Y_complete) >= 2 && n_visits >= 2) {
             # Perform repeated measures ANOVA at this time point
@@ -449,18 +432,30 @@
         withProgress(message = 'Permutation testing...', value = 0, {
           for(perm in 1:n_permutations) {
             if(perm %% 20 == 0) incProgress(20 / n_permutations)
-            
+
+            # AUDIT (P1.a): the condition relabelling used to be drawn INSIDE
+            # the time loop, so one subject could be read as 2-1-3 at t1 and
+            # 3-2-1 at t2. The exchangeable unit in a functional design is the
+            # whole trajectory, not the value at a time point. Each pointwise
+            # p-value was still marginally valid (permuting conditions within a
+            # subject is the right null at a single t), so no p-value the app
+            # has reported is wrong because of this -- but the permuted curves
+            # were temporally scrambled, which makes the joint null across time
+            # meaningless and blocks any global max-F or L2 statistic.
+            #
+            # One relabelling per subject per replicate, applied at every time
+            # point where that subject appears.
+            perm_map <- matrix(NA_integer_, n_subjects, n_visits)
+            for(i in seq_len(n_subjects)) perm_map[i, ] <- sample.int(n_visits)
+
             for(t in 1:n_time) {
               Y_complete <- Y_matrices[[t]]
               
               if(!is.null(Y_complete) && nrow(Y_complete) >= 2 && n_visits >= 2) {
-                # For RM data, randomly flip signs of condition effects within each subject
-                # This preserves the within-subject correlation structure
-                
-                # Method: Randomly permute conditions within each subject
+                rows_t <- Y_rows[[t]]
                 Y_perm <- Y_complete
-                for(i in 1:nrow(Y_complete)) {
-                  Y_perm[i, ] <- Y_complete[i, sample(1:n_visits)]
+                for(i in seq_len(nrow(Y_complete))) {
+                  Y_perm[i, ] <- Y_complete[i, perm_map[rows_t[i], ]]
                 }
                 
                 # Calculate permuted F-statistic
@@ -505,7 +500,7 @@
         cat("Permutation testing complete.\n")
         
       } else {
-        # Extract results from rmfanova
+        # Assemble the results
         # The structure depends on the package version
         
         # Try to extract pointwise statistics
@@ -575,11 +570,15 @@
       eta_squared[SST == 0] <- 0
       
       # Global test statistic (L2 norm)
-      L2_stat <- sqrt(sum((SSB / length(subject_id))^2))
+      # P1.3: integrate over time rather than summing over grid points
+      L2_stat <- fck_l2_norm(SSB / length(subject_id), time_points)
       p_value_L2 <- NA  # Would need permutation test
       
-      # Calculate confidence bands using bootstrap
-      n_boot <- 100
+      # Pointwise bootstrap percentile intervals (NOT simultaneous bands)
+      # AUDIT (P1.2): 100 replicates gives a 2.5% quantile estimated from the
+      # 2nd-3rd order statistic. These are POINTWISE percentile intervals, not
+      # simultaneous functional bands -- see the label below.
+      n_boot <- 2000
       visit_means_boot <- array(NA, dim = c(n_time, n_visits, n_boot))
       
       unique_subjects <- unique(subject_id)
@@ -607,7 +606,7 @@
         }
       }
       
-      # Calculate confidence bands
+      # Pointwise 95% percentile intervals
       visit_means_lower <- matrix(NA, n_time, n_visits)
       visit_means_upper <- matrix(NA, n_time, n_visits)
       
@@ -719,7 +718,8 @@
     df_within <- n_curves - n_groups
     
     F_stat <- (SSB / df_between) / (SSW / df_within)
-    L2_stat <- sqrt(sum((SSB / n_curves)^2))
+    # P1.3: a functional L2 norm, not a grid-density-dependent vector norm
+    L2_stat <- fck_l2_norm(SSB / n_curves, time_points)
     
     # Permutation test for p-values
     F_stat_perm <- matrix(NA, n_time, n_permutations)
@@ -750,7 +750,7 @@
       }
       
       F_stat_perm[, perm] <- (SSB_perm / df_between) / (SSW_perm / df_within)
-      L2_stat_perm[perm] <- sqrt(sum((SSB_perm / n_curves)^2))
+      L2_stat_perm[perm] <- fck_l2_norm(SSB_perm / n_curves, time_points)
     }
     
     # Calculate p-values
@@ -770,8 +770,9 @@
     SST <- SSB + SSW
     eta_squared <- SSB / SST
     
-    # Calculate confidence bands using bootstrap
-    n_boot <- 100
+    # Pointwise bootstrap percentile intervals (NOT simultaneous bands)
+    # AUDIT (P1.2): pointwise percentile intervals, 100 -> 2000 replicates.
+    n_boot <- 2000
     group_means_boot <- array(NA, dim = c(n_time, n_groups, n_boot))
     
     for(boot in 1:n_boot) {
@@ -784,7 +785,7 @@
       }
     }
     
-    # Calculate confidence bands
+    # Pointwise 95% percentile intervals
     group_means_lower <- matrix(NA, n_time, n_groups)
     group_means_upper <- matrix(NA, n_time, n_groups)
     
@@ -1487,7 +1488,7 @@
         t_stat[!is.finite(t_stat)] <- 0
         
         # L2 norm statistic
-        L2_stat <- sqrt(sum(mean_diff^2))
+        L2_stat <- fck_l2_norm(mean_diff, time_points)
         
         # Permutation test for paired data
         # Randomly flip signs of differences
@@ -1505,7 +1506,7 @@
           t_stat_perm[, perm] <- perm_mean_diff / perm_se_diff
           t_stat_perm[!is.finite(t_stat_perm[, perm]), perm] <- 0
           
-          L2_stat_perm[perm] <- sqrt(sum(perm_mean_diff^2))
+          L2_stat_perm[perm] <- fck_l2_norm(perm_mean_diff, time_points)
         }
         
         # Calculate p-values
@@ -1518,7 +1519,10 @@
                       (1 + sum(is.finite(L2_stat_perm)))
         
         # Bootstrap confidence intervals for paired differences
-        n_boot <- 100
+        # AUDIT (P1.2): 100 replicates gives a 2.5% quantile estimated from the
+      # 2nd-3rd order statistic. These are POINTWISE percentile intervals, not
+      # simultaneous functional bands -- see the label below.
+      n_boot <- 2000
         diff_boot <- matrix(NA, n_time, n_boot)
         
         for(boot in 1:n_boot) {
@@ -1631,7 +1635,7 @@
         t_stat <- mean_diff / se_diff
         
         # L2 norm statistic
-        L2_stat <- sqrt(sum(mean_diff^2))
+        L2_stat <- fck_l2_norm(mean_diff, time_points)
         
         # Permutation test
         t_stat_perm <- matrix(NA, n_time, n_permutations)
@@ -1655,7 +1659,7 @@
           perm_se_diff <- sqrt(perm_pooled_var * (1/n1 + 1/n2))
           
           t_stat_perm[, perm] <- perm_diff / perm_se_diff
-          L2_stat_perm[perm] <- sqrt(sum(perm_diff^2))
+          L2_stat_perm[perm] <- fck_l2_norm(perm_diff, time_points)
         }
         
         # Calculate p-values
@@ -1668,7 +1672,10 @@
                       (1 + sum(is.finite(L2_stat_perm)))
         
         # Bootstrap confidence intervals
-        n_boot <- 100
+        # AUDIT (P1.2): 100 replicates gives a 2.5% quantile estimated from the
+      # 2nd-3rd order statistic. These are POINTWISE percentile intervals, not
+      # simultaneous functional bands -- see the label below.
+      n_boot <- 2000
         diff_boot <- matrix(NA, n_time, n_boot)
         
         for(boot in 1:n_boot) {
@@ -1970,7 +1977,7 @@
         fill = 'toself',
         fillcolor = 'rgba(100, 100, 255, 0.2)',
         line = list(color = 'transparent'),
-        name = '95% CI',
+        name = '95% pointwise CI',   # P1.2: pointwise, not simultaneous
         hoverinfo = 'skip'
       )
       

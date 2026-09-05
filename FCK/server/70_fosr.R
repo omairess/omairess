@@ -37,12 +37,28 @@
       
       # --- METHOD A: Pointwise OLS ---
       if (input$reg_method == "OLS_nosmooth") {
-        f <- as.formula(paste("~", paste(input$reg_predictors, collapse = " + ")))
+        # AUDIT (P1.4b): as.formula(paste(...)) built the model formula by pasting
+        # UPLOADED COLUMN NAMES into text and re-parsing it. reformulate() takes
+        # the names as data and quotes them, so a column called `a + b` or
+        # anything else executable is a variable, not code.
+        f <- stats::reformulate(input$reg_predictors)
         X <- model.matrix(f, data = df_reg)
-        
-        # Point Estimation
-        xtx_inv <- solve(crossprod(X))
-        projector <- xtx_inv %*% t(X) 
+
+        # AUDIT (P1.4a): solve(crossprod(X)) inverts the normal equations. That
+        # squares the condition number and gives no warning on a rank-deficient
+        # design -- two collinear predictors, or a factor level that vanished
+        # after row filtering, either error out or return nonsense. A QR of X
+        # itself is the standard route and reports the rank.
+        qrX <- qr(X)
+        if (qrX$rank < ncol(X)) {
+          dropped <- colnames(X)[-qrX$pivot[seq_len(qrX$rank)]]
+          stop(sprintf(
+            "The design matrix is rank deficient (rank %d of %d columns). Collinear or empty terms: %s. Remove or recode them and re-run.",
+            qrX$rank, ncol(X), paste(dropped, collapse = ", ")))
+        }
+        xtx_inv <- chol2inv(qr.R(qrX))
+        dimnames(xtx_inv) <- list(colnames(X), colnames(X))
+        projector <- xtx_inv %*% t(X)
         coefs <- projector %*% Y
         fitted_vals <- X %*% coefs
         residuals <- Y - fitted_vals
@@ -84,26 +100,35 @@
             }
           }
           
-          # Bootstrap p-values: proportion of bootstrap samples on opposite side of 0
-          # This is a proper bootstrap test
-          p_values <- matrix(NA, nrow=nrow(coefs), ncol=ncol(coefs))
-          for(j in 1:nrow(coefs)) {
-            for(k in 1:ncol(coefs)) {
-              if(coefs[j, k] >= 0) {
-                p_values[j, k] <- 2 * mean(boot_betas[, j, k] <= 0)
-              } else {
-                p_values[j, k] <- 2 * mean(boot_betas[, j, k] >= 0)
-              }
-              # Ensure p-value is in [0, 1]
-              p_values[j, k] <- min(1, max(0, p_values[j, k]))
-            }
-          }
+          # AUDIT (P1.4c): this block used to compute
+          #     p <- 2 * mean(boot_betas[, j, k] <= 0)
+          # under the comment "This is a proper bootstrap test". It is not. The
+          # residuals are resampled around the FITTED ALTERNATIVE, so the
+          # bootstrap distribution is centred near beta-hat, not at zero; asking
+          # how often it crosses zero inverts a percentile interval rather than
+          # sampling the null. It is a usable interval and a poor test, and it
+          # was labelled the other way round.
+          #
+          # The bootstrap now produces the SE and the percentile interval only.
+          # Inference comes from the studentised statistic against the
+          # bootstrap SE, and is FDR-adjusted across time points -- there was no
+          # multiplicity correction at all, on a curve of ~100 pointwise tests.
+          t_stats <- coefs / se_mat
+          p_values <- 2 * (1 - pt(abs(t_stats), df = n - p))
+          p_values_raw <- p_values
+          for(j in seq_len(nrow(p_values)))
+            p_values[j, ] <- p.adjust(p_values[j, ], method = "fdr")
           
         } else {
           # Parametric SE
           for(j in 1:nrow(coefs)) se_mat[j, ] <- sqrt(xtx_inv[j,j] * sigma2)
           t_stats <- coefs / se_mat
           p_values <- 2 * (1 - pt(abs(t_stats), df = n - p))
+          # P1.4c: FDR across time points -- every coefficient curve is ~100
+          # simultaneous tests and none of them were corrected.
+          p_values_raw <- p_values
+          for(j in seq_len(nrow(p_values)))
+            p_values[j, ] <- p.adjust(p_values[j, ], method = "fdr")
         }
         
         rss <- colSums(residuals^2); y_bar <- colMeans(Y)
@@ -175,15 +200,37 @@
         }
         beta_hat[1, ] <- predict(gam_fit, newdata = d_int, type = "response")
         
-        # Covariate effects approx
-        for(i in 1:length(preds)) {
-          v <- preds[i]
+        # AUDIT (P1.4d): this loop populated beta_hat only when the predictor was
+        # NUMERIC. A factor predictor was fitted by the GAM, appeared in the
+        # results table, and its coefficient curve stayed a row of zeros -- a
+        # null effect displayed as though it had been estimated. A factor's
+        # effect is a contrast against the reference level, so there is one
+        # curve per non-reference level, not one per variable.
+        beta_rows <- list("(Intercept)" = beta_hat[1, ])
+        for(v in preds) {
           if(is.numeric(df_reg[[v]])) {
             d_0 <- d_int; d_0[[v]] <- 0
             d_1 <- d_int; d_1[[v]] <- 1
-            beta_hat[i+1, ] <- predict(gam_fit, newdata = d_1) - predict(gam_fit, newdata = d_0)
+            beta_rows[[v]] <- as.vector(predict(gam_fit, newdata = d_1) -
+                                        predict(gam_fit, newdata = d_0))
+          } else {
+            oc <- long_data[[v]]
+            lv <- if (is.factor(oc)) levels(oc) else sort(unique(as.character(oc)))
+            if (length(lv) >= 2) {
+              d_ref <- d_int
+              d_ref[[v]] <- factor(rep(lv[1], n_time), levels = lv)
+              base <- as.vector(predict(gam_fit, newdata = d_ref))
+              for (l in lv[-1]) {
+                d_l <- d_int
+                d_l[[v]] <- factor(rep(l, n_time), levels = lv)
+                beta_rows[[paste0(v, l)]] <-
+                  as.vector(predict(gam_fit, newdata = d_l)) - base
+              }
+            }
           }
         }
+        beta_hat <- do.call(rbind, beta_rows)
+        rownames(beta_hat) <- names(beta_rows)
         
         fitted_vec <- predict(gam_fit, newdata = long_data)
         fitted_vals <- matrix(fitted_vec, nrow = nrow(Y), ncol = n_time, byrow = TRUE)
@@ -194,7 +241,7 @@
         
         fit <- list(beta.hat = beta_hat, fitted.values = fitted_vals, resid = residuals, 
                     beta.se = beta_hat*0, beta.p = beta_hat*0, # placeholders
-                    terms = terms(as.formula(paste("~", paste(preds, collapse="+")))), 
+                    terms = terms(stats::reformulate(preds)), 
                     r2_t = r2_t, method = "Smoothed OLS (GAM)",
                     gam_obj = gam_fit,
                     gam_predictors = preds,

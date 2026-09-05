@@ -35,7 +35,15 @@ ui_tab_fanova <- tabItem(
             conditionalPanel(
               condition = "input.fanova_design == 'within'",
               h4("Repeated Measures Factors"),
-              helpText("For within-subjects designs, specify subject ID and the repeated measures factor (e.g., visit, condition, time)."),
+              helpText(HTML("For within-subjects designs, specify subject ID and the
+                             repeated measures factor (e.g. visit, condition, time).<br>
+                             <b>Method:</b> pointwise repeated-measures ANOVA at each
+                             time point, with p-values from within-subject permutation
+                             of the condition labels. One relabelling is drawn per
+                             subject per replicate and applied across the whole
+                             trajectory, so the permuted curves stay temporally
+                             coherent. This does not use the <code>rmfanova</code>
+                             package.")),
               helpText("Note: Do NOT define group labels in preprocessing for within-subjects designs. Each subject should have multiple observations (one per condition/visit)."),
               uiOutput("subject_id_ui"),
               uiOutput("rm_factor_ui"),
@@ -88,7 +96,13 @@ ui_tab_fanova <- tabItem(
             width = 12,
             fluidRow(
               column(4,
-                checkboxInput("fanova_show_sd_bands", "Show ±1 SD bands", value = TRUE)
+                checkboxInput("fanova_show_sd_bands", "Show \u00b11 SD bands", value = TRUE),
+                helpText(HTML("Bootstrap intervals shown on the post-hoc curves are
+                               <b>pointwise</b> 95% percentile intervals from 2,000
+                               replicates. They are not simultaneous functional bands:
+                               a region where the interval excludes zero is not a
+                               family-wise-controlled claim about the whole curve.
+                               Use the FDR-adjusted pointwise p-values for that."))
               ),
               column(4,
                 checkboxInput("fanova_show_sig_regions", "Highlight significant regions", value = TRUE)

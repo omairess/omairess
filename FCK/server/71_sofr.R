@@ -82,10 +82,22 @@
       df_sofr <- values$covariates
       y <- df_sofr[[input$sofr_response]]
       
-      # Handle factor response for binary
+      # AUDIT (P1.5a): this used to be as.numeric(y) - 1 with a reassuring
+      # "Factor response converted to 0/1 numeric" notification. A three-level
+      # factor silently became 0, 1, 2 -- and automatic family selection could
+      # then treat those codes as a Gaussian outcome, fitting a linear model to
+      # arbitrary label numbers. The UI warned about it; the code did it anyway.
+      # A warning that the code ignores is not a safeguard.
       if(is.factor(y)) {
-        y <- as.numeric(y) - 1  # Convert to 0/1
-        showNotification("Factor response converted to 0/1 numeric.", type = "message")
+        y <- droplevels(y)
+        if(nlevels(y) != 2L)
+          stop(sprintf(
+            "Factor responses must have exactly two levels; '%s' has %d (%s). Recode it, or pick a numeric response.",
+            input$sofr_response, nlevels(y),
+            paste(levels(y), collapse = ", ")))
+        showNotification(sprintf("Factor response: '%s' -> 0, '%s' -> 1.",
+                                 levels(y)[1], levels(y)[2]), type = "message")
+        y <- as.integer(y) - 1L
       }
       
       if(!is.numeric(y)) stop("Response variable must be numeric (or factor for binary).")
@@ -120,8 +132,16 @@
           y_clean <- as.numeric(y_clean == max(unique_y))
           showNotification(paste("Binary response recoded: ", min(unique_y), "->0, ", max(unique_y), "->1"), type = "message")
         } else if(all(y_clean >= 0 & y_clean <= 1)) {
-          # Already proportions - use as is
-          showNotification("Using response as proportions (0-1 range).", type = "message")
+          # AUDIT (P1.5b): bare proportions were passed to binomial() with no
+          # denominator. 0.8 might be 4/5 or 800/1000; those carry very
+          # different information, and binomial() assumes the latter is a single
+          # trial either way, so the standard errors are wrong by whatever
+          # factor the true trial count implies.
+          stop(paste0(
+            "Response values lie in [0, 1] but are not binary, so they look like proportions. ",
+            "A proportion without its denominator has no defined binomial variance: 0.8 could be 4 of 5 ",
+            "or 800 of 1000. Supply the response as 0/1 outcomes, or model it with the Gaussian family ",
+            "(on a logit or arcsine transform if you prefer), or add a trials column and use weights."))
         } else {
           stop("For binomial family, response must be binary (2 unique values) or proportions (0-1 range).")
         }
@@ -152,6 +172,9 @@
       pfr_data <- as.list(df_clean_no_response)
       pfr_data$X_func <- X_func_clean
       pfr_data$y <- y_clean  # Use our validated/converted y
+      # sofr_argvals is deliberately NOT added to pfr_data: every element of that
+      # list is a column of length n (subjects), and argvals has length n_time.
+      # It is resolved from the formula's environment instead.
       
       # Debug info
       cat("SoFR Debug:\n")
@@ -159,11 +182,31 @@
       cat("  y range:", range(y_clean), "\n")
       cat("  y unique values:", paste(head(sort(unique(y_clean)), 10), collapse=", "), "\n")
       
-      formula_str <- "y ~ lf(X_func, bs='ps', k=15)"
+      # AUDIT (P1.5d): lf() was called without argvals, so refund assumed the
+      # functional predictor sat on an EVEN grid. The app has an explicit
+      # "use real clock time" option precisely because these columns are often
+      # unevenly spaced (the Circaflex grid runs 8,9,10,11,12,14,16,... hours),
+      # and the smoothing module already normalises those spacings onto 0-1.
+      # Passing the real positions makes the coefficient function beta(t) a
+      # function of time rather than of column index.
+      sofr_argvals <- {
+        av <- NULL
+        if (isTRUE(input$use_real_time) && !is.null(values$time_labels)) {
+          h <- try(fck_cumulative_hours(values$time_labels), silent = TRUE)
+          if (!inherits(h, "try-error") && length(h) == ncol(X_func_clean) &&
+              all(is.finite(h)) && diff(range(h)) > 0)
+            av <- (h - min(h)) / diff(range(h))
+        }
+        if (is.null(av)) seq(0, 1, length.out = ncol(X_func_clean)) else av
+      }
+      formula_str <- "y ~ lf(X_func, argvals = sofr_argvals, bs='ps', k=15)"
       if(!is.null(preds) && length(preds) > 0) {
         formula_str <- paste(formula_str, "+", paste(preds, collapse = " + "))
       }
       pfr_formula <- as.formula(formula_str)
+      # lf() evaluates argvals in the formula's environment, so bind it there.
+      environment(pfr_formula) <- list2env(list(sofr_argvals = sofr_argvals),
+                                           parent = environment())
       
       # Final validation for binomial
       if(pfr_family$family == "binomial") {
@@ -321,7 +364,14 @@
       y_pred_class <- ifelse(y_pred_prob > 0.5, 1, 0)
       acc <- mean(y_pred_class == y_obs)
       
-      # Pseudo R-squared (McFadden)
+      # AUDIT (P1.5c): labelled "McFadden Pseudo-R2". For a binomial GLM on
+      # genuine 0/1 data the saturated log-likelihood is zero, so deviance =
+      # -2*logLik and 1 - dev/null.dev IS McFadden exactly -- verified identical
+      # to 10 decimal places. The label was therefore correct on the branch it
+      # was written for, and the review's objection applies only to a proportion
+      # response (0.652 vs 0.274 on a test case), which P1.5b now rejects
+      # outright. "Deviance explained" is the name that is right either way, so
+      # the display uses it and no longer claims a specific pseudo-R2 family.
       null_dev <- fit$null.deviance
       res_dev <- fit$deviance
       pseudo_r2 <- 1 - (res_dev / null_dev)
@@ -331,8 +381,8 @@
         tags$table(class = "table table-condensed",
                    tags$tr(tags$td("Null Deviance:"), tags$td(round(null_dev, 2))),
                    tags$tr(tags$td("Residual Deviance:"), tags$td(round(res_dev, 2))),
-                   tags$tr(tags$td("McFadden Pseudo-R²:"), tags$td(round(pseudo_r2, 3))),
-                   tags$tr(tags$td("Accuracy (at p=0.5):"), tags$td(paste0(round(acc * 100, 1), "%")))
+                   tags$tr(tags$td("Deviance explained:"), tags$td(round(pseudo_r2, 3))),
+                   tags$tr(tags$td("Accuracy (at p=0.5, apparent):"), tags$td(paste0(round(acc * 100, 1), "%")))
         )
       )
     } else {
@@ -428,7 +478,7 @@
       ci_label <- paste0("95% Bootstrap CI (B=", fit$n_boot, ")")
       subtitle <- paste0(subtitle, " | ", ci_label)
       
-      g <- ggplot(df_coef, aes_string(x = x_col, y = "value")) +
+      g <- ggplot(df_coef, aes(x = .data[[x_col]], y = .data[["value"]])) +
         geom_hline(yintercept = 0, linetype = "dashed", color = "gray50") +
         geom_ribbon(aes(ymin = boot_lower, ymax = boot_upper), fill = "firebrick", alpha = 0.2) +
         geom_line(color = "firebrick", linewidth = 1) +
@@ -438,7 +488,7 @@
              x = "Time", y = y_label)
     } else {
       # Use parametric CIs from pfr
-      g <- ggplot(df_coef, aes_string(x = x_col, y = "value")) +
+      g <- ggplot(df_coef, aes(x = .data[[x_col]], y = .data[["value"]])) +
         geom_hline(yintercept = 0, linetype = "dashed", color = "gray50") +
         geom_ribbon(aes(ymin = value - 1.96*se, ymax = value + 1.96*se), fill = "firebrick", alpha = 0.2) +
         geom_line(color = "firebrick", linewidth = 1) +
@@ -537,12 +587,13 @@
     p <- plot_ly() %>%
       add_trace(data = roc_data, x = ~fpr, y = ~tpr, type = 'scatter', mode = 'lines',
                 line = list(color = 'firebrick', width = 2),
-                name = paste0("ROC (AUC = ", round(auc, 3), ")"),
+                name = paste0("ROC (apparent AUC = ", round(auc, 3), ")"),
                 hovertemplate = "FPR: %{x:.3f}<br>TPR: %{y:.3f}<extra></extra>") %>%
       add_segments(x = 0, xend = 1, y = 0, yend = 1, 
                    line = list(color = 'gray', dash = 'dash'),
                    name = "Random", showlegend = FALSE) %>%
-      layout(title = paste0("ROC Curve (AUC = ", round(auc, 3), ")"),
+      layout(title = list(text = paste0("ROC Curve (apparent AUC = ", round(auc, 3), ")",
+                                        "<br><sub>Evaluated on the same observations used to fit the model \u2014 optimistic, not cross-validated</sub>")),
              xaxis = list(title = "False Positive Rate (1 - Specificity)", range = c(0, 1)),
              yaxis = list(title = "True Positive Rate (Sensitivity)", range = c(0, 1)))
     p

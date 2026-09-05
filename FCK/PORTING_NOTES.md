@@ -1175,6 +1175,115 @@ geometries, `install.packages()` at startup, and the export path writing `aov()`
 where the app runs permutation + FDR &mdash; that last one means "Export analysis
 code" still does not always mean "code that reproduces this result".
 
+**4.44 P1 corrections, plus the one defect the second review found.** A second
+independent review of the P0 work confirmed all eleven fixed items and raised one
+finding neither review had caught. What follows is P1 as scheduled, plus that.
+
+*P1.a &mdash; the RM permutation was drawn per time point, not per curve (NEW).*
+`sample(1:n_visits)` sat INSIDE `for(t in 1:n_time)`, so a subject could be read
+as condition order 2-1-3 at one time point and 3-2-1 at the next. In a functional
+design the exchangeable unit is the whole trajectory.
+
+  Being precise about what this did and did not invalidate, because the review
+  did not say and it matters: at a single time point, permuting condition labels
+  within a subject IS the correct null, so every pointwise p-value the app has
+  reported was marginally valid. What the per-time-point draw destroyed was the
+  JOINT null across time, which is what a global max-F or L2 statistic would need
+  &mdash; and the RM branch sets `p_value_L2 <- NA` and computes no global test,
+  so no reported number was wrong because of this. It is a real defect that
+  blocked a correct global test and wasted `n_perm x n_time x n_subjects` draws;
+  it is not a retraction. One relabelling is now drawn per subject per replicate
+  and applied wherever that subject appears, which needs the subject indices
+  behind each complete-case matrix (`Y_rows`), since that set differs by t.
+
+*P1.b &mdash; the app claimed to run rmfanova and never did.* Four guessed
+signatures in a tryCatch cascade &mdash; `rmfanova(curves, id=, visit=)`, the same
+call positionally, then `exists()` probes for `rm.fanova` and `rmfANOVA` &mdash;
+none of which is the package's API (it takes a list of condition-specific
+matrices). The package branch could never succeed, so the app always ran its own
+procedure while the module was named for the package, and refused to start
+without a package it never called. Guessing at an API in a cascade is not a
+fallback; it is a way of not knowing which estimator produced your numbers. The
+speculative calls and the hard dependency are removed and the method is named:
+pointwise repeated-measures ANOVA with within-subject, curve-wise permutation.
+
+*P1.3 &mdash; the L2 statistic was a vector norm.* `sqrt(sum(v^2))` over the
+evaluation grid scales with grid density: the same function on 50 versus 200
+points gave 4.95 and 9.97. `fck_l2_norm()` uses trapezoidal weights, so the same
+function gives 0.7071 on both grids &mdash; the analytic value of the L2 norm of
+sin(2*pi*t) on [0,1]. Uneven grids are now weighted by their own spacing rather
+than silently over-weighting dense regions. Seven sites.
+
+*P1.2 &mdash; intervals labelled for what they are.* The fANOVA "confidence
+bands" are pointwise percentile intervals, not simultaneous functional bands, and
+were built from 100 bootstrap replicates (a 2.5% quantile from the 2nd-3rd order
+statistic). Now 2,000 replicates, labelled "95% pointwise CI", with the UI saying
+that a region where the interval excludes zero is not a family-wise claim.
+
+*P1.6 &mdash; clustering compared quantities in different spaces.* Cluster centres
+came from `values$fd_obj`, always original-scale, while the members came from
+`data_matrix`, which may have been standardised. WCSS then subtracted a raw-units
+centre from standardised observations. A fixture shows this drives
+`between_ss = total_ss - within_ss` NEGATIVE. Objective centres now come from the
+same matrix as the points; original-scale means are kept as `cluster_means_raw`
+for display. Note the second review credited me with having fixed the
+restart-selection WCSS &mdash; `git log` shows `60_clustering.R` untouched since
+the merge, so that path was always consistent; only the final centres were wrong.
+
+*P1.4 &mdash; FoSR.* `solve(crossprod(X))` squares the condition number and gives
+no warning on a rank-deficient design; replaced with a QR that reports the rank
+and names the collinear columns. The formula was built by pasting uploaded column
+names into text and re-parsing; `reformulate()` takes them as data. The bootstrap
+p-values (`2 * mean(boot_betas <= 0)`, commented "This is a proper bootstrap
+test") resample around the fitted ALTERNATIVE, so the distribution is centred near
+beta-hat: that is percentile-CI inversion, a usable interval and a poor test,
+labelled the other way round. The bootstrap now yields the SE and interval only;
+inference is the studentised statistic, FDR-adjusted across time &mdash; there had
+been no multiplicity correction at all on a curve of ~100 pointwise tests. In the
+GAM branch, coefficient curves were written only for NUMERIC predictors, so a
+factor was fitted, appeared in the results, and displayed a row of zeros as
+though estimated; factors now emit one contrast curve per non-reference level.
+
+*P1.5 &mdash; SoFR.* A three-level factor response became 0, 1, 2 despite a UI
+warning &mdash; a warning the code ignores is not a safeguard; now a hard error.
+Bare proportions were passed to `binomial()` with no denominator, so 4/5 and
+800/1000 were treated identically; now refused with the three ways out named.
+`lf()` was called without `argvals`, assuming an even grid on an app that has an
+explicit uneven-time option; the normalised real positions are now passed, bound
+through the formula's environment rather than `pfr`'s data list (argvals has
+length n_time, every data column has length n). ROC, AUC and accuracy are
+labelled apparent, because they are evaluated on the fitting sample.
+
+  On "McFadden Pseudo-R2": both reviews called this wrong. It was right on the
+  branch it was written for. For a binomial GLM on genuine 0/1 data the saturated
+  log-likelihood is zero, so deviance = -2*logLik and `1 - dev/null.dev` IS
+  McFadden &mdash; identical to 10 decimal places on a test case. It diverges only
+  for a proportion response (0.652 vs 0.274), which P1.5 now rejects outright. The
+  display says "Deviance explained", which is right either way.
+
+*P1.7 &mdash; the lambda transfer is gone.* The "Use Diagnostic Results" button
+took an `mgcv::gam` smoothing parameter and handed it to `fda::fdPar()`. Those
+multiply different penalties on different bases; the number transferred cleanly,
+its meaning did not. The CV had a second problem: it scored lambda for predicting
+a held-out subject from the population mean, which is not the problem the
+smoothing module solves. Since P0.2 the app has a GCV search on the production
+smoother, so the transfer is unnecessary as well as wrong. The button now runs
+that search and is no longer gated on the REML/CV panels having been run; those
+remain as diagnostics about smoothness and no longer set the estimator's lambda.
+
+Also `aes_string()` -> `aes(.data[[ ]])` (2 sites), and `rmfanova` dropped from
+the optional-package list since nothing calls it.
+
+**Still open after P1** (all P2, none of it changes a number): exported code does
+not call the same kernels the app runs &mdash; the fANOVA export still writes
+`aov()` where the app runs permutation + FDR, which is now further from the truth
+than before P0.4; `install.packages()` at startup; no `renv.lock`; Roxygen
+contracts on the statistical kernels; vectorising the permutation loops now that
+the default count is 5,000. The SoFR changes are the one part of this round that
+is NOT runtime-verified: `refund` will not install for this container's R version,
+so `lf(argvals=)` and the response guards are checked by inspection and by unit
+tests on the surrounding logic, not by executing a fit.
+
 ## 5. Rename table
 
 | source | source app | merged app |

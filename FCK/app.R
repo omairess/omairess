@@ -46,7 +46,9 @@ required_packages <- c("shiny", "shinydashboard", "shinyWidgets", "fda", "mgcv",
 optional_packages <- c(
   gridExtra    = "multi-panel plot export",
   viridis      = "continuous colour scales",
-  rmfanova     = "repeated-measures functional ANOVA",
+  # rmfanova was listed as optional for repeated-measures fANOVA, but the app
+  # never called its API correctly and now does not call it at all (P1.b). Left
+  # out rather than installed for a code path that does not exist.
   fda.usc      = "functional k-means clustering",
   reticulate   = "DCF (density-core-finding) clustering via Python",
   refund       = "scalar-on-function regression (refund::pfr)",
