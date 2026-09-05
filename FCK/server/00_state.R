@@ -86,7 +86,6 @@ values <- reactiveValues(
 
   # ---- C: functional / circadian regression (from CIRCAREG) ----------------
   reg_model             = NULL,   # function-on-scalar
-  sofr_model            = NULL,   # scalar-on-function
   harmonic_model        = NULL,   # cosinor
   hp_pairwise_results   = NULL,   # pairwise tests on cosinor parameters
   hp_pairwise_param     = NULL,
@@ -111,7 +110,6 @@ fck_reset_analyses <- function(values, keep_smoothing = FALSE) {
   values$clustering_results <- NULL
   values$cluster_optimization <- NULL
   values$reg_model <- NULL
-  values$sofr_model <- NULL
   values$harmonic_model <- NULL
   values$hp_pairwise_results <- NULL
   invisible(NULL)

@@ -79,7 +79,7 @@ ui_tab_export <- tabItem(
       h4("Export R Code"),
       downloadButton("export_code", "Download Analysis Code (R)", class = "btn-warning"),
       helpText("Reproduces the whole pipeline in plain R: import, smoothing,",
-               "functional PCA/ANOVA/clustering, and the cosinor, FoSR and SoFR",
+               "functional PCA/ANOVA/clustering, and the cosinor and FoSR",
                "fits. The cosinor section carries the app's own fitting function",
                "verbatim rather than a re-implementation of it."),
       hr(),

@@ -17,7 +17,7 @@
 #   * variable selection: WaPaa picked "group variables", CIRCAREG picked
 #     "scalar variables". They are the same columns used for two purposes, so
 #     there is now ONE picker feeding both values$covariates (original types,
-#     for FoSR/SoFR/cosinor predictors) and values$group_variables (factors,
+#     for FoSR/cosinor predictors) and values$group_variables (factors,
 #     for fANOVA/clustering/group comparisons).
 #   * time values: WaPaa's extract_time_values() runs here for every dataset,
 #     so values$time_numeric is available to all tabs (the cosinor tab can now
@@ -177,7 +177,7 @@ output$var_select_container <- renderUI({
       multiple = TRUE
     ),
     helpText(HTML(
-      "These serve <b>both</b> families: as predictors/response in FoSR, SoFR and
+      "These serve <b>both</b> families: as predictors/response in FoSR and
        cosinor regression, and as grouping factors in functional ANOVA, cluster
        composition and cosinor group tests. The first one selected is the primary
        grouping variable; each tab can pick a different one.")),
@@ -234,7 +234,7 @@ observeEvent(input$apply_selection, {
     # ---- ONE scalar picker, TWO consumers -----------------------------------
     if(!is.null(input$sel_cov_vars) && length(input$sel_cov_vars) > 0) {
       cov_cols <- all_cols[all_cols %in% input$sel_cov_vars]
-      # original types: predictors and responses for FoSR / SoFR / cosinor
+      # original types: predictors and responses for FoSR / cosinor
       values$covariates <- values$raw_df[, cov_cols, drop = FALSE]
       # factor copies: grouping for fANOVA / clustering / cosinor group tests
       values$selected_group_vars <- cov_cols
@@ -366,8 +366,8 @@ observeEvent(input$apply_selection, {
 # --- 3. Sample data ----------------------------------------------------------
 # One dataset has to exercise both families, so this is a 24-hour circadian set
 # with group structure (fANOVA / clustering), scalar covariates (FoSR), a binary
-# outcome (SoFR logistic) and a real rhythm with group differences in MESOR,
-# amplitude and acrophase (cosinor).
+# covariate, and a real rhythm with group differences in MESOR, amplitude and
+# acrophase (cosinor).
 observeEvent(input$generate_sample, {
   cat("Generate sample button clicked\n")
 
@@ -403,7 +403,10 @@ observeEvent(input$generate_sample, {
         rnorm(n_time, 0, 1.2)
     }
 
-    # Binary outcome driven by the curve level, for the SoFR logistic branch.
+    # A binary covariate driven by the curve level. It was generated for the
+    # scalar-on-function tab, which has since been removed; it is kept because
+    # it is a perfectly good two-level grouping variable for the fANOVA,
+    # clustering and cosinor group comparisons.
     curve_integral <- rowMeans(sample_data)
     prob_outcome   <- plogis(-0.15 * (curve_integral - mean(curve_integral)) + 0.02 * (age - 50))
     binary_outcome <- rbinom(n_subjects, 1, prob_outcome)
@@ -489,7 +492,7 @@ output$data_status <- renderPrint({
     if(!is.null(values$covariates)) {
       cat("Scalar variables:", paste(names(values$covariates), collapse = ", "), "\n")
     } else {
-      cat("No scalar variables selected (FoSR/SoFR/cosinor group tests need at least one).\n")
+      cat("No scalar variables selected (FoSR/cosinor group tests need at least one).\n")
     }
     if(is.null(values$smooth_data)) {
       cat("\nSmoothing: not applied yet — go to 'Data Preprocessing/Smoothing'.\n")

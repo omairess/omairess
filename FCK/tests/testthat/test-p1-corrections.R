@@ -206,49 +206,25 @@ test_that("the GAM branch emits a coefficient curve for factor levels", {
 })
 
 # ------------------------------------------------------------------ P1.5 SoFR
-test_that("SoFR rejects a response that is not binary, instead of coercing it", {
-  src <- code_of("server/71_sofr.R")
-  expect_false(grepl("y <- as.numeric(y) - 1  ", src, fixed = TRUE))
-  expect_true(grepl("nlevels(y) != 2L", src, fixed = TRUE))
-  expect_true(grepl("Factor responses must have exactly two levels", src, fixed = TRUE))
-  # the coercion a 3-level factor used to receive
-  f <- factor(c("low", "mid", "high"), levels = c("low", "mid", "high"))
-  expect_equal(as.numeric(f) - 1, c(0, 1, 2))
-})
-
-test_that("SoFR refuses bare proportions for a binomial fit", {
-  src <- code_of("server/71_sofr.R")
-  expect_false(grepl("Using response as proportions (0-1 range).", src, fixed = TRUE))
-  expect_true(grepl("A proportion without its denominator has no defined binomial variance",
-                    src, fixed = TRUE))
-})
-
-test_that("SoFR passes real argvals and labels performance as apparent", {
-  src <- code_of("server/71_sofr.R")
-  expect_false(grepl('"y ~ lf(X_func, bs=\'ps\', k=15)"', src, fixed = TRUE))
-  expect_true(grepl("argvals = sofr_argvals", src, fixed = TRUE))
-  # argvals has length n_time and must NOT be put in pfr's data list (length n)
-  expect_false(grepl("pfr_data$sofr_argvals <- sofr_argvals", src, fixed = TRUE))
-  expect_true(grepl("environment(pfr_formula) <- list2env", src, fixed = TRUE))
-  expect_true(grepl("apparent", src, fixed = TRUE))
-  # the label that was arithmetically right for 0/1 but wrong for proportions
-  expect_false(grepl("McFadden Pseudo", src, fixed = TRUE))
-  expect_true(grepl("Deviance explained", src, fixed = TRUE))
-})
-
-test_that("deviance-explained equals McFadden for binary but not for proportions", {
-  set.seed(5); n <- 200; x <- rnorm(n)
-  y <- rbinom(n, 1, plogis(0.7 * x))
-  m <- glm(y ~ x, family = binomial); m0 <- glm(y ~ 1, family = binomial)
-  expect_equal(1 - m$deviance / m$null.deviance,
-               1 - as.numeric(logLik(m)) / as.numeric(logLik(m0)), tolerance = 1e-9)
-  # this is why the app now refuses proportions rather than renaming the number
-  p <- plogis(0.7 * x)
-  yp <- pmin(pmax(suppressWarnings(rbinom(n, 20, p)) / 20, 0.001), 0.999)
-  mp  <- suppressWarnings(glm(yp ~ x, family = binomial))
-  mp0 <- suppressWarnings(glm(yp ~ 1, family = binomial))
-  expect_false(isTRUE(all.equal(1 - mp$deviance / mp$null.deviance,
-                                1 - as.numeric(logLik(mp)) / as.numeric(logLik(mp0)))))
+# Scalar-on-function regression was REMOVED from the app after this round, at
+# the reporter's request: they never used it, and it was the one module whose
+# fixes could not be runtime-verified here because refund would not install for
+# this container's R version. Deleting it also removed the app's only refund
+# dependency. The P1.5 tests went with it; what remains is the guard that it
+# really is gone, so it cannot creep back in half-wired.
+test_that("scalar-on-function regression is fully removed", {
+  expect_false(file.exists(file.path(app_dir, "server/71_sofr.R")))
+  expect_false(file.exists(file.path(app_dir, "ui/71_sofr.R")))
+  app <- paste(readLines(file.path(app_dir, "app.R"), warn = FALSE), collapse = "\n")
+  expect_false(grepl("ui_tab_sofr", app, fixed = TRUE))
+  expect_false(grepl("tabName = \"sofr\"", app, fixed = TRUE))
+  # refund was used by nothing else, so it should no longer be a dependency
+  expect_false(grepl("refund       =", app, fixed = TRUE))
+  st <- paste(readLines(file.path(app_dir, "server/00_state.R"), warn = FALSE), collapse = "\n")
+  expect_false(grepl("sofr_model", st, fixed = TRUE))
+  ex <- code_of("server/90_export.R")
+  expect_false(grepl("refund::pfr", ex, fixed = TRUE))
+  expect_false(grepl("SCALAR-ON-FUNCTION", ex, fixed = TRUE))
 })
 
 # --------------------------------------------------------- P1.7 lambda transfer
@@ -260,6 +236,7 @@ test_that("the diagnostics no longer hand an mgcv smoothing parameter to fda", {
   expect_true(grepl("fck_auto_lambda(dat, seq_len(n_time), basis", src, fixed = TRUE))
 })
 
-test_that("aes_string is gone", {
-  expect_false(grepl("aes_string", code_of("server/71_sofr.R"), fixed = TRUE))
+test_that("aes_string is gone from every remaining server file", {
+  for (f in list.files(file.path(app_dir, "server"), pattern = "[.]R$", full.names = FALSE))
+    expect_false(grepl("aes_string", code_of(file.path("server", f)), fixed = TRUE), info = f)
 })

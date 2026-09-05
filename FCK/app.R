@@ -54,7 +54,6 @@ optional_packages <- c(
   rmfanova     = "global repeated-measures functional ANOVA test",
   fda.usc      = "functional k-means clustering",
   reticulate   = "DCF (density-core-finding) clustering via Python",
-  refund       = "scalar-on-function regression (refund::pfr)",
   minpack.lm   = "robust exponential-saturation cosinor fits"
 )
 
@@ -161,8 +160,6 @@ ui <- dashboardPage(
       # ---- C: circadian / functional regression (from CIRCAREG) -----------
       menuItem("Function-on-Scalar (FoSR)", tabName = "fosr",
                icon = icon("chart-line")),
-      menuItem("Scalar-on-Function (SoFR)", tabName = "sofr",
-               icon = icon("chart-bar")),
       menuItem("Harmonic Regression", tabName = "harmonic", icon = icon("sync")),
       menuItem("Cosinor: pairwise tests", tabName = "harm_pairwise",
                icon = icon("not-equal")),
@@ -186,7 +183,6 @@ ui <- dashboardPage(
       ui_tab_fanova,
       ui_tab_posthoc,
       ui_tab_fosr,
-      ui_tab_sofr,
       ui_tab_harmonic,
       ui_tab_cosinor_pairwise,
       ui_tab_clustering,

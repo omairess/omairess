@@ -115,17 +115,6 @@ FCK_CONTRACTS <- list(
     failure     = "a rank-deficient design is an error naming the collinear columns, not a silent pseudo-inverse"
   ),
 
-  fit_sofr = list(
-    file        = "server/71_sofr.R",
-    estimand    = "a scalar outcome regressed on a predictor CURVE, via refund::pfr",
-    orientation = "X_func is SUBJECTS x TIME",
-    argvals     = "the real normalised time positions are passed to lf(), so beta(t) is a function of time and not of column index",
-    outcomes    = "binary requires exactly two levels (a 3-level factor is an error, not a 0/1/2 recode); bare proportions are refused because a proportion without its denominator has no defined binomial variance",
-    fit_stat    = "'Deviance explained' = 1 - deviance/null.deviance. For binomial on 0/1 this equals McFadden's R^2 exactly (the saturated log-likelihood is zero); it does not for other families, which is why the display does not name a pseudo-R^2 family.",
-    performance = "ROC, AUC and accuracy are APPARENT -- evaluated on the fitting sample, not cross-validated",
-    caveat      = "not runtime-verified in the audit environment: refund would not install for R 4.3.3 there"
-  ),
-
   run_functional_clustering = list(
     file        = "server/60_clustering.R",
     orientation = "data_matrix is SUBJECTS x TIME",

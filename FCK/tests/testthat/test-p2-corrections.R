@@ -126,7 +126,7 @@ test_that("the exported script records and checks the environment it ran in", {
 test_that("every statistical kernel has a recorded contract", {
   needed <- c("fit_cosinor", "fit_cosinor_nonlinear", "fck_auto_lambda",
               "perform_functional_anova", "perform_rm_fanova",
-              "linear_shift_alignment", "fit_fosr", "fit_sofr",
+              "linear_shift_alignment", "fit_fosr",
               "run_functional_clustering")
   expect_true(all(needed %in% names(FCK_CONTRACTS)))
   # orientation is stated for every one: the app mixes subjects x time and
@@ -144,7 +144,7 @@ test_that("the contracts record the facts the audit established", {
   expect_true(grepl("p_value_L2 is NA", FCK_CONTRACTS$perform_rm_fanova$global))
   expect_true(grepl("does not search", FCK_CONTRACTS$fck_auto_lambda$warning))
   expect_true(grepl("Not simultaneous", FCK_CONTRACTS$perform_functional_anova$intervals, fixed = TRUE))
-  expect_true(grepl("not runtime-verified", FCK_CONTRACTS$fit_sofr$caveat))
+  expect_null(FCK_CONTRACTS$fit_sofr)   # the module was removed
 })
 
 # ------------------------------------------------- P2.6 rmfanova global test

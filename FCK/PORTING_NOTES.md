@@ -1377,6 +1377,40 @@ twelve are in the results object and the report names which are inflated and
 which have no power. `tests/rmfanova_calibration.R` re-runs the simulation and
 asserts that the curated set is still the calibrated one.
 
+**4.47 Scalar-on-function regression removed.** At the reporter's request: they
+never used it, and it was the one module whose P1 fixes could not be verified by
+running them, because `refund` will not install for R 4.3.3 in the audit
+container. A tab that is never used, cannot be tested here, and had four
+confirmed defects going into P1 is not worth carrying &mdash; every future audit
+pass has to reason about it, and every future reader has to decide whether to
+trust it.
+
+Removed: `server/71_sofr.R` (702 lines), `ui/71_sofr.R` (85 lines), the sidebar
+entry and tab object in `app.R`, `values$sofr_model` and its reset in
+`00_state.R`, the SoFR line in the session summary, section 12 of the exported
+script (which called `refund::pfr`), the `library(refund)` line the export
+emitted, the `fit_sofr` kernel contract, and the SoFR fixture and section
+assertion in `tests/codegen_test.R`.
+
+Two consequences worth recording. **`refund` is no longer a dependency of the
+app at all** &mdash; nothing else called it, so the package that could not be
+installed here is simply gone from the requirement list. And the app's demo
+generator still produces its `binary_outcome` column: it was created for the
+SoFR logistic branch, but it is a perfectly good two-level grouping variable for
+the fANOVA, clustering and cosinor group comparisons, so removing it would have
+made the sample data worse for no reason. The comment now says why it exists.
+
+The P1.5 tests went with the module. What replaces them is a guard that the
+removal is complete &mdash; no orphan file, no menu entry pointing at a missing
+tab, no `sofr_model` in state, no `refund::pfr` in the export &mdash; so it
+cannot creep back half-wired. The `aes_string` guard, which had pointed at
+`71_sofr.R`, now sweeps every remaining server file instead.
+
+After removal: 12 tabs, 155 outputs, 30 server files, 44 files parsing. 1,080
+testthat assertions and 10 standalone suites pass, and the Circaflex figures are
+identical to P2 (59.7% significant rhythms, Rayleigh Z 549.9), confirming nothing
+downstream depended on it.
+
 ## 5. Rename table
 
 | source | source app | merged app |

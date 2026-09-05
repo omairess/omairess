@@ -10,7 +10,7 @@
 #
 # The union keeps every control from both.  ONE selection step now defines:
 #   * the functional/time columns  -> values$data      (all analyses)
-#   * the scalar variables         -> values$covariates (FoSR / SoFR / cosinor)
+#   * the scalar variables         -> values$covariates (FoSR / cosinor)
 #                                  -> values$group_variables, values$group_labels
 #                                     (fANOVA / clustering / group comparisons)
 # so a variable chosen once is available as a predictor AND as a grouping
@@ -79,7 +79,7 @@ ui_tab_import <- tabItem(
       ),
       helpText("The sample set is a 24-hour circadian dataset (50 subjects, hourly",
                "columns 00:00-23:00) with group structure and scalar variables, so it",
-               "exercises every tab: fPCA, fANOVA, clustering, FoSR, SoFR and cosinor.")
+               "exercises every tab: fPCA, fANOVA, clustering, FoSR and cosinor.")
     ),
 
     box(

@@ -169,7 +169,7 @@ observeEvent(input$apply_smooth, {
       # square: on 16 time points the fit had 16 effective df, 0 residual df,
       # and reproduced the data to 9e-16. The control labelled "Automatic
       # smoothing (REML)" was doing no smoothing at all, and it is the default,
-      # upstream of fPCA, fANOVA, clustering, FoSR and SoFR.
+      # upstream of fPCA, fANOVA, clustering and FoSR.
       #
       # Auto mode now performs a real GCV search with the SAME estimator that
       # does the smoothing, which is the only way the selected lambda means

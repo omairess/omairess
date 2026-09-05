@@ -8,7 +8,7 @@
 # WHAT IS SAVED
 #   * the entire values bus: raw data, analysis matrix, covariates and group
 #     variables, the smoothed curves and the fd object, and every fitted model
-#     (fPCA, warping, fANOVA, post-hoc, clustering, FoSR, SoFR, cosinor)
+#     (fPCA, warping, fANOVA, post-hoc, clustering, FoSR, cosinor)
 #   * the analysis-defining settings, so a restored session can be re-run and
 #     not merely re-read
 #   * the exact package versions, because an fda or mgcv update can move the
@@ -46,7 +46,7 @@ if (!exists("%||%")) `%||%` <- function(a, b) if (is.null(a)) b else a
 fck_package_versions <- function() {
   pkgs <- c("shiny", "shinydashboard", "shinyWidgets", "fda", "mgcv", "plotly",
             "DT", "dplyr", "tidyr", "ggplot2", "cluster", "readxl",
-            "rmfanova", "fda.usc", "reticulate", "refund", "minpack.lm")
+            "rmfanova", "fda.usc", "reticulate", "minpack.lm")
   vapply(pkgs, function(p) tryCatch(as.character(utils::packageVersion(p)),
                                     error = function(e) "not installed"),
          character(1))
@@ -148,7 +148,6 @@ observeEvent(input$load_session, {
     if (!is.null(values$pairwise_results))  "post-hoc tests",
     if (!is.null(values$clustering_results))"clustering",
     if (!is.null(values$reg_model))         "FoSR",
-    if (!is.null(values$sofr_model))        "SoFR",
     if (!is.null(values$harmonic_model))    "cosinor")
 
   session_note(paste(c(

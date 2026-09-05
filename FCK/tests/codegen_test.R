@@ -60,14 +60,7 @@ server <- function(input, output, session) {
                         use_bootstrap = TRUE, n_boot = 200,
                         using_smoothed = TRUE, n_subjects = n_sub, n_time = n_t))
 
-  values$sofr_model <- list(
-    family = list(family = "binomial", link = "logit"),
-    fck_settings = list(response = "Outcome", predictors = "Age",
-                        formula = "y ~ lf(X_func, bs='ps', k=15) + Age",
-                        family = "binomial", link = "logit",
-                        using_smoothed = TRUE, n_obs = n_sub))
-
-  fail <- function(...) { cat("FAIL:", ..., "\n"); quit(status = 1) }
+fail <- function(...) { cat("FAIL:", ..., "\n"); quit(status = 1) }
 
   code <- tryCatch(generate_analysis_code(full = TRUE),
                    error = function(e) structure(conditionMessage(e), class = "err"))
@@ -80,11 +73,10 @@ server <- function(input, output, session) {
               length(strsplit(code, "\n")[[1]])))
 
   for (marker in c("10. HARMONIC (COSINOR) REGRESSION",
-                   "11. FUNCTION-ON-SCALAR REGRESSION",
-                   "12. SCALAR-ON-FUNCTION REGRESSION")) {
+                   "11. FUNCTION-ON-SCALAR REGRESSION")) {
     if (!grepl(marker, code, fixed = TRUE)) fail("missing section:", marker)
   }
-  cat("ok  : cosinor, FoSR and SoFR sections all present\n")
+  cat("ok  : cosinor and FoSR sections all present\n")
 
   # the cosinor section must carry the app's real fitting function, not a
   # paraphrase of it — that is the whole point of emitting it via deparse()
@@ -93,7 +85,7 @@ server <- function(input, output, session) {
   cat("ok  : the app's own fit_cosinor() is emitted verbatim\n")
 
   # ... and with no results at all, it must still produce valid R
-  for (nm in c("harmonic_model", "reg_model", "sofr_model", "smooth_fit_metrics",
+  for (nm in c("harmonic_model", "reg_model", "smooth_fit_metrics",
                "group_labels", "covariates", "smooth_data"))
     values[[nm]] <- NULL
   bare <- tryCatch(generate_analysis_code(full = TRUE),

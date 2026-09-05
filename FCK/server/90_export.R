@@ -460,13 +460,13 @@
     add("# =============================================================================")
     add("#")
     # AUDIT (P2.2): a script that names no versions is not reproducible, it is
-    # only re-runnable. The estimators below come from fda, mgcv and refund, all
+    # only re-runnable. The estimators below come from fda and mgcv, both
     # of which change across releases. The environment this analysis actually ran
     # in is stamped here and CHECKED at the top of the script, so a rerun that
     # would silently produce different numbers says so instead.
     add("# THE ENVIRONMENT THIS ANALYSIS RAN IN")
     add("#   ", R.version.string)
-    .pk <- c("fda", "mgcv", "refund", "fda.usc", "minpack.lm", "cluster",
+    .pk <- c("fda", "mgcv", "fda.usc", "minpack.lm", "cluster",
              "ggplot2", "plotly", "dplyr")
     .have <- character(0)
     for (.p in .pk) {
@@ -511,9 +511,6 @@
     if(!is.null(values$clustering_results)) {
       add("library(cluster)    # Clustering diagnostics")
       add("library(fda.usc)    # Functional clustering")
-    }
-    if(!is.null(values$sofr_model)) {
-      add("library(refund)     # Scalar-on-function regression")
     }
     if(!is.null(values$harmonic_model) &&
        identical(values$harmonic_model$trend_type, "exp_sat")) {
@@ -1167,37 +1164,6 @@
       add("")
     }
 
-    # ---- SECTION 12: SCALAR-ON-FUNCTION REGRESSION ----
-    if(!is.null(values$sofr_model) && !is.null(values$sofr_model$fck_settings)) {
-      st <- values$sofr_model$fck_settings
-      add("# -----------------------------------------------------------------------------")
-      add("# 12. SCALAR-ON-FUNCTION REGRESSION (SoFR)")
-      add("# -----------------------------------------------------------------------------")
-      add("")
-      add(sprintf("X_func <- %s   # the curves, as the functional predictor",
-                  if(isTRUE(st$using_smoothed)) "smooth_curves" else "raw_data"))
-      add(sprintf('y      <- covariates[["%s"]]', st$response))
-      if(length(st$predictors)) {
-        add(sprintf("sofr_scalars <- c(%s)",
-                    paste0('"', st$predictors, '"', collapse = ", ")))
-      }
-      add("")
-      add("keep   <- complete.cases(y) & complete.cases(X_func)")
-      add("X_func <- X_func[keep, , drop = FALSE]; y <- y[keep]")
-      add("")
-      add("pfr_data <- list(X_func = X_func, y = y)")
-      if(length(st$predictors)) {
-        add("for (v in sofr_scalars) pfr_data[[v]] <- covariates[keep, v]")
-      }
-      add(sprintf("sofr_fit <- refund::pfr(%s,", st$formula))
-      add(sprintf("                        data = pfr_data, family = %s(link = '%s'))",
-                  st$family, st$link))
-      add("summary(sofr_fit)")
-      add("")
-      add(sprintf("# Fitted on %d observations; %s family, %s link.",
-                  st$n_obs, st$family, st$link))
-      add("")
-    }
 
     add("# =============================================================================")
     add("# END OF ANALYSIS CODE")
