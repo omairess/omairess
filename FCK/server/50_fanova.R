@@ -572,7 +572,30 @@
       # Global test statistic (L2 norm)
       # P1.3: integrate over time rather than summing over grid points
       L2_stat <- fck_l2_norm(SSB / length(subject_id), time_points)
-      p_value_L2 <- NA  # Would need permutation test
+      p_value_L2 <- NA  # this app's own procedure computes no global p-value
+
+      # AUDIT (P2.6): the pointwise procedure above answers "where do the
+      # conditions differ", never "do they differ at all". rmfanova (Kurylo &
+      # Smaga 2023) supplies the global test, on a complete balanced design.
+      # It is optional, off unless asked for, and reports which subjects it had
+      # to drop. See server/09b_helpers_rmfanova.R for why only three of its
+      # fifteen outputs are shown by default.
+      rm_global <- NULL
+      if (isTRUE(input$rm_global_test)) {
+        rm_global <- tryCatch(
+          fck_rmfanova_global(curves, subject_id, rm_factor,
+                              n_perm = min(n_permutations, 2000),
+                              n_boot = min(n_permutations, 2000)),
+          error = function(e) list(ok = FALSE, reason = conditionMessage(e)))
+        if (isTRUE(rm_global$ok)) {
+          showNotification(sprintf(
+            "Global RM test on %d of %d subjects with a complete design.",
+            rm_global$n_complete, rm_global$n_total), type = "message", duration = 8)
+        } else {
+          showNotification(paste("Global RM test not run:", rm_global$reason),
+                           type = "warning", duration = 12)
+        }
+      }
       
       # Pointwise bootstrap percentile intervals (NOT simultaneous bands)
       # AUDIT (P1.2): 100 replicates gives a 2.5% quantile estimated from the
@@ -647,6 +670,7 @@
         sig_regions = sig_regions,
         L2_stat = L2_stat,
         p_value_L2 = p_value_L2,
+        rm_global = rm_global,     # P2.6: optional rmfanova global test, or NULL
         eta_squared = eta_squared,
         df_between = n_visits - 1,
         # AUDIT (P0.4): was length(unique(subject_id)) * (n_visits - 1), which
@@ -725,30 +749,26 @@
     F_stat_perm <- matrix(NA, n_time, n_permutations)
     L2_stat_perm <- numeric(n_permutations)
     
+    # AUDIT (P2.5): this was a four-deep interpreted loop --
+    #     for(perm) for(t) for(group) for(curve in group)
+    # which is O(n_perm x n_time x n_curves). At the P1.1 default of 5,000
+    # permutations, 100 evaluation points and the Circaflex sample that is ~650
+    # million R-level iterations, i.e. not runnable. The same two sums are
+    # matrix operations: SSB is a weighted row-sum over group means, and SSW is
+    # the row-sums of squared deviations from each curve's own permuted group
+    # mean. Identical arithmetic, verified against the loop in
+    # tests/testthat/test-p2-corrections.R.
     for(perm in 1:n_permutations) {
       perm_labels <- sample(group_labels)
-      
-      # Recalculate statistics with permuted labels
-      perm_means <- matrix(NA, n_time, n_groups)
-      for(i in 1:n_groups) {
-        perm_idx <- which(perm_labels == groups[i])
-        perm_means[, i] <- rowMeans(curves[, perm_idx, drop = FALSE])
-      }
-      
-      SSB_perm <- numeric(n_time)
-      SSW_perm <- numeric(n_time)
-      
-      for(t in 1:n_time) {
-        for(i in 1:n_groups) {
-          perm_idx <- which(perm_labels == groups[i])
-          SSB_perm[t] <- SSB_perm[t] + length(perm_idx) * (perm_means[t, i] - overall_mean[t])^2
-          
-          for(j in perm_idx) {
-            SSW_perm[t] <- SSW_perm[t] + (curves[t, j] - perm_means[t, i])^2
-          }
-        }
-      }
-      
+      gidx <- match(as.character(perm_labels), groups)   # group of each curve
+
+      perm_means <- vapply(seq_len(n_groups), function(i)
+        rowMeans(curves[, gidx == i, drop = FALSE]), numeric(n_time))
+      n_per_group <- tabulate(gidx, nbins = n_groups)
+
+      SSB_perm <- as.vector((perm_means - overall_mean)^2 %*% n_per_group)
+      SSW_perm <- rowSums((curves - perm_means[, gidx, drop = FALSE])^2)
+
       F_stat_perm[, perm] <- (SSB_perm / df_between) / (SSW_perm / df_within)
       L2_stat_perm[perm] <- fck_l2_norm(SSB_perm / n_curves, time_points)
     }
@@ -1129,8 +1149,40 @@
     
     if(!is.na(res$p_value_L2)) {
       cat("L2 p-value:", round(res$p_value_L2, 4), "\n")
+    } else if (identical(res$design, "within")) {
+      cat("L2 p-value: not computed by the pointwise procedure.\n")
     }
-    
+
+    # P2.6: the optional global repeated-measures test
+    if (!is.null(res$rm_global)) {
+      cat("\n---------------- GLOBAL TEST (rmfanova) ----------------\n")
+      g <- res$rm_global
+      if (!isTRUE(g$ok)) {
+        cat("Not run:", g$reason, "\n")
+      } else {
+        cat(sprintf("Complete balanced design: %d of %d subjects (%d condition%s).\n",
+                    g$n_complete, g$n_total, length(g$visits),
+                    if (length(g$visits) == 1) "" else "s"))
+        if (length(g$dropped))
+          cat("  Dropped for an incomplete design:",
+              paste(head(g$dropped, 12), collapse = ", "),
+              if (length(g$dropped) > 12) sprintf("... (%d total)", length(g$dropped)) else "", "\n")
+        cat(sprintf("  %d permutations, %d bootstrap replicates.\n", g$n_perm, g$n_boot))
+        cat("\nTest statistics:\n")
+        print(round(g$stats, 4))
+        cat("\nGlobal p-values (permutation scheme P1):\n")
+        for (nm in names(g$p_default))
+          cat(sprintf("  %-8s %.4f\n", nm, g$p_default[[nm]]))
+        cat("\nThese three are shown because a 400-replicate simulation put them\n")
+        cat("closest to nominal with full power. Of the other twelve outputs,\n")
+        cat(sprintf("  %s rejected true nulls at 17.5%% and 14.2%% (nominal 5%%)\n",
+                    paste(FCK_RMFANOVA_INFLATED, collapse = " and ")))
+        cat(sprintf("  %s had no power at all in that setting.\n",
+                    paste(FCK_RMFANOVA_NOPOWER, collapse = " and ")))
+        cat("All fifteen are in the results object as rm_global$p_values.\n")
+      }
+    }
+
     cat("\n========================================\n")
   })
   

@@ -13,9 +13,32 @@
 app_dir <- if (dir.exists("server")) "." else if (dir.exists("../../server")) "../.." else "FCK"
 source(file.path(app_dir, "server/09_helpers_pcanova.R"))
 
+# Strip comments so the guards read CODE, not prose -- the fixes deliberately
+# quote the removed lines in their comments. A naive sub("#.*$") also eats code
+# that follows a "#" INSIDE a string literal (e.g. add("#  ", R.version.string)),
+# which would make a forbidden-string guard pass for the wrong reason. Only strip
+# a "#" that is not inside quotes.
 code_of <- function(f) {
   ln <- readLines(file.path(app_dir, f), warn = FALSE)
-  paste(sub("#.*$", "", ln), collapse = "\n")
+  strip <- function(l) {
+    ch <- strsplit(l, "", fixed = TRUE)[[1]]
+    if (!length(ch)) return(l)
+    inq <- ""; out <- character(0)
+    for (i in seq_along(ch)) {
+      c1 <- ch[i]
+      esc <- i > 1 && ch[i - 1] == "\\"
+      if (nzchar(inq)) {
+        if (c1 == inq && !esc) inq <- ""
+      } else if (c1 %in% c("\"", "'")) {
+        inq <- c1
+      } else if (c1 == "#") {
+        break
+      }
+      out <- c(out, c1)
+    }
+    paste(out, collapse = "")
+  }
+  paste(vapply(ln, strip, character(1), USE.NAMES = FALSE), collapse = "\n")
 }
 
 # ------------------------------------------- P1.a curve-wise RM permutation

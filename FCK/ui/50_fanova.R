@@ -56,6 +56,21 @@ ui_tab_fanova <- tabItem(
                          choices = list("Original curves" = "original",
                                         "Time-warped curves (if available)" = "warped"),
                          selected = "original"),
+            conditionalPanel(
+              condition = "input.fanova_design == 'within'",
+              checkboxInput("rm_global_test",
+                            "Also run the global test (rmfanova package)", FALSE),
+              helpText(HTML("The pointwise test above says <i>where</i> the conditions
+                             differ; it computes no overall p-value. This adds one, via
+                             <code>rmfanova</code> (Kurylo &amp; Smaga 2023).<br>
+                             It needs a <b>complete balanced design</b> &mdash; every
+                             subject in every condition exactly once &mdash; and reports
+                             how many subjects it had to drop.<br>
+                             Only three of its fifteen outputs are shown: in a simulation
+                             of 400 nulls, two were anti-conservative (17.5% and 14.2%
+                             rejection at a nominal 5%) and two had no power at all.
+                             The three shown were closest to nominal with full power."))
+            ),
             numericInput("n_permutations", "Number of permutations for testing:",
                          value = 5000, min = 200, max = 20000),
             helpText(HTML("Was 200, which resolves a p-value only to 0.005 and

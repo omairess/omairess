@@ -1284,6 +1284,99 @@ is NOT runtime-verified: `refund` will not install for this container's R versio
 so `lf(argvals=)` and the response guards are checked by inspection and by unit
 tests on the surrounding logic, not by executing a fit.
 
+**4.45 P2 engineering, and the rmfanova question answered with a simulation.**
+
+*P2.1 &mdash; exported code now calls the app's own estimator.* The between-subjects
+fANOVA export wrote out `summary(aov(curves_eval[, t] ~ group_labels))` and took
+the parametric p-value, while the app runs a permutation test with FDR; the
+repeated-measures export emitted a commented sketch of an rmfanova call matching
+no version of that API. After the P0.4 residual-SS fix the exported `aov()` was
+closer to the app's OLD behaviour than its current one. The harmonic export had
+already solved this by deparsing the live function object into the script, so the
+same pattern is applied: `deparse(perform_functional_anova)` and
+`deparse(perform_rm_fanova)`. Deparsed code cannot drift from the implementation
+because it IS the implementation.
+
+*P2.2 &mdash; the app no longer installs packages while starting.* `app.R` called
+`install.packages()` for every missing required package and, inside a tryCatch,
+for every missing optional one. That made the estimator whatever CRAN held on the
+day; it could not work on the deployed, locked-down or offline machines where it
+mattered; and it hid a five-second fix inside a half-installed dependency tree.
+It now checks and stops with the exact command to run. `tools/renv_bootstrap.R`
+records a lockfile &mdash; deliberately NOT committed from the audit container,
+because a lockfile is supposed to record the library an analysis actually ran
+against and four of the app's packages are not installed here, so any lockfile
+written from this machine would be a fiction.
+
+  Exported scripts now also stamp `R.version.string` and the versions of fda,
+  mgcv, refund, fda.usc, minpack.lm and the rest, and CHECK them on re-run. A
+  script that names no versions is re-runnable, not reproducible.
+
+*P2.3 &mdash; `server/01b_kernel_contracts.R`.* Both reviews said the statistical
+contracts live only inside 5,800-line files. Nine kernels now have a recorded
+contract: orientation, time units, estimand, estimator, assumptions,
+missing-data policy, bounds, what the intervals mean, degenerate cases and
+failure modes. Orientation is stated for every one because the app mixes
+subjects x time and time x subjects and that is the easiest silent transpose in
+the codebase. Extracting the kernels into a package is the right long-term move
+and is not this change; moving eight estimators out of the reactive files at once
+is how a working app stops working.
+
+*P2.5 &mdash; the permutation loop was not runnable at the new default.* Four-deep
+interpreted `for(perm) for(t) for(group) for(curve)`, which at the P1.1 default of
+5,000 permutations, 100 evaluation points and the Circaflex sample is ~650 million
+R-level iterations. Replaced with the matrix form: SSB is a weighted row-sum over
+group means, SSW the row-sums of squared deviations from each curve's permuted
+group mean. Verified identical to the loop (max difference 4e-14, floating-point
+only) and ~8x faster; 5,000 permutations goes from ~47 s to ~6 s on a
+100 x 400 problem.
+
+**4.46 Is rmfanova worth implementing? Yes, with a curated default. Here is the
+evidence.**
+
+The app's repeated-measures procedure is pointwise: it says WHERE the conditions
+differ and computes no overall p-value at all (`p_value_L2 <- NA`). That is a real
+gap, because "do they differ at all" is usually the first question. rmfanova
+(Kurylo & Smaga 2023) answers it, with three statistics (Cn, Dn, En) under five
+resampling schemes plus pairwise comparisons.
+
+*It installs, with one obstacle worth knowing.* rmfanova's DESCRIPTION lists
+`refund` in Imports, but no `refund::` call appears anywhere in its source (it
+uses MASS and parallel). So an install can fail for a dependency nothing needs.
+
+*The fifteen outputs are not interchangeable.* Measured over 400 simulated nulls
+and 400 alternatives (n=15, p=20, l=3, subject random intercepts, iid noise, a
+Gaussian bump on one condition), at nominal 5%:
+
+| method | type-I | power | | method | type-I | power |
+|---|---|---|---|---|---|---|
+| Cn_P1 | 3.8% | 100% | | Dn_B3 | 0.0% | 99.5% |
+| Cn_P2 | **0.0%** | **0.0%** | | En_P1 | 6.0% | 99.8% |
+| Cn_B1 | 0.2% | 100% | | En_P2 | **17.5%** | 100% |
+| Cn_B2 | **0.0%** | **0.0%** | | En_B1 | 1.5% | 96.8% |
+| Cn_B3 | 0.5% | 99.8% | | En_B2 | **14.2%** | 100% |
+| Dn_P1 | 3.5% | 100% | | En_B3 | 4.0% | 99.2% |
+| Dn_P2 | 0.0% | 76.0% | | | | |
+| Dn_B1 | 0.0% | 98.2% | | | | |
+| Dn_B2 | 0.0% | 73.0% | | | | |
+
+Two reject true nulls at roughly three times the nominal rate. Two have no power
+whatsoever. Handing an analyst all fifteen in a GUI is an invitation to choose
+one. This is ONE data-generating scenario and not a verdict on the package &mdash;
+the authors characterise these tests across many more, and a different covariance
+structure could reorder them &mdash; but it is enough to justify a curated default.
+
+*How it is wired in.* `server/09b_helpers_rmfanova.R`. Optional, off unless asked
+for. It builds the list of condition matrices the documented API wants, which
+needs a COMPLETE BALANCED design: every subject in every condition exactly once,
+in the same row order in every matrix. The app's own pointwise procedure takes
+complete cases per time point and is more forgiving, so subjects missing a
+condition are dropped here and both the count and the names are reported rather
+than absorbed. `FCK_RMFANOVA_DEFAULT` shows Cn_P1, Dn_P1 and En_P1; the other
+twelve are in the results object and the report names which are inflated and
+which have no power. `tests/rmfanova_calibration.R` re-runs the simulation and
+asserts that the curated set is still the calibrated one.
+
 ## 5. Rename table
 
 | source | source app | merged app |

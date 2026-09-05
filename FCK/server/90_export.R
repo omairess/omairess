@@ -455,9 +455,44 @@
 
     add("# =============================================================================")
     add("# FUNCTIONAL DATA ANALYSIS - REPRODUCIBLE CODE")
-    add("# Generated from WAPAA Shiny App")
+    add("# Generated from F*CK")
     add("# Date: ", Sys.Date())
     add("# =============================================================================")
+    add("#")
+    # AUDIT (P2.2): a script that names no versions is not reproducible, it is
+    # only re-runnable. The estimators below come from fda, mgcv and refund, all
+    # of which change across releases. The environment this analysis actually ran
+    # in is stamped here and CHECKED at the top of the script, so a rerun that
+    # would silently produce different numbers says so instead.
+    add("# THE ENVIRONMENT THIS ANALYSIS RAN IN")
+    add("#   ", R.version.string)
+    .pk <- c("fda", "mgcv", "refund", "fda.usc", "minpack.lm", "cluster",
+             "ggplot2", "plotly", "dplyr")
+    .have <- character(0)
+    for (.p in .pk) {
+      .v <- tryCatch(as.character(utils::packageVersion(.p)), error = function(e) NA_character_)
+      if (!is.na(.v)) { add(sprintf("#   %-12s %s", .p, .v)); .have <- c(.have, sprintf('%s = "%s"', .p, .v)) }
+    }
+    add("# =============================================================================")
+    add("")
+    add("# Re-running under different package versions can change these numbers.")
+    add("# This reports any that differ; it does not stop the script.")
+    add(sprintf("fck_recorded_versions <- c(%s)", paste(.have, collapse = ", ")))
+    add("fck_check_env <- function(recorded) {")
+    add("  now <- vapply(names(recorded), function(p)")
+    add("    tryCatch(as.character(utils::packageVersion(p)), error = function(e) NA_character_),")
+    add("    character(1))")
+    add("  diff <- which(!is.na(now) & now != recorded)")
+    add("  if (length(diff)) {")
+    add("    message('NOTE: package versions differ from the run that produced these results:')")
+    add("    for (i in diff) message(sprintf('  %-12s recorded %s, installed %s',")
+    add("                                    names(recorded)[i], recorded[i], now[i]))")
+    add("  }")
+    add("  miss <- names(recorded)[is.na(now)]")
+    add("  if (length(miss)) message('NOTE: not installed: ', paste(miss, collapse = ', '))")
+    add("  invisible(NULL)")
+    add("}")
+    add("fck_check_env(fck_recorded_versions)")
     add("")
 
     # ---- SECTION 1: LIBRARIES ----
@@ -471,7 +506,6 @@
 
     if(!is.null(values$fanova_results) && !is.null(values$fanova_results$design) &&
        values$fanova_results$design == "within") {
-      add("library(rmfanova)   # Repeated measures functional ANOVA")
     }
 
     if(!is.null(values$clustering_results)) {
@@ -855,61 +889,61 @@
       add("# Number of groups: ", n_groups)
       add("")
 
+      # AUDIT (P2.1): this section used to WRITE OUT a reimplementation. For the
+      # between-subjects design it emitted
+      #     aov_result <- summary(aov(curves_eval[, t] ~ group_labels))
+      # and took the parametric p-value, while the app runs a permutation test
+      # with FDR adjustment; for repeated measures it emitted a commented
+      # sketch of an rmfanova call that matches no version of that API and that
+      # the app never made. So "Export analysis code" produced a script whose
+      # numbers could differ from the ones on screen -- and after the P0.4
+      # residual-SS correction it diverged further, because the exported aov()
+      # was closer to the app's OLD behaviour than to its current one.
+      #
+      # The harmonic export already solved this: it deparses the actual fitting
+      # function into the script, so the exported code IS the app's estimator.
+      # The same pattern applies here. deparse() of the live closure cannot
+      # drift from the implementation, because it is the implementation.
+      add("# The estimator below is the app's own function, written out verbatim.")
+      add("# It is not a reconstruction: deparse() of the live function object")
+      add("# guarantees the exported script computes what the app computed.")
+      add("")
       if(design == "between") {
-        add("# Between-subjects functional ANOVA")
+        add(paste("perform_functional_anova <-",
+                  paste(deparse(perform_functional_anova), collapse = "\n")))
         add("")
-        add("# Prepare data")
         if(!is.null(values$warping_results)) {
           add("fd_to_analyze <- reg_fd")
         } else {
           add("fd_to_analyze <- fd_obj")
         }
+        add(sprintf("fanova_results <- perform_functional_anova(fd_to_analyze, group_labels, n_permutations = %d, alpha = %s)",
+                    values$fanova_results$n_permutations %||% 5000,
+                    format(values$fanova_results$alpha %||% 0.05)))
         add("")
-        add("# Pointwise F-tests")
-        add("n_time_eval <- 100")
-        add("eval_points <- seq(0, 1, length.out = n_time_eval)")
-        add("curves_eval <- t(eval.fd(eval_points, fd_to_analyze))")
+        add("cat('Significant time points (FDR-adjusted):',")
+        add("    sum(fanova_results$p_values_adjusted < fanova_results$alpha, na.rm = TRUE),")
+        add("    'of', length(fanova_results$p_values_adjusted), '\\n')")
         add("")
-        add("# Perform pointwise ANOVA at each time point")
-        add("f_values <- numeric(n_time_eval)")
-        add("p_values <- numeric(n_time_eval)")
-        add("")
-        add("for(t in 1:n_time_eval) {")
-        add("  aov_result <- summary(aov(curves_eval[, t] ~ group_labels))")
-        add("  f_values[t] <- aov_result[[1]]$'F value'[1]")
-        add("  p_values[t] <- aov_result[[1]]$'Pr(>F)'[1]")
-        add("}")
-        add("")
-        add("# Identify significant time regions (p < 0.05)")
-        add("sig_times <- eval_points[p_values < 0.05]")
-        add("cat('Significant time points:', length(sig_times), '/', n_time_eval, '\\n')")
-        add("")
-
-        # Global test results
-        if(!is.null(values$fanova_results$global_p)) {
-          add("# Global test results:")
-          add("#   Global F-statistic: ", sprintf("%.4f", values$fanova_results$global_f))
-          add("#   Global p-value: ", sprintf("%.6f", values$fanova_results$global_p))
-          add("")
-        }
 
       } else {
-        add("# Within-subjects (Repeated Measures) functional ANOVA")
-        add("# Using rmfanova package")
+        add("# Pointwise repeated-measures functional ANOVA with within-subject,")
+        add("# curve-wise permutation. This does NOT use the rmfanova package: the")
+        add("# app never called that API successfully and no longer pretends to.")
         add("")
-        add("# Prepare data for rmfanova")
-        add("# Data should be in long format with subject_id, condition, and functional observations")
+        add(paste("perform_rm_fanova <-",
+                  paste(deparse(perform_rm_fanova), collapse = "\n")))
         add("")
-        add("# Example structure:")
-        add("# rm_data <- data.frame(")
-        add("#   subject_id = rep(1:n_subjects, each = n_conditions),")
-        add("#   condition = rep(condition_levels, n_subjects),")
-        add("#   ... # functional data columns")
-        add("# )")
+        add(sprintf("fanova_results <- perform_rm_fanova(fd_obj, subject_id, rm_factor, n_permutations = %d, alpha = %s)",
+                    values$fanova_results$n_permutations %||% 5000,
+                    format(values$fanova_results$alpha %||% 0.05)))
         add("")
-        add("# Fit repeated measures functional ANOVA")
-        add("# rm_result <- rmfanova(formula = value ~ condition + Error(subject_id),")
-        add("#                       data = rm_data, argvals = time_points)")
+      }
+
+      if(!is.null(values$fanova_results$global_p)) {
+        add("# For reference, the values this script should reproduce:")
+        add("#   Global F-statistic: ", sprintf("%.4f", values$fanova_results$global_f))
+        add("#   Global p-value: ", sprintf("%.6f", values$fanova_results$global_p))
         add("")
       }
     }

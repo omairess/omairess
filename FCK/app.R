@@ -46,39 +46,64 @@ required_packages <- c("shiny", "shinydashboard", "shinyWidgets", "fda", "mgcv",
 optional_packages <- c(
   gridExtra    = "multi-panel plot export",
   viridis      = "continuous colour scales",
-  # rmfanova was listed as optional for repeated-measures fANOVA, but the app
-  # never called its API correctly and now does not call it at all (P1.b). Left
-  # out rather than installed for a code path that does not exist.
+  # rmfanova is optional again, and for the first time the app actually calls
+  # its documented API (P2.6): the GLOBAL repeated-measures test, which the
+  # app's own pointwise procedure does not provide. Note that rmfanova declares
+  # refund in Imports but never calls it, so an install can fail for a
+  # dependency nothing needs.
+  rmfanova     = "global repeated-measures functional ANOVA test",
   fda.usc      = "functional k-means clustering",
   reticulate   = "DCF (density-core-finding) clustering via Python",
   refund       = "scalar-on-function regression (refund::pfr)",
   minpack.lm   = "robust exponential-saturation cosinor fits"
 )
 
-install_if_missing <- function(pkg) {
-  if (!require(pkg, character.only = TRUE)) {
-    install.packages(pkg, dependencies = TRUE)
-    library(pkg, character.only = TRUE)
-  }
+# AUDIT (P2.2): this block used to call install.packages() at startup -- for the
+# required packages unconditionally, and for each missing optional one inside a
+# tryCatch. A statistical application must not rewrite its own library while
+# launching. Three reasons, in order of how much they matter here:
+#
+#   1. It silently changes the analysis. Whatever CRAN holds on the day you
+#      press run becomes the estimator. An analysis re-run next year against
+#      newer fda or mgcv can produce different numbers with nothing in the
+#      project recording why.
+#   2. It cannot work where it is most needed. A deployed app, a locked-down
+#      institutional machine or an offline analysis box has no writable library
+#      and no network, so the "fallback" fails anyway -- after a long pause.
+#   3. It hides the real problem. A missing package is a five-second fix once
+#      you are told which one; discovering it through a half-installed
+#      dependency tree is not.
+#
+# The app now checks and stops with the exact command to run. Pin the
+# environment with renv (see renv.lock in the project root) so the library the
+# analysis ran against is recorded with the analysis.
+missing_required <- required_packages[
+  !vapply(required_packages, requireNamespace, logical(1), quietly = TRUE)]
+if (length(missing_required)) {
+  stop("F*CK cannot start: required packages are missing.\n",
+       "  ", paste(missing_required, collapse = ", "), "\n\n",
+       "Install them with:\n",
+       "  install.packages(c(",
+       paste(sprintf('"%s"', missing_required), collapse = ", "), "))\n\n",
+       "Or restore the recorded environment with:  renv::restore()",
+       call. = FALSE)
 }
-invisible(lapply(required_packages, install_if_missing))
+invisible(lapply(required_packages, function(p)
+  suppressPackageStartupMessages(library(p, character.only = TRUE))))
 
-missing_optional <- character(0)
-for (pkg in names(optional_packages)) {
-  ok <- suppressWarnings(require(pkg, character.only = TRUE, quietly = TRUE))
-  if (!ok) {
-    ok <- tryCatch({
-      install.packages(pkg, dependencies = TRUE)
-      suppressWarnings(require(pkg, character.only = TRUE, quietly = TRUE))
-    }, error = function(e) FALSE)
-  }
-  if (!isTRUE(ok)) missing_optional <- c(missing_optional, pkg)
-}
+missing_optional <- names(optional_packages)[
+  !vapply(names(optional_packages), requireNamespace, logical(1), quietly = TRUE)]
+invisible(lapply(setdiff(names(optional_packages), missing_optional), function(p)
+  suppressPackageStartupMessages(
+    suppressWarnings(require(p, character.only = TRUE, quietly = TRUE)))))
+
 if (length(missing_optional)) {
   message("\n--- F*CK: optional packages not available ---")
   for (pkg in missing_optional)
     message(sprintf("  %-12s -> disables: %s", pkg, optional_packages[[pkg]]))
-  message("Everything else works. Install with install.packages(\"<pkg>\").\n")
+  message("Everything else works. Install with:")
+  message(sprintf("  install.packages(c(%s))\n",
+                  paste(sprintf('"%s"', missing_optional), collapse = ", ")))
 }
 
 # --- Source the UI and remember the server files ----------------------------
