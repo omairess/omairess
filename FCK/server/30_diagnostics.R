@@ -569,21 +569,54 @@
   })
 
   # ===== GCV vs n-BASIS SWEEP =====
+  #
+  # AUDIT (P3.1): this sweep used to open with
+  #     lam <- if(input$smooth_method == "auto") 0 else 10^(-input$smooth_factor)
+  # which is the same defect P0.2 removed from server/20_smoothing.R and from
+  # the "suggest a lambda" observer above, left behind in the one place that
+  # advertises itself as a diagnostic. lambda = 0 in fda is UNPENALISED, not
+  # "chosen automatically": under it GCV is minimised by whatever basis
+  # interpolates least badly, so in auto mode the curve this tab drew was the
+  # GCV of a model the app would never fit, and its "optimal n_basis" was the
+  # optimum for an unpenalised fit. With a penalty selected per candidate
+  # basis, the curve is normally much flatter -- which is the real finding:
+  # once lambda is chosen by GCV, n_basis stops mattering above some floor.
   observeEvent(input$run_nbasis_analysis, {
     req(values$data)
     data_mat <- values$data
     n_time   <- ncol(data_mat)
-    lam      <- if(input$smooth_method == "auto") 0 else 10^(-input$smooth_factor)
+    auto     <- identical(input$smooth_method, "auto")
+    lam_manual <- if(auto) NA_real_ else 10^(-input$smooth_factor)
 
     nb_seq    <- seq(4, min(n_time - 1, 40), by = 2)
     gcv_means <- numeric(length(nb_seq))
+    lam_used  <- numeric(length(nb_seq))
 
-    withProgress(message = "Computing GCV for each n-basis...", value = 0, {
+    withProgress(message = if(auto)
+                   "GCV for each n-basis, with lambda re-selected each time..."
+                 else "Computing GCV for each n-basis...", value = 0, {
       for(bi in seq_along(nb_seq)) {
         incProgress(1 / length(nb_seq), detail = paste("n_basis =", nb_seq[bi]))
         nb    <- nb_seq[bi]
         basis <- create.bspline.basis(rangeval = c(1, n_time), nbasis = nb)
-        fdP   <- fdPar(basis, 2, lam)
+
+        if(auto) {
+          # The same GCV search the app performs on every run, repeated for
+          # this candidate basis. A coarser grid and a smaller subject cap
+          # than the single-shot search: this runs once per basis size, and
+          # GCV as a function of log-lambda is smooth enough that a 12-point
+          # bracket plus the refinement lands in the same place.
+          al <- tryCatch(fck_auto_lambda(data_mat, seq_len(n_time), basis,
+                                         min_points_needed = 4, n_grid = 12),
+                         error = function(e) NULL)
+          if(is.null(al)) { gcv_means[bi] <- NA_real_; lam_used[bi] <- NA_real_; next }
+          lam_used[bi]  <- al$lambda
+          gcv_means[bi] <- al$gcv
+          next
+        }
+
+        lam_used[bi] <- lam_manual
+        fdP   <- fdPar(basis, 2, lam_manual)
         gcv_sub <- sapply(seq_len(nrow(data_mat)), function(s) {
           y     <- data_mat[s, ]
           valid <- which(!is.na(y))
@@ -595,16 +628,33 @@
       }
     })
 
+    if(all(!is.finite(gcv_means))) {
+      showNotification(
+        "No n-basis could be scored: every subject failed to smooth. Check for subjects with too few observed points.",
+        type = "error", duration = 12)
+      return()
+    }
+
     optimal_idx <- which.min(gcv_means)
     values$nbasis_gcv <- list(
-      nb      = nb_seq,
-      gcv     = gcv_means,
-      optimal = nb_seq[optimal_idx]
+      nb       = nb_seq,
+      gcv      = gcv_means,
+      lambda   = lam_used,
+      auto     = auto,
+      optimal  = nb_seq[optimal_idx]
     )
     showNotification(
-      paste0("n-basis analysis complete. Optimal n_basis = ", nb_seq[optimal_idx],
-             " (lowest mean GCV)."),
-      type = "message", duration = 5)
+      if(auto)
+        paste0("n-basis analysis complete. Lowest mean GCV at n_basis = ",
+               nb_seq[optimal_idx], " (lambda re-selected by GCV at each basis size; ",
+               sprintf("%.3g", lam_used[optimal_idx]), " there). ",
+               "The curve is usually flat -- with lambda chosen, n_basis matters ",
+               "little above the floor.")
+      else
+        paste0("n-basis analysis complete. Optimal n_basis = ", nb_seq[optimal_idx],
+               " (lowest mean GCV at the fixed lambda ",
+               sprintf("%.3g", lam_manual), ")."),
+      type = "message", duration = 12)
   })
 
   output$nbasis_gcv_plot <- renderPlotly({
@@ -625,7 +675,15 @@
         name   = "Mean GCV"
       ) %>%
       layout(
-        title  = list(text = "GCV Score vs Number of B-spline Basis Functions", x = 0.5),
+        title  = list(
+          text = paste0(
+            "GCV Score vs Number of B-spline Basis Functions",
+            if(isTRUE(ng$auto))
+              "<br><sub>lambda re-selected by GCV at every basis size (auto mode)</sub>"
+            else
+              paste0("<br><sub>at the fixed lambda ",
+                     sprintf("%.3g", ng$lambda[1]), " (manual mode)</sub>")),
+          x = 0.5),
         xaxis  = list(title = "n_basis"),
         yaxis  = list(title = "Mean GCV (lower = better)"),
         shapes = list(

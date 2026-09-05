@@ -5,12 +5,12 @@ One Shiny app combining two previously separate tools:
 | source app | what it did | where it is now |
 |---|---|---|
 | `WaPaa1_3.R` — *Functional Data Analysis Suite* | fPCA / time-warped PCA, functional ANOVA (between-subjects and repeated measures), post-hoc tests, functional clustering | the **F** and **K** tabs |
-| `CIRCAREG.R` — *Functional Regression Suite* | function-on-scalar regression, scalar-on-function regression, harmonic (cosinor) regression, pairwise tests on circadian parameters | the **C** tabs |
+| `CIRCAREG.R` — *Functional Regression Suite* | function-on-scalar regression, harmonic (cosinor) regression, pairwise tests on circadian parameters | the **C** tabs |
 
 Both apps started with the same four steps — load a file, pick the variables,
 smooth the curves, check the smoothing — implemented twice. **In this app those
 four steps exist once.** Import and smooth your curves, then run any of the
-seven analyses on them without re-importing, re-selecting or re-smoothing, and
+analyses on them without re-importing, re-selecting or re-smoothing, and
 without any risk that the fPCA and the cosinor fit were run on differently
 smoothed data.
 
@@ -37,7 +37,6 @@ if any of these were missing):
 | `rmfanova` | repeated-measures functional ANOVA |
 | `fda.usc` | functional k-means clustering |
 | `reticulate` | DCF (density-core-finding) clustering via Python |
-| `refund` | scalar-on-function regression (`refund::pfr`) |
 | `minpack.lm` | robust exponential-saturation cosinor fits |
 | `gridExtra`, `viridis` | plot export, continuous colour scales |
 
@@ -84,11 +83,11 @@ if any of these were missing):
 
 **C — circadian and functional regression**
 
-8. **Function-on-Scalar (FoSR)** — pointwise OLS with residual bootstrap, or
-   smoothed OLS via `mgcv::gam`; coefficient, p-value, R² and residual curves.
-9. **Scalar-on-Function (SoFR)** — `refund::pfr`, Gaussian or binomial, with
-   ROC, calibration and classification metrics for binary outcomes.
-10. **Harmonic Regression** — cosinor with 1–3 harmonics, optional linear/log/
+8. **Function-on-Scalar (FoSR)** — pointwise OLS (analytical SE and p-values,
+   FDR-adjusted across time; optional residual bootstrap for a percentile
+   interval), or smoothed OLS via `mgcv::gam`; coefficient, p-value, R² and
+   residual curves.
+9. **Harmonic Regression** — cosinor with 1–3 harmonics, optional linear/log/
     exponential-saturation trend, MESOR / amplitude / acrophase per subject,
     polar plots, circular statistics, group comparisons. The **Polar Density**
     tab draws a filled shape on a clock face — noon at the top, midnight at the
@@ -96,7 +95,7 @@ if any of these were missing):
     Fitted Curves tab (same coefficients, same band), a von Mises kernel density
     of the acrophases (so a distribution straddling midnight reads as one peak,
     not two), or the signal itself averaged over the clock.
-11. **Cosinor: pairwise tests** — pairwise group comparisons of any cosinor
+10. **Cosinor: pairwise tests** — pairwise group comparisons of any cosinor
     parameter, with corrections, effect sizes and confidence intervals.
 
 **K — clustering**
@@ -147,7 +146,7 @@ FCK/
     10_import.R  20_smoothing.R           <- hand-merged shared steps
     11_import_views.R  21_smoothing_views.R  30_diagnostics.R
     40_fpca.R  50_fanova.R  60_clustering.R
-    70_fosr.R  71_sofr.R  72_harmonic.R  73_cosinor_pairwise.R
+    70_fosr.R  72_harmonic.R  73_cosinor_pairwise.R
     90_export.R            exports + the reproducible-code generator
     91_session.R           save / restore a whole session
   tests/                   see "Checking it still assembles" below
@@ -163,15 +162,29 @@ them, and no analysis code had to be rewritten to be namespaced.
 Rscript tests/smoke_test.R           # from the FCK directory
 Rscript tests/clock_helpers_test.R
 Rscript tests/codegen_test.R
+Rscript tests/export_roundtrip_test.R
 Rscript tests/missing_status_test.R
 Rscript tests/posthoc_source_test.R
 Rscript tests/circular_density_test.R
+Rscript tests/warping_test.R
+Rscript tests/audit_test.R
+Rscript tests/polar_agreement_test.R
+Rscript -e 'testthat::test_dir("tests/testthat")'
 ```
 
 `smoke_test.R` parses every file, builds and renders the whole UI, checks that
 every sidebar entry reaches a uniquely-named tab, checks that no output id is
-assigned twice, and registers all 17 server files under a mock session. It
-needs only the UI packages, so it runs without `fda` or `refund` installed.
+assigned twice, and registers all 31 server files under a mock session. It
+needs only the UI packages, so it runs without `fda` or `fda.usc` installed.
+
+`codegen_test.R` checks that the exported script *parses* for every combination
+of results the generator might be asked about. `export_roundtrip_test.R` goes
+further: it RUNS the exported script in a clean `Rscript --vanilla` session on
+the same data the app analysed, then re-runs each estimator from the
+definitions that script supplied and checks every coefficient, standard error,
+p-value and permutation statistic against the app's to 1e-8. Parsing is a low
+bar — a script full of undefined symbols parses — so the round-trip is what
+actually backs the reproducibility claim. It needs `fda` and `minpack.lm`.
 
 `clock_helpers_test.R` pins the clock-time parsing that the cosinor tab's
 shared-times option and the real-time smoothing both depend on — including the

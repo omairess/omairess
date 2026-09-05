@@ -37,110 +37,21 @@
       
       # --- METHOD A: Pointwise OLS ---
       if (input$reg_method == "OLS_nosmooth") {
-        # AUDIT (P1.4b): as.formula(paste(...)) built the model formula by pasting
-        # UPLOADED COLUMN NAMES into text and re-parsing it. reformulate() takes
-        # the names as data and quotes them, so a column called `a + b` or
-        # anything else executable is a variable, not code.
-        f <- stats::reformulate(input$reg_predictors)
-        X <- model.matrix(f, data = df_reg)
+        # P3.4: the estimator itself lives in server/07_helpers_fosr.R as a
+        # named function, so the Export tab can deparse() the SAME object into
+        # the generated script instead of maintaining a second, drifting
+        # transcription of it. See the note at the top of that file.
+        fit <- withProgress(
+          message = "Fitting pointwise OLS...", value = 0,
+          fck_fit_fosr_ols(
+            Y             = Y,
+            df_reg        = df_reg,
+            predictors    = input$reg_predictors,
+            use_bootstrap = isTRUE(input$use_bootstrap),
+            n_boot        = if(isTRUE(input$use_bootstrap)) input$n_boot else 0,
+            progress      = function(frac, detail = NULL) incProgress(frac, detail = detail),
+            notify        = function(msg, ...) showNotification(msg, type = "message")))
 
-        # AUDIT (P1.4a): solve(crossprod(X)) inverts the normal equations. That
-        # squares the condition number and gives no warning on a rank-deficient
-        # design -- two collinear predictors, or a factor level that vanished
-        # after row filtering, either error out or return nonsense. A QR of X
-        # itself is the standard route and reports the rank.
-        qrX <- qr(X)
-        if (qrX$rank < ncol(X)) {
-          dropped <- colnames(X)[-qrX$pivot[seq_len(qrX$rank)]]
-          stop(sprintf(
-            "The design matrix is rank deficient (rank %d of %d columns). Collinear or empty terms: %s. Remove or recode them and re-run.",
-            qrX$rank, ncol(X), paste(dropped, collapse = ", ")))
-        }
-        xtx_inv <- chol2inv(qr.R(qrX))
-        dimnames(xtx_inv) <- list(colnames(X), colnames(X))
-        projector <- xtx_inv %*% t(X)
-        coefs <- projector %*% Y
-        fitted_vals <- X %*% coefs
-        residuals <- Y - fitted_vals
-        n <- nrow(Y); p <- ncol(X)
-        sigma2 <- colSums(residuals^2) / (n - p)
-        
-        se_mat <- matrix(NA, nrow=nrow(coefs), ncol=ncol(coefs))
-        p_values <- matrix(NA, nrow=nrow(coefs), ncol=ncol(coefs))
-        boot_ci_lower <- NULL
-        boot_ci_upper <- NULL
-        
-        if(input$use_bootstrap) {
-          showNotification("Bootstrapping...", type = "message")
-          B <- input$n_boot
-          boot_betas <- array(NA, dim = c(B, nrow(coefs), ncol(coefs)))
-          
-          withProgress(message = 'Running Bootstrap...', value = 0, {
-            for(b in 1:B) {
-              # Residual bootstrap: resample residuals, add to fitted
-              resid_idx <- sample(1:n, n, replace = TRUE)
-              Y_boot <- fitted_vals + residuals[resid_idx, ]
-              boot_betas[b, , ] <- projector %*% Y_boot
-              if(b %% 20 == 0) incProgress(20/B)
-            }
-          })
-          
-          # Calculate SE from bootstrap distribution
-          for(j in 1:nrow(coefs)) {
-            for(k in 1:ncol(coefs)) se_mat[j, k] <- sd(boot_betas[, j, k])
-          }
-          
-          # Percentile-based 95% CI
-          boot_ci_lower <- matrix(NA, nrow=nrow(coefs), ncol=ncol(coefs))
-          boot_ci_upper <- matrix(NA, nrow=nrow(coefs), ncol=ncol(coefs))
-          for(j in 1:nrow(coefs)) {
-            for(k in 1:ncol(coefs)) {
-              boot_ci_lower[j, k] <- quantile(boot_betas[, j, k], 0.025)
-              boot_ci_upper[j, k] <- quantile(boot_betas[, j, k], 0.975)
-            }
-          }
-          
-          # AUDIT (P1.4c): this block used to compute
-          #     p <- 2 * mean(boot_betas[, j, k] <= 0)
-          # under the comment "This is a proper bootstrap test". It is not. The
-          # residuals are resampled around the FITTED ALTERNATIVE, so the
-          # bootstrap distribution is centred near beta-hat, not at zero; asking
-          # how often it crosses zero inverts a percentile interval rather than
-          # sampling the null. It is a usable interval and a poor test, and it
-          # was labelled the other way round.
-          #
-          # The bootstrap now produces the SE and the percentile interval only.
-          # Inference comes from the studentised statistic against the
-          # bootstrap SE, and is FDR-adjusted across time points -- there was no
-          # multiplicity correction at all, on a curve of ~100 pointwise tests.
-          t_stats <- coefs / se_mat
-          p_values <- 2 * (1 - pt(abs(t_stats), df = n - p))
-          p_values_raw <- p_values
-          for(j in seq_len(nrow(p_values)))
-            p_values[j, ] <- p.adjust(p_values[j, ], method = "fdr")
-          
-        } else {
-          # Parametric SE
-          for(j in 1:nrow(coefs)) se_mat[j, ] <- sqrt(xtx_inv[j,j] * sigma2)
-          t_stats <- coefs / se_mat
-          p_values <- 2 * (1 - pt(abs(t_stats), df = n - p))
-          # P1.4c: FDR across time points -- every coefficient curve is ~100
-          # simultaneous tests and none of them were corrected.
-          p_values_raw <- p_values
-          for(j in seq_len(nrow(p_values)))
-            p_values[j, ] <- p.adjust(p_values[j, ], method = "fdr")
-        }
-        
-        rss <- colSums(residuals^2); y_bar <- colMeans(Y)
-        tss <- colSums(sweep(Y, 2, y_bar)^2); r2_t <- 1 - (rss/tss)
-        
-        fit <- list(beta.hat = coefs, fitted.values = fitted_vals, resid = residuals, 
-                    beta.se = se_mat, beta.p = p_values, terms = terms(f), r2_t = r2_t, 
-                    method = ifelse(input$use_bootstrap, "OLS (Bootstrap SE)", "OLS (Parametric SE)"), 
-                    xtx_inv = xtx_inv, sigma2 = sigma2,
-                    boot_ci_lower = boot_ci_lower, boot_ci_upper = boot_ci_upper,
-                    n_boot = if(input$use_bootstrap) input$n_boot else NULL)
-        
       } else {
         # --- METHOD B: Smoothed OLS (GAM) ---
         showNotification("Fitting GAM with Splines...", type = "message")
@@ -276,8 +187,27 @@
     cat("Method:", mod$method, "\n")
     cat("Coefficients:", paste(rownames(mod$beta.hat), collapse=", "), "\n")
     if(!is.null(mod$r2_t)) cat("Mean R2:", round(mean(mod$r2_t, na.rm=TRUE), 3), "\n")
+    if(identical(mod$inference, "analytic-t-fdr")) {
+      cat("\nInference (P3.2): p-values come from the ANALYTICAL OLS standard\n")
+      cat(sprintf("error, beta / sqrt(diag((X'X)^-1) * sigma2(t)), referred to t on %s df,\n",
+                  if(is.null(mod$df_resid)) "n - p" else format(mod$df_resid)))
+      cat("then FDR-adjusted across time points. They do not depend on a seed.\n")
+    }
     if(!is.null(mod$n_boot)) {
-      cat("Bootstrap: Yes (B =", mod$n_boot, "), Percentile CIs\n")
+      cat("\nBootstrap: residual bootstrap, B =", mod$n_boot, "\n")
+      cat("It supplies the 95% PERCENTILE INTERVAL only -- it is not the test.\n")
+      if(!is.null(mod$se_ratio_range)) {
+        cat(sprintf("Diagnostic: SE_bootstrap / SE_analytic ranges %.2f to %.2f.\n",
+                    mod$se_ratio_range[1], mod$se_ratio_range[2]))
+        if(is.finite(mod$se_ratio_range[2]) &&
+           (mod$se_ratio_range[2] > 1.25 || mod$se_ratio_range[1] < 0.8))
+          cat("  WARNING: these should agree closely -- the residual bootstrap\n",
+              "  resamples from the same homoscedastic model the analytical SE\n",
+              "  assumes. A ratio far from 1 means that model is in doubt (or B is\n",
+              "  too small). Treat both the interval and the p-values with caution.\n", sep = "")
+      }
+      cat("The interval and the test can therefore disagree at the margin; the\n")
+      cat("interval is the percentile one, not an inversion of the t test.\n")
     }
     if(!is.null(mod$gam_obj)) {
       cat("\nFamily:", mod$gam_obj$family$family, "\n")
@@ -585,8 +515,16 @@
       p <- p %>% layout(xaxis = list(tickmode = "array", tickvals = tick_pos, ticktext = values$time_labels, tickangle = -90))
     }
     
-    ci_type <- if(!is.null(mod$boot_ci_lower)) "Bootstrap" else "Parametric"
-    p %>% layout(title = paste("Coefficient:", sel, "(", ci_type, "CI)"))
+    # P3.2: name the interval AND say what the test is, because they are now
+    # deliberately different procedures and can disagree at the margin.
+    ci_type <- if(!is.null(mod$boot_ci_lower))
+      paste0("95% bootstrap percentile CI, B=", mod$n_boot) else "95% analytical CI"
+    p %>% layout(title = list(text = paste0(
+      "Coefficient: ", sel,
+      "<br><sub>", ci_type,
+      if(identical(mod$inference, "analytic-t-fdr"))
+        "; p-values from the analytical SE, FDR-adjusted" else "",
+      "</sub>")))
   })
   
   output$reg_pvalue_plot <- renderPlotly({

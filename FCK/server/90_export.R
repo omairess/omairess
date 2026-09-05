@@ -495,6 +495,74 @@
     add("fck_check_env(fck_recorded_versions)")
     add("")
 
+    # ---- Kernel emission with its dependency closure --------------------
+    #
+    # AUDIT (P3.5). Sections 7, 10 and 11 write the app's own estimators into
+    # the script with deparse(), so that the exported code IS the
+    # implementation and cannot drift from it. That guarantee stopped at the
+    # top-level function: the emitted bodies call the app's own helpers, and
+    # the script defined none of them. Measured on this build, the closure is
+    #   perform_functional_anova -> fck_l2_norm
+    #   perform_rm_fanova        -> fck_l2_norm, fck_rmfanova_global, fck_rm_design
+    #   fit_cosinor              -> 11 helpers, via fit_cosinor_nonlinear
+    # so the exported cosinor script died at "could not find function
+    # fck_r_squared" on the first subject, and the fANOVA script at
+    # fck_l2_norm. A script that stops on line one is not a reproducibility
+    # guarantee; it is a claim of one.
+    #
+    # The closure is computed HERE, at export time, from the live function
+    # objects via codetools::findGlobals -- not from a hand-maintained list,
+    # which is the thing that went stale in the first place. Adding a helper
+    # call to any kernel automatically adds its definition to the export.
+    # environment() here would be this call's own frame, in which nothing is
+    # defined; the app's helpers live in the environment the generator was
+    # DEFINED in, i.e. the server function environment app.R sources into.
+    kernel_env  <- environment(generate_analysis_code)
+    emitted_fns <- character(0)
+
+    # A name counts as "the app's own" when it resolves to a function whose
+    # enclosing environment is this server environment -- which is exactly how
+    # app.R sources server/*.R. Base and package functions are excluded by the
+    # same test, so library() calls still cover them.
+    fck_is_app_fn <- function(nm) {
+      o <- tryCatch(get0(nm, envir = kernel_env, inherits = TRUE),
+                    error = function(e) NULL)
+      is.function(o) && !is.null(environment(o)) &&
+        identical(environment(o), kernel_env)
+    }
+
+    # Post-order: a helper is emitted before anything that calls it.
+    fck_fn_order <- function(nm, seen = character(0), stack = character(0)) {
+      if (nm %in% seen || nm %in% stack) return(seen)
+      stack <- c(stack, nm)
+      obj <- tryCatch(get(nm, envir = kernel_env), error = function(e) NULL)
+      if (!is.function(obj)) return(seen)
+      g <- tryCatch(codetools::findGlobals(obj, merge = TRUE),
+                    error = function(e) character(0))
+      for (d in Filter(fck_is_app_fn, g)) seen <- fck_fn_order(d, seen, stack)
+      c(seen, nm)
+    }
+
+    emit_kernel <- function(nm) {
+      for (f in fck_fn_order(nm)) {
+        if (f %in% emitted_fns) next
+        obj <- tryCatch(get(f, envir = kernel_env), error = function(e) NULL)
+        if (!is.function(obj)) next
+        emitted_fns <<- c(emitted_fns, f)
+        # Non-syntactic names (the app defines `%||%` this way) need backticks
+        # on the left of the assignment or the emitted script does not parse.
+        lhs <- if (identical(f, make.names(f))) f else paste0("`", f, "`")
+        add(paste(lhs, "<-", paste(deparse(obj), collapse = "\n")))
+        add("")
+      }
+    }
+
+    # fit_cosinor_nonlinear uses %||%, which app.R defines outside any of the
+    # emitted functions, so findGlobals cannot reach it. Define it once here.
+    add("# The app's null-coalescing operator, used by the estimators below.")
+    add('if (!exists("%||%", mode = "function")) `%||%` <- function(a, b) if (is.null(a)) b else a')
+    add("")
+
     # ---- SECTION 1: LIBRARIES ----
     add("# -----------------------------------------------------------------------------")
     add("# 1. LOAD REQUIRED LIBRARIES")
@@ -504,17 +572,26 @@
     add("library(ggplot2)    # Plotting")
     add("library(dplyr)      # Data manipulation")
 
+    # P3.5: the repeated-measures kernel calls fck_rmfanova_global(), which
+    # calls rmfanova::. It is only reached when run_global_test is TRUE, but
+    # the script should say so rather than fail at that line.
     if(!is.null(values$fanova_results) && !is.null(values$fanova_results$design) &&
        values$fanova_results$design == "within") {
+      add("# rmfanova is needed ONLY if you set run_global_test = TRUE below.")
+      add("# The pointwise procedure does not use it.")
+      add("if (!requireNamespace('rmfanova', quietly = TRUE))")
+      add("  message('NOTE: rmfanova is not installed; the global RM test will be skipped.')")
     }
 
     if(!is.null(values$clustering_results)) {
       add("library(cluster)    # Clustering diagnostics")
       add("library(fda.usc)    # Functional clustering")
     }
-    if(!is.null(values$harmonic_model) &&
-       identical(values$harmonic_model$trend_type, "exp_sat")) {
-      add("library(minpack.lm) # Robust non-linear fits (exponential saturation)")
+    # P3.5: fit_cosinor_nonlinear() calls minpack.lm::nlsLM and nls.lm, and it
+    # is now emitted whenever the cosinor kernel is (it is in fit_cosinor's
+    # dependency closure), not only for the exp_sat trend.
+    if(!is.null(values$harmonic_model)) {
+      add("library(minpack.lm) # Robust non-linear fits used by the cosinor kernel")
     }
     add("")
 
@@ -531,8 +608,17 @@
       add("")
       add("# Load your data (replace with your actual file path)")
       add("# The data should be a matrix with subjects in rows and time points in columns")
-      add("data_matrix <- read.csv('your_data.csv', row.names = 1)")
-      add("data_matrix <- as.matrix(data_matrix)")
+      add("#")
+      add("# P3.8: if an object called fck_input_data is already in the session,")
+      add("# the script uses it instead of reading the file. That is how")
+      add("# tests/export_roundtrip_test.R runs this script against the same data")
+      add("# the app used and checks the numbers agree; it changes nothing for a")
+      add("# normal run, where no such object exists.")
+      add("if (exists('fck_input_data')) {")
+      add("  data_matrix <- as.matrix(fck_input_data)")
+      add("} else {")
+      add("  data_matrix <- as.matrix(read.csv('your_data.csv', row.names = 1))")
+      add("}")
       add("")
       add("# Number of subjects and time points")
       add("n_subjects <- nrow(data_matrix)  # ", n_subj)
@@ -555,13 +641,60 @@
         groups <- levels(values$group_labels)
         group_counts <- table(values$group_labels)
         add("# Group structure")
+        # P3.8: the group vector used to be truncated to ten entries with a
+        # literal ", ..." pasted in, which does not parse and, when it did,
+        # described a different design from the one analysed. Emit all of it.
         add("group_labels <- factor(c(")
-        # Show first few group assignments
-        n_show <- min(10, length(values$group_labels))
-        group_sample <- paste0("'", as.character(values$group_labels[1:n_show]), "'", collapse = ", ")
-        add("  ", group_sample, if(length(values$group_labels) > 10) ", ..." else "")
+        gl <- as.character(values$group_labels)
+        for (ci in split(seq_along(gl), ceiling(seq_along(gl) / 12))) {
+          add("  ", paste0("'", gl[ci], "'", collapse = ", "),
+              if (max(ci) < length(gl)) "," else "")
+        }
         add("))")
         add("# Groups: ", paste(names(group_counts), " (n=", group_counts, ")", sep = "", collapse = ", "))
+        add("")
+      }
+
+      # P3.8: the repeated-measures design vectors. Section 7's within branch
+      # called perform_rm_fanova(fd_obj, subject_id, rm_factor, ...) with
+      # neither of those objects ever defined in the script.
+      fr <- values$fanova_results
+      if(!is.null(fr) && identical(fr$design, "within") &&
+         !is.null(fr$subject_id) && !is.null(fr$rm_factor)) {
+        add("# Repeated-measures design (one entry per curve, in data_matrix row order)")
+        for (nm in c("subject_id", "rm_factor")) {
+          v <- as.character(fr[[nm]])
+          add(nm, " <- c(")
+          for (ci in split(seq_along(v), ceiling(seq_along(v) / 12)))
+            add("  ", paste0("'", v[ci], "'", collapse = ", "),
+                if (max(ci) < length(v)) "," else "")
+          add(")")
+        }
+        add("rm_factor <- factor(rm_factor)")
+        add("")
+      }
+
+      # P3.8: the scalar covariates. Section 11 (FoSR) indexed `covariates`,
+      # which the script never defined either.
+      if(!is.null(values$covariates) && !is.null(values$reg_model)) {
+        cv <- values$covariates
+        add("# Scalar covariates (subjects in rows, same order as data_matrix)")
+        add("if (exists('fck_input_covariates')) {")
+        add("  covariates <- as.data.frame(fck_input_covariates)")
+        add("} else {")
+        add("  covariates <- data.frame(")
+        for (j in seq_along(cv)) {
+          col <- cv[[j]]
+          lit <- if (is.numeric(col))
+            paste(signif(col, 10), collapse = ", ")
+          else
+            paste0("'", as.character(col), "'", collapse = ", ")
+          add(sprintf("    `%s` = %s(c(%s))%s", names(cv)[j],
+                      if (is.numeric(col)) "as.numeric" else "factor",
+                      lit, if (j < length(cv)) "," else ""))
+        }
+        add("    , stringsAsFactors = FALSE)")
+        add("}")
         add("")
       }
     }
@@ -583,18 +716,40 @@
         add("")
       } else if(smooth_method == "auto") {
         n_basis <- if(!is.null(input$n_basis)) input$n_basis else 20
-        add("# Smoothing method: Automatic (REML optimization)")
+        # AUDIT (P3.5b, found while wiring the round-trip test): this branch was
+        # the last surviving copy of the P0.2 defect. It emitted
+        #     # Smoothing method: Automatic (REML optimization)
+        #     # Smooth with REML (lambda = 0 triggers automatic optimization)
+        #     fd_par <- fdPar(basis, Lfdobj = 2, lambda = 0)
+        # Neither sentence is true of fda: smooth.basis() never searches for a
+        # smoothing parameter and never uses REML, and lambda = 0 is the
+        # UNPENALISED fit. So the exported script for an auto-mode run
+        # reproduced neither the app's smoothing nor any automatic selection --
+        # it fitted an unpenalised spline and labelled it REML. The app selects
+        # lambda by GCV (fck_auto_lambda); the script now states the value that
+        # search returned and offers the search itself as a re-run.
+        add("# Smoothing method: Automatic, lambda chosen by GCV (fck_auto_lambda)")
         add("# Number of B-spline basis functions: ", n_basis)
-        if(!is.null(metrics$lambda)) {
-          add("# Estimated lambda (smoothing parameter): ", sprintf("%.6e", metrics$lambda))
-        }
         add("")
         add("# Create B-spline basis")
         add("n_basis <- ", n_basis)
         add("basis <- create.bspline.basis(rangeval = c(0, 1), nbasis = n_basis)")
         add("")
-        add("# Smooth with REML (lambda = 0 triggers automatic optimization)")
-        add("fd_par <- fdPar(basis, Lfdobj = 2, lambda = 0)")
+        if(!is.null(metrics$lambda) && is.finite(metrics$lambda)) {
+          add("# The lambda the app's GCV search selected on THIS data set. Using the")
+          add("# recorded value reproduces the app's fit exactly; re-running the")
+          add("# search (below) reproduces the app's PROCEDURE on new data.")
+          add("lambda <- ", sprintf("%.10e", metrics$lambda))
+        } else {
+          add("# No lambda was recorded for this run; re-run the search below.")
+          add("lambda <- NA_real_")
+        }
+        add("")
+        add("# The app's own GCV search, emitted verbatim. Uncomment to re-select:")
+        emit_kernel("fck_auto_lambda")
+        add("# lambda <- fck_auto_lambda(data_matrix, time_points, basis)$lambda")
+        add("")
+        add("fd_par <- fdPar(basis, Lfdobj = 2, lambda = lambda)")
         add("smooth_result <- smooth.basis(time_points, t(data_matrix), fd_par)")
         add("fd_obj <- smooth_result$fd")
         add("")
@@ -635,11 +790,17 @@
         add("")
       }
     } else {
-      add("# No smoothing applied yet")
-      add("# Default smoothing code:")
+      # P3.5b: this fallback carried the same false label as the auto branch --
+      # "# REML optimization" on lambda = 0, which is the UNPENALISED fit.
+      # smooth.basis() neither searches for lambda nor uses REML.
+      add("# No smoothing had been applied in the app when this was exported.")
+      add("# Starting point, with lambda selected by GCV the way the app selects it:")
       add("n_basis <- 20")
       add("basis <- create.bspline.basis(rangeval = c(0, 1), nbasis = n_basis)")
-      add("fd_par <- fdPar(basis, Lfdobj = 2, lambda = 0)  # REML optimization")
+      emit_kernel("fck_auto_lambda")
+      add("lambda <- fck_auto_lambda(data_matrix, time_points, basis)$lambda")
+      add("cat('GCV-selected lambda:', lambda, '\\n')")
+      add("fd_par <- fdPar(basis, Lfdobj = 2, lambda = lambda)")
       add("smooth_result <- smooth.basis(time_points, t(data_matrix), fd_par)")
       add("fd_obj <- smooth_result$fd")
       add("")
@@ -906,9 +1067,7 @@
       add("# guarantees the exported script computes what the app computed.")
       add("")
       if(design == "between") {
-        add(paste("perform_functional_anova <-",
-                  paste(deparse(perform_functional_anova), collapse = "\n")))
-        add("")
+        emit_kernel("perform_functional_anova")
         if(!is.null(values$warping_results)) {
           add("fd_to_analyze <- reg_fd")
         } else {
@@ -928,12 +1087,14 @@
         add("# curve-wise permutation. This does NOT use the rmfanova package: the")
         add("# app never called that API successfully and no longer pretends to.")
         add("")
-        add(paste("perform_rm_fanova <-",
-                  paste(deparse(perform_rm_fanova), collapse = "\n")))
-        add("")
-        add(sprintf("fanova_results <- perform_rm_fanova(fd_obj, subject_id, rm_factor, n_permutations = %d, alpha = %s)",
+        emit_kernel("perform_rm_fanova")
+        add(sprintf(paste0("fanova_results <- perform_rm_fanova(fd_obj, subject_id, rm_factor,\n",
+                           "                                   n_permutations = %d, alpha = %s,\n",
+                           "                                   run_global_test = %s)"),
                     values$fanova_results$n_permutations %||% 5000,
-                    format(values$fanova_results$alpha %||% 0.05)))
+                    format(values$fanova_results$alpha %||% 0.05),
+                    isTRUE(values$fanova_results$rm_global$ok) ||
+                      isTRUE(!is.null(values$fanova_results$rm_global))))
         add("")
       }
 
@@ -1055,13 +1216,11 @@
       }
       add("# The app's own fitting function, emitted verbatim (not a")
       add("# re-implementation) so this script reproduces its numbers exactly:")
-      add(paste("fit_cosinor <-", paste(deparse(fit_cosinor), collapse = "\n")))
-      add("")
-      if(identical(hm$trend_type, "exp_sat") && exists("fit_cosinor_nonlinear")) {
-        add(paste("fit_cosinor_nonlinear <-",
-                  paste(deparse(fit_cosinor_nonlinear), collapse = "\n")))
-        add("")
-      }
+      # P3.5: emit_kernel() pulls in fit_cosinor_nonlinear and the eleven fck_*
+      # helpers the estimator calls. The previous code emitted fit_cosinor and
+      # (conditionally) fit_cosinor_nonlinear and nothing else, so the script
+      # failed at the first fit with "could not find function fck_r_squared".
+      emit_kernel("fit_cosinor")
       add("# The same per-subject call the app makes:")
       add("cosinor_fits <- lapply(seq_len(nrow(cosinor_input)), function(i) {")
       add("  fit_cosinor(time_vec, cosinor_input[i, ], period = period,")
@@ -1077,13 +1236,28 @@
       }
       add("})")
       add("")
-      add("# MESOR / amplitude / acrophase per subject (successful fits only):")
+      # AUDIT (P3.8, found by tests/export_roundtrip_test.R the first time the
+      # exported script was actually RUN): this block read f$amplitude and
+      # f$acrophase. fit_cosinor() returns those fields under the names
+      # `amplitudes` and `acrophases` -- they are vectors, one entry per
+      # harmonic -- so both were NULL, and the script died on
+      # "arguments imply differing number of rows: 1, 0" at the first subject.
+      # The block also assumed every fit carries a MESOR; a failed fit does not.
+      add("# MESOR / amplitude / acrophase per subject (successful fits only).")
+      add("# amplitudes and acrophases are vectors, one entry per harmonic;")
+      add("# [1] is the fundamental. Acrophase is in radians, acrophases_time in")
+      add("# clock hours.")
       add("ok <- vapply(cosinor_fits, function(f) isTRUE(f$success), logical(1))")
       add("cosinor_params <- do.call(rbind, lapply(which(ok), function(i) {")
-      add("  f <- cosinor_fits[[i]]")
-      add("  data.frame(subject = i, mesor = f$mesor,")
-      add("             amplitude = f$amplitude[1], acrophase = f$acrophase[1],")
-      add("             r_squared = f$r_squared)")
+      add("  f  <- cosinor_fits[[i]]")
+      add("  g1 <- function(x) if (length(x)) as.numeric(x)[1] else NA_real_")
+      add("  data.frame(subject        = i,")
+      add("             mesor          = g1(f$mesor),")
+      add("             amplitude      = g1(f$amplitudes),")
+      add("             acrophase_rad  = g1(f$acrophases),")
+      add("             acrophase_hour = g1(f$acrophases_time),")
+      add("             r_squared      = g1(f$r_squared),")
+      add("             p_value        = g1(f$p_value))")
       add("}))")
       add("print(head(cosinor_params))")
       if(!is.null(hm$individual_fits)) {
@@ -1115,32 +1289,44 @@
       add("Y      <- Y[keep, , drop = FALSE]")
       add("")
       if(identical(st$method, "OLS_nosmooth")) {
-        add("# Pointwise OLS: one regression per time point, in closed form.")
-        add("f           <- as.formula(paste('~', paste(fosr_predictors, collapse = ' + ')))")
-        add("X           <- model.matrix(f, data = df_reg)")
-        add("xtx_inv     <- solve(crossprod(X))")
-        add("projector   <- xtx_inv %*% t(X)")
-        add("beta_hat    <- projector %*% Y          # the coefficient curves")
-        add("fitted_vals <- X %*% beta_hat")
-        add("residuals   <- Y - fitted_vals")
-        add("n <- nrow(Y); p <- ncol(X)")
-        add("sigma2 <- colSums(residuals^2) / (n - p)")
-        add("")
+        # AUDIT (P3.4): this section used to be a HAND-WRITTEN reconstruction
+        # of the pointwise-OLS fit, and it had drifted from the app. It emitted
+        #     f       <- as.formula(paste('~', paste(fosr_predictors, ...)))
+        #     xtx_inv <- solve(crossprod(X))
+        # which are precisely the two constructions the P1.4a and P1.4b
+        # corrections removed from the GUI -- a formula pasted from uploaded
+        # column names and re-parsed, and an inversion of the normal equations
+        # with no rank check. It also emitted no standard errors, no p-values
+        # and no FDR adjustment, so the script could not reproduce any of the
+        # inference on screen; only the bootstrap interval, from a seed the app
+        # never used.
+        #
+        # The estimator now exists as a named function (server/07_helpers_fosr.R)
+        # and is written out verbatim, on the same footing as the fANOVA and
+        # cosinor kernels. There is no second transcription left to drift.
+        add("# Pointwise OLS. The app's own estimator, emitted verbatim:")
+        emit_kernel("fck_fit_fosr_ols")
         if(isTRUE(st$use_bootstrap)) {
-          add(sprintf("# Residual bootstrap for the coefficient bands (B = %d).", st$n_boot))
-          add("# The app does not fix a seed, so its bands differ slightly run to run;")
-          add("# this script fixes one so the script itself is reproducible.")
+          add(sprintf("# Residual bootstrap for the percentile interval (B = %d).", st$n_boot))
+          add("# The app does not fix a seed, so its interval differs slightly run to")
+          add("# run; this script fixes one so the script itself is reproducible.")
+          add("# (The p-values are analytical and do NOT depend on the seed.)")
           add("set.seed(1)")
-          add(sprintf("B <- %d", st$n_boot))
-          add("boot_betas <- array(NA, dim = c(B, nrow(beta_hat), ncol(beta_hat)))")
-          add("for (b in 1:B) {")
-          add("  resid_idx <- sample(seq_len(n), n, replace = TRUE)")
-          add("  boot_betas[b, , ] <- projector %*% (fitted_vals + residuals[resid_idx, ])")
-          add("}")
-          add("boot_ci_lower <- apply(boot_betas, c(2, 3), quantile, 0.025, na.rm = TRUE)")
-          add("boot_ci_upper <- apply(boot_betas, c(2, 3), quantile, 0.975, na.rm = TRUE)")
-          add("")
         }
+        add(sprintf("fosr_fit <- fck_fit_fosr_ols(Y, df_reg, fosr_predictors,\n                             use_bootstrap = %s, n_boot = %s)",
+                    isTRUE(st$use_bootstrap),
+                    if(isTRUE(st$use_bootstrap)) format(st$n_boot) else "0"))
+        add("")
+        add("beta_hat <- fosr_fit$beta.hat        # coefficient curves")
+        add("beta_se  <- fosr_fit$beta.se         # analytical SE")
+        add("beta_p   <- fosr_fit$beta.p          # FDR-adjusted across time")
+        add("if (!is.null(fosr_fit$boot_ci_lower)) {")
+        add("  boot_ci_lower <- fosr_fit$boot_ci_lower")
+        add("  boot_ci_upper <- fosr_fit$boot_ci_upper")
+        add("}")
+        add("cat('Coefficients:', paste(rownames(beta_hat), collapse = ', '), '\\n')")
+        add("cat('Mean R2 across time:', round(mean(fosr_fit$r2_t, na.rm = TRUE), 3), '\\n')")
+        add("")
       } else {
         add("# Smoothed OLS: one GAM over the (subject, time) long form, with a")
         add("# penalised spline in time and a by-smooth per predictor.")

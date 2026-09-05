@@ -106,11 +106,20 @@ test_that("the fANOVA export deparses the app's own estimator", {
   expect_false(grepl("aov_result <- summary(aov(curves_eval[, t] ~ group_labels))",
                      src, fixed = TRUE))
   expect_false(grepl("rm_result <- rmfanova(formula = value ~ condition", src, fixed = TRUE))
-  # the live function objects, written out
-  expect_true(grepl("deparse(perform_functional_anova)", src, fixed = TRUE))
-  expect_true(grepl("deparse(perform_rm_fanova)", src, fixed = TRUE))
-  # the harmonic export already worked this way; both should
-  expect_true(grepl("deparse(fit_cosinor)", src, fixed = TRUE))
+  # The live function objects, written out. P3.5 replaced the three separate
+  # deparse() calls with emit_kernel(), which deparses the SAME objects and
+  # additionally emits their helper dependency closure -- so the guard now
+  # checks that each kernel is emitted through it, and that deparse of a live
+  # object is still what does the writing.
+  expect_true(grepl('emit_kernel("perform_functional_anova")', src, fixed = TRUE))
+  expect_true(grepl('emit_kernel("perform_rm_fanova")', src, fixed = TRUE))
+  expect_true(grepl('emit_kernel("fit_cosinor")', src, fixed = TRUE))
+  expect_true(grepl('emit_kernel("fck_fit_fosr_ols")', src, fixed = TRUE))
+  expect_true(grepl("paste(deparse(obj), collapse", src, fixed = TRUE))
+  # the closure is computed from the live objects, not from a list that can go
+  # stale -- that is the whole point of P3.5
+  expect_true(grepl("codetools::findGlobals(obj, merge = TRUE)", src, fixed = TRUE))
+  expect_true(grepl("kernel_env  <- environment(generate_analysis_code)", src, fixed = TRUE))
 })
 
 test_that("the exported script records and checks the environment it ran in", {

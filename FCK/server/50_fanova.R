@@ -241,7 +241,22 @@
   # Pointwise repeated-measures functional ANOVA with within-subject,
   # curve-wise permutation. (Named for what it does: it does NOT call the
   # rmfanova package -- see P1.b below.)
-  perform_rm_fanova <- function(fd_obj, subject_id, rm_factor, n_permutations = 200, alpha = 0.05) {
+  # AUDIT (P3.5): the exported script writes this function out with deparse(),
+  # so anything Shiny-only in its body becomes an undefined symbol in a plain R
+  # session. It referenced input$rm_global_test, showNotification(),
+  # withProgress() and incProgress(), which means the exported script for a
+  # repeated-measures design could not run AT ALL -- it failed at
+  # "object 'input' not found" the moment the permutation loop started. The
+  # Shiny pieces are now arguments with inert defaults: the app passes the real
+  # ones, the exported script gets a function that needs nothing but base R,
+  # fda and (optionally) rmfanova.
+  perform_rm_fanova <- function(fd_obj, subject_id, rm_factor, n_permutations = 200,
+                                alpha = 0.05, run_global_test = FALSE,
+                                progress = NULL, notify = NULL) {
+    if (is.null(progress)) progress <- function(frac, detail = NULL) invisible(NULL)
+    if (is.null(notify))   notify   <- function(msg, type = "message") {
+      message(msg); invisible(NULL)
+    }
     
     # AUDIT (P1.b): this used to refuse to run without the rmfanova package,
     # which the code then never successfully called. The procedure below has no
@@ -278,6 +293,19 @@
     # are removed and the procedure is named for what it is. Adapting the data
     # to the real rmfanova API is a worthwhile separate change; it is not this
     # one, and pretending it already happened was the defect.
+    # AUDIT (P3.3): the repeated-measures sums of squares were computed at every
+    # time point, used for F, and then discarded -- and the effect size reported
+    # downstream was rebuilt from a DIFFERENT, between-subjects decomposition
+    # (SSB / SST over all curves, ignoring the subject margin). That is
+    # classical eta-squared for an independent-groups design, reported under a
+    # repeated-measures F. These vectors keep the RM sums of squares so partial
+    # eta-squared can be formed from the same decomposition the test used:
+    # SS_condition / (SS_condition + SS_error). Declared out here so the effect
+    # size block below can tell "not computed" from "computed and zero".
+    SS_visit_t    <- rep(NA_real_, n_time)
+    SS_residual_t <- rep(NA_real_, n_time)
+    n_complete_t  <- rep(NA_real_, n_time)
+
     tryCatch({
       rm_results <- NULL
       if(is.null(rm_results)) {
@@ -395,7 +423,11 @@
 
             SS_visit <- sum(nrow(Y_complete) * (visit_means_t - grand_mean)^2)
             SS_residual <- sum(E^2, na.rm = TRUE)
-            
+
+            SS_visit_t[t]    <- SS_visit
+            SS_residual_t[t] <- SS_residual
+            n_complete_t[t]  <- nrow(Y_complete)
+
             df_visit <- n_visits - 1
             df_residual <- (nrow(Y_complete) - 1) * (n_visits - 1)
             
@@ -429,9 +461,13 @@
         
         F_stat_perm <- matrix(NA, n_time, n_permutations)
         
-        withProgress(message = 'Permutation testing...', value = 0, {
+        # P3.5: this loop used to sit inside withProgress({...}), which
+        # evaluates its expression in the CALLER's frame, so the assignments
+        # below reached F_stat_perm. local() would not -- it makes a new
+        # environment and the writes would be discarded. The progress sink is
+        # a plain callback now, so no wrapper is needed at all.
           for(perm in 1:n_permutations) {
-            if(perm %% 20 == 0) incProgress(20 / n_permutations)
+            if(perm %% 20 == 0) progress(20 / n_permutations, "Permutation testing")
 
             # AUDIT (P1.a): the condition relabelling used to be drawn INSIDE
             # the time loop, so one subject could be read as 2-1-3 at t1 and
@@ -481,7 +517,6 @@
               }
             }
           }
-        })
         
         # Calculate permutation-based p-values
         p_values_pointwise <- numeric(n_time)
@@ -551,27 +586,68 @@
       p_values_adjusted <- p.adjust(p_values_pointwise, method = "fdr")
       sig_regions <- p_values_adjusted < alpha
       
-      # Calculate effect sizes (eta-squared)
+      # ---- Effect size --------------------------------------------------
+      # AUDIT (P3.3): this block used to compute
+      #     SSB[t] = sum_i n_i (visit_mean - overall_mean)^2
+      #     SST[t] = sum_j (curve_j - overall_mean)^2
+      #     eta_squared = SSB / SST
+      # over ALL curves, with no subject margin anywhere in it. That is
+      # classical eta-squared for a BETWEEN-subjects one-way design. In a
+      # repeated-measures design the subject differences sit inside that SST,
+      # so the denominator carries between-subject variance the F test has
+      # already partialled out, and the reported effect size is biased DOWN --
+      # arbitrarily far down, since it shrinks as between-subject spread grows.
+      # It was also computed on a different case set from the test: the F used
+      # complete cases per time point, this used every curve.
+      #
+      # The correct companion to a repeated-measures F is PARTIAL eta-squared,
+      # from the decomposition the test itself used:
+      #     partial eta^2 = SS_condition / (SS_condition + SS_error)
+      # which is exactly df_visit * F / (df_visit * F + df_residual). Those sums
+      # of squares are recorded per time point in the loop above.
+      eta_squared <- rep(NA_real_, n_time)
+      ok_ss <- is.finite(SS_visit_t) & is.finite(SS_residual_t) &
+               (SS_visit_t + SS_residual_t) > 0
+      eta_squared[ok_ss] <- SS_visit_t[ok_ss] /
+                            (SS_visit_t[ok_ss] + SS_residual_t[ok_ss])
+      # A time point where both sums of squares are zero has no variation at
+      # all to explain; 0 is the honest value there, NA where the RM
+      # decomposition could not be formed (fewer than two complete subjects).
+      eta_squared[is.finite(SS_visit_t) & is.finite(SS_residual_t) &
+                  (SS_visit_t + SS_residual_t) == 0] <- 0
+      eta_squared_type <- "partial"
+
+      # Kept for reporting: the classical (between-subjects) eta-squared this
+      # tab used to show, so a user comparing against an earlier run can see
+      # both and see why they differ.
       overall_mean <- rowMeans(curves)
-      SST <- numeric(n_time)
-      SSB <- numeric(n_time)
-      
+      SSB_classical <- numeric(n_time)
+      SST_classical <- numeric(n_time)
       for(t in 1:n_time) {
         for(i in 1:n_visits) {
-          SSB[t] <- SSB[t] + visit_sizes[i] * (visit_means[t, i] - overall_mean[t])^2
+          SSB_classical[t] <- SSB_classical[t] +
+            visit_sizes[i] * (visit_means[t, i] - overall_mean[t])^2
         }
-        
-        for(j in 1:ncol(curves)) {
-          SST[t] <- SST[t] + (curves[t, j] - overall_mean[t])^2
-        }
+        SST_classical[t] <- sum((curves[t, ] - overall_mean[t])^2, na.rm = TRUE)
       }
-      
-      eta_squared <- SSB / (SST + 1e-10)  # Add small constant to avoid division by zero
-      eta_squared[SST == 0] <- 0
+      eta_squared_classical <- ifelse(SST_classical > 0,
+                                      SSB_classical / SST_classical, 0)
       
       # Global test statistic (L2 norm)
       # P1.3: integrate over time rather than summing over grid points
-      L2_stat <- fck_l2_norm(SSB / length(subject_id), time_points)
+      # P3.3 (continued): this used to read the same between-subjects SSB the
+      # old effect size was built from -- a global summary of the RM tab built
+      # out of a decomposition the RM test does not use. It is now the
+      # integrated CONDITION sum of squares from the repeated-measures
+      # decomposition, per complete subject. THIS NUMBER CHANGES relative to
+      # earlier versions of the app. It is descriptive only: p_value_L2 is NA
+      # here because this procedure computes no global p-value for a
+      # repeated-measures design (rmfanova does -- see run_global_test).
+      L2_stat <- fck_l2_norm(
+        ifelse(is.finite(SS_visit_t) & is.finite(n_complete_t) & n_complete_t > 0,
+               SS_visit_t / n_complete_t, 0),
+        time_points)
+      L2_stat_classical <- fck_l2_norm(SSB_classical / length(subject_id), time_points)
       p_value_L2 <- NA  # this app's own procedure computes no global p-value
 
       # AUDIT (P2.6): the pointwise procedure above answers "where do the
@@ -581,19 +657,17 @@
       # to drop. See server/09b_helpers_rmfanova.R for why only three of its
       # fifteen outputs are shown by default.
       rm_global <- NULL
-      if (isTRUE(input$rm_global_test)) {
+      if (isTRUE(run_global_test)) {
         rm_global <- tryCatch(
           fck_rmfanova_global(curves, subject_id, rm_factor,
                               n_perm = min(n_permutations, 2000),
                               n_boot = min(n_permutations, 2000)),
           error = function(e) list(ok = FALSE, reason = conditionMessage(e)))
         if (isTRUE(rm_global$ok)) {
-          showNotification(sprintf(
-            "Global RM test on %d of %d subjects with a complete design.",
-            rm_global$n_complete, rm_global$n_total), type = "message", duration = 8)
+          notify(sprintf("Global RM test on %d of %d subjects with a complete design.",
+                         rm_global$n_complete, rm_global$n_total), "message")
         } else {
-          showNotification(paste("Global RM test not run:", rm_global$reason),
-                           type = "warning", duration = 12)
+          notify(paste("Global RM test not run:", rm_global$reason), "warning")
         }
       }
       
@@ -676,6 +750,12 @@
         # AUDIT (P0.4): was length(unique(subject_id)) * (n_visits - 1), which
         # counts n*(k-1) instead of the (n-1)*(k-1) the F test actually uses.
         df_within = (length(unique(subject_id)) - 1) * (n_visits - 1),
+        eta_squared_type = eta_squared_type,
+        L2_stat_classical = L2_stat_classical,
+        eta_squared_classical = eta_squared_classical,
+        SS_condition = SS_visit_t,
+        SS_error = SS_residual_t,
+        n_complete_per_time = n_complete_t,
         alpha = alpha,
         n_permutations = n_permutations,
         subject_id = subject_id,
@@ -788,7 +868,11 @@
     sig_regions <- p_values_adjusted < alpha
     
     SST <- SSB + SSW
-    eta_squared <- SSB / SST
+    # Classical eta-squared: correct for this INDEPENDENT-groups design, where
+    # SST carries no subject margin to partial out. The repeated-measures
+    # branch reports partial eta-squared instead (P3.3); both carry an
+    # eta_squared_type label so the readout never has to guess which it holds.
+    eta_squared <- ifelse(SST > 0, SSB / SST, 0)
     
     # Pointwise bootstrap percentile intervals (NOT simultaneous bands)
     # AUDIT (P1.2): pointwise percentile intervals, 100 -> 2000 replicates.
@@ -834,6 +918,7 @@
       L2_stat = L2_stat,
       p_value_L2 = p_value_L2,
       eta_squared = eta_squared,
+      eta_squared_type = "classical",
       df_between = df_between,
       df_within = df_within,
       alpha = alpha,
@@ -1083,15 +1168,30 @@
         cat("  RM factor length:", length(rm_factor_data), "\n")
         cat("  Unique levels:", length(unique(rm_factor_data)), "\n")
 
-        values$fanova_results <- perform_rm_fanova(
-          fd_obj = fd_to_use,
-          subject_id = subject_id_data,
-          rm_factor = rm_factor_data,
-          n_permutations = input$n_permutations,
-          alpha = input$alpha_level
-        )
+        # P3.5: the estimator no longer reads input$ or calls showNotification
+        # itself -- the Shiny pieces are passed in here, so the same function
+        # object runs unchanged in the exported script with inert defaults.
+        values$fanova_results <- withProgress(
+          message = "Repeated-measures functional ANOVA...", value = 0,
+          perform_rm_fanova(
+            fd_obj = fd_to_use,
+            subject_id = subject_id_data,
+            rm_factor = rm_factor_data,
+            n_permutations = input$n_permutations,
+            alpha = input$alpha_level,
+            run_global_test = isTRUE(input$rm_global_test),
+            progress = function(frac, detail = NULL) incProgress(frac, detail = detail),
+            notify = function(msg, type = "message")
+              showNotification(msg, type = type,
+                               duration = if(identical(type, "message")) 8 else 12)
+          ))
 
         values$fanova_results$design <- "within"
+        # P3.8: the exported script referenced subject_id and rm_factor without
+        # ever defining them, so the within-design section could not run. Keep
+        # the design vectors the fit actually used so the export can write them.
+        values$fanova_results$subject_id <- as.character(subject_id_data)
+        values$fanova_results$rm_factor  <- as.character(rm_factor_data)
       }
       
       # Store which data source was used
@@ -1400,6 +1500,12 @@
     res <- values$fanova_results
     hover_times <- hover_time_labels(res$time_points)
 
+    # P3.3: a repeated-measures design reports PARTIAL eta-squared, an
+    # independent-groups design classical eta-squared. They are different
+    # quantities on the same axis, so the label has to say which one this is.
+    eta_partial <- identical(res$eta_squared_type, "partial")
+    eta_lab     <- if(eta_partial) "partial \u03b7\u00b2" else "\u03b7\u00b2"
+
     # Add background for effect size interpretation
     p <- plot_ly(type = 'scatter', mode = 'lines')
     
@@ -1426,13 +1532,20 @@
                          fill = 'tozeroy',
                          fillcolor = 'rgba(100, 100, 255, 0.3)',
                          line = list(color = 'purple', width = 2),
-                         name = 'η² (Effect size)',
-                         hovertemplate = "Time: %{customdata}<br>η²: %{y:.3f}<extra></extra>",
+                         name = paste(eta_lab, '(Effect size)'),
+                         hovertemplate = paste0("Time: %{customdata}<br>", eta_lab,
+                                                ": %{y:.3f}<extra></extra>"),
                          customdata = hover_times)
-    
-    p <- p %>% layout(title = paste("Effect Size (η²) across Time -", res$n_groups, "groups"),
-                      yaxis = list(title = "η² (proportion of variance explained)", 
-                                   range = c(0, max(0.3, max(res$eta_squared) * 1.1))),
+
+    p <- p %>% layout(title = list(text = paste0(
+                        "Effect Size (", eta_lab, ") across Time \u2014 ",
+                        res$n_groups, if(eta_partial) " conditions" else " groups",
+                        if(eta_partial)
+                          "<br><sub>SS<sub>condition</sub> / (SS<sub>condition</sub> + SS<sub>error</sub>), from the same repeated-measures decomposition as F</sub>"
+                        else
+                          "<br><sub>SS<sub>between</sub> / SS<sub>total</sub></sub>")),
+                      yaxis = list(title = paste(eta_lab, "(proportion of variance explained)"),
+                                   range = c(0, max(0.3, max(res$eta_squared, na.rm = TRUE) * 1.1))),
                       annotations = list(
                         list(x = 0.95, y = 0.01, text = "Small", showarrow = FALSE, 
                              font = list(size = 10, color = "gray")),
@@ -1450,10 +1563,37 @@
     req(values$fanova_results)
     
     res <- values$fanova_results
-    mean_eta <- mean(res$eta_squared)
-    
-    cat("Effect Size Summary (η²):\n")
-    cat("Mean η²:", round(mean_eta, 4), "\n")
+    eta_partial <- identical(res$eta_squared_type, "partial")
+    eta_lab     <- if(eta_partial) "partial \u03b7\u00b2" else "\u03b7\u00b2"
+    mean_eta    <- mean(res$eta_squared, na.rm = TRUE)
+
+    cat("Effect Size Summary (", eta_lab, "):\n", sep = "")
+    cat("Mean ", eta_lab, ": ", round(mean_eta, 4), "\n", sep = "")
+    cat("Max  ", eta_lab, ": ", round(max(res$eta_squared, na.rm = TRUE), 4),
+        " at ", hover_time_labels(res$time_points)[which.max(res$eta_squared)], "\n", sep = "")
+    if(any(!is.finite(res$eta_squared)))
+      cat("Not computable at ", sum(!is.finite(res$eta_squared)),
+          " of ", length(res$eta_squared),
+          " time points (fewer than two subjects with a complete design there).\n", sep = "")
+
+    if(eta_partial) {
+      cat("\nDefinition: SS_condition / (SS_condition + SS_error), from the same\n")
+      cat("repeated-measures decomposition the F test used -- equivalently\n")
+      cat("df_cond * F / (df_cond * F + df_resid). Between-subject differences are\n")
+      cat("partialled out of the denominator, as they are out of the F test.\n")
+      if(!is.null(res$eta_squared_classical)) {
+        cat("\nFor comparison, classical eta-squared (SS_between / SS_total over all\n")
+        cat("curves, subject margin NOT removed) has mean ",
+            round(mean(res$eta_squared_classical, na.rm = TRUE), 4), ".\n", sep = "")
+        cat("Versions of this app before the P3.3 correction reported THAT number\n")
+        cat("under a repeated-measures F. It is biased downward here and is shown\n")
+        cat("only so earlier output can be reconciled; do not report it.\n")
+      }
+    } else {
+      cat("\nDefinition: SS_between / SS_total, the classical eta-squared for an\n")
+      cat("independent-groups design.\n")
+    }
+    cat("\nConventional benchmarks (Cohen): 0.01 small, 0.06 medium, 0.14 large.\n")
   })
   
   # Check if FANOVA completed

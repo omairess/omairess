@@ -169,13 +169,22 @@ test_that("mixed geometry really can drive between-SS negative", {
 
 # ------------------------------------------------------------------ P1.4 FoSR
 test_that("FoSR fits by QR with a rank check and no longer inverts the normal equations", {
-  src <- code_of("server/70_fosr.R")
-  expect_false(grepl("xtx_inv <- solve(crossprod(X))", src, fixed = TRUE))
+  # P3.4 moved the estimator out of the observer and into a named function, so
+  # that the export can deparse the same object the GUI runs. The guards follow
+  # it; the properties they check are unchanged. Both files are read so that
+  # neither the old construction reappearing in the observer, nor the helper
+  # losing the check, can pass.
+  src  <- code_of("server/07_helpers_fosr.R")
+  both <- paste(src, code_of("server/70_fosr.R"))
+  expect_false(grepl("xtx_inv <- solve(crossprod(X))", both, fixed = TRUE))
   expect_true(grepl("qrX <- qr(X)", src, fixed = TRUE))
   expect_true(grepl("rank deficient", src, fixed = TRUE))
   # formulas are built from names as data, not by re-parsing text
-  expect_false(grepl('as.formula(paste("~", paste(input$reg_predictors', src, fixed = TRUE))
-  expect_true(grepl("stats::reformulate(input$reg_predictors)", src, fixed = TRUE))
+  expect_false(grepl("as.formula(paste('~'", both, fixed = TRUE))
+  expect_false(grepl('as.formula(paste("~"', both, fixed = TRUE))
+  expect_true(grepl("stats::reformulate(predictors)", src, fixed = TRUE))
+  # and the GUI calls that function rather than carrying a second copy
+  expect_true(grepl("fck_fit_fosr_ols(", code_of("server/70_fosr.R"), fixed = TRUE))
 })
 
 test_that("chol2inv(qr.R(qr(X))) equals solve(crossprod(X)) on a well-conditioned design", {
@@ -187,13 +196,44 @@ test_that("chol2inv(qr.R(qr(X))) equals solve(crossprod(X)) on a well-conditione
 })
 
 test_that("the FoSR bootstrap no longer claims to be a hypothesis test", {
-  src <- code_of("server/70_fosr.R")
+  src <- code_of("server/07_helpers_fosr.R")
   expect_false(grepl("This is a proper bootstrap test", src, fixed = TRUE))
   expect_false(grepl("2 * mean(boot_betas[, j, k] <= 0)", src, fixed = TRUE))
-  # p-values are FDR-adjusted across time, on both branches
-  expect_gte(length(gregexpr('p.adjust(p_values[j, ], method = "fdr")',
-                             src, fixed = TRUE)[[1]]), 2)
-  expect_true(grepl("p_values_raw <- p_values", src, fixed = TRUE))
+  # P3.2: ONE inference path, from the analytical SE, FDR-adjusted across time.
+  # The bootstrap SE must not feed the test any more.
+  expect_true(grepl('p.adjust(p_values[j, ], method = "fdr")', src, fixed = TRUE))
+  # P3.2 reversed the direction: the RAW p-values are computed first and the
+  # FDR-adjusted copy is derived from them, so both are reported.
+  expect_true(grepl("p_values <- p_values_raw", src, fixed = TRUE))
+  expect_true(grepl("beta.p.raw = p_values_raw", src, fixed = TRUE))
+  expect_false(grepl("t_stats <- coefs / se_mat", src, fixed = TRUE))
+  expect_true(grepl("t_stats      <- coefs / se_analytic", src, fixed = TRUE))
+})
+
+test_that("P3.2: the FoSR p-values come from the analytical SE and ignore the seed", {
+  skip_if_not_installed("stats")
+  source(file.path(app_dir, "server/07_helpers_fosr.R"), local = TRUE)
+  set.seed(5)
+  n <- 30; nt <- 12
+  df <- data.frame(x = rnorm(n), g = factor(rep(c("a", "b"), n / 2)))
+  Y  <- matrix(rnorm(n * nt), n, nt) + df$x %o% seq(0, 1, length.out = nt)
+
+  set.seed(1); a <- fck_fit_fosr_ols(Y, df, c("x", "g"), use_bootstrap = TRUE, n_boot = 60)
+  set.seed(9); b <- fck_fit_fosr_ols(Y, df, c("x", "g"), use_bootstrap = TRUE, n_boot = 60)
+  # the test is deterministic ...
+  expect_equal(a$beta.p, b$beta.p)
+  expect_equal(a$beta.se, b$beta.se)
+  # ... while the bootstrap interval, which IS a Monte Carlo quantity, is not
+  expect_false(isTRUE(all.equal(a$boot_ci_lower, b$boot_ci_lower)))
+  # and the SE it reports is the analytical one, matching lm() term by term
+  fitlm <- lm(Y[, 1] ~ x + g, data = df)
+  expect_equal(unname(a$beta.se[, 1]), unname(summary(fitlm)$coefficients[, "Std. Error"]),
+               tolerance = 1e-10)
+  expect_equal(unname(a$beta.p.raw[, 1]), unname(summary(fitlm)$coefficients[, "Pr(>|t|)"]),
+               tolerance = 1e-10)
+  # the bootstrap SE is kept only as a diagnostic, never as the test denominator
+  expect_false(is.null(a$beta.se.boot))
+  expect_identical(a$inference, "analytic-t-fdr")
 })
 
 test_that("the GAM branch emits a coefficient curve for factor levels", {

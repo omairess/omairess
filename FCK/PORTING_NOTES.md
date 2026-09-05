@@ -1411,6 +1411,182 @@ testthat assertions and 10 standalone suites pass, and the Circaflex figures are
 identical to P2 (59.7% significant rhythms, Rayleigh Z 549.9), confirming nothing
 downstream depended on it.
 
+**4.48 P3: eight items from a third reviewer, of which seven held.** The list
+was handed over after the SoFR removal. I checked each against the code before
+touching anything, on the standard set earlier in this audit &mdash; the last
+review had 17 of 21 claims hold, one wrong, two overstated. This time seven of
+eight held, one is refused, and acting on them turned up two further defects
+neither the reviewer nor I had seen.
+
+*P3.1 &mdash; the n-basis GCV sweep still swept at lambda = 0. Confirmed.* P0.2
+removed `lam <- if(input$smooth_method == "auto") 0 else ...` from
+`server/20_smoothing.R` and from the "suggest a lambda" observer. It survived
+in the GCV-vs-n-basis sweep in `server/30_diagnostics.R` &mdash; the one place
+in the app that calls itself a diagnostic. lambda = 0 in `fda` is the
+UNPENALISED fit, not "chosen automatically", so in auto mode that tab drew the
+GCV curve of a model the app would never fit, and its "optimal n_basis" was the
+optimum for an unpenalised spline. The sweep now re-selects lambda by GCV at
+every candidate basis size, using `fck_auto_lambda` &mdash; the same search the
+app runs &mdash; on a 12-point bracket and a smaller subject cap, since it runs
+once per basis size. The plot and the notification say which regime produced
+the curve. The finding this exposes is worth stating: once lambda is selected,
+the GCV curve is much flatter, so n_basis stops mattering above a floor.
+`test-p3-corrections.R` checks that numerically (the penalised sweep's relative
+range is smaller, and its GCV is never worse).
+
+*P3.2 &mdash; FoSR should use analytical p-values and keep the bootstrap for the
+interval. Confirmed.* P1.4c had already removed a bootstrap "test" that
+inverted a percentile interval. What it put in its place was still mismatched:
+`beta / SE_bootstrap` referred to `t_{n-p}`. A t reference is what you get when
+the denominator is the analytical sigma-hat, whose scaled square is chi-square
+on n-p df and independent of beta-hat; a bootstrap SE is neither, it is a Monte
+Carlo estimate of the same quantity carrying its own noise of order
+1/sqrt(2B) &mdash; about 5% at B = 200 &mdash; and it made a reported p-value
+depend on the seed. It also bought nothing: this is a RESIDUAL bootstrap,
+resampling rows of the residual matrix from the fitted homoscedastic model, so
+it estimates exactly what `xtx_inv[j,j] * sigma2` estimates, with extra
+variance. (A case/pairs bootstrap is the one that buys heteroscedasticity
+robustness. That is a different estimator, it is not what this control has ever
+run, and it is not substituted here.) The test is now always the analytical
+one, FDR-adjusted across time; the bootstrap supplies the percentile interval
+and its SE is kept as a misspecification diagnostic &mdash; the summary prints
+the SE_bootstrap / SE_analytic range and warns when it leaves [0.8, 1.25]. The
+interval and the test can now disagree at the margin, deliberately, and both
+readouts say so. A test checks the p-values against `lm()` term by term and
+checks they no longer move with the seed while the interval still does.
+
+*P3.3 &mdash; the repeated-measures effect size should be partial eta-squared.
+Confirmed, and it was worse than "should".* The RM branch computed the correct
+repeated-measures sums of squares at every time point, used them for F, and
+**threw them away**; the effect size was then rebuilt from a different,
+between-subjects decomposition &mdash; `SSB / SST` over all curves, with no
+subject margin anywhere in it, and over a different case set from the test
+(every curve, rather than the complete cases per time point the F used). So a
+repeated-measures F was reported next to a classical eta-squared, which carries
+the between-subject variance the F test has already partialled out and is
+therefore biased DOWN, arbitrarily far down as subject spread grows. The RM
+sums of squares are now kept and partial eta-squared formed from them,
+`SS_condition / (SS_condition + SS_error)`; a test verifies the identity
+`df_c*F / (df_c*F + df_r)` and cross-checks F against `stats::aov`'s own
+`Error(s/c)` decomposition, and shows the old number to be more than five times
+too small on a design with large subject spread. Both branches now carry an
+`eta_squared_type` label, the axis and title name which one is on screen, and
+the classical value is still reported in the summary so earlier output can be
+reconciled &mdash; explicitly marked as not to be reported.
+
+**This changes a number in the repeated-measures tab.** The RM global L2
+statistic did too: it was built from the same between-subjects SSB, and is now
+the integrated condition sum of squares from the RM decomposition. It is
+descriptive only (`p_value_L2` is NA for this design; the global test is
+rmfanova's, behind `run_global_test`), but it is not the number earlier
+versions printed.
+
+*P3.4 &mdash; the FoSR export should be the same implementation as the GUI.
+Confirmed.* Sections 7 and 10 already emitted the app's estimators with
+`deparse()` of the live function object. Section 11 was a hand-written
+reconstruction, and it had drifted: it emitted
+`as.formula(paste('~', paste(fosr_predictors, ...)))` and
+`solve(crossprod(X))` &mdash; precisely the two constructions P1.4b and P1.4a
+removed from the GUI &mdash; and no standard errors, no p-values and no FDR
+adjustment at all. So "Export analysis code" silently reintroduced a fixed
+defect and could not reproduce any of the inference on screen. The estimator
+now lives in `server/07_helpers_fosr.R` as `fck_fit_fosr_ols()`, is called by
+the GUI, and is written into the script verbatim. There is no second
+transcription left to drift.
+
+*P3.5 &mdash; the exported kernels should be standalone. Confirmed, and larger
+than described.* `deparse()` guarantees the exported code IS the
+implementation. That guarantee stopped at the top-level function: the emitted
+bodies call the app's own helpers and the script defined none of them. Measured
+with `codetools::findGlobals` on the live objects, the closure is
+`perform_functional_anova` &rarr; `fck_l2_norm`; `perform_rm_fanova` &rarr;
+`fck_l2_norm`, `fck_rmfanova_global`, `fck_rm_design`; `fit_cosinor` &rarr;
+**eleven** helpers via `fit_cosinor_nonlinear`. Worse, `perform_rm_fanova`
+carried `input$rm_global_test`, `showNotification()`, `withProgress()` and
+`incProgress()` in its body, so the exported script for a repeated-measures
+design failed at `object 'input' not found` the moment the permutation loop
+started &mdash; it could not run at all. And `covariates`, `subject_id` and
+`rm_factor` were indexed by the script but never assigned anywhere in it (the
+group vector was emitted truncated to ten entries with a literal `", ..."`
+pasted in, which does not parse).
+
+Fixed by: making the Shiny pieces arguments with inert defaults (`progress`,
+`notify`, `run_global_test`), the app passing the real ones; and an
+`emit_kernel()` that computes the dependency closure **at export time from the
+live function objects**, post-order, so adding a helper call to any kernel
+automatically adds its definition to the script. A hand-maintained list is the
+thing that went stale in the first place. One subtlety worth recording: the
+permutation loop used to sit inside `withProgress({...})`, which evaluates its
+expression in the CALLER's frame; replacing that with `local({...})` would have
+silently discarded every write to `F_stat_perm`. It is a bare loop now.
+
+*P3.5b, found while doing the above &mdash; the export still called an
+unpenalised fit "REML".* Two sites in `server/90_export.R` emitted
+`fdPar(basis, Lfdobj = 2, lambda = 0)` under `# Smoothing method: Automatic
+(REML optimization)` and `# lambda = 0 triggers automatic optimization`. This
+is the same false claim P0.2 removed from the app and P3.1 removed from the
+diagnostics tab, surviving in the exported script &mdash; so an auto-mode
+export reproduced neither the app's smoothing nor any automatic selection. Both
+sites now emit the GCV-selected lambda the app actually used, with
+`fck_auto_lambda` written out so the search can be re-run on new data.
+
+*P3.6 &mdash; commit an `renv.lock`. REFUSED, for the second time, and this
+time with the refusal made executable.* A lockfile is a record of a library
+that exists. `renv::snapshot()` writes the version and hash of each package as
+installed on the machine it runs on, and this container has neither `renv` nor
+`shinyWidgets`, `fda.usc` or `reticulate`. A lockfile written here would either
+omit them &mdash; in which case `renv::restore()` silently does not install
+them and the clustering and cosinor tabs fail at first use on a machine whose
+owner was told the environment was pinned &mdash; or carry invented versions
+and hashes, which is worse. A lockfile that does not describe a working library
+is not a weaker guarantee than none; it is a false one, and this app is being
+corrected precisely because it made claims of that shape. What I did instead:
+`tools/renv_bootstrap.R` now reads the required/optional package lists out of
+`app.R` rather than keeping a second copy that can go stale, prints the
+installed version of every one, **refuses to snapshot** if any REQUIRED package
+is missing, and warns which optional ones will be absent from the lock. Run on
+this container it refuses, naming `shinyWidgets` &mdash; which is the point.
+
+*P3.7 &mdash; stale SoFR and refund references in the documentation. Confirmed.*
+My 4.47 removal sweep used `grep --include="*.R"` and never looked at Markdown.
+`README.md` still listed scalar-on-function regression in the source-app table,
+`refund` in the package table, SoFR as tab 9, and `71_sofr.R` in the file tree,
+and told the reader `smoke_test.R` "runs without `fda` or `refund` installed".
+All corrected, tab numbering closed up, and the test list brought up to date.
+`PORTING_NOTES.md` still mentions SoFR throughout and should: it is the
+chronological record of the removal. A test enforces exactly that split.
+
+*P3.8 &mdash; a test that runs the exported script in a clean session and
+compares numerically. Confirmed, and the most valuable of the eight.*
+`tests/codegen_test.R` checked that the generated script PARSES. That is a low
+bar: a script full of undefined symbols parses perfectly, which is how P3.5
+went unnoticed. `tests/export_roundtrip_test.R` generates the script for both
+designs, RUNS each in a separate `Rscript --vanilla` process on the same data
+the app analysed, then re-runs every estimator from the definitions that script
+supplied under the app's seeds and compares element by element. It agrees to
+1e-13 on 37 quantities &mdash; the GCV lambda, the smoothed curves, F(t),
+eta-squared(t), the L2 statistics, both permutation p-value vectors, twelve
+cosinor fields across twelve subjects and their fitted values, and every FoSR
+coefficient, SE, raw and adjusted p-value and bootstrap CI bound.
+
+The first time it ran, it failed. The export's own cosinor reporting block read
+`f$amplitude` and `f$acrophase`; `fit_cosinor()` returns those as `amplitudes`
+and `acrophases`, vectors with one entry per harmonic, so both were `NULL` and
+the script died on "arguments imply differing number of rows: 1, 0" at the
+first subject. That defect had been in the export since the merge and no
+parse-level test could ever have caught it. Fixed, along with the assumption
+that every fit carries a MESOR.
+
+After P3: 12 tabs, 31 server files, all parsing. **1,157 testthat assertions
+(0 failed, 0 skipped) and 10 standalone suites pass, including the new
+round-trip.** The Circaflex dataset is no longer present in this container, so
+the 59.7%-significant-rhythms and Rayleigh Z figures were NOT re-measured; they
+are unaffected by construction, since `08_helpers_cosinor.R` and
+`72_harmonic.R` are untouched by this round. The repeated-measures partial
+eta-squared and RM L2 statistic ARE new numbers and should be re-run wherever
+the old ones were reported.
+
+
 ## 5. Rename table
 
 | source | source app | merged app |
@@ -1459,12 +1635,16 @@ duplicate code.
   UI places them. That is true in WaPaa as well — dead code carried across
   rather than silently deleted.
 * **The CV basis-count divergence** in 4.5.
-* **Not run end-to-end here.** `tests/smoke_test.R` and
-  `tests/clock_helpers_test.R` verify that every file
-  parses, the whole UI renders, every tab is reachable, no output is defined
-  twice and all 16 server files register in one environment. It cannot verify
-  the statistics: `fda`, `refund`, `rmfanova`, `fda.usc` and `shinyWidgets`
-  were not installable in the environment this port was done in (CRAN was
-  blocked by egress policy), so the analyses themselves have not been executed
-  since the merge. Run each tab once against a known dataset before trusting
-  the numbers.
+* **Not run end-to-end here** *(as of the original port; largely superseded by
+  4.43&ndash;4.48).* `tests/smoke_test.R` and `tests/clock_helpers_test.R` verify
+  that every file parses, the whole UI renders, every tab is reachable, no
+  output is defined twice and all server files register in one environment.
+  They cannot verify the statistics. At the time of the port `fda`, `rmfanova`,
+  `fda.usc` and `shinyWidgets` were not installable here, so nothing had been
+  executed since the merge. Since then `fda`, `mgcv`, `minpack.lm`, `rmfanova`
+  and `lme4` have been installed and the estimators ARE exercised &mdash; by the
+  testthat suite, by `tests/export_roundtrip_test.R`, and by the calibration and
+  real-data runs recorded in 4.43&ndash;4.48. `fda.usc`, `shinyWidgets`,
+  `reticulate` and `circular` are still missing, so the clustering tab and the
+  UI widgets that need them remain unexecuted. Run each tab once against a known
+  dataset before trusting the numbers.
