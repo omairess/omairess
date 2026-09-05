@@ -43,7 +43,11 @@ ui_tab_settings <- tabItem(
                 wellPanel(
                   h4("Linear Shift (Translation) Options"),
                   checkboxInput("periodic_shift", "Periodic/circular data (e.g., 24-hour cycles)", FALSE),
-                  checkboxInput("allow_dilation", "Allow slight scaling (dilation)", FALSE),
+                  # AUDIT (P0.8): allow_dilation, dilation_range and symmetric_warp were read
+                  # from the UI and passed as arguments that no function body ever
+                  # referenced. Disabled rather than deleted so the intent is on
+                  # record; a dilation term needs an estimator, not a checkbox.
+                  checkboxInput("allow_dilation", "Allow slight scaling (dilation) - not implemented", FALSE),
                   conditionalPanel(
                     condition = "input.allow_dilation == true",
                     sliderInput("dilation_range", "Scaling factor range (b):",
@@ -75,7 +79,7 @@ ui_tab_settings <- tabItem(
                                selected = "power"),
                   sliderInput("param_range", "Parameter Search Range:",
                               min = 0.1, max = 10, value = c(0.5, 2), step = 0.1),
-                  checkboxInput("symmetric_warp", "Force symmetric warping", FALSE)
+                  checkboxInput("symmetric_warp", "Force symmetric warping - not implemented", FALSE)
                 ),
                 hr()
               ),

@@ -156,9 +156,41 @@ observeEvent(input$apply_smooth, {
 
     } else {
       # ---- per-subject smoothing --------------------------------------------
-      # lambda = 0 in "auto" mode: smooth.basis then uses REML/GCV internally
-      # rather than a lambda search here. This is what BOTH source apps did.
-      lam      <- if(input$smooth_method == "auto") 0 else 10^(-input$smooth_factor)
+      # AUDIT (P0.2). This block used to read:
+      #
+      #     # lambda = 0 in "auto" mode: smooth.basis then uses REML/GCV
+      #     # internally rather than a lambda search here.
+      #     lam <- if(input$smooth_method == "auto") 0 else 10^(-input$smooth_factor)
+      #
+      # That comment was false and I wrote it. smooth.basis() never searches
+      # for lambda: it uses the value it is given and REPORTS a GCV score for
+      # that value. lambda = 0 is the UNPENALISED fit. Worse, nb is capped at
+      # min(n_basis, n_time) a few lines above, so in "auto" mode the system was
+      # square: on 16 time points the fit had 16 effective df, 0 residual df,
+      # and reproduced the data to 9e-16. The control labelled "Automatic
+      # smoothing (REML)" was doing no smoothing at all, and it is the default,
+      # upstream of fPCA, fANOVA, clustering, FoSR and SoFR.
+      #
+      # Auto mode now performs a real GCV search with the SAME estimator that
+      # does the smoothing, which is the only way the selected lambda means
+      # anything for the fit that follows. See fck_auto_lambda() in
+      # server/04_helpers_fd.R.
+      lam <- if(input$smooth_method == "auto") {
+        al <- fck_auto_lambda(values$data, t_full, basis, min_points_needed =
+                                if(cyclic) 3 else 4)
+        if (is.null(al)) {
+          showNotification(
+            "Automatic smoothing could not evaluate GCV for any subject (too few observed points). Falling back to an unpenalised basis fit; set a lambda by hand on the Manual setting if you want a smooth.",
+            type = "warning", duration = 12)
+          0
+        } else {
+          showNotification(
+            sprintf("Automatic smoothing (GCV): lambda = %s, chosen by minimising the mean GCV score across %d subjects.",
+                    format(al$lambda, digits = 3), al$n_used),
+            type = "message", duration = 10)
+          al$lambda
+        }
+      } else 10^(-input$smooth_factor)
       fdParobj <- fdPar(basis, 2, lam)
 
       smooth_mat      <- matrix(NA, nrow = n_subjects, ncol = n_time)
@@ -193,9 +225,21 @@ observeEvent(input$apply_smooth, {
               n_failed <<- n_failed + 1
               failed_subjects <<- c(failed_subjects, i)
             })
-          } else if(n_valid > 0) {
-            smooth_mat[i, ] <- approx(t_full[valid_idx], y_i[valid_idx],
-                                      xout = t_full, rule = 2)$y
+          } else if(n_valid >= 2) {
+            # approx() needs two distinct points; with fewer it raises
+            # "need at least two non-NA values to interpolate", which used to
+            # escape to the MODULE-level handler and revert the whole run to
+            # raw data for every subject (P0.6).
+            smooth_mat[i, ] <- tryCatch(
+              approx(t_full[valid_idx], y_i[valid_idx], xout = t_full, rule = 2)$y,
+              error = function(e) rep(mean(y_i[valid_idx]), n_time))
+          } else if(n_valid == 1) {
+            # One observation carries no shape. Held flat at that value and
+            # counted as a failure so it is reported rather than passed off as
+            # a smoothed curve.
+            smooth_mat[i, ] <- rep(as.numeric(y_i[valid_idx]), n_time)
+            n_failed <- n_failed + 1
+            failed_subjects <- c(failed_subjects, i)
           } else {
             n_failed <- n_failed + 1
             failed_subjects <- c(failed_subjects, i)

@@ -25,7 +25,7 @@ ui_tab_preprocess <- tabItem(
       width = 6,
       radioButtons("smooth_method", "Smoothing Method:",
                    choices = list("Raw data (no smoothing)" = "none",
-                                  "Automatic smoothing (REML)" = "auto",
+                                  "Automatic smoothing (GCV)" = "auto",
                                   "Manual smoothing" = "manual"),
                    selected = "auto"),
 
@@ -86,14 +86,19 @@ ui_tab_preprocess <- tabItem(
           hr(),
           actionButton("use_diagnostic_lambda", "📊 Use Diagnostic Results",
                        class = "btn-info btn-sm"),
-          helpText("Click to automatically set smoothing factor based on REML/CV analysis")
+          helpText("Sets the manual smoothing factor from the diagnostics tab. Note that tab fits an mgcv model, whose smoothing parameter is not on the same scale as fda's lambda; treat the transferred value as a starting point, not a selection.")
         )
       ),
       conditionalPanel(
         condition = "input.smooth_method == 'auto'",
         numericInput("n_basis", "Number of B-spline basis functions:",
                      value = 20, min = 4, max = 100),
-        helpText("Lambda = 0 uses REML optimization automatically")
+        helpText(HTML("Lambda is chosen by minimising the mean GCV score across
+                       subjects, using the same smoother that then does the
+                       smoothing. This control previously said REML and set
+                       lambda to zero, which applied no penalty at all &mdash; on a
+                       basis the size of your time grid that is exact
+                       interpolation, not a smooth."))
       ),
       conditionalPanel(
         condition = "input.smooth_method != 'none' && input.is_cyclic == false",

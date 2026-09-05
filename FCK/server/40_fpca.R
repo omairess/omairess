@@ -1189,25 +1189,40 @@
                             plot = FALSE, na.action = na.pass)
           if(!is.null(ccf_result$acf) && length(ccf_result$acf) > 0) {
             best_lag <- ccf_result$lag[which.max(ccf_result$acf)]
-            shifts[i] <- best_lag / n_time * 0.1  # Scale down shift
+            # AUDIT (P0.8): was  best_lag / n_time * 0.1  -- the estimated lag
+            # was multiplied by 0.1 here and by a further 0.5 below, so the warp
+            # carried 5% of the shift it had just measured. Neither constant was
+            # justified anywhere. The measured lag is now used as measured.
+            shifts[i] <- best_lag / n_time
           } else {
             shifts[i] <- 0
           }
         }
         
-        # Create warping function with some variation
-        base_warp <- time_points - shifts[i] * 0.5
-        
-        # Add slight S-curve for visualization
-        distortion <- sin(pi * time_points) * runif(1, -0.03, 0.03)
-        warp_functions[,i] <- pmin(1, pmax(0, base_warp + distortion))
-        
-        # Ensure endpoints are fixed
-        warp_functions[1,i] <- 0
-        warp_functions[n_time,i] <- 1
+        # ---- AUDIT (P0.8): the warp is the shift, and nothing else -----------
+        # This block used to read:
+        #     base_warp  <- time_points - shifts[i] * 0.5
+        #     distortion <- sin(pi * time_points) * runif(1, -0.03, 0.03)
+        #     warp_functions[,i] <- pmin(1, pmax(0, base_warp + distortion))
+        # under the comment "# Add slight S-curve for visualization". A random
+        # draw was being added to an ESTIMATED transformation, on a module with
+        # no set.seed, so the same data gave different answers on every run --
+        # measured at up to 5.9x the size of the shift being estimated. The
+        # clipping then destroyed monotonicity at the ends: a clipped warp maps
+        # a whole interval of new time onto one old time, and approx() hands
+        # back the same value for all of it.
+        #
+        # A shift warp is h(t) = t - s, clamped to the observed domain. It is
+        # monotone by construction, deterministic, and endpoint-anchored.
+        # Anchoring the endpoints by ASSIGNMENT (as the old code did) is what
+        # broke monotonicity when |s| was large, so the shift is limited to what
+        # the domain can absorb instead.
+        s_max <- 0.25   # a shift beyond a quarter of the domain is not identified
+        shifts[i] <- max(-s_max, min(s_max, shifts[i]))
+        warp_functions[,i] <- time_points - shifts[i]
         
         # Apply warping
-        if(abs(shifts[i]) > 0.001) {
+        if(abs(shifts[i]) > 1e-8) {
           # Interpolate curve at warped time points
           registered_curves[,i] <- approx(time_points, curves[,i], 
                                           xout = warp_functions[,i], 
@@ -1268,6 +1283,22 @@
       registered_curves <- matrix(NA, n_time, n_curves)
       alpha_values <- numeric(n_curves)
       
+      # AUDIT (P0.8): the quadratic family alpha*t^2 + (1-alpha)*t has
+      # derivative 2*alpha*t + (1-alpha), which is negative near t = 0 whenever
+      # alpha > 1. The UI's default search range was c(0.5, 2), so the optimiser
+      # could and did return non-monotone maps; clipping them to [0,1] produced
+      # a flat leading segment that collapses many new times onto one old time
+      # (at alpha = 2, 12 of 24 grid points mapped to time 0). A time warp that
+      # is not strictly increasing is not a reparameterisation of time.
+      # The search range is therefore restricted per family to the region where
+      # the map is a bijection of [0,1].
+      param_range <- switch(family,
+        "quadratic" = c(max(param_range[1], 0.05), min(param_range[2], 1)),
+        "power"     = c(max(param_range[1], 0.05), param_range[2]),
+        param_range)
+      if (param_range[1] >= param_range[2])
+        param_range <- c(param_range[1], param_range[1] * 1.0001)
+
       # Define warping function
       warp_func <- function(t, alpha) {
         switch(family,
@@ -1420,14 +1451,47 @@
         warp_functions <- matrix(NA, n_time, n_curves)
         registered_curves <- matrix(NA, n_time, n_curves)
         
+        # ---- AUDIT (P0.8): this branch used to be ---------------------------
+        #     distortion <- sin(2*pi*time_points) * runif(1, -0.02, 0.02)
+        #     warp_functions[,i]    <- pmin(1, pmax(0, time_points + distortion))
+        #     registered_curves[,i] <- curves[,i]
+        # under the comment "# Simple landmark alignment". It computed landmark
+        # positions, discarded them, returned a warp made entirely of random
+        # numbers, and did not warp the curves at all -- while the UI announced
+        # "Time-warped PCA completed!".
+        #
+        # A landmark warp is the monotone piecewise-linear map that carries each
+        # curve's own landmarks onto the reference landmarks. Detecting the
+        # landmarks is done by the same rule for every curve (the largest local
+        # extremum nearest each reference position), so the result is
+        # deterministic.
+        ref_lm <- sort(unique(pmin(1 - 1e-6, pmax(1e-6, landmark_times))))
+        find_lm <- function(v, target) {
+          # search a window around the reference position for the strongest
+          # turning point; fall back to the reference position itself
+          w <- which(abs(time_points - target) <= 0.12)
+          if (length(w) < 3) return(target)
+          d <- diff(v[w])
+          turn <- which(d[-length(d)] * d[-1] < 0)
+          if (!length(turn)) return(target)
+          best <- turn[which.max(abs(d[turn]))]
+          time_points[w[best + 1]]
+        }
         for(i in 1:n_curves) {
-          # Simple identity warping with slight variation
-          distortion <- sin(2*pi*time_points) * runif(1, -0.02, 0.02)
-          warp_functions[,i] <- pmin(1, pmax(0, time_points + distortion))
-          warp_functions[1,i] <- 0
-          warp_functions[n_time,i] <- 1
-          
-          registered_curves[,i] <- curves[,i]
+          own <- vapply(ref_lm, function(tt) find_lm(curves[, i], tt), numeric(1))
+          own <- sort(own)
+          # strictly increasing knots, endpoints pinned, so h is a bijection
+          kx <- c(0, own, 1); ky <- c(0, ref_lm, 1)
+          keep <- c(TRUE, diff(kx) > 1e-6)
+          kx <- kx[keep]; ky <- ky[keep]
+          if (length(kx) < 2 || any(diff(ky[seq_along(kx)]) <= 0)) {
+            warp_functions[, i] <- time_points
+          } else {
+            warp_functions[, i] <- approx(kx, ky[seq_along(kx)],
+                                          xout = time_points, rule = 2)$y
+          }
+          registered_curves[, i] <- approx(warp_functions[, i], curves[, i],
+                                           xout = time_points, rule = 2)$y
         }
       }
       

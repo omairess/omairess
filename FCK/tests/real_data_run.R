@@ -77,7 +77,8 @@ fenv <- extract_fns(file.path(app_dir, "server/72_harmonic.R"),
 # from the environment their closures see.
 for (nm in c("fck_commonality", "fck_commonality_pct", "fck_zero_amplitude_test",
              "fck_amp_se", "fck_acro_se", "fck_bingham_ci", "phi_to_hours",
-             "fck_rhythm_adjusted_mean", "%||%"))
+             "fck_rhythm_adjusted_mean", "fck_reduced_exp_sat_sse",
+             "fck_r_squared", "fck_gaussian_loglik", "%||%"))
   assign(nm, get(nm, envir = globalenv()), envir = fenv)
 for (nm in ls(fenv)) {
   f <- get(nm, envir = fenv)

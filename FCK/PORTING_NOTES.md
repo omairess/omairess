@@ -1063,6 +1063,118 @@ A bug found while testing this work, mine and in the test harness rather than
 the app: `tests/real_data_run.R` wrote `g_pos`/`g_id` into its `.rds` output
 unconditionally, but both only exist on the `--join-sheets` path.
 
+**4.43 P0 corrections from the external statistical review.** An independent
+review of the whole app raised 21 findings. I re-checked each against the code
+and, where the claim was about behaviour rather than syntax, by running it. 17
+confirmed, one wrong, two overstated, and one defect the review missed that was
+mine. What follows is what changed and what it was measured to be worth.
+
+*P0.2 &mdash; "Automatic smoothing (REML)" did no smoothing.* The control set
+`lambda = 0` under a comment I wrote claiming `smooth.basis()` optimises
+internally. It does not: it smooths with the lambda it is given and reports that
+lambda's GCV score. With `nb` capped at `min(n_basis, n_time)` a few lines above,
+auto mode was a square system &mdash; on 16 time points, 16 effective df, zero
+residual df, data reproduced to 9e-16. Against a known truth it was 3.2x worse
+than the GCV choice, and it is the default, upstream of everything.
+`fck_auto_lambda()` (server/04_helpers_fd.R) now runs a real GCV search with the
+same estimator that performs the smoothing: coarse log grid to find the basin,
+then `optimize()` to refine, minimising mean GCV across subjects because one
+lambda for the sample is what makes curves comparable downstream. On a 25-subject
+fixture: df 16.00 -> 4.17, RMSE against truth 1.145 -> 0.332.
+
+*P0.3 &mdash; the zero-amplitude test rejected true nulls three times too often.*
+My own audit fix. For `exp_sat` the reduced model froze tau at its full-model
+value and refit only the MESOR and A_sat by OLS. I chose that for numerical
+robustness and documented the shortcut, but never worked out its cost. Under the
+null tau is free, so SSE0 was not minimised, the numerator was inflated and F was
+biased upwards. Measured over 3,000 simulated nulls on the Circaflex time grid:
+**14.6% rejection at nominal 5%, 4.5% at nominal 1%**. `fck_reduced_exp_sat_sse()`
+refits tau with `nls.lm` under the same bounds, and returns NA rather than a
+number if the refit fails &mdash; a wrong F is worse than an absent one. After:
+**3.6% at nominal 5%, 0.8% at 1%**. On the real data this moved "significant
+rhythms" from **67.5% to 59.7%**: 102 of 1305 subjects were being called rhythmic
+and are not. Any earlier report of that figure should be corrected.
+
+*P0.4 &mdash; the repeated-measures F used a residual containing the effect.*
+`Y_centered <- Y - rowMeans(Y)` removes the subject margin only, so
+`sum(Y_centered^2)` was SS_error + SS_visit exactly. On a 12x4 fixture the app
+returned F = 8.49 where `stats::aov` gives 37.26 &mdash; 22.8% of the correct
+value, so the test was badly *conservative* and would miss real effects. Both the
+observed and the permutation statistic now remove both margins and add the grand
+mean back, and `df_within` is `(n-1)(k-1)` rather than `n(k-1)`. The fixed form
+reproduces `stats::aov` to 1e-8.
+
+*P0.5 &mdash; the amplitude bound was not an amplitude bound.* `b_cos` and `b_sin`
+were each boxed at +/- amplitude_max, and a box of half-width A admits
+`sqrt(A^2+A^2) = A*sqrt(2)`: ask for 10, get up to 14.14. The constraint region is
+a disc and a box cannot express it. Refitting inside the inscribed square would
+satisfy the bound but would also forbid legitimate amplitudes at off-axis phases,
+so it is applied *only* when the converged fit actually violates the promise;
+fits inside the disc keep the full box. `amp_bound_action` records which
+happened. `amplitude_min` was threaded through six signatures and never applied;
+it is now *reported* (`amplitude_below_min`) and still not imposed, because
+forcing a flat subject up to a floor would invent a rhythm.
+
+*P0.6 &mdash; degenerate fits.* A constant trajectory gave R&sup2; = 0/0 = NaN; a
+perfect fit gave `log(0)`, log-likelihood `Inf` and **AIC = -Inf**, so a flat
+subject won every model comparison it entered. `fck_r_squared()` returns NA when
+SST = 0 (undefined, not 1 and not 0) and `fck_gaussian_loglik()` floors sigma^2
+relative to the data scale. Separately, a subject with exactly one observed point
+reached `approx()`, which raises; that error escaped to the module-level handler
+whose fallback reverts the **whole run** to raw data for every subject. One and
+two-point subjects are now handled explicitly and counted as failures so they are
+reported.
+
+*P0.8 &mdash; time warping was partly random.* `linear_shift_alignment()` added
+`sin(pi*t) * runif(1, -0.03, 0.03)` to an estimated transformation under the
+comment "Add slight S-curve for visualization", on a module with no `set.seed`:
+measured run-to-run spread was up to 5.9x the shift being estimated. The measured
+lag was multiplied by 0.1 and again by 0.5, so the warp carried 5% of what it had
+measured. The landmark branch computed landmarks, discarded them, returned a warp
+made entirely of random numbers, and set `registered_curves[,i] <- curves[,i]`
+&mdash; it did not warp anything &mdash; while the UI announced "Time-warped PCA
+completed!". The quadratic family's derivative is negative for alpha > 1 and the
+default search range was c(0.5, 2), so at alpha = 2 clipping collapsed 12 of 24
+grid points onto time 0.
+
+  The shift warp is now `h(t) = t - s` with s used as measured and limited to a
+  quarter of the domain; the landmark branch builds the monotone piecewise-linear
+  map carrying each curve's own landmarks onto the reference ones and actually
+  applies it; the quadratic family's search range is restricted to where the map
+  is a bijection. `tests/warping_test.R` executes the estimator: identical output
+  across runs, all warps strictly increasing, identity in gives identity out
+  exactly, and a known phase shift is recovered with r = 0.998 and slope 0.901
+  &mdash; against 0.045 under the old attenuation. `allow_dilation`,
+  `dilation_range` and `symmetric_warp` were read from the UI, passed as
+  arguments and referenced by no function body; they are labelled "not
+  implemented" rather than silently accepted.
+
+*P1.1 &mdash; permutation p-values could be exactly zero.* `mean(perm >= obs)`
+reports p = 0 for a Monte Carlo test of finitely many draws. All five sites now
+use `(1 + #{T* >= T}) / (1 + B)`, and the default permutation count goes from 200
+(resolution 0.005, with an FDR correction on top of it) to 5,000.
+
+**What the review got wrong.** `1 - deviance/null.deviance` labelled "McFadden
+Pseudo-R&sup2;" is *correct* for a binomial GLM on 0/1 data &mdash; the saturated
+log-likelihood is zero, so deviance = -2 logLik and the two are the same quantity
+(verified identical to 10 decimal places). It diverges only for a proportion
+response (0.652 vs 0.274), which is the separate defect the review also correctly
+identifies; fixing that removes this one. The FoSR bootstrap is percentile-CI
+inversion &mdash; a recognised approximate test with poor small-sample coverage,
+not the meaningless number "not a valid bootstrap hypothesis test" implies; the
+comment claiming it is "a proper bootstrap test" is still indefensible and the
+missing multiplicity correction across time is the more serious half. The
+formula-injection surface is two FoSR sites, not "several": the harmonic
+`as.formula(paste(...))` calls use internal names the app controls.
+
+**Still open** (P1/P2, and none of it changes a number already fixed above): the
+mgcv -> fda lambda transfer on the diagnostics tab, the L2 statistic not
+integrating over time, FoSR QR fitting and multiplicity, SoFR outcome handling
+and apparent-performance labelling, clustering metrics computed in mixed
+geometries, `install.packages()` at startup, and the export path writing `aov()`
+where the app runs permutation + FDR &mdash; that last one means "Export analysis
+code" still does not always mean "code that reproduces this result".
+
 ## 5. Rename table
 
 | source | source app | merged app |

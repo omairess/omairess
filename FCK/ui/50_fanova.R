@@ -49,7 +49,11 @@ ui_tab_fanova <- tabItem(
                                         "Time-warped curves (if available)" = "warped"),
                          selected = "original"),
             numericInput("n_permutations", "Number of permutations for testing:",
-                         value = 200, min = 100, max = 10000),
+                         value = 5000, min = 200, max = 20000),
+            helpText(HTML("Was 200, which resolves a p-value only to 0.005 and
+                           leaves nothing for an FDR correction across time
+                           points to work with. 5,000 is the minimum worth
+                           reporting; raise it for a final analysis.")),
             sliderInput("alpha_level", "Significance level:",
                         min = 0.01, max = 0.1, value = 0.05, step = 0.01),
             conditionalPanel(

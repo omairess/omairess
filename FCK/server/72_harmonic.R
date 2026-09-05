@@ -729,7 +729,7 @@
     # Goodness of fit - calculate manually because lm(y ~ X - 1) R² is vs origin, not mean
     ss_total <- sum((y - mean(y))^2)
     ss_resid <- sum(residuals(fit)^2)
-    r_squared <- 1 - ss_resid / ss_total
+    r_squared <- fck_r_squared(ss_resid, ss_total)   # P0.6: SST = 0 -> NA, not NaN
 
     # Adjusted R² accounting for number of predictors
     n_predictors <- ncol(X)  # MESOR + trend + harmonics
@@ -759,8 +759,10 @@
     # ===========================================================================
 
     # Log-likelihood for Gaussian linear model
+    # P0.6: a perfect fit gave log(0) -> log_lik = Inf -> AIC = -Inf, so a flat
+    # subject beat every rival model. sigma^2 is floored relative to the data.
     sigma_sq <- ss_resid / n
-    log_lik <- -n/2 * (log(2*pi) + log(sigma_sq) + 1)
+    log_lik <- fck_gaussian_loglik(ss_resid, n, y_scale = stats::sd(y))
 
     # AIC: Akaike Information Criterion
     # AIC = -2*log(L) + 2*k, where k = number of parameters
@@ -827,7 +829,7 @@
           t_offset_temp <- min(time)
           fitted_trend <- mesor + A_sat_val * (1 - exp(-(time - t_offset_temp) / tau_val))
           ss_resid_trend <- sum((y - fitted_trend)^2)
-          r_squared_S <- 1 - ss_resid_trend / ss_total
+          r_squared_S <- fck_r_squared(ss_resid_trend, ss_total)
         }
       } else {
         X_trend <- matrix(1, nrow = n, ncol = 1)
@@ -840,7 +842,7 @@
         }
         fit_trend <- lm(y ~ X_trend - 1)
         ss_resid_trend <- sum(residuals(fit_trend)^2)
-        r_squared_S <- 1 - ss_resid_trend / ss_total
+        r_squared_S <- fck_r_squared(ss_resid_trend, ss_total)
       }
     }
 
@@ -852,7 +854,7 @@
     }
     fit_circ <- lm(y ~ X_circ - 1)
     ss_resid_circ <- sum(residuals(fit_circ)^2)
-    r_squared_C <- 1 - ss_resid_circ / ss_total
+    r_squared_C <- fck_r_squared(ss_resid_circ, ss_total)
 
     # AUDIT 1.3: r_squared_S and r_squared_C are MARGINAL R2s from two
     # overlapping, collinear predictor blocks. They do not partition anything --
@@ -1260,6 +1262,69 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     ))
   }
 
+  # ---- AUDIT (P0.5): make the amplitude bound mean what the UI says ----------
+  # The UI offers "Amplitude bounds" and the code bounded b_cos and b_sin
+  # SEPARATELY at +/- amplitude_max, with the comment
+  #     # Since amplitude = sqrt(b_cos^2 + b_sin^2), bound each coefficient
+  # A box of half-width A permits sqrt(A^2 + A^2) = A*sqrt(2), so a user who
+  # asked for a maximum of 10 could be handed an amplitude of 14.14. The
+  # constraint region is a DISC and a box cannot express it.
+  #
+  # Refitting inside the inscribed square (half-width A/sqrt(2)) does satisfy
+  # the constraint, but it also forbids legitimate amplitudes up to A at
+  # off-axis phases, so applying it unconditionally would distort every fit to
+  # protect the few that violate. It is therefore applied ONLY when the
+  # converged fit actually breaks the promise: fits inside the disc keep the
+  # full box, violating fits are refitted inside the inscribed square, which is
+  # the largest box guaranteed to satisfy the stated bound.
+  #
+  # amplitude_min is NOT enforced here. It is a floor on a fitted magnitude,
+  # which is not a constraint an optimiser should be given -- forcing a flat
+  # subject up to a minimum amplitude would invent a rhythm. It is reported
+  # instead; see amplitude_below_min in the returned object.
+  amp_bound_action <- "not requested"
+  if (use_bounds && is.finite(amplitude_max) && n_harmonics >= 1) {
+    .amp_of <- function(fit) {
+      cf <- coef(fit)
+      vapply(seq_len(n_harmonics), function(h) {
+        a <- cf[paste0("b_cos", h)]; b <- cf[paste0("b_sin", h)]
+        if (is.na(a) || is.na(b)) NA_real_ else sqrt(a^2 + b^2)
+      }, numeric(1))
+    }
+    amps0 <- .amp_of(nls_fit)
+    if (any(is.finite(amps0) & amps0 > amplitude_max * (1 + 1e-9))) {
+      lb2 <- lower_bounds; ub2 <- upper_bounds
+      inscribed <- amplitude_max / sqrt(2)
+      for (h in seq_len(n_harmonics)) {
+        lb2[paste0("b_cos", h)] <- -inscribed; ub2[paste0("b_cos", h)] <- inscribed
+        lb2[paste0("b_sin", h)] <- -inscribed; ub2[paste0("b_sin", h)] <- inscribed
+      }
+      st2 <- as.list(coef(nls_fit))
+      for (nm in names(st2)) {
+        if (nm %in% names(lb2) && is.finite(lb2[[nm]]) && st2[[nm]] < lb2[[nm]])
+          st2[[nm]] <- lb2[[nm]] * 0.9
+        if (nm %in% names(ub2) && is.finite(ub2[[nm]]) && st2[[nm]] > ub2[[nm]])
+          st2[[nm]] <- ub2[[nm]] * 0.9
+      }
+      refit <- tryCatch(minpack.lm::nlsLM(as.formula(formula_str), data = fit_data,
+                 start = st2, lower = lb2, upper = ub2,
+                 control = minpack.lm::nls.lm.control(maxiter = 300)),
+                 error = function(e) NULL)
+      if (!is.null(refit) && isTRUE(fck_conv_of(refit)$ok)) {
+        nls_fit <- refit
+        amp_bound_action <- sprintf(
+          "amplitude exceeded the stated maximum (%.4g); refitted inside the inscribed box (+/-%.4g per coefficient)",
+          max(amps0, na.rm = TRUE), inscribed)
+      } else {
+        amp_bound_action <- sprintf(
+          "amplitude %.4g exceeds the stated maximum %.4g and the constrained refit did not converge -- this fit does NOT satisfy the bound you set",
+          max(amps0, na.rm = TRUE), amplitude_max)
+      }
+    } else {
+      amp_bound_action <- "satisfied by the unconstrained-in-disc fit"
+    }
+  }
+
   # Extract results
   tryCatch({
     coefs <- coef(nls_fit)
@@ -1349,7 +1414,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     fitted_vals <- predict(nls_fit)
     ss_total <- sum((y - mean(y))^2)
     ss_resid <- sum((y - fitted_vals)^2)
-    r_squared <- 1 - ss_resid / ss_total
+    r_squared <- fck_r_squared(ss_resid, ss_total)   # P0.6: SST = 0 -> NA, not NaN
     percent_rhythm <- max(0, r_squared * 100)
 
     # Calculate p-value for circadian rhythm
@@ -1358,12 +1423,19 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     # AUDIT (extra a): test the harmonics GIVEN the trend, by refitting the
     # trend-only model. See the note in fit_cosinor() -- the old numerator was
     # the whole model's SS over the harmonics' df alone.
+    # AUDIT (P0.3): the exp_sat branch used to freeze tau at its full-model value
+    # and refit only M and A_sat by OLS. That is not the nested null -- tau is
+    # free under it -- so SSE0 was too large, F was biased up, and the test
+    # rejected true nulls at 14.6% against a nominal 5%. It now refits tau.
+    # See fck_reduced_exp_sat_sse() in server/08_helpers_cosinor.R.
     ss_resid_trend_only <- tryCatch({
       if(trend_type == "exp_sat" && !is.null(trend_params$A_sat) && !is.null(trend_params$tau)) {
-        # refit M and A_sat with tau held at its full-model value: a 2-parameter
-        # linear problem, so no second optimisation can fail here
-        b <- 1 - exp(-(time - t_offset) / trend_params$tau$coef)
-        sum(residuals(lm(y ~ b))^2)
+        fck_reduced_exp_sat_sse(
+          y, time, t_offset,
+          start = list(mesor = as.numeric(coefs[["mesor"]]),
+                       A_sat = trend_params$A_sat$coef,
+                       tau   = trend_params$tau$coef),
+          lower = as.list(lower_bounds), upper = as.list(upper_bounds))
       } else if(trend_type == "linear") {
         sum(residuals(lm(y ~ time))^2)
       } else if(trend_type == "log") {
@@ -1384,8 +1456,10 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     # ===========================================================================
 
     # Log-likelihood for Gaussian nonlinear model
+    # P0.6: a perfect fit gave log(0) -> log_lik = Inf -> AIC = -Inf, so a flat
+    # subject beat every rival model. sigma^2 is floored relative to the data.
     sigma_sq <- ss_resid / n
-    log_lik <- -n/2 * (log(2*pi) + log(sigma_sq) + 1)
+    log_lik <- fck_gaussian_loglik(ss_resid, n, y_scale = stats::sd(y))
 
     # AIC: Akaike Information Criterion
     k <- n_params + 1  # parameters + sigma
@@ -1499,6 +1573,14 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
 
     list(
       success = TRUE,
+      # AUDIT (P0.5): what the amplitude bound actually did to this fit, and
+      # whether any harmonic came out below the minimum the user asked for.
+      # amplitude_min is reported, never imposed: forcing a flat subject up to
+      # a floor would invent a rhythm.
+      amp_bound_action = amp_bound_action,
+      amplitude_below_min = if (use_bounds && is.finite(amplitude_min) &&
+                                amplitude_min > 0 && length(amplitudes))
+        which(amplitudes < amplitude_min) else integer(0),
       mesor = as.numeric(mesor),
       mesor_se = if(!is.na(mesor_se)) as.numeric(mesor_se) else NA,
       trend_type = trend_type,

@@ -904,3 +904,97 @@ fck_value_at <- function(coefs, mod, t_model) {
                              include_trend = TRUE, t_offset = mod$t_offset %||% 0)
   as.numeric(v[1])
 }
+
+# ==============================================================================
+# THE REDUCED MODEL FOR THE ZERO-AMPLITUDE TEST (P0.3)
+# ==============================================================================
+# The zero-amplitude F test compares the full model against the same model with
+# every harmonic coefficient set to zero. For a `linear` or `log` trend the
+# reduced model is linear in its parameters, so lm() already returns the exact
+# least-squares fit and nothing was wrong there.
+#
+# For `exp_sat` it is NOT. The reduced model is
+#
+#     y = mesor + A_sat * (1 - exp(-(t - t0)/tau)) + e
+#
+# which is nonlinear in tau. The previous code held tau at the value the FULL
+# model estimated and refitted only mesor and A_sat by OLS:
+#
+#     b <- 1 - exp(-(time - t_offset) / trend_params$tau$coef)
+#     sum(residuals(lm(y ~ b))^2)
+#
+# I wrote that, for numerical robustness, and documented the shortcut without
+# working out what it costs. Under the null tau is a free parameter; freezing it
+# leaves SSE0 un-minimised, so the numerator (SSE0 - SSE1) is inflated and F is
+# biased UPWARDS. Measured on 3,000 simulated nulls on the Circaflex time grid,
+# the test rejected at 14.6% against a nominal 5%, and 4.5% against a nominal
+# 1%. It manufactured significance.
+#
+# This refits tau. If the refit fails to converge the function returns NA rather
+# than silently falling back to the frozen-tau value, because a wrong F is worse
+# than an absent one.
+fck_reduced_exp_sat_sse <- function(y, time, t_offset, start, lower = NULL, upper = NULL) {
+  ok <- is.finite(y) & is.finite(time)
+  y <- y[ok]; time <- time[ok]
+  if (length(y) < 4) return(NA_real_)
+
+  st <- list(mesor = as.numeric(start[["mesor"]]),
+             A_sat = as.numeric(start[["A_sat"]]),
+             tau   = as.numeric(start[["tau"]]))
+  if (any(!vapply(st, function(v) length(v) == 1 && is.finite(v), logical(1))))
+    return(NA_real_)
+  if (st$tau <= 0) st$tau <- max(1, diff(range(time)) / 4)
+
+  pick <- function(b, nm, dflt) {
+    if (is.null(b) || !nm %in% names(b)) return(dflt)
+    v <- as.numeric(b[[nm]]); if (length(v) != 1 || is.na(v)) dflt else v
+  }
+  lo <- c(mesor = pick(lower, "mesor", -Inf),
+          A_sat = pick(lower, "A_sat", -Inf),
+          tau   = max(pick(lower, "tau", 1e-6), 1e-6))
+  up <- c(mesor = pick(upper, "mesor", Inf),
+          A_sat = pick(upper, "A_sat", Inf),
+          tau   = pick(upper, "tau", Inf))
+  # A start sitting exactly on a bound stalls the optimiser.
+  for (nm in names(st)) {
+    if (is.finite(lo[[nm]]) && st[[nm]] <= lo[[nm]])
+      st[[nm]] <- lo[[nm]] + max(abs(lo[[nm]]) * 1e-3, 1e-3)
+    if (is.finite(up[[nm]]) && st[[nm]] >= up[[nm]])
+      st[[nm]] <- up[[nm]] - max(abs(up[[nm]]) * 1e-3, 1e-3)
+  }
+
+  resid_fn <- function(p) y - (p[1] + p[2] * (1 - exp(-(time - t_offset) / p[3])))
+  fit <- tryCatch(
+    minpack.lm::nls.lm(par = unlist(st), fn = resid_fn,
+                       lower = lo[names(st)], upper = up[names(st)],
+                       control = minpack.lm::nls.lm.control(maxiter = 200,
+                                                            maxfev = 2000)),
+    error = function(e) NULL)
+  if (is.null(fit)) return(NA_real_)
+  sse <- sum(resid_fn(fit$par)^2)
+  if (!is.finite(sse)) return(NA_real_) else sse
+}
+
+# ---- degenerate-fit guards (P0.6) -------------------------------------------
+# A constant trajectory has SST = 0, so 1 - SSE/SST is 0/0 = NaN. A perfect fit
+# has SSE = 0, so log(sigma^2) = -Inf, the Gaussian log-likelihood is +Inf and
+# AIC is -Inf -- a flat subject then WINS every model comparison it enters.
+# Neither case is an error in the data; both need a defined answer.
+fck_r_squared <- function(ss_resid, ss_total) {
+  if (!is.finite(ss_resid) || !is.finite(ss_total)) return(NA_real_)
+  # No variance to explain: R^2 is undefined, not 1 and not 0.
+  if (ss_total <= .Machine$double.eps) return(NA_real_)
+  1 - ss_resid / ss_total
+}
+
+# Gaussian log-likelihood with a floor on sigma^2. The floor is relative to the
+# data scale so it does not depend on the units, and it is only ever reached by
+# a fit that reproduces the observations exactly.
+fck_gaussian_loglik <- function(ss_resid, n, y_scale = NULL) {
+  if (!is.finite(ss_resid) || !is.finite(n) || n < 1) return(NA_real_)
+  sigma_sq <- ss_resid / n
+  floor_sq <- if (!is.null(y_scale) && is.finite(y_scale) && y_scale > 0)
+    (1e-8 * y_scale)^2 else 1e-16
+  if (sigma_sq < floor_sq) sigma_sq <- floor_sq
+  -n / 2 * (log(2 * pi) + log(sigma_sq) + 1)
+}

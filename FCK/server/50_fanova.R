@@ -393,15 +393,25 @@
           if(nrow(Y_complete) >= 2 && n_visits >= 2) {
             # Perform repeated measures ANOVA at this time point
             # Remove subject mean (within-subject centering)
-            subject_means <- rowMeans(Y_complete, na.rm = TRUE)
-            Y_centered <- Y_complete - subject_means
-            
-            # Calculate SS
+            # AUDIT (P0.4): this used to be
+            #     Y_centered  <- Y_complete - rowMeans(Y_complete)
+            #     SS_residual <- sum(Y_centered^2)
+            # Removing the SUBJECT means leaves the VISIT effect in the
+            # residual, so SS_residual was SS_error + SS_visit exactly. The
+            # denominator was inflated and F came out at 22.8% of its correct
+            # value on a 12x4 fixture (8.49 where stats::aov gives 37.26), so
+            # the test was badly conservative and would miss real effects.
+            # The residual of a one-factor repeated-measures design removes
+            # BOTH margins and adds the grand mean back.
             grand_mean <- mean(Y_complete, na.rm = TRUE)
             visit_means_t <- colMeans(Y_complete, na.rm = TRUE)
-            
+            subject_means <- rowMeans(Y_complete, na.rm = TRUE)
+
+            E <- sweep(sweep(Y_complete, 1, subject_means, "-"),
+                       2, visit_means_t, "-") + grand_mean
+
             SS_visit <- sum(nrow(Y_complete) * (visit_means_t - grand_mean)^2)
-            SS_residual <- sum(Y_centered^2, na.rm = TRUE)
+            SS_residual <- sum(E^2, na.rm = TRUE)
             
             df_visit <- n_visits - 1
             df_residual <- (nrow(Y_complete) - 1) * (n_visits - 1)
@@ -455,13 +465,13 @@
                 
                 # Calculate permuted F-statistic
                 subject_means_perm <- rowMeans(Y_perm, na.rm = TRUE)
-                Y_centered_perm <- Y_perm - subject_means_perm
-                
                 grand_mean_perm <- mean(Y_perm, na.rm = TRUE)
                 visit_means_perm <- colMeans(Y_perm, na.rm = TRUE)
                 
+                E_perm <- sweep(sweep(Y_perm, 1, subject_means_perm, "-"),
+                                2, visit_means_perm, "-") + grand_mean_perm
                 SS_visit_perm <- sum(nrow(Y_perm) * (visit_means_perm - grand_mean_perm)^2)
-                SS_residual_perm <- sum(Y_centered_perm^2, na.rm = TRUE)
+                SS_residual_perm <- sum(E_perm^2, na.rm = TRUE)
                 
                 df_visit <- n_visits - 1
                 df_residual <- (nrow(Y_perm) - 1) * (n_visits - 1)
@@ -481,7 +491,12 @@
         # Calculate permutation-based p-values
         p_values_pointwise <- numeric(n_time)
         for(t in 1:n_time) {
-          p_values_pointwise[t] <- mean(F_stat_perm[t, ] >= F_stat[t], na.rm = TRUE)
+          # AUDIT (P1.1): mean(perm >= obs) can be exactly 0, reporting p = 0
+          # for a Monte Carlo test of finitely many draws. The observed
+          # statistic counts as one of its own null draws.
+          .np <- sum(is.finite(F_stat_perm[t, ]))
+          p_values_pointwise[t] <- if (.np < 1) NA_real_ else
+            (1 + sum(F_stat_perm[t, ] >= F_stat[t], na.rm = TRUE)) / (1 + .np)
         }
         
         # Handle any remaining NAs
@@ -635,7 +650,9 @@
         p_value_L2 = p_value_L2,
         eta_squared = eta_squared,
         df_between = n_visits - 1,
-        df_within = length(unique(subject_id)) * (n_visits - 1),
+        # AUDIT (P0.4): was length(unique(subject_id)) * (n_visits - 1), which
+        # counts n*(k-1) instead of the (n-1)*(k-1) the F test actually uses.
+        df_within = (length(unique(subject_id)) - 1) * (n_visits - 1),
         alpha = alpha,
         n_permutations = n_permutations,
         subject_id = subject_id,
@@ -739,10 +756,13 @@
     # Calculate p-values
     p_values_pointwise <- numeric(n_time)
     for(t in 1:n_time) {
-      p_values_pointwise[t] <- mean(F_stat_perm[t, ] >= F_stat[t])
+      # AUDIT (P1.1): (1 + #{T* >= T}) / (1 + B) -- a Monte Carlo p is never 0.
+      p_values_pointwise[t] <- (1 + sum(F_stat_perm[t, ] >= F_stat[t], na.rm = TRUE)) /
+                               (1 + sum(is.finite(F_stat_perm[t, ])))
     }
     
-    p_value_L2 <- mean(L2_stat_perm >= L2_stat)
+    p_value_L2 <- (1 + sum(L2_stat_perm >= L2_stat, na.rm = TRUE)) /
+                      (1 + sum(is.finite(L2_stat_perm)))
     
     p_values_adjusted <- p.adjust(p_values_pointwise, method = "fdr")
     sig_regions <- p_values_adjusted < alpha
@@ -1494,7 +1514,8 @@
           p_values_pointwise[t] <- mean(abs(t_stat_perm[t, ]) >= abs(t_stat[t]), na.rm = TRUE)
         }
         
-        p_value_L2 <- mean(L2_stat_perm >= L2_stat)
+        p_value_L2 <- (1 + sum(L2_stat_perm >= L2_stat, na.rm = TRUE)) /
+                      (1 + sum(is.finite(L2_stat_perm)))
         
         # Bootstrap confidence intervals for paired differences
         n_boot <- 100
@@ -1643,7 +1664,8 @@
           p_values_pointwise[t] <- mean(abs(t_stat_perm[t, ]) >= abs(t_stat[t]), na.rm = TRUE)
         }
         
-        p_value_L2 <- mean(L2_stat_perm >= L2_stat)
+        p_value_L2 <- (1 + sum(L2_stat_perm >= L2_stat, na.rm = TRUE)) /
+                      (1 + sum(is.finite(L2_stat_perm)))
         
         # Bootstrap confidence intervals
         n_boot <- 100
