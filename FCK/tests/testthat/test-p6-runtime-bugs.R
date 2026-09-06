@@ -211,3 +211,62 @@ test_that("P6.7: the harmonic tab's defaults are the ones you would want", {
   expect_false(grepl('input$harmonic_data_source %||% "smoothed"', srv, fixed = TRUE))
   expect_false(grepl('input$harmonic_time_origin %||% "midnight"', srv, fixed = TRUE))
 })
+
+# ============================================ P7.1 the dead control ==========
+test_that("P7.1: the pairwise permutation control is not overridden", {
+  src <- code_of("server/50_fanova.R")
+  # the override, and the "Fallback" comment that described the LIVE branch as
+  # the dead one
+  expect_false(grepl("n_perm_to_use <- if(!is.null(values$fanova_results$n_permutations))",
+                     src, fixed = TRUE))
+  expect_true(grepl("n_perm_to_use <- suppressWarnings(as.integer(input$pairwise_permutations))",
+                    src, fixed = TRUE))
+  # both counts travel with the result so a difference is visible
+  expect_true(grepl("values$pairwise_results$omnibus_permutations <- omnibus_perm",
+                    src, fixed = TRUE))
+  expect_true(grepl("the omnibus fANOVA used %d", src, fixed = TRUE))
+})
+
+test_that("P7.1: a correction floor above alpha makes significance impossible", {
+  # m/(B+1) is the smallest adjusted p Bonferroni can produce. If that exceeds
+  # alpha, nothing can be significant however strong the effect -- the app now
+  # refuses the run rather than reporting a null result.
+  m <- 6; alpha <- 0.05
+  expect_gt(m / (100 + 1), alpha)      # B = 100: impossible
+  expect_lt(m / (1000 + 1), alpha)     # B = 1000: fine
+  expect_equal(ceiling(m / alpha), 120)
+  src <- code_of("server/50_fanova.R")
+  expect_true(grepl("smallest attainable", src, fixed = TRUE))
+  expect_true(grepl("Raise B to at least %d", src, fixed = TRUE))
+})
+
+# ============================================ P7.2 two more dead controls =====
+test_that("P7.2: every UI control is read somewhere in the server", {
+  # The sweep that found max_landmarks and display_options. It would NOT have
+  # found P7.1 -- that reference existed, in a branch that never ran -- which is
+  # why tests/reactive_smoke_test.R also asserts a distinctive value reaches the
+  # result. Both checks are needed; neither subsumes the other.
+  ids <- unique(unlist(lapply(
+    list.files(file.path(app_dir, "ui"), full.names = TRUE, pattern = "[.]R$"),
+    function(f) {
+      s <- paste(readLines(f, warn = FALSE), collapse = "\n")
+      c(regmatches(s, gregexpr('(?<=Input\\(")[A-Za-z0-9_]+', s, perl = TRUE))[[1]],
+        regmatches(s, gregexpr('(?<=actionButton\\(")[A-Za-z0-9_]+', s, perl = TRUE))[[1]])
+    })))
+  srv <- paste(unlist(lapply(
+    list.files(file.path(app_dir, "server"), full.names = TRUE, pattern = "[.]R$"),
+    readLines, warn = FALSE)), collapse = "\n")
+  unread <- ids[!vapply(ids, function(id)
+    grepl(paste0("input\\$", id, "\\b"), srv), logical(1))]
+  expect_identical(sort(unread), character(0))
+})
+
+test_that("P7.2: max_landmarks and display_options now do something", {
+  src <- code_of("server/40_fpca.R")
+  expect_true(grepl("cap <- suppressWarnings(as.integer(input$max_landmarks))",
+                    src, fixed = TRUE))
+  expect_true(grepl("Maximum of %d landmarks reached", src, fixed = TRUE))
+  expect_true(grepl(".opt <- input$display_options", src, fixed = TRUE))
+  expect_true(grepl('show_curves <- is.null(.opt) || "curves" %in% .opt', src, fixed = TRUE))
+  expect_true(grepl("if(show_means && n_display > 0) {", src, fixed = TRUE))
+})

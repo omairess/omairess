@@ -178,6 +178,46 @@ server <- function(input, output, session) {
   render("reg_pvalue_plot renders (GAM, all-NA p)", output$reg_pvalue_plot)
   render("reg_coeff_plot renders (GAM, all-NA se)", output$reg_coeff_plot)
 
+  # ----------------------------------------------- fANOVA and its post-hocs --
+  # P7.1: the pairwise permutation box was overridden by the omnibus count, so
+  # a value typed there never reached the test. The check that catches that
+  # class of bug is: set a control to a DISTINCTIVE value and assert the result
+  # carries it. A static "is input$x referenced anywhere" sweep would not have
+  # caught it -- the reference existed, in dead code.
+  cat("\n-- fANOVA, then pairwise with a distinct permutation count -------------\n")
+  session$setInputs(fanova_design = "between", fanova_group_var = "AGEcategory",
+                    n_permutations = 200L, alpha_level = 0.05,
+                    fanova_data_source = "smoothed", rm_global_test = FALSE)
+  session$setInputs(run_fanova = 1); session$flushReact()
+  if (is.null(values$fanova_results)) {
+    fail("the omnibus fANOVA produced no result")
+  } else {
+    ok(sprintf("omnibus fANOVA ran with B = %d", values$fanova_results$n_permutations))
+    if (!identical(as.integer(values$fanova_results$n_permutations), 200L))
+      fail("the omnibus did not use the permutation count it was given")
+
+    session$setInputs(pairwise_permutations = 777L, pairwise_correction = "bonferroni",
+                      pairwise_alpha = 0.05, pairwise_confidence_bands = TRUE,
+                      posthoc_source = "fanova")
+    session$setInputs(run_pairwise = 1); session$flushReact()
+    pr <- values$pairwise_results
+    if (is.null(pr)) {
+      fail("the pairwise comparisons produced no result")
+    } else if (!identical(as.integer(pr$n_permutations), 777L)) {
+      fail(sprintf("the pairwise tests used B = %s, not the 777 that was asked for",
+                   as.character(pr$n_permutations)))
+    } else {
+      ok("the pairwise tests used the permutation count the control was set to")
+      if (!identical(as.integer(pr$omnibus_permutations), 200L))
+        fail("the omnibus count was not recorded alongside it")
+      else ok("both counts are recorded, so a difference is visible")
+    }
+    render("pairwise summary renders", output$pairwise_summary)
+    render("pairwise global table renders", output$pairwise_global_table)
+    render("fanova effect size plot renders", output$fanova_effect_size_plot)
+    render("fanova effect summary renders", output$fanova_effect_summary)
+  }
+
   cat("\n")
   if (failures) { cat(sprintf("Reactive smoke test FAILED (%d).\n", failures)); quit(status = 1) }
   cat("Reactive smoke test passed.\n")

@@ -1957,6 +1957,56 @@ After P6: **1,372 testthat assertions (0 failed, 0 skipped) and 13 standalone
 suites pass.**
 
 
+**4.52 P7: a control that had never done anything.** Reported directly: typing
+9904 into the pairwise tab's "Number of permutations" produced a run at 1000.
+
+*P7.1 &mdash; the pairwise permutation box was dead code.* The observer read
+
+```r
+n_perm_to_use <- if (!is.null(values$fanova_results$n_permutations))
+                   values$fanova_results$n_permutations
+                 else input$pairwise_permutations   # "Fallback"
+```
+
+under the comment "IMPORTANT: Use the same n_permutations that was used in the
+omnibus FANOVA". **The tab refuses to run without an omnibus fANOVA**, so the
+first branch is always taken and the second is unreachable. The control has
+never had any effect; the readout reported the omnibus's count, and nothing said
+the typed value had been discarded. P6.6 made it worse by adding help text
+telling the user to raise it.
+
+There is no statistical reason the two counts must match &mdash; they are
+different tests, and the pairwise family needs MORE resolution, because a
+correction across *m* comparisons pushes the smallest attainable adjusted
+p-value to *m*/(B+1). The control is honoured now, both counts are reported so a
+difference is visible, and a blank or invalid entry falls back with a warning
+rather than silently.
+
+While there: the summary now also reports the smallest attainable **adjusted**
+p, and the app **refuses the run** when *m*/(B+1) exceeds alpha &mdash; at
+B = 100 with six comparisons and Bonferroni that is 0.059, so nothing could be
+significant however strong the effect, which previously came out as six null
+results with no explanation.
+
+*P7.2 &mdash; a sweep for the same shape found two more.* Comparing every
+`*Input("id")` and `actionButton("id")` in `ui/` against every `input$id` in
+`server/` turned up `max_landmarks` ("Maximum number of landmarks", enforcing
+none) and `display_options` ("Show individual curves" / "Show mean curves",
+read by no plot). Both are wired.
+
+**Two checks, because neither subsumes the other.** The static sweep is now a
+test &mdash; it would have caught P7.2 and it asserts the list stays empty. It
+would NOT have caught P7.1, because `input$pairwise_permutations` *was*
+referenced, in a branch that never ran. So `tests/reactive_smoke_test.R` also
+sets the control to a distinctive value (777, against an omnibus at 200) and
+asserts the result carries it. Verified by reintroducing the override and
+confirming the test fails with
+"the pairwise tests used B = 200, not the 777 that was asked for".
+
+After P7: **1,387 testthat assertions (0 failed, 0 skipped) and 13 standalone
+suites pass.**
+
+
 ## 5. Rename table
 
 | source | source app | merged app |

@@ -1960,9 +1960,15 @@
         min(30, n_curves)
       }
       
+      # AUDIT (P7.2): the "Display options" checkboxes sat directly above this
+      # plot and were read nowhere in the server. Both now do what they say.
+      .opt <- input$display_options
+      show_curves <- is.null(.opt) || "curves" %in% .opt
+      show_means  <- is.null(.opt) || "means"  %in% .opt
+
       p <- plot_ly(type = 'scatter', mode = 'lines')
-      
-      for(i in 1:n_display) {
+
+      for(i in if (show_curves) seq_len(n_display) else integer(0)) {
         p <- p %>% add_trace(
           x = time_points,
           y = warp_functions[,i],
@@ -1986,7 +1992,7 @@
         hovertemplate = "Identity line<extra></extra>"
       )
       
-      if(n_display > 0) {
+      if(show_means && n_display > 0) {
         mean_warp <- rowMeans(warp_functions[,1:n_display, drop = FALSE])
         p <- p %>% add_trace(
           x = time_points,
@@ -2195,10 +2201,23 @@
     if(!is.null(click)) {
       # Only add landmark if it's a click on the curve, not on existing landmarks
       if(is.null(click$curveNumber) || click$curveNumber == 0) {
+        # AUDIT (P7.2): "Maximum number of landmarks" was read nowhere in the
+        # server -- a control that stated a limit and enforced none. Found by
+        # the same sweep that caught the dead permutation box (P7.1).
+        cap <- suppressWarnings(as.integer(input$max_landmarks))
+        if (!is.finite(cap) || cap < 2) cap <- 20L
+        n_have <- if (is.null(values$landmark_points)) 0L else nrow(values$landmark_points)
+        if (n_have >= cap) {
+          showNotification(sprintf(
+            "Maximum of %d landmarks reached. Clear some, or raise the limit above.", cap),
+            duration = 5, type = "warning")
+          return()
+        }
         new_point <- data.frame(x = click$x, y = click$y)
         values$landmark_points <- rbind(values$landmark_points, new_point)
-        
-        showNotification(paste("Landmark added at t =", round(click$x, 3)), 
+
+        showNotification(sprintf("Landmark %d of %d added at t = %s",
+                                 n_have + 1L, cap, round(click$x, 3)),
                          duration = 2, type = "message")
       }
     }

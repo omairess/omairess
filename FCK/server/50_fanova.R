@@ -2028,15 +2028,35 @@
         fd_to_use <- values$fd_obj
       }
       
-      # Call appropriate pairwise function based on design
-      # IMPORTANT: Use the same n_permutations that was used in the omnibus FANOVA
-      n_perm_to_use <- if(!is.null(values$fanova_results$n_permutations)) {
-        values$fanova_results$n_permutations
-      } else {
-        input$pairwise_permutations  # Fallback
+      # AUDIT (P7.1): this used to read
+      #     n_perm_to_use <- if (!is.null(values$fanova_results$n_permutations))
+      #                        values$fanova_results$n_permutations
+      #                      else input$pairwise_permutations   # "Fallback"
+      # under the comment "IMPORTANT: Use the same n_permutations that was used
+      # in the omnibus FANOVA". The tab REQUIRES an omnibus fANOVA before it
+      # will run, so the first branch is always taken and the second is dead
+      # code. The "Number of permutations" box on this tab therefore did
+      # nothing, ever: type 9904, get the omnibus's 1000, with the readout
+      # reporting 1000 and nothing saying the entry had been discarded. P6.6
+      # made that worse by adding help text telling the user to raise it.
+      #
+      # There is no statistical reason the two must match. They are different
+      # tests with different resolution needs -- and the pairwise family needs
+      # MORE, because a multiplicity correction across m comparisons pushes the
+      # smallest attainable adjusted p to m/(B+1). The control is honoured, and
+      # both counts are reported so a difference is visible rather than silent.
+      omnibus_perm <- values$fanova_results$n_permutations
+      n_perm_to_use <- suppressWarnings(as.integer(input$pairwise_permutations))
+      if (!is.finite(n_perm_to_use) || n_perm_to_use < 1) {
+        n_perm_to_use <- if (!is.null(omnibus_perm)) as.integer(omnibus_perm) else 5000L
+        showNotification(
+          sprintf("The permutation count was blank or invalid; using %d.", n_perm_to_use),
+          type = "warning", duration = 8)
       }
-      
-      cat("Using", n_perm_to_use, "permutations (same as omnibus test)\n")
+
+      cat("Using", n_perm_to_use, "permutations for the pairwise tests",
+          if (!is.null(omnibus_perm)) sprintf("(the omnibus used %d)", omnibus_perm) else "",
+          "\n")
       
       # MERGED APP: what to compare is resolved in one place
       # (FCK/server/52_posthoc_source.R). Before this, the between-subjects
@@ -2052,6 +2072,28 @@
       }
       fd_for_pairs <- if (!is.null(spec$fd)) spec$fd else fd_to_use
       cat("Post-hoc source:", spec$description, "\n")
+
+      # A correction across m comparisons cannot produce an adjusted p below
+      # m/(B+1) (Bonferroni; Holm and Hochberg have the same floor on their
+      # smallest entry). If that exceeds alpha, NO comparison can come out
+      # significant however strong the effect -- a trap worth refusing rather
+      # than reporting as a null result.
+      .m_cmp <- choose(nlevels(droplevels(as.factor(
+                  if (spec$design == "within") spec$rm_factor else spec$group_labels))), 2)
+      .adj_floor <- if (identical(input$pairwise_correction, "none")) 1 / (n_perm_to_use + 1)
+                    else .m_cmp / (n_perm_to_use + 1)
+      if (is.finite(.adj_floor) && .adj_floor > input$pairwise_alpha) {
+        showNotification(sprintf(
+          paste("With B = %d and %s across %d comparisons, the smallest attainable",
+                "ADJUSTED p is %.4g, which is above your alpha of %g. No comparison",
+                "could be significant at this permutation count whatever the data",
+                "shows. Raise B to at least %d."),
+          n_perm_to_use, input$pairwise_correction, .m_cmp, .adj_floor,
+          input$pairwise_alpha, ceiling(.m_cmp / input$pairwise_alpha)),
+          type = "error", duration = NULL)
+        return()
+      }
+
 
       if(spec$design == "within") {
         cat("Performing PAIRED comparisons for within-subjects design\n")
@@ -2078,6 +2120,9 @@
 
       # Travels with the result, so the summary and the export can say what was
       # compared rather than leaving the reader to assume it was the omnibus.
+      # P7.1: what the omnibus used, so the readout can show both counts and a
+      # difference is visible instead of silent.
+      values$pairwise_results$omnibus_permutations <- omnibus_perm
       values$pairwise_results$posthoc_source <- spec$description
       values$pairwise_results$matches_omnibus <- isTRUE(spec$matches_omnibus)
       
@@ -2121,7 +2166,11 @@
     cat("Number of comparisons:", length(res$pair_names), "\n")
     cat("Correction method:", res$correction_method, "\n")
     cat("Significance level:", res$alpha, "\n")
-    cat("Permutations:", res$n_permutations, "\n")
+    cat("Permutations:", res$n_permutations)
+    if (!is.null(res$omnibus_permutations) &&
+        !identical(as.integer(res$omnibus_permutations), as.integer(res$n_permutations)))
+      cat(sprintf("   (the omnibus fANOVA used %d)", as.integer(res$omnibus_permutations)))
+    cat("\n")
 
     # AUDIT (P6.6): with B permutations the smallest attainable Monte Carlo
     # p-value is 1/(B+1) -- at B = 100 that is 0.009901. When several
@@ -2136,6 +2185,18 @@
                  function(x) as.numeric(x$p_value_L2 %||% NA), numeric(1)))
       .n_at <- sum(is.finite(.praw) & .praw <= .floor_p + 1e-12)
       cat(sprintf("Smallest attainable p at this B: %.6f = 1/(B+1)\n", .floor_p))
+      # P7.1: alpha is compared against the ADJUSTED p, and a correction across
+      # m comparisons cannot go below m/(B+1). That is the number that decides
+      # whether anything CAN be significant.
+      .m <- length(.praw)
+      .adj_floor <- if (identical(res$correction_method, "none")) .floor_p else .m * .floor_p
+      cat(sprintf("Smallest attainable ADJUSTED p (%s, %d comparisons): %.6g\n",
+                  res$correction_method, .m, .adj_floor))
+      if (is.finite(.adj_floor) && .adj_floor > res$alpha)
+        cat(sprintf(paste0("WARNING: that is ABOVE your alpha of %g, so no comparison can be\n",
+                           "      significant at this permutation count whatever the data shows.\n",
+                           "      Raise B to at least %d.\n"),
+                    res$alpha, ceiling(.m / res$alpha)))
       if (.n_at > 0)
         cat(sprintf(paste0("NOTE: %d of %d comparison%s sit AT that floor. Their true p-values\n",
                            "      are somewhere below %.6f and this run cannot separate them --\n",
