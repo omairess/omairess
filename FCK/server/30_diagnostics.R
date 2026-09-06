@@ -300,10 +300,11 @@
           # over a different basis, so the advice to transfer it was wrong for
           # the same reason the mgcv/fda ratio was (P8.3), one level less
           # obvious. It now builds the SAME object production does.
-          nb_user <- if(!is.null(input$smooth_method) && input$smooth_method == "manual")
-            input$n_basis_manual else input$n_basis
-          if(is.null(nb_user) || !is.finite(nb_user)) nb_user <- 20
-          nb <- max(4, min(as.integer(nb_user), n_time - 2))
+          # P10.2: the same count rule as production, not a second one. This
+          # capped at n_time - 2 where production caps at n_time, so on a short
+          # series the CV was fitting a smaller basis than the app -- which made
+          # its lambda not quite comparable after all.
+          nb <- fck_smoothing_nbasis(input, n_time)
           basis <- fck_smoothing_basis(cv_axis, nb, input$smooth_method %||% "manual")
           fdParobj <- fdPar(basis, 2, lambda)
           
@@ -368,13 +369,10 @@
         k_folds = k_folds,
         # P9.3: which model this lambda belongs to, so the report can say it
         # rather than leave the reader to assume.
+        # P10.2: the same count rule again, not a third copy of it.
         basis_label = tryCatch(
           fck_basis_label(cv_axis, fck_smoothing_basis(
-            cv_axis,
-            max(4, min(as.integer(if(!is.null(input$smooth_method) &&
-                                     input$smooth_method == "manual")
-                                    input$n_basis_manual else input$n_basis) %||% 20,
-                       n_time - 2)),
+            cv_axis, fck_smoothing_nbasis(input, n_time),
             input$smooth_method %||% "manual")),
           error = function(e) NA_character_)
       )

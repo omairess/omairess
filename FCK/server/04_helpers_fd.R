@@ -1,3 +1,5 @@
+if (!exists("%||%", mode = "function")) `%||%` <- function(a, b) if (is.null(a)) b else a
+
 # ==============================================================================
 # server/04_helpers_fd.R — one rule for turning curves into an fd object
 #
@@ -196,6 +198,24 @@ fck_smoothing_axis <- function(input, values) {
 # functions; it is ignored for a Fourier basis, which follows CIRCAREG's
 # min(n_time, 13) rule (fda rounds an even count up to the next odd number,
 # which is the behaviour CIRCAREG shipped).
+# AUDIT (P10.2). P9.3 extracted the basis CONSTRUCTOR so production and the
+# cross-validation diagnostic would build the same object, and left the basis
+# COUNT rule duplicated: production capped at n_time, the CV at n_time - 2. On
+# 16 time points with n_basis = 20 that is 16 functions against 14, so the claim
+# that the CV fits "exactly the production basis" was not universally true --
+# it held for cyclic smoothing, where the Fourier rule ignores the count, and
+# for any series long enough for the cap not to bind. Extracting half a rule and
+# leaving the other half duplicated is the same mistake this audit has made four
+# times over; the whole rule lives here now.
+fck_smoothing_nbasis <- function(input, n_time, method = NULL) {
+  method <- method %||% (input$smooth_method %||% "auto")
+  if (identical(method, "none")) return(min(20L, n_time - 2L))
+  nb <- if (identical(method, "manual")) input$n_basis_manual else input$n_basis
+  nb <- suppressWarnings(as.integer(nb))
+  if (!length(nb) || !is.finite(nb)) nb <- 20L
+  max(4L, min(nb, n_time))
+}
+
 fck_smoothing_basis <- function(axis, nb, method = "manual") {
   nb <- max(4L, min(as.integer(nb), axis$n_time))
   if (isTRUE(axis$cyclic)) {

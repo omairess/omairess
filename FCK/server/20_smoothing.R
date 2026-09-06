@@ -69,17 +69,11 @@ observeEvent(input$apply_smooth, {
     }
 
     # ---- basis size ---------------------------------------------------------
-    if(input$smooth_method == "none") {
-      nb <- min(20, n_time - 2)
-    } else if(input$smooth_method == "manual") {
-      nb <- input$n_basis_manual
-      nb <- min(nb, n_time)
-      if(nb < 4) nb <- 4
-    } else {
-      nb <- input$n_basis
-      nb <- min(nb, n_time)
-      if(nb < 4) nb <- 4
-    }
+    # P10.2: the rule lives in fck_smoothing_nbasis() alongside the basis
+    # constructor, so the cross-validation diagnostic caps identically. The
+    # rule itself is unchanged: 20 or n_time - 2 for an unpenalised fit, the
+    # user's count capped at n_time otherwise, never below 4.
+    nb <- fck_smoothing_nbasis(input, n_time)
 
     if(!cyclic && nb >= n_time - 2 && input$smooth_method != "none") {
       showNotification(

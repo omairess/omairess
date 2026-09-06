@@ -173,6 +173,7 @@ Rscript tests/registration_effectiveness_test.R
 Rscript tests/reactive_smoke_test.R
 Rscript tests/audit_test.R
 Rscript tests/polar_agreement_test.R
+Rscript tests/periodic_shift_test.R
 Rscript -e 'testthat::test_dir("tests/testthat")'
 ```
 
@@ -189,6 +190,11 @@ that errors fails the test. Two bugs shipped in successive rounds because
 nothing pressed the buttons: a GAM loop whose header was renamed but whose body
 was not, and R's `$` partial-matching on a list. Both are now caught here — the
 test was checked by reintroducing each defect and confirming it fails.
+
+`periodic_shift_test.R` covers the periodic-registration estimator, and it
+reads the SHIPPED function: it parses `server/40_fpca.R` and evaluates only that
+one assignment, so it cannot pass against a stale copy. It was verified by
+reintroducing the off-by-one bin error, which it catches on three counts.
 
 `codegen_test.R` checks that the exported script *parses* for every combination
 of results the generator might be asked about. `export_roundtrip_test.R` goes
@@ -243,6 +249,18 @@ and the warp wraps, which is correct for a full cycle of circadian data; leave
 it unticked and the ends are filled by constant extrapolation, and the fraction
 of each curve that was extrapolated is reported. Shifts are capped at a quarter
 of the domain, beyond which a lag is not identified.
+
+In the periodic case the lag is estimated by FFT cross-correlation, and two
+details of that are easy to get wrong and were wrong here until 4.57. The time
+grid `seq(0, 1, length.out = n_time)` is CLOSED: its first and last samples are
+the same phase on a cycle, so the circular transform runs over `n_time - 1`
+samples, not `n_time`. And bin 1 of the transform is lag ZERO, so the 1-based
+`which.max()` index has to be decremented before it is wrapped onto the negative
+half of the cycle. Getting either wrong biases every shift by a constant
+1/(`n_time` − 1) — which is not visible as a wrong-looking number, only as a
+phase difference between curves that have none. `tests/periodic_shift_test.R`
+pins both: two identical periodic curves must return a shift of exactly zero and
+an exact identity round trip (RMSE 0, r 1), and known shifts must be recovered.
 
 **Landmark alignment** builds a monotone piecewise-linear map through the
 matched landmarks with the endpoints pinned. Landmarks that cross or duplicate

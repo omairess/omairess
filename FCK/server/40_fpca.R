@@ -1452,13 +1452,45 @@
       for(i in 1:n_curves) {
         # Find best shift using cross-correlation
         if(periodic) {
-          # Circular cross-correlation
-          fft_curve <- fft(curves[,i] - mean(curves[,i]))
-          fft_ref <- fft(ref_curve - mean(ref_curve))
-          cross_corr <- Re(fft(Conj(fft_ref) * fft_curve, inverse = TRUE)) / n_time
-          max_idx <- which.max(cross_corr)
-          shift_idx <- if(max_idx > n_time/2) max_idx - n_time else max_idx
-          shifts[i] <- -shift_idx / n_time
+          # AUDIT (P10.1): the circular estimator was off by exactly one FFT bin,
+          # and it was fed a duplicated endpoint. Two separate defects.
+          #
+          #   1. R's which.max() is 1-BASED, and element 1 of the inverse FFT is
+          #      ZERO lag. The old code took `max_idx` as the lag directly, so
+          #      every estimate was displaced by one grid step. Measured on the
+          #      default 100-point grid with two IDENTICAL curves: s = -0.0100,
+          #      i.e. a curve needing no shift was moved by 1% of the cycle --
+          #      14.4 minutes on a 24-hour day. Every other estimate carried the
+          #      same offset (a true 0.05 delay was estimated as 0.06).
+          #
+          #   2. The evaluation grid is seq(0, 1, length.out = n_time), which
+          #      contains BOTH endpoints. On a cycle those are the same phase, so
+          #      a circular cross-correlation must not see both: the duplicated
+          #      sample biases the correlation and makes the lag resolution
+          #      1/n_time where it should be 1/(n_time - 1).
+          #
+          # This is upstream of everything the registration produces. The shift
+          # is APPLIED to the curve, so the per-subject R-squared, RMSE and
+          # correlation in the warping table were computed on a curve that had
+          # been moved when it should not have been: on the zero-shift case the
+          # old code reported R2 = .9955, RMSE = .0557, r = .9978 for a curve
+          # identical to the reference. With the fix those are exactly 1, 0, 1.
+          #
+          # Verified across true displacements 0, +/-0.05, +/-0.10 and 0.25: the
+          # corrected estimator recovers each to within 1/(n_time - 1), which is
+          # the grid resolution and not a systematic error.
+          circ_idx <- seq_len(n_time - 1L)      # drop the duplicated endpoint
+          n_circ   <- length(circ_idx)
+          curve_c  <- curves[circ_idx, i]
+          ref_c    <- ref_curve[circ_idx]
+
+          fft_curve  <- fft(curve_c - mean(curve_c))
+          fft_ref    <- fft(ref_c - mean(ref_c))
+          cross_corr <- Re(fft(Conj(fft_ref) * fft_curve, inverse = TRUE)) / n_circ
+
+          lag_idx <- which.max(cross_corr) - 1L   # bin 1 is zero lag
+          if (lag_idx > n_circ / 2) lag_idx <- lag_idx - n_circ
+          shifts[i] <- -lag_idx / n_circ
         } else {
           # Standard cross-correlation
           ccf_result <- ccf(curves[,i], ref_curve, lag.max = floor(n_time/4), 

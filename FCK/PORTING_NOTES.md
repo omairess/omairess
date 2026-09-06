@@ -2246,6 +2246,69 @@ After this round: **1,612 testthat assertions (0 failed, 0 skipped) and 13
 standalone suites pass.**
 
 
+**4.57 P10: a seventh review, and this one was not a duplicate. Two findings,
+both of which held.** The first is the most consequential single defect found in
+any of the ten rounds, because it was silent: it produced plausible numbers.
+
+*The periodic shift estimator was off by exactly one FFT bin, and it also used a
+duplicated sample.* `linear_shift_alignment` in `server/40_fpca.R` estimated the
+lag with `which.max()` on a circular cross-correlation. `which.max()` is 1-based
+and FFT element 1 is zero lag, so every estimate was one bin too large. The
+second error compounded it: the time grid is `seq(0, 1, length.out = n_time)`, a
+CLOSED grid whose first and last samples are the SAME PHASE on a cycle, so the
+circular transform was run over a series with one point duplicated and divided
+by the wrong n. Reproduced before touching anything, on curves whose true shift
+is known:
+
+```
+true delta   estimated s    reported |s|
+0.00          -0.0100        0.0100
+0.05          -0.0600        0.0600
+0.10          -0.1100        0.1100
+```
+
+Two identical curves were reported as being 0.01 out of phase, and the "aligned"
+curve was a genuinely misaligned one: R^2 = 0.9955, RMSE = 0.0557, r = 0.9978 on
+a pair that should have returned an exact identity. That is the reason this one
+matters more than a mis-labelled column would. The bias is constant (one bin,
+i.e. 1/(n_time - 1)) rather than proportional, so it is largest exactly where it
+is least visible &mdash; on data with little real phase variation, where it can be
+the whole of the reported "phase difference".
+
+The fix drops the duplicated endpoint (`circ_idx <- seq_len(n_time - 1L)`),
+divides by that length, and subtracts 1 from `which.max()` before wrapping to the
+negative half of the cycle. Measured after: `0.00 -> 0.0000`, `0.05 -> -0.0505`,
+and the identical-curve case now returns `s = 0.000000, RMSE = 0.000000,
+r = 1.000000` &mdash; an exact identity, as it must.
+
+*The basis-count rule was still written twice.* This is the fourth time in this
+audit that a duplicated statistical definition has drifted, and the third time it
+has been the smoothing configuration. P9.3 extracted `fck_smoothing_basis()` for
+the basis TYPE and claimed the CV and production paths were then aligned; that
+claim was too strong, because the basis COUNT rule was left duplicated. The
+reviewer's example reproduces: at `n_time = 16` with `n_basis = 20`, production
+uses 16 and cross-validation used 14 (`min(20, n_time - 2)`, 4.5's WaPaa line,
+which had survived under a different guard). A CV curve computed at a different
+basis count than the smoothing it advises is mis-targeted in the same way 4.5
+described. `fck_smoothing_nbasis()` in `server/04_helpers_fd.R` is now the single
+rule, and both paths call it. This also closes the "CV basis-count divergence"
+gap that has been open in section 6 since the original port.
+
+`tests/periodic_shift_test.R` was written to fail on the original code, and was
+verified to do so by reintroducing the defect (three failures: the identical-curve
+shift, the identity round trip, and the recovery of known shifts). It reads the
+SHIPPED estimator &mdash; it parses `server/40_fpca.R` and evaluates only that one
+assignment &mdash; rather than a copy, so it cannot pass against a stale duplicate
+of the function. `tests/testthat/test-p10-corrections.R` covers both findings.
+
+**Anything previously read off a periodic linear-shift registration has to be
+re-run, not merely re-displayed.** The wrong shift was applied to the curve, so
+it is not only the Warping_Amplitude column that is wrong: R^2, RMSE and the
+correlation were all computed on mis-registered curves.
+
+After this round: **1,646 testthat assertions (0 failed, 0 skipped) and 14
+standalone suites pass.**
+
 ## 5. Rename table
 
 | source | source app | merged app |
@@ -2293,7 +2356,8 @@ duplicate code.
 * **`group_summary` and `group_preview_plot`** are defined in the server but no
   UI places them. That is true in WaPaa as well — dead code carried across
   rather than silently deleted.
-* **The CV basis-count divergence** in 4.5.
+* ~~The CV basis-count divergence in 4.5.~~ **Closed at 4.57**: both
+  paths now take their basis count from `fck_smoothing_nbasis()`.
 * **Not run end-to-end here** *(as of the original port; largely superseded by
   4.43&ndash;4.48).* `tests/smoke_test.R` and `tests/clock_helpers_test.R` verify
   that every file parses, the whole UI renders, every tab is reachable, no
