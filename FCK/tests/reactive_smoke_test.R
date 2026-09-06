@@ -253,6 +253,59 @@ server <- function(input, output, session) {
     render("fanova effect summary renders", output$fanova_effect_summary)
   }
 
+  # ------------------------------------------------- the APA report --------
+  cat("\n-- APA report ----------------------------------------------------------\n")
+  session$setInputs(apa_report_title = "Diurnal profiles by age group")
+  md <- tryCatch(fck_apa_report(values, input, "Diurnal profiles by age group"),
+                 error = function(e) structure(conditionMessage(e), class = "fckerr"))
+  if (inherits(md, "fckerr")) {
+    fail("fck_apa_report ->", as.character(md))
+  } else {
+    ok(sprintf("report generated (%d lines)", length(md)))
+    txt <- paste(md, collapse = "\n")
+    # it must describe the analyses that ran, and only those
+    must <- c("Statistical analysis", "Results", "Reproducibility",
+              "Smoothing", "Functional ANOVA", "Post-hoc",
+              "Function-on-scalar regression", "principal component",
+              "What these numbers do not establish")
+    for (k in must)
+      if (!grepl(k, txt, fixed = TRUE)) fail("the report does not mention:", k)
+    # and it must NOT describe analyses that did not run
+    for (k in c("Functional clustering", "Registration diagnostics"))
+      if (grepl(k, txt, fixed = TRUE))
+        fail("the report describes an analysis that was not run:", k)
+    ok("the report covers every analysis that ran, and none that did not")
+
+    # APA formatting: no leading zero on a bounded quantity, p to 3 dp
+    if (grepl("\\*p\\* = 0\\.", txt)) fail("a p-value carries a leading zero")
+    else ok("p-values follow APA 7 (no leading zero)")
+    # APA 7 sec. 6.36 applies to RANGES of a bounded quantity too
+    if (grepl("range 0\\.", txt)) fail("a bounded quantity's range carries a leading zero")
+    else ok("bounded quantities drop the leading zero in ranges as well")
+    if (!grepl("smallest attainable", txt, fixed = TRUE))
+      fail("the report does not state the permutation resolution floor")
+    else ok("the permutation resolution floor is stated")
+    if (!grepl("*B* = 200", txt, fixed = TRUE) &&
+        !grepl("*B* = 777", txt, fixed = TRUE))
+      fail("the report does not state the permutation counts that were used")
+    else ok("the permutation counts used are stated")
+
+    hh <- tryCatch(fck_apa_html(md, "t"), error = function(e)
+                   structure(conditionMessage(e), class = "fckerr"))
+    if (inherits(hh, "fckerr")) fail("fck_apa_html ->", as.character(hh))
+    else {
+      h1 <- paste(hh, collapse = "\n")
+      if (!grepl("<!DOCTYPE html>", h1, fixed = TRUE)) fail("the HTML has no doctype")
+      else if (!grepl("<table>", h1, fixed = TRUE)) fail("no table survived the HTML rendering")
+      else if (grepl("| ---:", h1, fixed = TRUE)) fail("a Markdown table separator leaked into the HTML")
+      else ok(sprintf("HTML rendering produced %d lines with tables intact", length(hh)))
+    }
+    writeLines(md, "/tmp/claude-0/fck_apa_report.md")
+    writeLines(hh, "/tmp/claude-0/fck_apa_report.html")
+    cat("   (written to /tmp/claude-0/fck_apa_report.md)\n")
+  }
+  render("apa_report_preview renders", output$apa_report_preview)
+
   cat("\n")
   if (failures) { cat(sprintf("Reactive smoke test FAILED (%d).\n", failures)); quit(status = 1) }
   cat("Reactive smoke test passed.\n")

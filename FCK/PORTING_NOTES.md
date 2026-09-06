@@ -2175,6 +2175,77 @@ suites pass.** Anything read off the per-subject Warping Amplitude Scores table
 for a periodic registration should be re-run.
 
 
+**4.55 Review 7 was review 5 again.** The document circulated as the seventh
+review is textually identical to the fifth: the same "30,400 lines of R across
+75 files", the same nine items (FoSR OLS prediction, warped-PCA AIC/BIC, the
+EFDA label, the elastic phase distance, landmark monotonicity, warp direction,
+RM-fANOVA NA handling, the GAM export, GAM zero placeholders, stale REML and
+SoFR references). Every one was fixed at P5 (`d288702`) and several were carried
+further at P6&ndash;P9. Verified rather than assumed: each item was grepped
+against the current tree, and the only two hits are AUDIT comments quoting the
+code they removed. Nothing was re-done.
+
+**4.56 The publication report.** New: `server/93_apa_report.R` (pure functions)
+and `server/94_apa_report_views.R` (the Shiny wiring), with a panel on the
+Export tab.
+
+Every other export writes numbers. This one writes the sentences a paper needs,
+and it is built on the position this whole audit arrived at: **the corrections
+are worth nothing if the document produced for publication reintroduces the
+overstatement.** So the report has three rules.
+
+*It reports only what was run.* Every section is conditional on the
+corresponding result existing in `values`. A report describing an analysis you
+did not perform is worse than no report.
+
+*It carries the caveats with the numbers.* Each Results subsection closes with
+"What these numbers do not establish", in the same voice as the audit: a
+pointwise procedure answers *where* and not *whether*; the FDR controls the
+expected proportion of false positives among flagged points, not the familywise
+error; partial eta-squared is not comparable with the classical one; k-means
+partitions data that has no clusters; acrophase is circular and its arithmetic
+mean is interpretable only away from the period boundary; the coefficient curves
+carry pointwise, not simultaneous, intervals; the registration dispersion
+reduction is **not** a phase/amplitude decomposition and no information
+criterion is reported because no likelihood is specified. The amplitude-leakage
+warning from P5.12 fires in the report as well as on screen.
+
+*It states its own resolution.* The permutation count is reported with the
+smallest *p* that count can produce, and when a correction's floor
+*m*/(*B*+1) exceeds alpha the report says so.
+
+APA 7 formatting is implemented, not approximated: no leading zero on a quantity
+bounded by 1 (including both ends of a RANGE, which is where the first draft
+slipped), exact *p* to three decimals with "< .001" as the floor, *F* with exact
+degrees of freedom, statistics italicised, and eponymous corrections written as
+proper names rather than as `p.adjust()` argument strings.
+
+Output is Markdown and a self-contained HTML page that prints to PDF with APA
+table rules (top, below header, bottom; no verticals) and no dependency on
+pandoc or rmarkdown, neither of which this app requires.
+
+Two things found while building it, both worth recording. The escaped asterisk
+in the app's own name broke the italic pass and rendered the title as
+"F\\CK ... 19:26.\*"; literal asterisks are now parked on a sentinel before the
+emphasis regex runs. And the HTML escaper allow-listed tags by NOT escaping
+them, which left ">" through unescaped &mdash; report text contains
+user-supplied column names and factor levels, so it now escapes both brackets
+unconditionally and restores only the fixed literal set of tags the report
+itself writes.
+
+`tests/testthat/test-apa-report.R` unit-tests the formatting rules and the
+promises the text makes (including that the count of caveat paragraphs equals
+the count of Results subsections, and that the registration section never
+mentions AIC or BIC); `tests/reactive_smoke_test.R` generates the document from
+a real session and checks it covers every analysis that ran and none that did
+not. Splitting the logic from the wiring was forced by that test: an
+`output$x <- render...` at the top level of the module made it unsourceable
+outside a Shiny session, which is why `94_apa_report_views.R` exists.
+
+After this round: **1,612 testthat assertions (0 failed, 0 skipped) and 13
+standalone suites pass.**
+
+
 ## 5. Rename table
 
 | source | source app | merged app |

@@ -76,6 +76,43 @@ ui_tab_export <- tabItem(
       downloadButton("export_pairwise_plots", "Download Post-hoc Plots (PDF)", class = "btn-success"),
       hr(),
 
+      # ---- the APA report -----------------------------------------------
+      # Every other export on this tab writes NUMBERS. This one writes the
+      # sentences a paper needs: which analytic choices were made, and what
+      # the results were, in APA 7th-edition style. It reports only analyses
+      # that were actually run, and each Results subsection closes with what
+      # its numbers do not establish -- the corrections this app has had to
+      # make are worth nothing if the document produced for publication
+      # reintroduces the overstatement.
+      h4("Publication report (APA 7)"),
+      textInput("apa_report_title", "Report title (optional):",
+                placeholder = "Functional data analysis: methods and results",
+                width = "100%"),
+      downloadButton("download_apa_html", "Download Report (HTML, print to PDF)",
+                     class = "btn-success"),
+      downloadButton("download_apa_md", "Download Report (Markdown)",
+                     class = "btn-primary"),
+      helpText(HTML(paste(
+        "A Methods and Results document written from the analyses in this",
+        "session. The <b>Statistical analysis</b> section states the choices",
+        "&mdash; basis and smoothing parameter and how it was selected,",
+        "registration method and its boundary rule, estimator, multiplicity",
+        "correction, permutation count and the smallest <i>p</i> it can",
+        "produce. The <b>Results</b> section reports the numbers in APA style",
+        "(exact <i>df</i>, <i>p</i> to three decimals with no leading zero,",
+        "effect sizes named for what they are), and each subsection ends with",
+        "what those numbers do <i>not</i> establish. Open the HTML in a browser",
+        "and print to PDF for a formatted copy; the Markdown is for pasting",
+        "into a manuscript.<br><br>",
+        "<b>Check every number against the app before submission.</b> This is",
+        "an aid to writing, not a substitute for reading your own results."))),
+      hr(),
+
+      h4("Report preview"),
+      div(style = "max-height:26em;overflow:auto;background:#f8f9fa;padding:.6em;border:1px solid #dee2e6;border-radius:4px;",
+          verbatimTextOutput("apa_report_preview")),
+      hr(),
+
       h4("Export R Code"),
       downloadButton("export_code", "Download Analysis Code (R)", class = "btn-warning"),
       helpText("Reproduces the whole pipeline in plain R: import, smoothing,",

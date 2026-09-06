@@ -280,6 +280,39 @@ amplitude from phase variance beyond what these three give you. If your question
 is specifically about phase, prefer the acrophase from the cosinor tab, which is
 estimated rather than assumed.
 
+## The publication report
+
+The Export tab writes a **Methods and Results document** from whatever you have
+run in the session, in APA 7th-edition style, as HTML (open in a browser, print
+to PDF) or Markdown (paste into a manuscript).
+
+It is not a numbers dump. The **Statistical analysis** section states the
+choices: the basis and how the smoothing parameter was selected, the
+registration method and its boundary rule, the estimator, the multiplicity
+correction, the permutation count *and the smallest p that count can produce*.
+The **Results** section reports the numbers in APA form — exact *df*, *p* to
+three decimals with no leading zero, effect sizes named for what they are
+(partial η² is labelled as such and distinguished from the classical one) —
+and every subsection closes with **what those numbers do not establish**.
+
+That last part is deliberate. Most of this repository's history is a record of
+the app claiming more than it had computed: an AIC with no likelihood, a
+"variance decomposition" that did not decompose, a standard error of zero
+meaning "unavailable". Those corrections are worth nothing if the document you
+generate *for publication* quietly puts the overstatement back. So the report
+says, next to each result, that a pointwise procedure answers *where* and not
+*whether*; that k-means partitions data with no cluster structure; that
+acrophase is circular and its arithmetic mean is not always meaningful; that a
+permutation *p* cannot go below 1/(*B*+1); that the registration dispersion
+reduction is not a phase/amplitude split.
+
+Sections appear only for analyses you actually ran. The report is regenerated
+on every download from the current state, so it cannot go stale against the
+screen, and it recomputes nothing, so it cannot disagree with it.
+
+**Check every number against the app before submission.** It is an aid to
+writing, not a substitute for reading your own results.
+
 ## Reproducibility: pin the environment yourself
 
 This repository does **not** ship an `renv.lock`, and the app is not
