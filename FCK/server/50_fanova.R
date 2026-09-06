@@ -821,7 +821,21 @@
     df_between <- n_groups - 1
     df_within <- n_curves - n_groups
     
-    F_stat <- (SSB / df_between) / (SSW / df_within)
+    # AUDIT (P4.7): (SSB/df) / (SSW/df) with no guard. Constant curves at a
+    # time point give SSW = 0, so F is Inf when SSB > 0 and NaN when both are
+    # zero -- and NaN then propagates into the permutation comparison, where
+    # `NaN >= NaN` is NA and the p-value silently comes from fewer draws than it
+    # claims. The repeated-measures branch already refuses this case
+    # (df_residual > 0 && SS_residual > 0); the between-subjects branch now does
+    # too, and NA is carried through to the p-value rather than smuggled in as
+    # a number. Groups that genuinely differ with zero within-group spread are
+    # a degenerate design, not evidence of infinite strength.
+    ss_floor <- .Machine$double.eps * max(1, max(abs(curves), na.rm = TRUE))^2 * n_curves
+    F_stat <- ifelse(SSW > ss_floor, (SSB / df_between) / (SSW / df_within), NA_real_)
+    if (any(!is.finite(F_stat)))
+      warning(sprintf(
+        "F is undefined at %d of %d time points (no within-group variation there); those points are reported as NA.",
+        sum(!is.finite(F_stat)), length(F_stat)))
     # P1.3: a functional L2 norm, not a grid-density-dependent vector norm
     L2_stat <- fck_l2_norm(SSB / n_curves, time_points)
     
@@ -849,7 +863,9 @@
       SSB_perm <- as.vector((perm_means - overall_mean)^2 %*% n_per_group)
       SSW_perm <- rowSums((curves - perm_means[, gidx, drop = FALSE])^2)
 
-      F_stat_perm[, perm] <- (SSB_perm / df_between) / (SSW_perm / df_within)
+      F_stat_perm[, perm] <- ifelse(SSW_perm > ss_floor,
+                                    (SSB_perm / df_between) / (SSW_perm / df_within),
+                                    NA_real_)
       L2_stat_perm[perm] <- fck_l2_norm(SSB_perm / n_curves, time_points)
     }
     
@@ -857,15 +873,22 @@
     p_values_pointwise <- numeric(n_time)
     for(t in 1:n_time) {
       # AUDIT (P1.1): (1 + #{T* >= T}) / (1 + B) -- a Monte Carlo p is never 0.
-      p_values_pointwise[t] <- (1 + sum(F_stat_perm[t, ] >= F_stat[t], na.rm = TRUE)) /
-                               (1 + sum(is.finite(F_stat_perm[t, ])))
+      # P4.7: a time point whose observed F is undefined has no test, and must
+      # not be handed a p-value of 1 as though it had one.
+      .np <- sum(is.finite(F_stat_perm[t, ]))
+      p_values_pointwise[t] <- if (!is.finite(F_stat[t]) || .np < 1) NA_real_ else
+        (1 + sum(F_stat_perm[t, ] >= F_stat[t], na.rm = TRUE)) / (1 + .np)
     }
     
     p_value_L2 <- (1 + sum(L2_stat_perm >= L2_stat, na.rm = TRUE)) /
                       (1 + sum(is.finite(L2_stat_perm)))
     
     p_values_adjusted <- p.adjust(p_values_pointwise, method = "fdr")
-    sig_regions <- p_values_adjusted < alpha
+    # P4.7: a time point with no defined test is not significant, and is not
+    # non-significant either. It is excluded, and counted so the readout can
+    # say how many were dropped rather than folding them into "not significant".
+    sig_regions <- !is.na(p_values_adjusted) & p_values_adjusted < alpha
+    n_undefined <- sum(is.na(p_values_pointwise))
     
     SST <- SSB + SSW
     # Classical eta-squared: correct for this INDEPENDENT-groups design, where
@@ -915,6 +938,7 @@
       p_values_pointwise = p_values_pointwise,
       p_values_adjusted = p_values_adjusted,
       sig_regions = sig_regions,
+      n_undefined = n_undefined,
       L2_stat = L2_stat,
       p_value_L2 = p_value_L2,
       eta_squared = eta_squared,

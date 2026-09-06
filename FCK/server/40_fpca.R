@@ -1171,7 +1171,8 @@
       warp_functions <- matrix(NA, n_time, n_curves)
       registered_curves <- matrix(NA, n_time, n_curves)
       shifts <- numeric(n_curves)
-      
+      extrap_frac <- numeric(n_curves)   # P4.2: how much of each warp left the domain
+
       # Perform alignment for each curve
       for(i in 1:n_curves) {
         # Find best shift using cross-correlation
@@ -1212,20 +1213,57 @@
         # a whole interval of new time onto one old time, and approx() hands
         # back the same value for all of it.
         #
-        # A shift warp is h(t) = t - s, clamped to the observed domain. It is
-        # monotone by construction, deterministic, and endpoint-anchored.
-        # Anchoring the endpoints by ASSIGNMENT (as the old code did) is what
-        # broke monotonicity when |s| was large, so the shift is limited to what
-        # the domain can absorb instead.
+        # A shift warp is h(t) = t - s. It is monotone by construction and
+        # deterministic. Forcing the endpoints by ASSIGNMENT (as the pre-P0.8
+        # code did) is what broke monotonicity when |s| was large, so the shift
+        # is limited to what the domain can absorb instead. See P4.2 below for
+        # what h actually maps onto, and for the boundary rule.
+        # AUDIT (P4.2): the comment above used to claim three properties for
+        # this warp -- monotone by construction, deterministic, and (in its own
+        # words) anchored at the endpoints. The first two are true. THE THIRD IS
+        # FALSE, and a reviewer was right to call it out. (The exact old phrase
+        # is deliberately not repeated here: tests/warp_family_test.R greps the
+        # source for it, and a fix that quotes the sentence it is removing makes
+        # its own guard vacuous -- which has happened twice in this audit.)
+        # h(t) = t - s maps [0, 1] onto [-s, 1 - s]. For s = 0.1 that is
+        # h(0) = -0.1 and h(1) = 0.9: it is not a map of [0,1] to itself and it
+        # does not fix the endpoints. It is a TRANSLATION, which is what shift
+        # registration is (Ramsay & Silverman's shift model), and translations
+        # are not endpoint-preserving diffeomorphisms. The label was wrong, not
+        # the arithmetic.
+        #
+        # What WAS wrong: the boundary rule. A shift estimated by CIRCULAR
+        # cross-correlation (the periodic branch above) was then applied with
+        # approx(rule = 2), i.e. constant extrapolation -- so a curve shifted by
+        # s had its first |s| of the domain filled with a repeat of the endpoint
+        # value, flattening exactly the region the circular estimate said should
+        # wrap round from the other end. On 24-hour data with a 2.4 h shift that
+        # is a tenth of the cycle replaced by a constant. When the design is
+        # periodic the warp now wraps; when it is not, it still clamps, and the
+        # amount of extrapolation is reported rather than left implicit.
         s_max <- 0.25   # a shift beyond a quarter of the domain is not identified
         shifts[i] <- max(-s_max, min(s_max, shifts[i]))
-        warp_functions[,i] <- time_points - shifts[i]
-        
+        h <- time_points - shifts[i]
+
+        if(periodic) {
+          # Wrap into the observed domain: the curve is one period of a cycle.
+          span <- diff(range(time_points))
+          h_use <- min(time_points) +
+                   ((h - min(time_points)) %% span)
+          extrap_frac[i] <- 0
+        } else {
+          h_use <- h
+          rng <- range(time_points)
+          extrap_frac[i] <- mean(h < rng[1] | h > rng[2])
+        }
+        warp_functions[,i] <- h_use
+
         # Apply warping
         if(abs(shifts[i]) > 1e-8) {
-          # Interpolate curve at warped time points
-          registered_curves[,i] <- approx(time_points, curves[,i], 
-                                          xout = warp_functions[,i], 
+          # Interpolate curve at warped time points. rule = 2 is a no-op in the
+          # periodic branch, where h_use is inside the domain by construction.
+          registered_curves[,i] <- approx(time_points, curves[,i],
+                                          xout = h_use,
                                           rule = 2)$y
         } else {
           registered_curves[,i] <- curves[,i]
@@ -1245,6 +1283,8 @@
         registered_curves = registered_curves,
         warp_functions = warp_functions,
         shifts = shifts,
+        extrap_frac = extrap_frac,
+        boundary = if(periodic) "periodic wrap" else "constant extrapolation",
         method = "linear_shift",
         time_points = time_points
       ))
@@ -1290,32 +1330,84 @@
       # a flat leading segment that collapses many new times onto one old time
       # (at alpha = 2, 12 of 24 grid points mapped to time 0). A time warp that
       # is not strictly increasing is not a reparameterisation of time.
-      # The search range is therefore restricted per family to the region where
-      # the map is a bijection of [0,1].
-      param_range <- switch(family,
-        "quadratic" = c(max(param_range[1], 0.05), min(param_range[2], 1)),
-        "power"     = c(max(param_range[1], 0.05), param_range[2]),
-        param_range)
-      if (param_range[1] >= param_range[2])
-        param_range <- c(param_range[1], param_range[1] * 1.0001)
+      #
+      # AUDIT (P4.1): that fix was right about monotonicity and WRONG about
+      # where each family's identity lies, and a reviewer caught both halves.
+      #
+      #   exponential  h(t) = (e^(at) - 1)/(e^a - 1).  Its identity is the LIMIT
+      #                a -> 0 (L'Hopital: (at + O(a^2))/(a + O(a^2)) -> t). The
+      #                code special-cased  abs(alpha - 1) < 0.001  and returned
+      #                t there. At a = 1 the function is (e^t - 1)/(e - 1),
+      #                which is not t -- it is the most-curved member of the
+      #                family the default range could reach. So the guard put a
+      #                DISCONTINUITY in the objective in the middle of the
+      #                default search interval [0.5, 2], and optimize() can and
+      #                does converge onto it: a curve reported as "alpha = 1,
+      #                identity" had in fact been left unwarped by accident
+      #                while its neighbours were warped by a real map. And the
+      #                genuinely singular point, a = 0 (0/0), had no guard at
+      #                all -- it was simply outside the range the UI allowed.
+      #   quadratic    identity at a = 0. The P0.8 clamp forced a >= 0.05 and
+      #                the UI default gave [0.5, 1], so the identity was NOT
+      #                REACHABLE: a curve needing no registration was deformed
+      #                anyway, by at least a = 0.5. The 0.05 floor was copied
+      #                from the power family, where it is correct; here it is
+      #                not. The family is monotone on the whole of (-1, 1).
+      #   logistic     identity as its steepness -> 0, also excluded, and also
+      #                0/0 at exactly 0 (L1 - L0 = 0). Monotone for every a != 0.
+      #   power        h(t) = t^a, identity at a = 1, monotone for a > 0. The
+      #                only family whose identity the old range contained.
+      #
+      # Each family now declares its identity and the open interval on which it
+      # is a strictly increasing bijection of [0,1]. The user's range is clamped
+      # to that interval AND widened, if necessary, to contain the identity --
+      # so "no warping needed" is always inside the search space, in every
+      # family. Where the identity is a removable singularity it is returned
+      # exactly rather than divided out.
+      fam_spec <- switch(family,
+        "power"       = list(identity = 1, lo = 0.05, hi = Inf),
+        "exponential" = list(identity = 0, lo = -Inf, hi = Inf),
+        "quadratic"   = list(identity = 0, lo = -0.999, hi = 0.999),
+        "logistic"    = list(identity = 0, lo = -Inf, hi = Inf),
+        list(identity = 0, lo = -Inf, hi = Inf))
 
-      # Define warping function
+      param_range <- sort(as.numeric(param_range))
+      param_range <- c(max(param_range[1], fam_spec$lo),
+                       min(param_range[2], fam_spec$hi))
+      # always able to say "this curve needs no warping"
+      param_range <- c(min(param_range[1], fam_spec$identity),
+                       max(param_range[2], fam_spec$identity))
+      param_range <- c(max(param_range[1], fam_spec$lo),
+                       min(param_range[2], fam_spec$hi))
+      if (param_range[1] >= param_range[2])
+        param_range <- c(fam_spec$identity - 1e-3, fam_spec$identity + 1e-3)
+
+      # Define warping function. Every branch returns a map with h(0) = 0,
+      # h(1) = 1, strictly increasing on the declared interval, so no clipping
+      # to [0,1] is needed -- the pmin/pmax that used to be here only ever
+      # masked a non-monotone map instead of rejecting it. They are kept as a
+      # floating-point tidy-up (widths of order 1e-16), not as a repair.
+      eps_id <- 1e-8
       warp_func <- function(t, alpha) {
-        switch(family,
-               "power" = pmin(1, pmax(0, t^alpha)),
+        h <- switch(family,
+               "power" = t^alpha,
                "exponential" = {
-                 if(abs(alpha - 1) < 0.001) t
-                 else pmin(1, pmax(0, (exp(alpha * t) - 1) / (exp(alpha) - 1)))
+                 # identity is the limit a -> 0, where the expression is 0/0
+                 if (abs(alpha) < eps_id) t
+                 else (exp(alpha * t) - 1) / (exp(alpha) - 1)
                },
-               "quadratic" = pmin(1, pmax(0, alpha * t^2 + (1 - alpha) * t)),
+               "quadratic" = alpha * t^2 + (1 - alpha) * t,
                "logistic" = {
-                 L <- function(x) 1 / (1 + exp(-alpha * (x - 0.5)))
-                 L0 <- L(0)
-                 L1 <- L(1)
-                 pmin(1, pmax(0, (L(t) - L0) / (L1 - L0)))
+                 # identity is the limit a -> 0, where L1 - L0 is 0
+                 if (abs(alpha) < eps_id) t
+                 else {
+                   L  <- function(x) 1 / (1 + exp(-alpha * (x - 0.5)))
+                   L0 <- L(0); L1 <- L(1)
+                   (L(t) - L0) / (L1 - L0)
+                 }
                },
-               t
-        )
+               t)
+        pmin(1, pmax(0, h))
       }
       
       # Optimize warping for each curve
@@ -1347,6 +1439,8 @@
         warp_functions = warp_functions,
         alpha_values = alpha_values,
         family = family,
+        param_range_used = param_range,
+        identity_alpha = fam_spec$identity,
         method = "parametric",
         time_points = time_points
       ))

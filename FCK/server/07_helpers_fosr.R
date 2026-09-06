@@ -32,13 +32,50 @@ fck_fit_fosr_ols <- function(Y, df_reg, predictors,
   if (is.null(notify))   notify   <- function(msg, ...) invisible(NULL)
 
   Y <- as.matrix(Y)
+  if (!length(predictors)) stop("No predictors were selected.")
+  missing_cols <- setdiff(predictors, names(df_reg))
+  if (length(missing_cols))
+    stop("Predictor(s) not found in the covariates: ",
+         paste(missing_cols, collapse = ", "))
 
-  # AUDIT (P1.4b): as.formula(paste(...)) built the model formula by pasting
-  # UPLOADED COLUMN NAMES into text and re-parsing it. reformulate() takes
-  # the names as data and quotes them, so a column called `a + b` or
-  # anything else executable is a variable, not code.
-  f <- stats::reformulate(predictors)
-  X <- model.matrix(f, data = df_reg)
+  # AUDIT (P1.4b, CORRECTED at P4.3). The P1.4b note claimed that
+  # "reformulate() takes the names as data and quotes them". THAT IS FALSE, and
+  # a reviewer was right to reject it. stats::reformulate() pastes its
+  # termlabels together and PARSES the result -- R's own documentation says the
+  # labels must be syntactically valid names or already backquoted. Measured:
+  #   reformulate("a b")              -> error, unexpected symbol
+  #   reformulate("Age (years)")      -> ~Age(years), a FUNCTION CALL
+  #   reformulate('I(cat("PWNED"))')  -> a formula holding a live call
+  # So the P1.4b change swapped one text-pasting route for another and the
+  # comment asserted a safety property the function does not have. Backquoting
+  # would fix the first two cases and still breaks on a name containing a
+  # backquote.
+  #
+  # The robust fix is not to put user text in a formula at all. The model is
+  # built on an internal frame whose columns are named x1..xp -- names that
+  # cannot be anything but names -- and the mapping back to the user's labels is
+  # applied to the coefficient rows afterwards, as data. An uploaded column may
+  # then be called anything at all, including something executable, and it is
+  # still only ever a column.
+  model_names <- paste0("x", seq_along(predictors))
+  model_df <- df_reg[, predictors, drop = FALSE]
+  names(model_df) <- model_names
+  # drop unused factor levels: a level emptied by row filtering makes the design
+  # rank deficient in a way the user cannot see in their own data
+  for (nm in model_names)
+    if (is.factor(model_df[[nm]])) model_df[[nm]] <- droplevels(model_df[[nm]])
+
+  f <- stats::reformulate(model_names)
+  X <- model.matrix(f, data = model_df)
+
+  # Map the safe names on the design columns back to the user's labels. Done by
+  # string surgery on the COLUMN NAMES only -- nothing here is ever parsed.
+  restore_labels <- function(z) {
+    for (k in rev(seq_along(predictors)))
+      z <- sub(paste0("^", model_names[k]), predictors[k], z)
+    z
+  }
+  colnames(X) <- restore_labels(colnames(X))
 
   # AUDIT (P1.4a): solve(crossprod(X)) inverts the normal equations. That
   # squares the condition number and gives no warning on a rank-deficient
@@ -52,13 +89,49 @@ fck_fit_fosr_ols <- function(Y, df_reg, predictors,
       "The design matrix is rank deficient (rank %d of %d columns). Collinear or empty terms: %s. Remove or recode them and re-run.",
       qrX$rank, ncol(X), paste(dropped, collapse = ", ")))
   }
-  xtx_inv <- chol2inv(qr.R(qrX))
+
+  # AUDIT (P4.4): chol2inv(qr.R(qrX)) is (X'X)^-1 only if the decomposition did
+  # not permute the columns; under a pivoted QR, R belongs to the PERMUTED
+  # design and the inverse would be silently mis-labelled, so the SE of one
+  # coefficient would be reported for another.
+  #
+  # A reviewer flagged this as a live bug. As stated it is overstated for the
+  # default LINPACK qr(): dqrdc2 only cycles a column to the back when its
+  # reduced norm falls below the rank tolerance, and it decrements the rank when
+  # it does -- so rank == ncol(X) implies pivot == 1:p, and the rank check above
+  # has already stopped otherwise. Measured on ill-conditioned designs at three
+  # conditioning levels: whenever pivoting would have mattered, the rank test
+  # fired first. But that is an UNDOCUMENTED invariant of one LAPACK/LINPACK
+  # path, not a guarantee, and it costs one comparison to stop relying on it.
+  if (!identical(qrX$pivot, seq_len(ncol(X)))) {
+    # Undo the permutation rather than trusting it did not happen.
+    R  <- qr.R(qrX)
+    iv <- chol2inv(R)
+    ord <- order(qrX$pivot)
+    xtx_inv <- iv[ord, ord, drop = FALSE]
+  } else {
+    xtx_inv <- chol2inv(qr.R(qrX))
+  }
   dimnames(xtx_inv) <- list(colnames(X), colnames(X))
   projector <- xtx_inv %*% t(X)
   coefs <- projector %*% Y
   fitted_vals <- X %*% coefs
   residuals <- Y - fitted_vals
   n <- nrow(Y); p <- ncol(X)
+
+  # AUDIT (P4.5): a design with n == p is full rank, so the check above passes,
+  # and then every downstream quantity is meaningless: sigma2 = 0/0, the SE is
+  # Inf and pt(df = 0) is NaN. Measured on a 3x3 design: sigma2 Inf, SE Inf,
+  # p NaN, with no warning the user would connect to the cause. There is no
+  # residual variance to estimate, so the fit cannot support inference at all
+  # and saying so is the only honest option.
+  if (n <= p)
+    stop(sprintf(
+      paste("This design has %d subject%s and %d coefficient%s, leaving %d residual",
+            "degrees of freedom. Standard errors and p-values need at least one.",
+            "Use fewer predictors, or collapse factor levels, and re-run."),
+      n, if (n == 1) "" else "s", p, if (p == 1) "" else "s", n - p))
+
   sigma2 <- colSums(residuals^2) / (n - p)
   
   # AUDIT (P3.2): the analytical standard error is available in closed
@@ -146,8 +219,15 @@ fck_fit_fosr_ols <- function(Y, df_reg, predictors,
       min(se_boot / se_analytic, na.rm = TRUE))
   }
   
+  # AUDIT (P4.6): r2_t <- 1 - rss/tss with no guard. A time point at which the
+  # response is constant across subjects has tss = 0, so R2 came out NaN or
+  # -Inf and was then plotted and averaged. The cosinor code already refuses
+  # this case (fck_r_squared returns NA when SST is at the noise floor); the
+  # same rule applies here. NA means "no variance to explain", not "zero fit".
   rss <- colSums(residuals^2); y_bar <- colMeans(Y)
-  tss <- colSums(sweep(Y, 2, y_bar)^2); r2_t <- 1 - (rss/tss)
+  tss <- colSums(sweep(Y, 2, y_bar)^2)
+  tss_floor <- .Machine$double.eps * max(1, max(abs(Y), na.rm = TRUE))^2 * nrow(Y)
+  r2_t <- ifelse(tss > tss_floor, 1 - (rss / tss), NA_real_)
   
   list(beta.hat = coefs, fitted.values = fitted_vals, resid = residuals,
        beta.se = se_mat, beta.se.boot = se_boot,

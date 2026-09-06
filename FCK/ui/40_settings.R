@@ -71,14 +71,27 @@ ui_tab_settings <- tabItem(
                   h4("Parametric Warping Options"),
                   radioButtons("parametric_family", "Warping Function Family:",
                                choices = list(
-                                 "Power (t^α)" = "power",
-                                 "Exponential ((e^(αt) - 1)/(e^α - 1))" = "exponential",
-                                 "Quadratic (at² + (1-a)t)" = "quadratic",
-                                 "Logistic (sigmoid)" = "logistic"
+                                 "Power (t^α) — identity at α = 1" = "power",
+                                 "Exponential ((e^(αt) - 1)/(e^α - 1)) — identity at α = 0" = "exponential",
+                                 "Quadratic (αt² + (1-α)t) — identity at α = 0" = "quadratic",
+                                 "Logistic (sigmoid) — identity at α = 0" = "logistic"
                                ),
                                selected = "power"),
+                  # P4.1: the slider used to start at 0.1, so three of the four
+                  # families could not reach their own identity and a curve
+                  # needing no registration was deformed anyway. It now spans
+                  # zero and negatives, and the server clamps the range to the
+                  # interval where each family is strictly increasing and
+                  # widens it if necessary to contain that family's identity.
                   sliderInput("param_range", "Parameter Search Range:",
-                              min = 0.1, max = 10, value = c(0.5, 2), step = 0.1),
+                              min = -5, max = 10, value = c(0.5, 2), step = 0.1),
+                  helpText(paste(
+                    "The identity differs by family (shown above). The search",
+                    "range is clamped to the region where the chosen family is",
+                    "a strictly increasing map of [0,1], and always widened to",
+                    "include the identity, so \"no warping needed\" is always",
+                    "an available answer. The range actually used is reported",
+                    "with the results.")),
                   checkboxInput("symmetric_warp", "Force symmetric warping - not implemented", FALSE)
                 ),
                 hr()

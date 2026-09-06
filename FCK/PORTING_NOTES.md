@@ -1587,6 +1587,133 @@ eta-squared and RM L2 statistic ARE new numbers and should be re-run wherever
 the old ones were reported.
 
 
+**4.49 P4: a third review, mostly on time warping.** Eleven findings. Nine hold
+as stated, one is overstated, and one is a correction to an audit comment of
+mine that was simply false. Checked each against the code before touching
+anything.
+
+*P4.1 &mdash; the parametric warp families. Confirmed, and the worst statistical
+defect left in the app.* Three of the four families could not express the
+identity, so a curve needing no registration was deformed anyway.
+
+* **exponential** h(t) = (e^{at}&minus;1)/(e^a&minus;1) has its identity at the
+  LIMIT a &rarr; 0. The code special-cased `abs(alpha - 1) < 0.001` and returned
+  `t` there. At a = 1 the family gives (e^t&minus;1)/(e&minus;1), which differs
+  from t by 0.123 at its worst &mdash; so the guard put a **discontinuity of
+  that size in the middle of the default search interval [0.5, 2]**, and
+  `optimize()` can converge onto it. A curve reported as "alpha = 1" had been
+  left unwarped by accident while its neighbours were warped by a real map. The
+  genuinely singular point, a = 0 (0/0), had no guard at all &mdash; it was
+  simply outside the range the UI allowed.
+* **quadratic** identity at a = 0. My own P0.8 clamp forced a &ge; 0.05, copied
+  from the power family where it is correct, and the UI default gave [0.5, 1].
+* **logistic** identity as steepness &rarr; 0, excluded, and 0/0 at exactly 0.
+* **power** identity at a = 1 &mdash; the only family whose identity the range
+  contained.
+
+Each family now declares its identity and the open interval on which it is a
+strictly increasing bijection of [0,1]; the user's range is clamped to that
+interval and then *widened to contain the identity*. The UI slider starts at
+&minus;5 instead of 0.1 and each family's identity is named in its label.
+
+**Measured**, on twelve curves generated to need no registration at all (max
+|h(t) &minus; t|, in units of the domain; &times;24 for hours):
+
+| family | old range | new range | old distortion | new |
+|---|---|---|---|---|
+| power | [0.50, 2.00] | [0.50, 2.00] | 0.036 | 0.036 |
+| exponential | [0.50, 2.00] | [0.00, 2.00] | 0.062 | 0.018 |
+| quadratic | [0.50, 1.00] | [0.00, 1.00] | **0.125 (3.0 h)** | 0.018 |
+| logistic | [0.50, 2.00] | [0.00, 2.00] | 0.008 | 0.007 |
+
+For exponential and quadratic the fitted parameter came back as exactly 0.500
+for every curve &mdash; the optimiser pinned at the boundary, which is the
+cleanest possible evidence that the right answer lay outside the range.
+`tests/warp_family_test.R` now checks endpoints, strict monotonicity, range,
+exact identity and continuity in the parameter, on a 121-point grid per family.
+
+*P4.2 &mdash; the shift warp is not endpoint-anchored. Confirmed; my comment was
+wrong.* h(t) = t &minus; s maps [0,1] onto [&minus;s, 1&minus;s]. It is a
+translation, which is what shift registration IS, and translations do not fix
+the endpoints. The arithmetic was right and the label was wrong. What was also
+wrong: a shift estimated by CIRCULAR cross-correlation was applied with
+`approx(rule = 2)`, i.e. constant extrapolation &mdash; so the region the
+circular estimate said should wrap round from the other end was filled with a
+repeat of the endpoint value instead. On 24-hour data with a 2.4 h shift that is
+a tenth of the cycle replaced by a constant. Periodic shifts now wrap;
+non-periodic ones still clamp, and the extrapolated fraction is reported. The
+README says plainly what each of the three registration methods is.
+
+*P4.3 &mdash; reformulate() does not protect uploaded column names. Confirmed,
+and this is a false claim I wrote in a FIX.* The P1.4b note said reformulate()
+"takes the names as data and quotes them". It does not; it pastes its termlabels
+and parses them, and R's own documentation says the labels must be syntactically
+valid names or already backquoted. Measured: `reformulate("a b")` errors;
+`reformulate("Age (years)")` silently returns `~Age(years)`, a **function
+call**; `reformulate('I(cat("PWNED"))')` returns a formula holding a live call.
+So P1.4b swapped one text-pasting route for another and asserted a safety
+property that was not there. The GAM branch never even pretended &mdash; it
+pasted names into formula text directly. Both branches now fit on internal
+column names `x1..xp`, which cannot be anything but names, with the user's
+labels restored afterwards as data. A test fits three hostile column names,
+including `I(stop("executed"))`, and checks the coefficients match `lm()` on
+renamed columns.
+
+*P4.4 &mdash; the QR pivot. OVERSTATED as a live bug, guarded anyway.*
+`chol2inv(qr.R(qrX))` is (X'X)^-1 only for an unpivoted decomposition. But
+LINPACK's `dqrdc2` only cycles a column to the back when its reduced norm falls
+below the rank tolerance, and it decrements the rank when it does &mdash; so
+rank == ncol(X) implies pivot == 1:p, and the existing rank check has already
+stopped otherwise. Measured at three conditioning levels: whenever pivoting
+would have mattered, the rank test fired first. That is an undocumented
+invariant of one code path, not a guarantee, and it costs one comparison to stop
+relying on it, so the pivot is now checked and undone if present.
+
+*P4.5 &mdash; n == p divides by zero degrees of freedom. Confirmed.* Such a
+design is full rank, so the rank check passes, and then sigma2 = 0/0, SE = Inf
+and `pt(df = 0)` = NaN, with nothing the user could connect to the cause.
+Measured on a 3&times;3 design. Now refused with a message naming the counts.
+
+*P4.6 / P4.7 &mdash; two degenerate-case guards. Confirmed.* FoSR R&sup2; had no
+protection for a time point where the response is constant (NaN or &minus;Inf,
+then plotted and averaged); the between-subjects fANOVA F had none for zero
+within-group variation (Inf or NaN, and NaN then propagates into the permutation
+comparison, where `NaN >= NaN` is NA and the p-value silently comes from fewer
+draws than it reports). Both now return NA, and NA is carried through to the
+p-value and excluded from the significant-region count rather than folded into
+"not significant". The repeated-measures branch already did this correctly.
+
+*P4.8 &mdash; the cyclic n-basis diagnostic. Confirmed.* The sweep always built
+a B-spline basis. Under cyclic smoothing the production smoother fits a Fourier
+basis, so for periodic data the diagnostic answered a question about a model the
+app was not fitting. It now branches on `input$is_cyclic`, as the "suggest a
+lambda" observer already did, and sweeps an ODD grid &mdash; fda rounds an even
+Fourier `nbasis` up, so an even grid would have scored the same model twice
+(pinned in a test).
+
+*P4.9 &mdash; app.R pointed at an renv.lock that does not exist. Confirmed.*
+Pointing at a lockfile that is not there is the same category of defect as the
+rest of this audit: a claim of a guarantee that is not present. The note now
+says what to run and states plainly that the project is not environment-pinned
+until you run it, and the README carries a section explaining why the lockfile
+must be generated on the analysis machine. My P3.6 refusal stands; the dangling
+pointer was a separate and real defect.
+
+**A pattern worth recording.** Three times now a fix has reproduced the exact
+string it was removing, inside the comment explaining the removal &mdash; which
+makes the grep guard that proves the removal pass for the wrong reason. It
+happened again here (P4.2 and P4.9) and both were caught by the tests. The rule
+is written into the code now: describe the removed text, do not repeat it.
+
+After P4: **1,193 testthat assertions (0 failed, 0 skipped) and 11 standalone
+suites pass**, including the new `warp_family_test.R` and the export round-trip.
+The Circaflex data is still absent from this container; the cosinor files remain
+untouched by this round, so those figures are unaffected by construction.
+Anything registered with the exponential, quadratic or logistic warp families
+SHOULD be re-run &mdash; those results were produced with the identity outside
+the search space.
+
+
 ## 5. Rename table
 
 | source | source app | merged app |

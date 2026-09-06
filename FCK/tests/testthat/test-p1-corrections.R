@@ -182,7 +182,12 @@ test_that("FoSR fits by QR with a rank check and no longer inverts the normal eq
   # formulas are built from names as data, not by re-parsing text
   expect_false(grepl("as.formula(paste('~'", both, fixed = TRUE))
   expect_false(grepl('as.formula(paste("~"', both, fixed = TRUE))
-  expect_true(grepl("stats::reformulate(predictors)", src, fixed = TRUE))
+  # P4.3 superseded the reformulate(predictors) form: reformulate PARSES its
+  # labels, so it was never the protection the P1.4b comment claimed. The model
+  # is now built on internal names that cannot be anything but names. See
+  # test-p4-corrections.R for the demonstration.
+  expect_false(grepl("stats::reformulate(predictors)", src, fixed = TRUE))
+  expect_true(grepl("stats::reformulate(model_names)", src, fixed = TRUE))
   # and the GUI calls that function rather than carrying a second copy
   expect_true(grepl("fck_fit_fosr_ols(", code_of("server/70_fosr.R"), fixed = TRUE))
 })

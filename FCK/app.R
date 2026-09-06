@@ -73,9 +73,26 @@ optional_packages <- c(
 #      you are told which one; discovering it through a half-installed
 #      dependency tree is not.
 #
-# The app now checks and stops with the exact command to run. Pin the
-# environment with renv (see renv.lock in the project root) so the library the
-# analysis ran against is recorded with the analysis.
+# The app now checks and stops with the exact command to run.
+#
+# AUDIT (P4.9): this note used to point the reader at a lockfile in the project
+# root. THERE IS NO SUCH FILE, and a reviewer was right to say so. (The old
+# sentence is deliberately not quoted here. Three times in this audit a fix has
+# reproduced the exact string it was removing, inside the comment explaining the
+# removal, which makes the grep guard that proves the removal pass for the wrong
+# reason. Describe the removed text; do not repeat it.) Pointing at a
+# lockfile that does not exist is the same category of defect as the rest of
+# this audit -- a claim of a guarantee that is not there. A lockfile records a
+# library that EXISTS, and it can only be written on a machine where the app's
+# packages are actually installed; the audit container is not that machine (see
+# tools/renv_bootstrap.R, which refuses to snapshot an incomplete library
+# rather than writing a fiction). So: pin the environment yourself, once, on
+# the machine you analyse on --
+#
+#   Rscript tools/renv_bootstrap.R      # writes renv.lock; commit it
+#   renv::restore()                     # later, or elsewhere
+#
+# -- and until you have done that, this project is NOT environment-pinned.
 missing_required <- required_packages[
   !vapply(required_packages, requireNamespace, logical(1), quietly = TRUE)]
 if (length(missing_required)) {

@@ -67,26 +67,45 @@
           }
         }
         
-        # Reshape to Long format
+        # AUDIT (P4.3): this branch pasted UPLOADED COLUMN NAMES straight into
+        # formula text and re-parsed it with as.formula(). A column called
+        # "Age (years)" becomes a function call; anything executable is
+        # executed. The pointwise branch had the same problem, and the P1.4b
+        # note there wrongly claimed reformulate() solved it -- it does not,
+        # it parses text too.
+        #
+        # Same fix as the pointwise branch: the model is fitted on internal
+        # column names x1..xp, which cannot be anything but names, and the
+        # user's labels are restored afterwards as data. `preds` keeps the
+        # user-facing names for every readout; `mpred` is what the formula sees.
+        preds <- input$reg_predictors
+        mpred <- paste0("x", seq_along(preds))
+
         df_reg$id_temp <- 1:nrow(df_reg)
         long_cov <- df_reg[rep(seq_len(nrow(df_reg)), each = n_time), ]
         long_data <- long_cov
+        # the safe aliases, alongside the original columns (which stay for
+        # display and for any downstream code that indexes by the user's name)
+        for (k in seq_along(preds)) {
+          v <- long_data[[preds[k]]]
+          if (is.factor(v)) v <- droplevels(v)
+          long_data[[mpred[k]]] <- v
+        }
         long_data$time <- rep(time_points, times = nrow(df_reg))
         long_data$Y_val <- as.vector(t(Y))
-        
-        # Build Formula: Y ~ s(time) + s(time, by=cov) ...
+
+        # Build Formula: Y ~ s(time) + s(time, by = x_k) ...
         gam_formula_str <- "Y_val ~ s(time, bs = 'ps', k = 10)"
-        preds <- input$reg_predictors
-        
-        for(p_var in preds) {
-          if(is.numeric(df_reg[[p_var]])) {
-            gam_formula_str <- paste0(gam_formula_str, " + s(time, by = ", p_var, ", bs='ps', k=10)")
+        for(k in seq_along(preds)) {
+          if(is.numeric(df_reg[[preds[k]]])) {
+            gam_formula_str <- paste0(gam_formula_str, " + s(time, by = ", mpred[k], ", bs='ps', k=10)")
           } else {
             # Factor interaction
-            gam_formula_str <- paste0(gam_formula_str, " + ", p_var, " + s(time, by = ", p_var, ", bs='ps', k=10)")
+            gam_formula_str <- paste0(gam_formula_str, " + ", mpred[k],
+                                      " + s(time, by = ", mpred[k], ", bs='ps', k=10)")
           }
         }
-        
+
         gam_fit <- gam(as.formula(gam_formula_str), data = long_data, method = "REML")
         
         # Reconstruct Beta(t) for Visualization (Approximation)
@@ -94,18 +113,20 @@
         beta_hat <- matrix(0, nrow = length(preds) + 1, ncol = n_time)
         rownames(beta_hat) <- c("(Intercept)", preds)
         
-        # Intercept approx
+        # Intercept approx. The prediction frames are built on the MODEL names,
+        # because that is what the fitted formula refers to (P4.3).
         d_int <- pred_grid
-        for(v in preds) {
-          if(is.numeric(df_reg[[v]])) d_int[[v]] <- 0
+        for(k in seq_along(preds)) {
+          mv <- mpred[k]
+          if(is.numeric(df_reg[[preds[k]]])) d_int[[mv]] <- 0
           else {
             # Use proper factor levels from long_data (which is what GAM was trained on)
-            orig_col <- long_data[[v]]
+            orig_col <- long_data[[mv]]
             if(is.factor(orig_col)) {
-              d_int[[v]] <- factor(rep(levels(orig_col)[1], n_time), levels = levels(orig_col))
+              d_int[[mv]] <- factor(rep(levels(orig_col)[1], n_time), levels = levels(orig_col))
             } else {
               lvls <- sort(unique(as.character(orig_col)))
-              d_int[[v]] <- factor(rep(lvls[1], n_time), levels = lvls)
+              d_int[[mv]] <- factor(rep(lvls[1], n_time), levels = lvls)
             }
           }
         }
@@ -118,22 +139,23 @@
         # effect is a contrast against the reference level, so there is one
         # curve per non-reference level, not one per variable.
         beta_rows <- list("(Intercept)" = beta_hat[1, ])
-        for(v in preds) {
+        for(k in seq_along(preds)) {
+          v <- preds[k]; mv <- mpred[k]   # v names the ROW, mv drives the model
           if(is.numeric(df_reg[[v]])) {
-            d_0 <- d_int; d_0[[v]] <- 0
-            d_1 <- d_int; d_1[[v]] <- 1
+            d_0 <- d_int; d_0[[mv]] <- 0
+            d_1 <- d_int; d_1[[mv]] <- 1
             beta_rows[[v]] <- as.vector(predict(gam_fit, newdata = d_1) -
                                         predict(gam_fit, newdata = d_0))
           } else {
-            oc <- long_data[[v]]
+            oc <- long_data[[mv]]
             lv <- if (is.factor(oc)) levels(oc) else sort(unique(as.character(oc)))
             if (length(lv) >= 2) {
               d_ref <- d_int
-              d_ref[[v]] <- factor(rep(lv[1], n_time), levels = lv)
+              d_ref[[mv]] <- factor(rep(lv[1], n_time), levels = lv)
               base <- as.vector(predict(gam_fit, newdata = d_ref))
               for (l in lv[-1]) {
                 d_l <- d_int
-                d_l[[v]] <- factor(rep(l, n_time), levels = lv)
+                d_l[[mv]] <- factor(rep(l, n_time), levels = lv)
                 beta_rows[[paste0(v, l)]] <-
                   as.vector(predict(gam_fit, newdata = d_l)) - base
               }
@@ -147,12 +169,15 @@
         fitted_vals <- matrix(fitted_vec, nrow = nrow(Y), ncol = n_time, byrow = TRUE)
         residuals <- Y - fitted_vals
         
+        # P4.6: same zero-variance guard as the pointwise branch.
         rss <- colSums(residuals^2); y_bar <- colMeans(Y)
-        tss <- colSums(sweep(Y, 2, y_bar)^2); r2_t <- 1 - (rss/tss)
-        
+        tss <- colSums(sweep(Y, 2, y_bar)^2)
+        tss_floor <- .Machine$double.eps * max(1, max(abs(Y), na.rm = TRUE))^2 * nrow(Y)
+        r2_t <- ifelse(tss > tss_floor, 1 - (rss / tss), NA_real_)
+
         fit <- list(beta.hat = beta_hat, fitted.values = fitted_vals, resid = residuals, 
                     beta.se = beta_hat*0, beta.p = beta_hat*0, # placeholders
-                    terms = terms(stats::reformulate(preds)), 
+                    terms = terms(gam_fit), gam_model_names = mpred, 
                     r2_t = r2_t, method = "Smoothed OLS (GAM)",
                     gam_obj = gam_fit,
                     gam_predictors = preds,

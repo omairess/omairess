@@ -167,6 +167,7 @@ Rscript tests/missing_status_test.R
 Rscript tests/posthoc_source_test.R
 Rscript tests/circular_density_test.R
 Rscript tests/warping_test.R
+Rscript tests/warp_family_test.R
 Rscript tests/audit_test.R
 Rscript tests/polar_agreement_test.R
 Rscript -e 'testthat::test_dir("tests/testthat")'
@@ -204,6 +205,71 @@ the acrophase density. No packages needed.
 `codegen_test.R` drives the code export with a stub result for every analysis
 family and checks that what comes out is valid R — a script that does not parse
 looks like a reproducibility guarantee and is not one.
+
+## What the registration methods are, exactly
+
+The time-warping controls on the fPCA tab are three different things, and the
+difference matters for what you can claim about the result.
+
+**Parametric alignment** fits one of four one-parameter families —
+`power` t^α, `exponential` (e^{αt}−1)/(e^α−1), `quadratic` αt²+(1−α)t, or
+`logistic` (normalised sigmoid). Each is a strictly increasing map of [0,1] onto
+itself with h(0)=0 and h(1)=1: a genuine reparameterisation of time.
+`tests/warp_family_test.R` checks that on a fine parameter grid for every
+family. **The identity is reachable in all four** — at α=1 for `power` and
+α=0 for the other three — so "this curve needs no registration" is an answer
+the search can give. It could not, before: three of the four families had their
+identity outside the allowed range, and on curves needing no registration the
+quadratic family deformed the time axis by up to 12.5% of the domain (3 hours
+of a 24-hour day) with the fitted parameter pinned at the range boundary.
+
+**Linear shift** estimates a lag by cross-correlation and applies h(t)=t−s.
+That is a *translation* — the standard shift-registration model — and a
+translation is **not** an endpoint-preserving diffeomorphism: it maps [0,1] onto
+[−s, 1−s]. What happens at the boundary depends on the design. Tick *periodic*
+and the warp wraps, which is correct for a full cycle of circadian data; leave
+it unticked and the ends are filled by constant extrapolation, and the fraction
+of each curve that was extrapolated is reported. Shifts are capped at a quarter
+of the domain, beyond which a lag is not identified.
+
+**Landmark alignment** builds a monotone piecewise-linear map through the
+matched landmarks with the endpoints pinned.
+
+Not implemented: SRVF / Fisher–Rao elastic registration, and any separation of
+amplitude from phase variance beyond what these three give you. If your question
+is specifically about phase, prefer the acrophase from the cosinor tab, which is
+estimated rather than assumed.
+
+## Reproducibility: pin the environment yourself
+
+This repository does **not** ship an `renv.lock`, and the app is not
+environment-pinned until you make one. That is deliberate. A lockfile records a
+library that exists — `renv::snapshot()` writes the version and hash of each
+package as installed on the machine it runs on — and it can only honestly be
+written where the app's packages are actually installed. A lockfile listing
+packages that were never there would make `renv::restore()` reproduce the gap
+instead of filling it, on a machine whose owner had been told the environment
+was pinned.
+
+So, once, on the machine you analyse on:
+
+```r
+Rscript tools/renv_bootstrap.R   # from the FCK directory; writes renv.lock
+```
+
+It reads the required/optional package lists out of `app.R` rather than keeping
+a second copy, prints the installed version of every one, **refuses to write a
+lockfile if any required package is missing**, and warns you which optional
+features will be absent from the lock. Commit the `renv.lock` it produces
+alongside your analysis. Later, or elsewhere:
+
+```r
+renv::restore()
+```
+
+The exported analysis script is pinned separately and always: it records the
+version of every package it used and prints a notice on re-run if any of them
+has changed.
 
 ## A note on smoothing
 

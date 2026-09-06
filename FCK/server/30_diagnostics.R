@@ -588,7 +588,23 @@
     auto     <- identical(input$smooth_method, "auto")
     lam_manual <- if(auto) NA_real_ else 10^(-input$smooth_factor)
 
-    nb_seq    <- seq(4, min(n_time - 1, 40), by = 2)
+    # AUDIT (P4.8): this sweep always built a B-spline basis. When the user has
+    # selected CYCLIC smoothing the production smoother fits a FOURIER basis, so
+    # for periodic data the diagnostic answered a question about a model the app
+    # was not fitting -- "which B-spline count is best?" while the analysis ran
+    # "Fourier basis at the selected lambda". The "suggest a lambda" observer
+    # above already branches on input$is_cyclic; this one now does too, and the
+    # sweep runs over the number of Fourier basis functions, which must be odd
+    # (a constant plus sin/cos pairs) -- fda silently rounds an even count up,
+    # so an even grid would have scored the same model twice.
+    cyclic <- isTRUE(input$is_cyclic)
+    make_basis <- function(nb) {
+      if (cyclic) create.fourier.basis(rangeval = c(1, n_time), nbasis = nb)
+      else        create.bspline.basis(rangeval = c(1, n_time), nbasis = nb)
+    }
+
+    nb_seq <- if (cyclic) seq(3, min(n_time - 1, 41), by = 2)
+              else        seq(4, min(n_time - 1, 40), by = 2)
     gcv_means <- numeric(length(nb_seq))
     lam_used  <- numeric(length(nb_seq))
 
@@ -598,7 +614,7 @@
       for(bi in seq_along(nb_seq)) {
         incProgress(1 / length(nb_seq), detail = paste("n_basis =", nb_seq[bi]))
         nb    <- nb_seq[bi]
-        basis <- create.bspline.basis(rangeval = c(1, n_time), nbasis = nb)
+        basis <- make_basis(nb)
 
         if(auto) {
           # The same GCV search the app performs on every run, repeated for
@@ -607,7 +623,8 @@
           # GCV as a function of log-lambda is smooth enough that a 12-point
           # bracket plus the refinement lands in the same place.
           al <- tryCatch(fck_auto_lambda(data_mat, seq_len(n_time), basis,
-                                         min_points_needed = 4, n_grid = 12),
+                                         min_points_needed = if(cyclic) 3 else 4,
+                                         n_grid = 12),
                          error = function(e) NULL)
           if(is.null(al)) { gcv_means[bi] <- NA_real_; lam_used[bi] <- NA_real_; next }
           lam_used[bi]  <- al$lambda
@@ -617,10 +634,11 @@
 
         lam_used[bi] <- lam_manual
         fdP   <- fdPar(basis, 2, lam_manual)
+        min_pts <- if(cyclic) 3 else 4
         gcv_sub <- sapply(seq_len(nrow(data_mat)), function(s) {
           y     <- data_mat[s, ]
           valid <- which(!is.na(y))
-          if(length(valid) < 4) return(NA_real_)
+          if(length(valid) < min_pts) return(NA_real_)
           sb <- tryCatch(smooth.basis(valid, y[valid], fdP), error = function(e) NULL)
           if(is.null(sb)) NA_real_ else sb$gcv
         })
@@ -641,6 +659,7 @@
       gcv      = gcv_means,
       lambda   = lam_used,
       auto     = auto,
+      cyclic   = cyclic,
       optimal  = nb_seq[optimal_idx]
     )
     showNotification(
@@ -677,7 +696,10 @@
       layout(
         title  = list(
           text = paste0(
-            "GCV Score vs Number of B-spline Basis Functions",
+            if(isTRUE(ng$cyclic))
+              "GCV Score vs Number of Fourier Basis Functions"
+            else
+              "GCV Score vs Number of B-spline Basis Functions",
             if(isTRUE(ng$auto))
               "<br><sub>lambda re-selected by GCV at every basis size (auto mode)</sub>"
             else
