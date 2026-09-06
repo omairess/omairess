@@ -49,7 +49,9 @@ test_that("the n-basis GCV sweep no longer scores auto mode at lambda = 0", {
   expect_false(grepl('if(input$smooth_method == "auto") 0 else', src, fixed = TRUE))
   # in auto mode it re-selects lambda by GCV at each candidate basis size,
   # using the same search the app runs
-  expect_true(grepl("fck_auto_lambda(data_mat, seq_len(n_time), basis", src, fixed = TRUE))
+  # P11.3: on the production axis, not the column index (see test-p11).
+  expect_true(grepl("fck_auto_lambda(data_mat, axis$t_full, basis", src, fixed = TRUE))
+  expect_false(grepl("fck_auto_lambda(data_mat, seq_len(n_time), basis", src, fixed = TRUE))
   expect_true(grepl("lam_used[bi]  <- al$lambda", src, fixed = TRUE))
   # and the stored result records which regime produced the curve
   expect_true(grepl("auto     = auto,", src, fixed = TRUE))

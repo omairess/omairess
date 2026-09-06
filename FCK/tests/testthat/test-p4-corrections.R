@@ -149,8 +149,16 @@ test_that("P4.7: the between-subjects F is NA where there is no within-group var
 test_that("P4.8: the n-basis sweep uses the basis the app would actually fit", {
   src <- code_of("server/30_diagnostics.R")
   expect_true(grepl("cyclic <- isTRUE(input$is_cyclic)", src, fixed = TRUE))
-  expect_true(grepl("if (cyclic) create.fourier.basis(rangeval = c(1, n_time), nbasis = nb)",
+  # P4.8 made the sweep branch on cyclic; P11.3 then found it was still building
+  # the basis BY HAND, over rangeval = c(1, n_time) with the column index as
+  # argvals, so for real-time data it swept a domain (and, when cyclic, a
+  # period) the app does not fit. The property P4.8 asserted is now guaranteed
+  # by construction: the sweep calls the shared builder, and nb_fourier is the
+  # single sanctioned override that lets it vary the count.
+  expect_true(grepl("fck_smoothing_basis(axis, nb, input$smooth_method, nb_fourier = nb)",
                     src, fixed = TRUE))
+  expect_false(grepl("create.fourier.basis(rangeval = c(1, n_time), nbasis = nb)",
+                     src, fixed = TRUE))
   expect_true(grepl("basis <- make_basis(nb)", src, fixed = TRUE))
   # a Fourier basis needs an ODD count (constant + sin/cos pairs); an even grid
   # would have scored the same model twice

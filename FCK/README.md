@@ -141,6 +141,9 @@ FCK/
     02_helpers_gam.R       GAM prediction helpers
     03_helpers_clock.R     real clock times, when they can be trusted
     04_helpers_fd.R        the one rule for building an fd object
+    05_helpers_warp.R      the registration kernels: pure, so the app,
+                           the tests and the exported script share one
+                           definition rather than three
     05_helpers_missing.R   which values are measured, filled, or invented
     06_helpers_posthoc.R   what the post-hoc tests compare
     07_helpers_circular.R  circular density and the clock-face orientation
@@ -174,12 +177,14 @@ Rscript tests/reactive_smoke_test.R
 Rscript tests/audit_test.R
 Rscript tests/polar_agreement_test.R
 Rscript tests/periodic_shift_test.R
+Rscript tests/warp_export_roundtrip_test.R
+Rscript tests/diagnostic_axis_test.R
 Rscript -e 'testthat::test_dir("tests/testthat")'
 ```
 
 `smoke_test.R` parses every file, builds and renders the whole UI, checks that
 every sidebar entry reaches a uniquely-named tab, checks that no output id is
-assigned twice, and registers all 31 server files under a mock session. It
+assigned twice, and registers all 35 server files under a mock session. It
 needs only the UI packages, so it runs without `fda` or `fda.usc` installed.
 
 `reactive_smoke_test.R` is the layer the others were missing. It builds a
@@ -195,6 +200,20 @@ test was checked by reintroducing each defect and confirming it fails.
 reads the SHIPPED function: it parses `server/40_fpca.R` and evaluates only that
 one assignment, so it cannot pass against a stale copy. It was verified by
 reintroducing the off-by-one bin error, which it catches on three counts.
+
+`warp_export_roundtrip_test.R` is what backs the reproducibility claim for time
+warping. `codegen_test.R` proves the exported script parses, and a script full of
+the WRONG algorithm parses perfectly: for ten rounds the export wrote its own
+copy of the registration by hand, and that copy predated the P0.8 fixes — it
+recovered about a twelfth of each periodic shift and reversed its sign. This test
+runs the shipped kernel and the generator's emitted text on the same curves and
+requires them to agree to 1e-10, which they now do exactly, because they are the
+same function object. It was checked by reintroducing three separate defects.
+
+`diagnostic_axis_test.R` asserts that the smoothing diagnostics describe the
+model the app actually fits — same axis, same basis type, same count — rather
+than checking that some particular line of code is present. Four rounds of this
+audit found that property broken in four different ways.
 
 `codegen_test.R` checks that the exported script *parses* for every combination
 of results the generator might be asked about. `export_roundtrip_test.R` goes
@@ -261,6 +280,16 @@ half of the cycle. Getting either wrong biases every shift by a constant
 phase difference between curves that have none. `tests/periodic_shift_test.R`
 pins both: two identical periodic curves must return a shift of exactly zero and
 an exact identity round trip (RMSE 0, r 1), and known shifts must be recovered.
+
+**The estimate has a resolution.** The lag is found on the analysis grid, so the
+smallest non-zero shift the estimator can return is one grid step — 1/(n−1),
+about 63 minutes on 24 hourly columns and 1.5 hours on 17. That is the grid's
+resolution, not an error, but it is invisible in a table of four-decimal shifts,
+so the registration panel and the Methods paragraph of the publication report
+both state it. The grid is deliberately **not** densified behind your back: the
+app holds an `fd` object and could evaluate on 256 points, but that would be
+finer interpolation of the same fitted curves rather than more measurement, and
+it would change every number anyone has already reported.
 
 **Landmark alignment** builds a monotone piecewise-linear map through the
 matched landmarks with the endpoints pinned. Landmarks that cross or duplicate

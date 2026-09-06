@@ -821,134 +821,148 @@
       add("# Warping method: ", warp_method)
       add("")
 
+      # AUDIT (P11.1): this block used to write the registration algorithms out
+      # with add("..."), by hand, and the hand-written copy had not been touched
+      # since before P0.8. Measured, live estimator against exported script, on
+      # a periodic profile with known displacements: the export recovered about
+      # a twelfth of each shift and REVERSED ITS SIGN (0.05 -> +0.0050 where the
+      # app gives -0.0505), because it still carried the 0.1 and 0.5 attenuation
+      # constants and had no periodic branch at all; registered curves differed
+      # by up to 2.17 on curves of range +/-1.4. The parametric copy was the
+      # pre-P4.1 code: on curves needing NO warping it pinned the quadratic
+      # family at the range boundary and deformed the time axis by 0.4999 of the
+      # domain (the app gives 0.0003), and the `logistic` family the UI offers
+      # was missing from its switch entirely, so it silently fell through to the
+      # identity. The landmark branch emitted a comment and no code, leaving
+      # `registered_curves` undefined for the lines below to use.
+      #
+      # So "Export R code" did not reproduce the analysis for ANY of the three
+      # methods. The generator has had the right machinery all along --
+      # emit_kernel() deparses the app's own function objects and pulls in their
+      # helper closure via codetools::findGlobals -- and sections 7, 10 and 11
+      # use it. This section could not, because the kernels were buried inside
+      # server/40_fpca.R. They now live in server/05_helpers_warp.R as pure
+      # top-level functions, so the exported script gets the REAL estimator and
+      # the two cannot drift apart again.
+      add("# The registration kernel below is the app's own function, written out")
+      add("# by deparse(). It is not a re-implementation: there is exactly one")
+      add("# definition (server/05_helpers_warp.R) and this is it.")
+      add("")
+
       if(warp_method == "linear_shift") {
         periodic <- if(!is.null(input$periodic_shift)) input$periodic_shift else FALSE
-        reference <- if(!is.null(input$shift_reference)) input$shift_reference else "mean"
         allow_dilation <- if(!is.null(input$allow_dilation)) input$allow_dilation else FALSE
+        dilation_range <- if(!is.null(input$dilation_range)) input$dilation_range else c(0.95, 1.05)
+        reference <- if(!is.null(input$shift_reference)) input$shift_reference else "mean"
 
-        add("# Linear shift alignment parameters:")
+        add("# Linear shift alignment. Settings used for the reported analysis:")
         add("#   Reference: ", reference)
         add("#   Periodic: ", periodic)
         add("#   Allow dilation: ", allow_dilation)
         add("")
-
-        add("# Linear shift alignment function")
-        add("linear_shift_alignment <- function(fd_obj, periodic = ", periodic,
-            ", reference = '", reference, "', time_points = seq(0, 1, length.out = 100)) {")
-        add("  n_curves <- ncol(fd_obj$coefs)")
-        add("  n_time <- length(time_points)")
-        add("  curves <- eval.fd(time_points, fd_obj)")
-        add("")
-        add("  # Get reference curve")
-        add("  ref_curve <- switch(reference,")
-        add("    'mean' = rowMeans(curves),")
-        add("    'median' = apply(curves, 1, median),")
-        add("    curves[,1])")
-        add("")
-        add("  # Initialize outputs")
-        add("  registered_curves <- matrix(NA, n_time, n_curves)")
-        add("  warp_functions <- matrix(NA, n_time, n_curves)")
-        add("  shifts <- numeric(n_curves)")
-        add("")
-        add("  for(i in 1:n_curves) {")
-        add("    # Find optimal shift using cross-correlation")
-        add("    ccf_result <- ccf(curves[,i], ref_curve, lag.max = floor(n_time/4), plot = FALSE)")
-        add("    best_lag <- ccf_result$lag[which.max(ccf_result$acf)]")
-        add("    shifts[i] <- best_lag / n_time * 0.1")
-        add("")
-        add("    # Create warping function")
-        add("    warp_functions[,i] <- pmin(1, pmax(0, time_points - shifts[i] * 0.5))")
-        add("    warp_functions[1,i] <- 0; warp_functions[n_time,i] <- 1")
-        add("")
-        add("    # Apply warping")
-        add("    if(abs(shifts[i]) > 0.001) {")
-        add("      registered_curves[,i] <- approx(time_points, curves[,i],")
-        add("                                       xout = warp_functions[,i], rule = 2)$y")
-        add("    } else {")
-        add("      registered_curves[,i] <- curves[,i]")
-        add("    }")
-        add("  }")
-        add("")
-        add("  return(list(registered_curves = registered_curves,")
-        add("              warp_functions = warp_functions, shifts = shifts))")
-        add("}")
-        add("")
-        add("# Apply alignment")
-        add("warp_result <- linear_shift_alignment(fd_obj, periodic = ", periodic, ", reference = '", reference, "')")
+        emit_kernel("linear_shift_alignment")
+        add("warp_result <- linear_shift_alignment(fd_obj,")
+        add("                                      periodic = ", periodic, ",")
+        add("                                      allow_dilation = ", allow_dilation, ",")
+        add("                                      dilation_range = c(", dilation_range[1],
+            ", ", dilation_range[2], "),")
+        add("                                      reference = '", reference, "',")
+        add("                                      time_points = time_points)")
         add("registered_curves <- warp_result$registered_curves")
+        add("shifts <- warp_result$shifts")
         add("")
 
       } else if(warp_method == "parametric") {
         family <- if(!is.null(input$parametric_family)) input$parametric_family else "power"
         param_range <- if(!is.null(input$param_range)) input$param_range else c(0.5, 2)
+        symmetric <- if(!is.null(input$symmetric_warp)) input$symmetric_warp else FALSE
 
-        add("# Parametric warping parameters:")
+        add("# Parametric alignment. Settings used for the reported analysis:")
         add("#   Family: ", family)
-        add("#   Parameter range: [", param_range[1], ", ", param_range[2], "]")
+        add("#   Parameter range requested: [", param_range[1], ", ", param_range[2], "]")
+        add("# The kernel clamps that range to the interval on which the family is a")
+        add("# strictly increasing bijection AND widens it to contain the identity, so")
+        add("# 'this curve needs no warping' is always reachable. The range it")
+        add("# actually used is returned in warp_result$param_range_used.")
         add("")
-
-        add("# Parametric alignment function")
-        add("parametric_alignment <- function(fd_obj, family = '", family, "',")
-        add("                                  param_range = c(", param_range[1], ", ", param_range[2], "),")
-        add("                                  time_points = seq(0, 1, length.out = 100)) {")
-        add("  n_curves <- ncol(fd_obj$coefs)")
-        add("  n_time <- length(time_points)")
-        add("  curves <- eval.fd(time_points, fd_obj)")
-        add("  mean_curve <- rowMeans(curves)")
-        add("")
-        add("  # Warping function based on family")
-        add("  warp_func <- function(t, alpha) {")
-        add("    switch(family,")
-        add("      'power' = pmin(1, pmax(0, t^alpha)),")
-        add("      'exponential' = if(abs(alpha-1) < 0.001) t else pmin(1, pmax(0, (exp(alpha*t)-1)/(exp(alpha)-1))),")
-        add("      'quadratic' = pmin(1, pmax(0, alpha*t^2 + (1-alpha)*t)),")
-        add("      t)")
-        add("  }")
-        add("")
-        add("  registered_curves <- matrix(NA, n_time, n_curves)")
-        add("  alpha_values <- numeric(n_curves)")
-        add("")
-        add("  for(i in 1:n_curves) {")
-        add("    # Optimize warping parameter")
-        add("    objective <- function(alpha) {")
-        add("      warped <- approx(time_points, curves[,i], xout = warp_func(time_points, alpha), rule = 2)$y")
-        add("      sum((warped - mean_curve)^2, na.rm = TRUE)")
-        add("    }")
-        add("    result <- optimize(objective, interval = param_range, tol = 1e-4)")
-        add("    alpha_values[i] <- result$minimum")
-        add("    registered_curves[,i] <- approx(time_points, curves[,i],")
-        add("                                     xout = warp_func(time_points, alpha_values[i]), rule = 2)$y")
-        add("  }")
-        add("")
-        add("  return(list(registered_curves = registered_curves, alpha_values = alpha_values))")
-        add("}")
-        add("")
-        add("# Apply alignment")
-        add("warp_result <- parametric_alignment(fd_obj, family = '", family, "')")
+        emit_kernel("parametric_alignment")
+        add("warp_result <- parametric_alignment(fd_obj,")
+        add("                                    family = '", family, "',")
+        add("                                    param_range = c(", param_range[1],
+            ", ", param_range[2], "),")
+        add("                                    symmetric = ", symmetric, ",")
+        add("                                    time_points = time_points)")
         add("registered_curves <- warp_result$registered_curves")
+        add("alpha_values <- warp_result$alpha_values")
         add("")
 
       } else if(warp_method == "landmark") {
-        add("# Landmark-based alignment")
-        add("# (Implementation depends on detected landmarks)")
+        lm_pts <- values$landmark_points
+        add("# Landmark alignment.")
+        if(!is.null(lm_pts) && nrow(lm_pts) > 0) {
+          add("# Manual landmarks, as placed in the app:")
+          add("landmark_points <- data.frame(x = c(",
+              paste(sprintf("%.6f", lm_pts$x), collapse = ", "), "))")
+        } else {
+          add("# No manual landmarks were placed, so the kernel detects them")
+          add("# automatically from the sample mean curve (deterministically).")
+          add("landmark_points <- NULL")
+        }
+        add("# Curves whose detected landmarks cross cannot define a monotone warp;")
+        add("# the kernel leaves those UNREGISTERED and names them in")
+        add("# warp_result$rejection_warning.")
+        add("")
+        emit_kernel("landmark_alignment_simple")
+        add("warp_result <- landmark_alignment_simple(fd_obj, c(0.25, 0.5, 0.75),")
+        add("                                         time_points,")
+        add("                                         landmark_points = landmark_points)")
+        add("registered_curves <- warp_result$registered_curves")
+        add("if (!is.null(warp_result$rejection_warning)) warning(warp_result$rejection_warning)")
         add("")
       }
 
-      # Warping fit statistics
+      # Warping fit statistics.
+      #
+      # AUDIT (P11.1): this comment block asked the summary for AIC, BIC and
+      # variance_explained_by_warping. None of the three has existed since P5.2
+      # and P5.3 -- the first two because no likelihood is specified for a
+      # registration, the third because the pre/post dispersion change is NOT a
+      # phase/amplitude decomposition and reporting it as "variance explained"
+      # is the overstatement P5.3 removed. Because add() pastes its arguments,
+      # sprintf("%.2f", NULL) is character(0) and paste0() of it is character(0),
+      # so all three lines silently produced NOTHING rather than erroring: the
+      # export had been quietly dropping them for five rounds. Fields are now
+      # read with [["..."]], which does not partial-match (P6.2), and only
+      # fields that exist are written.
       if(!is.null(values$warping_results$fit_statistics)) {
         stats <- values$warping_results$fit_statistics$summary
-        add("# Warping fit statistics:")
-        add("#   Mean R² (orig vs warped): ", sprintf("%.4f", stats$mean_r_squared))
-        add("#   Mean RMSE: ", sprintf("%.4f", stats$mean_rmse))
-        add("#   Variance explained by warping: ", sprintf("%.2f%%", stats$variance_explained_by_warping * 100))
-        add("#   AIC: ", sprintf("%.2f", stats$AIC))
-        add("#   BIC: ", sprintf("%.2f", stats$BIC))
+        put <- function(label, key, fmt = "%.4f", scale = 1) {
+          v <- stats[[key]]
+          if (!is.null(v) && length(v) == 1 && is.finite(v))
+            add("#   ", label, ": ", sprintf(fmt, v * scale))
+        }
+        add("# Warping fit statistics (transformation magnitude, not evidence of")
+        add("# improved alignment -- see the registration notes):")
+        put("Mean R² (original vs registered)", "mean_r_squared")
+        put("Mean RMSE", "mean_rmse")
+        put("Mean correlation", "mean_correlation")
+        put("Between-curve dispersion, pre-registration", "total_dispersion_pre")
+        put("Between-curve dispersion, post-registration", "total_dispersion_post")
+        put("Mean phase displacement", "mean_phase_displacement")
+        add("#   Phase geometry: ", if (isTRUE(stats[["periodic"]])) "circular" else "linear")
         add("")
       }
 
-      add("# Create fd object from registered curves")
-      add("reg_basis <- create.bspline.basis(c(0, 1), nbasis = min(20, n_time - 2))")
-      add("reg_fd <- smooth.basis(time_points, registered_curves, fdPar(reg_basis, 2, 0))$fd")
+      # AUDIT (P11.1): this used to re-smooth the registered curves onto a fresh
+      # B-spline basis with nbasis = min(20, n_time - 2) -- the SAME duplicated
+      # basis-count rule P10.2 removed from the diagnostics path, and hardcoded
+      # to B-splines even when the analysis had been run on a Fourier basis, so
+      # a periodic analysis was re-expanded in a non-periodic basis. The kernel
+      # already returns regfd, smoothed onto fd_obj's own basis. Use it.
+      add("# The kernel returns the registered curves already expressed in the")
+      add("# same basis the analysis used, so there is no second smoothing step")
+      add("# and no second basis rule to keep in step with the first.")
+      add("reg_fd <- warp_result$regfd")
       add("")
     }
 

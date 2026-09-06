@@ -259,6 +259,17 @@ fck_apa_report <- function(values, input, title = NULL) {
           " yielded crossed or duplicated landmarks, which cannot define a ",
           "monotone time warp, and ", if (wr$n_rejected == 1) "was" else "were",
           " left unregistered rather than registered with a fold.")
+    # P11.4: the estimate has a resolution, and a paper is the last place a
+    # difference below it should be read as a finding. The report states the
+    # floor next to the method, in the Methods section, where a reader checks
+    # whether a reported phase difference is resolvable at all.
+    ng <- length(wr$time_points %|% numeric(0))
+    if (identical(wr$method, "linear_shift") && ng > 1)
+      add(" The shift was estimated on the ", ng, "-point analysis grid, so ",
+          "the resolution of the estimate is one grid step, ",
+          fck_apa_num(1 / (ng - 1), 4, bounded = TRUE),
+          " of the observed interval; differences smaller than that are not ",
+          "resolvable and are not interpreted.")
     blank()
   }
 

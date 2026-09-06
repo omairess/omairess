@@ -2309,6 +2309,133 @@ correlation were all computed on mis-registered curves.
 After this round: **1,646 testthat assertions (0 failed, 0 skipped) and 14
 standalone suites pass.**
 
+**4.58 P11: an eighth review, whose one finding led to a worse one.** The review
+confirmed P10 and raised three things. All three held, and chasing the first
+uncovered a live defect none of the eight reviews had found.
+
+*The exported R code for time warping was an algorithm from before P0.8.*
+`server/90_export.R` wrote the registration out by hand with `add("...")`, and
+that hand-written copy had never been updated when the estimators were fixed.
+Measured, live kernel against the emitted script, on a periodic profile with
+known displacements:
+
+```
+true delta    live s      exported s     ratio
+ 0.05        -0.0505       +0.0050       -0.099
+ 0.10        -0.1010       +0.0090       -0.089
+-0.10        +0.1010       -0.0080       -0.079
+```
+
+The exported script recovered about a twelfth of each shift AND REVERSED ITS
+SIGN: it still carried the 0.1 and 0.5 attenuation constants, clipped the warp,
+forced the endpoints, and had no periodic branch at all. Registered curves
+differed from the app's by up to 2.17 on curves of range &plusmn;1.4.
+
+The reviewer flagged the shift branch. The parametric branch was equally stale
+and I found it by checking rather than assuming: it emitted the pre-P4.1
+families, with the exponential guard at &alpha;&nbsp;=&nbsp;1 (where that family
+is at its most curved, not its identity) and a bare `optimize()` over the user's
+range. On curves needing NO warping the exported quadratic pinned at the range
+boundary and deformed the time axis by **0.4999 of the domain**; the live kernel
+gives 0.0003. The `logistic` family the UI offers was absent from the emitted
+`switch()` entirely, so it fell through to the identity. And the landmark branch
+emitted a comment and no code, leaving `registered_curves` undefined for the
+next section to read &mdash; a script that dies on the line after the one this
+audit already fixed once. `tests/codegen_test.R` could not see any of it,
+because a script full of the wrong algorithm parses perfectly.
+
+*And then the live defect.* Making the kernels emittable meant making them pure
+and top-level, and doing that exposed why it had never been done:
+`fck_landmark_warp()` was defined at **depth 11**, inside the
+`else if (warping_method == "landmark")` branch of a reactive observer, while
+its only caller, `landmark_alignment_simple()`, was defined at the top level of
+the same file. R scopes functions lexically, so the caller's search path is the
+server environment and the observer's frame is not on it. The call could never
+resolve. Reproduced with the app's own sourcing model:
+
+```
+is fck_landmark_warp reachable from landmark_alignment_simple?  FALSE
+Error in landmark_alignment: could not find function "fck_landmark_warp"
+landmark_alignment_simple returned:  NULL  <-- registration FAILED
+```
+
+The surrounding `tryCatch` turned that into NULL, the caller treated NULL as
+"warping failed", and **substituted a linear shift**. So every landmark
+registration since P5.5 silently returned a different method's answer, with the
+only notice going to the console. This is my own regression: the function was
+written correctly at P5.5/P5.6 and pasted in the wrong place.
+
+Why no test caught it is the part worth keeping. Every warping test in the suite
+called the estimators DIRECTLY, extracting them from the source and invoking
+them by hand &mdash; and a direct call supplies exactly the scope the app does
+not, so all of them passed against a function the app could not reach. The
+reactive smoke test, added at P9 precisely to close "nothing presses the
+buttons", drove fPCA, the component ANOVA and both FoSR methods, and never
+pressed *this* button. It now runs all three registration methods through
+`run_analysis` and requires the method that comes back to be the method that was
+asked for; with the defect reintroduced it reports
+
+```
+FAIL: asked for 'landmark' registration, the app ran 'linear_shift'
+```
+
+*The diagnostics were still building their own axis.* P4.8 fixed the basis type
+in the n-basis sweep, P9.3 the basis type in the CV, P10.2 the basis count. The
+axis was left. Both diagnostic observers built over `rangeval = c(1, n_time)`
+with the column index as argvals, while production goes through
+`fck_smoothing_axis()` and uses elapsed hours when real-time smoothing is on.
+Measured on 14 unevenly spaced hourly columns: production fits over [0, 23] and
+the diagnostic over [1, 14]; and in cyclic mode production uses a Fourier basis
+of **period 24** where the diagnostic used **period 13** &mdash; a 13-hour rhythm
+fitted to a day, then handed back as a recommended lambda. The `use_diagnostic_lambda`
+observer also hardcoded `min(n_time, 13)` for the Fourier count, ignoring the
+user's `n_basis` outright. Production itself was building the axis inline too, so
+that is now one call as well: `fck_smoothing_axis()` is the only derivation, and
+`nb_fourier` is the single sanctioned override that lets the sweep vary a count
+while keeping production's domain, period and type.
+
+That is the **fifth** time this audit has found a duplicated statistical
+definition that drifted, and the third in the smoothing configuration alone.
+The pattern is now explicit in the code: one definition, in a pure file, shared
+by the app, the tests and the exported script. `server/05_helpers_warp.R` exists
+for that reason, and `server/90_export.R` reaches it through the `emit_kernel()`
+machinery the generator has had since P3.5 and that this section alone never
+used.
+
+*One methodological point, taken as stated.* The reviewer noted that the shift
+estimate has a floor no correction can move: the FFT runs on the analysis grid,
+so the smallest non-zero lag is one grid step &mdash; 1/(n&nbsp;&minus;&nbsp;1),
+about 63 minutes on 24 hourly columns. That is the resolution of the grid, not a
+bug. The grid is **not** silently densified: the app holds an `fd` object and
+could evaluate on 256 points, but that is finer interpolation of the same fitted
+curves rather than more measurement, and it would move every number already
+reported. Instead the floor is stated where the numbers are read &mdash; on the
+registration panel and in the Methods paragraph of the publication report &mdash;
+and `tests/testthat/test-p11-corrections.R` verifies the claim empirically:
+estimates land on the lattice of grid steps, a displacement of 0.2 of a step
+comes back as exactly zero, and one of three steps is recovered.
+
+Smaller things found in the same file: the export asked the fit statistics for
+`AIC`, `BIC` and `variance_explained_by_warping`, none of which has existed since
+P5.2 and P5.3 &mdash; and because `add()` pastes its arguments, `sprintf()` of a
+NULL field is `character(0)` and the whole line silently produced nothing rather
+than erroring, for five rounds. It also re-smoothed the registered curves onto a
+fresh B-spline basis at `min(20, n_time - 2)` &mdash; the same duplicated count
+rule P10.2 removed &mdash; hardcoded to B-splines even for a Fourier analysis;
+the kernel already returns `regfd` in the analysis basis.
+
+New: `server/05_helpers_warp.R`, `tests/warp_export_roundtrip_test.R` (32 checks,
+verified by reintroducing three separate defects),
+`tests/diagnostic_axis_test.R`, `tests/testthat/test-p11-corrections.R`. Four
+existing suites were repointed at the kernel file &mdash; and note why that
+mattered: a source guard reading the file the code has LEFT does not fail, it
+goes vacuous, because every `expect_false()` passes once the text is simply not
+there. The registration guards now read the registration source wherever it
+lives.
+
+After this round: **1,738 testthat assertions (0 failed, 0 skipped) and 16
+standalone suites pass.**
+
 ## 5. Rename table
 
 | source | source app | merged app |
@@ -2332,10 +2459,13 @@ duplicate code.
 
 ## 6. Known gaps
 
-* **The exported script is checked for syntax, not for equivalence.**
-  `tests/codegen_test.R` proves it is valid R and that every family
-  contributed a section; nobody has yet run an exported script end to end and
-  compared its numbers against the app's. The cosinor section emits the app's
+* **The exported script is checked for syntax, and now for equivalence in the
+  places that have been checked.** `tests/codegen_test.R` proves it is valid R
+  and that every family contributed a section. `tests/export_roundtrip_test.R`
+  runs the script and compares the estimators to 1e-8, and
+  `tests/warp_export_roundtrip_test.R` does the same for the three registration
+  methods (added at 4.58, after the warping export was found to be an algorithm
+  from before P0.8). Sections not covered by those two are still syntax-only. The cosinor section emits the app's
   real fitting function, so it should agree exactly; the FoSR GAM section
   reproduces the model but derives its coefficient curves the same
   approximate way the app does (prediction contrasts), which is exact for

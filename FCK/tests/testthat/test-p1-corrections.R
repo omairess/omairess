@@ -279,8 +279,12 @@ test_that("the diagnostics no longer hand an mgcv smoothing parameter to fda", {
   src <- code_of("server/30_diagnostics.R")
   expect_false(grepl("lambda_to_use <- values$reml_profile$optimal_lambda", src, fixed = TRUE))
   expect_false(grepl("lambda_to_use <- values$cv_results$optimal_lambda", src, fixed = TRUE))
-  # the button now runs the production estimator
-  expect_true(grepl("fck_auto_lambda(dat, seq_len(n_time), basis", src, fixed = TRUE))
+  # The button runs the production estimator. P11.3: on the production AXIS as
+  # well -- it used to pass seq_len(n_time), the column index, while the
+  # smoother it advises fits over elapsed hours whenever real-time smoothing is
+  # on, so the lambda it returned did not belong to that model.
+  expect_true(grepl("fck_auto_lambda(dat, axis$t_full, basis", src, fixed = TRUE))
+  expect_false(grepl("fck_auto_lambda(dat, seq_len(n_time), basis", src, fixed = TRUE))
 })
 
 test_that("aes_string is gone from every remaining server file", {

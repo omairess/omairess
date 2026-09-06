@@ -253,6 +253,59 @@ server <- function(input, output, session) {
     render("fanova effect summary renders", output$fanova_effect_summary)
   }
 
+  # ------------------------------------------------- curve registration -----
+  #
+  # AUDIT (P11.2). This is the gap that let a severe defect ship. Every warping
+  # test in the suite called the estimators DIRECTLY -- extracting them from the
+  # source and invoking them by hand -- so all of them passed while the app
+  # could not run landmark registration at all: fck_landmark_warp() was defined
+  # inside a reactive observer where its own caller could not see it, the
+  # tryCatch turned the lookup failure into NULL, and the app quietly
+  # substituted a LINEAR SHIFT. A user choosing "landmark" got a different
+  # method's answer with no indication on screen.
+  #
+  # A direct call cannot detect that, because a direct call supplies the scope
+  # the app does not. Only pressing the button does. So this section presses it,
+  # once per method, and requires the method that comes back to be the method
+  # that was asked for.
+  cat("\n-- registration: all three methods, through the button ------------------\n")
+  for (meth in c("linear_shift", "parametric", "landmark")) {
+    values$warping_results <- NULL
+    values$pca_results     <- NULL
+    session$setInputs(pca_type = "twpca", warping_method = meth,
+                      periodic_shift = TRUE, shift_reference = "mean",
+                      parametric_family = "power", param_range = c(0.5, 2),
+                      run_analysis = which(c("linear_shift","parametric","landmark") == meth) + 100)
+    session$flushReact()
+    wr <- values$warping_results
+    if (is.null(wr)) {
+      fail(sprintf("registration '%s' produced no result at all", meth))
+    } else if (!identical(wr$method, meth)) {
+      # exactly the P11.2 symptom: asked for one method, got another
+      fail(sprintf("asked for '%s' registration, the app ran '%s'", meth, wr$method))
+    } else {
+      ok(sprintf("registration '%s' ran and reported itself as '%s'", meth, wr$method))
+      if (is.null(wr$warp_functions)) {
+        fail(sprintf("'%s' returned no warp functions", meth))
+      } else if (!all(is.finite(wr$warp_functions))) {
+        fail(sprintf("'%s' returned non-finite warp values", meth))
+      } else {
+        ok(sprintf("'%s' warp functions are finite", meth))
+      }
+    }
+    render(sprintf("warping_plot renders (%s)", meth), output$warping_plot)
+    render(sprintf("warping stats render (%s)", meth), output$warping_model_criteria)
+  }
+  # the resolution note the estimate now carries (P11.4)
+  mc <- render("registration stats render", output$warping_model_criteria)
+  if (!is.null(mc)) {
+    txt <- paste(as.character(mc), collapse = "\n")
+    if (!grepl("Resolution of the phase estimate", txt, fixed = TRUE))
+      fail("the registration summary does not report its own resolution")
+    else ok("the registration summary reports the resolution of the estimate")
+  }
+  values$warping_results <- NULL
+
   # ------------------------------------------------- the APA report --------
   cat("\n-- APA report ----------------------------------------------------------\n")
   session$setInputs(apa_report_title = "Diurnal profiles by age group")

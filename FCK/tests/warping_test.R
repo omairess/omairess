@@ -11,15 +11,12 @@
 .libPaths(c("~/Rlib", .libPaths()))
 suppressWarnings(suppressMessages(library(fda)))
 app <- if (dir.exists("server")) "." else "FCK"
-# reuse the AST-based extractor the other harnesses use
-src_txt <- readLines(file.path(app, "tests/real_data_run.R"), warn = FALSE)
-st <- grep("^extract_fns <- function", src_txt)[1]
-en <- st - 1 + which(src_txt[st:length(src_txt)] == "}")[1]
-eval(parse(text = paste(src_txt[st:en], collapse = "\n")))
-env <- extract_fns(file.path(app, "server/40_fpca.R"),
-                   c("linear_shift_alignment", "parametric_alignment"))
-env$linear_shift_alignment <- get("linear_shift_alignment", envir = env)
-env$parametric_alignment  <- get("parametric_alignment",  envir = env)
+# P11.1: the estimators used to live inside server/40_fpca.R, so this harness
+# had to pull them out of the AST. They are pure top-level functions in
+# server/05_helpers_warp.R now, which the app, the exported script and this test
+# all load the same way -- so there is one definition and no extraction step.
+env <- new.env(parent = globalenv())
+source(file.path(app, "server/05_helpers_warp.R"), local = env)
 
 # curves with a KNOWN phase shift
 set.seed(9)

@@ -38,6 +38,15 @@ code_of <- function(f) {
   paste(vapply(ln, strip, character(1), USE.NAMES = FALSE), collapse = "\n")
 }
 
+# AUDIT (P11.1): the registration kernels moved out of server/40_fpca.R into
+# server/05_helpers_warp.R. A guard that keeps reading only the old file does
+# not fail when that happens -- it goes VACUOUS, because every expect_false()
+# passes once the code is simply not in that file any more, and every
+# expect_true() fails for a reason that has nothing to do with the property.
+# Registration guards therefore read the registration source wherever it lives.
+warp_code <- function() paste(code_of("server/40_fpca.R"),
+                              code_of("server/05_helpers_warp.R"), sep = "\n")
+
 # =========================================================== P5.1 prediction ==
 test_that("P5.1: a fitted FoSR model can build a prediction design for new data", {
   source(file.path(app_dir, "server/07_helpers_fosr.R"), local = TRUE)
@@ -103,7 +112,7 @@ test_that("P5.1: both prediction sites go through the shared builder", {
 
 # ============================================================ P5.2 AIC/BIC ====
 test_that("P5.2: the warping panel no longer reports AIC, BIC or a log-likelihood", {
-  src <- code_of("server/40_fpca.R")
+  src <- warp_code()
   expect_false(grepl("aic <- -2 * log_lik + 2 * k_params", src, fixed = TRUE))
   expect_false(grepl("bic <- -2 * log_lik + k_params * log(n_obs)", src, fixed = TRUE))
   expect_false(grepl("k_params <- 2 * n_subjects", src, fixed = TRUE))
@@ -115,7 +124,7 @@ test_that("P5.2: the warping panel no longer reports AIC, BIC or a log-likelihoo
 
 # ================================================= P5.3 not a decomposition ===
 test_that("P5.3: the dispersion statistics are not presented as a decomposition", {
-  src <- code_of("server/40_fpca.R")
+  src <- warp_code()
   expect_false(grepl("variance_explained_by_warping", src, fixed = TRUE))
   expect_false(grepl("total_amp_variance", src, fixed = TRUE))
   expect_false(grepl("total_phase_variance", src, fixed = TRUE))
@@ -153,7 +162,7 @@ test_that("P5.4: the Fisher-Rao phase distance is blind to translation", {
 })
 
 test_that("P5.4: the module computes the phase summary per geometry", {
-  src <- code_of("server/40_fpca.R")
+  src <- warp_code()
   expect_true(grepl('geom <- if (identical(method, "linear_shift")) "shift" else "interval"',
                     src, fixed = TRUE))
   expect_true(grepl('if (identical(geom, "shift")) {', src, fixed = TRUE))
@@ -165,7 +174,7 @@ test_that("P5.4: the module computes the phase summary per geometry", {
 
 # ================================== P5.5 / P5.6 landmark warps ================
 test_that("P5.5: a landmark warp is built and validated in one place", {
-  src <- code_of("server/40_fpca.R")
+  src <- warp_code()
   expect_true(grepl("fck_landmark_warp <- function(ref, own, time_points)", src, fixed = TRUE))
   # neither branch builds its own knots any more
   expect_false(grepl("all_curve_landmarks <- c(0, curve_landmarks, 1)", src, fixed = TRUE))
@@ -182,7 +191,12 @@ test_that("P5.5: crossed or duplicated landmarks are rejected, not folded", {
   # assignment expression, rather than by regex on the text -- the point of the
   # test is that the shipped function has this contract.
   src_env <- new.env(parent = globalenv())
-  exprs <- parse(file.path(app_dir, "server/40_fpca.R"), encoding = "UTF-8")
+  # P11.1: fck_landmark_warp() moved to the pure kernel file. It is a plain
+  # top-level definition there, so it no longer has to be dug out of an AST --
+  # which is itself the P11.2 fix: while it was nested inside a reactive
+  # observer, its own caller could not see it and every landmark registration
+  # silently fell back to a linear shift.
+  exprs <- parse(file.path(app_dir, "server/05_helpers_warp.R"), encoding = "UTF-8")
   got <- FALSE
   walk <- function(e) {
     if (!is.call(e)) return(invisible(NULL))
@@ -222,7 +236,7 @@ test_that("P5.5: crossed or duplicated landmarks are rejected, not folded", {
 })
 
 test_that("P5.6: every registration method returns h in one direction", {
-  src <- code_of("server/40_fpca.R")
+  src <- warp_code()
   expect_equal(length(gregexpr('warp_direction = "registered -> original"',
                                src, fixed = TRUE)[[1]]), 3L)
   # the inverse application in the automatic branch is gone

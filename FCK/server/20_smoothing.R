@@ -42,25 +42,28 @@ observeEvent(input$apply_smooth, {
     # Both source apps used the column index, which is only correct when the
     # columns are evenly spaced in real time. Opt in to real clock times when
     # they are not (see FCK/server/03_helpers_clock.R).
-    real_time <- NULL
-    if(isTRUE(input$use_real_time)) {
-      real_time <- fck_cumulative_hours(values$time_labels)
-      if(is.null(real_time) || length(real_time) != n_time) {
-        real_time <- NULL
-        showNotification(
-          "Real clock times requested, but the column names do not yield hours in [0, 24). Smoothing against the column index instead.",
-          type = "warning", duration = 10)
-      }
+    #
+    # AUDIT (P11.3): this block used to derive the axis itself, and the
+    # diagnostics derived it again, and the two drifted -- production ended up
+    # fitting over elapsed hours while the diagnostic that recommends a lambda
+    # for it fitted over the column index. The derivation now happens ONCE, in
+    # fck_smoothing_axis(). Production keeps the notification, because it is the
+    # place the user made the request; the helper stays silent so it can be
+    # called from a diagnostic without raising notices of its own.
+    axis            <- fck_smoothing_axis(input, values)
+    using_real_time <- axis$using_real_time
+    t_full          <- axis$t_full
+    t_rng           <- axis$t_rng
+    if(isTRUE(input$use_real_time) && !using_real_time) {
+      showNotification(
+        "Real clock times requested, but the column names do not yield hours in [0, 24). Smoothing against the column index instead.",
+        type = "warning", duration = 10)
     }
-    using_real_time <- !is.null(real_time)
 
     # Where every value in the smoothed curves will come from. Computed from the
     # RAW data, before anything is filled, and kept for the whole session so any
     # later plot or export can say which points are measurements.
     values$fill_status <- fck_fill_status(values$data)
-    t_full <- if(using_real_time) real_time else 1:n_time   # smoothing argument
-    t_rng  <- range(t_full)
-
     if(using_real_time) {
       showNotification(
         sprintf("Smoothing against real elapsed time (%.2f to %.2f h). The roughness penalty is now per hour, so the smoothing factor may need re-tuning.",
@@ -93,8 +96,6 @@ observeEvent(input$apply_smooth, {
     # (CIRCAREG's min(n_time, 13), period 24 h on real elapsed time), an
     # interpolating B-spline through every observation when smoothing is off,
     # and an nb-function B-spline otherwise.
-    axis    <- list(n_time = n_time, t_full = t_full, t_rng = t_rng,
-                    using_real_time = using_real_time, cyclic = cyclic)
     basis   <- fck_smoothing_basis(axis, nb, input$smooth_method)
     nb_used <- if(cyclic) basis$nbasis else nb
 

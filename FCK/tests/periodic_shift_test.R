@@ -34,19 +34,17 @@ near <- function(label, a, b, tol) {
 source(file.path(app_dir, "server/04_helpers_fd.R"))
 
 # --- the estimator, as shipped ------------------------------------------------
-# linear_shift_alignment() lives inside the server function, so it is pulled out
-# by parsing the file and evaluating just that assignment. That way the test
-# runs the SHIPPED code rather than a transcription of it.
+# This used to parse server/40_fpca.R and evaluate just the one assignment,
+# because linear_shift_alignment() was defined inside the server function and
+# could not be sourced. P11.1 moved it to a pure kernel file, so the test now
+# loads exactly what the app loads and what the exported script emits -- one
+# definition, no extraction, and nothing that could go stale against a copy.
 env <- new.env(parent = globalenv())
-env$values <- list()
-for (ex in parse(file.path(app_dir, "server/40_fpca.R"), encoding = "UTF-8")) {
-  if (is.call(ex) && length(ex) == 3 && as.character(ex[[1]]) %in% c("<-", "=") &&
-      is.name(ex[[2]]) &&
-      as.character(ex[[2]]) %in% c("linear_shift_alignment", "fck_landmark_warp"))
-    eval(ex, envir = env)
+source(file.path(app_dir, "server/05_helpers_warp.R"), local = env)
+if (!exists("linear_shift_alignment", envir = env, inherits = FALSE)) {
+  cat("FAIL: server/05_helpers_warp.R does not define linear_shift_alignment\n")
+  quit(status = 1)
 }
-if (!exists("linear_shift_alignment", envir = env))
-  { cat("FAIL: could not extract linear_shift_alignment from the source\n"); quit(status = 1) }
 align <- get("linear_shift_alignment", envir = env)
 
 # --- curves with a KNOWN periodic displacement --------------------------------

@@ -216,10 +216,21 @@ fck_smoothing_nbasis <- function(input, n_time, method = NULL) {
   max(4L, min(nb, n_time))
 }
 
-fck_smoothing_basis <- function(axis, nb, method = "manual") {
+# AUDIT (P11.3). `nb_fourier` exists for ONE caller: the GCV-vs-n-basis sweep,
+# which has to vary the Fourier count to draw its curve. Everything else must
+# leave it NULL and get the production rule. It is a parameter rather than a
+# second constructor in the diagnostics file because the sweep still has to
+# match production on everything ELSE -- the rangeval, the argvals and, for
+# real-time data, period = 24 -- and building a second basis by hand is how the
+# diagnostic came to fit a 13-hour period to 24-hour data in the first place.
+#
+# Note also what varying it means: for cyclic smoothing production PINS the
+# count at min(n_time, 13) and ignores the user's n_basis entirely, so the
+# sweep is exploratory there, not a recommendation. The sweep says so on screen.
+fck_smoothing_basis <- function(axis, nb, method = "manual", nb_fourier = NULL) {
   nb <- max(4L, min(as.integer(nb), axis$n_time))
   if (isTRUE(axis$cyclic)) {
-    nb_used <- min(axis$n_time, 13)
+    nb_used <- if (is.null(nb_fourier)) min(axis$n_time, 13) else as.integer(nb_fourier)
     b <- if (isTRUE(axis$using_real_time))
       fda::create.fourier.basis(rangeval = axis$t_rng, nbasis = nb_used, period = 24)
     else

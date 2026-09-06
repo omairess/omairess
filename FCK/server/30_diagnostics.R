@@ -569,14 +569,23 @@
     n_time <- ncol(dat)
     cyclic <- isTRUE(input$is_cyclic)
 
-    nb <- if(!is.null(input$n_basis)) input$n_basis else 20
-    nb <- max(4, min(nb, n_time))
-    basis <- if(cyclic)
-      create.fourier.basis(rangeval = c(1, n_time), nbasis = min(n_time, 13))
-    else
-      create.bspline.basis(rangeval = c(1, n_time), nbasis = nb)
+    # AUDIT (P11.3): this built its own basis over rangeval = c(1, n_time) and
+    # scored GCV against argvals = seq_len(n_time) -- the COLUMN INDEX -- while
+    # production goes through fck_smoothing_axis(), which uses elapsed hours
+    # whenever real-time smoothing is on. Measured on 14 unevenly spaced hourly
+    # columns with real time active: production fits over [0, 23] and this fit
+    # over [1, 14], and in cyclic mode production uses a Fourier basis of
+    # PERIOD 24 while this one used period 13 -- a 13-hour rhythm fitted to
+    # 24-hour data. The lambda that came back was then handed to the smoother as
+    # if it belonged to it. It also ignored the user's n_basis in cyclic mode by
+    # hardcoding min(n_time, 13) rather than deferring to the production rule.
+    # One axis, one basis rule, one count rule; all three now come from the
+    # shared helpers, which is the same correction as P9.3 and P10.2.
+    axis  <- fck_smoothing_axis(input, values)
+    nb    <- fck_smoothing_nbasis(input, n_time)
+    basis <- fck_smoothing_basis(axis, nb, input$smooth_method)
 
-    al <- tryCatch(fck_auto_lambda(dat, seq_len(n_time), basis,
+    al <- tryCatch(fck_auto_lambda(dat, axis$t_full, basis,
                                    min_points_needed = if(cyclic) 3 else 4),
                    error = function(e) NULL)
     if(is.null(al)) {
@@ -627,10 +636,23 @@
     # sweep runs over the number of Fourier basis functions, which must be odd
     # (a constant plus sin/cos pairs) -- fda silently rounds an even count up,
     # so an even grid would have scored the same model twice.
+    #
+    # AUDIT (P11.3): P4.8 fixed the basis TYPE and left the AXIS hand-built, so
+    # the sweep still ran over rangeval = c(1, n_time) with the column index as
+    # argvals. With real-time smoothing on that is a different domain from the
+    # one production fits (measured: [1, 14] against [0, 23]) and, for cyclic
+    # data, a different PERIOD (13 against 24). A sweep that recommends an
+    # n_basis for a model the app will not fit is the same defect P4.8 and P3.1
+    # each removed from this observer; the axis now comes from the shared
+    # builder, so there is nothing left in this file that constructs a basis.
     cyclic <- isTRUE(input$is_cyclic)
+    axis   <- fck_smoothing_axis(input, values)
+    # nb_fourier is the one sanctioned override: the sweep must vary the count
+    # to have a curve to draw. Everything else -- rangeval, period, basis type --
+    # is production's.
     make_basis <- function(nb) {
-      if (cyclic) create.fourier.basis(rangeval = c(1, n_time), nbasis = nb)
-      else        create.bspline.basis(rangeval = c(1, n_time), nbasis = nb)
+      if (cyclic) fck_smoothing_basis(axis, nb, input$smooth_method, nb_fourier = nb)
+      else        fck_smoothing_basis(axis, nb, "manual")
     }
 
     nb_seq <- if (cyclic) seq(3, min(n_time - 1, 41), by = 2)
@@ -652,7 +674,7 @@
           # than the single-shot search: this runs once per basis size, and
           # GCV as a function of log-lambda is smooth enough that a 12-point
           # bracket plus the refinement lands in the same place.
-          al <- tryCatch(fck_auto_lambda(data_mat, seq_len(n_time), basis,
+          al <- tryCatch(fck_auto_lambda(data_mat, axis$t_full, basis,
                                          min_points_needed = if(cyclic) 3 else 4,
                                          n_grid = 12),
                          error = function(e) NULL)
@@ -669,7 +691,12 @@
           y     <- data_mat[s, ]
           valid <- which(!is.na(y))
           if(length(valid) < min_pts) return(NA_real_)
-          sb <- tryCatch(smooth.basis(valid, y[valid], fdP), error = function(e) NULL)
+          # P11.3: argvals must be the SAME axis the basis was built over.
+          # These were column indices against a basis now spanning elapsed
+          # hours, which is not a mismatch fda would report -- it would simply
+          # fit the wrong thing.
+          sb <- tryCatch(smooth.basis(axis$t_full[valid], y[valid], fdP),
+                         error = function(e) NULL)
           if(is.null(sb)) NA_real_ else sb$gcv
         })
         gcv_means[bi] <- mean(gcv_sub, na.rm = TRUE)

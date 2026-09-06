@@ -26,7 +26,7 @@ failures <- 0L
 fail <- function(...) { cat("FAIL:", ..., "\n"); failures <<- failures + 1L }
 ok   <- function(...) cat("ok  :", ..., "\n")
 
-# The families, transcribed from server/40_fpca.R. A source guard below checks
+# The families, transcribed from server/05_helpers_warp.R. A source guard checks
 # this transcription has not drifted from the implementation.
 eps_id <- 1e-8
 warp_func <- function(t, alpha, family) {
@@ -104,7 +104,10 @@ if (d_new > 1e-12) fail("the new exponential does not evaluate the family at alp
 
 # --- the source has not drifted from what is tested above --------------------
 cat("\n-- source guards -------------------------------------------------------\n")
-src <- paste(readLines(file.path(app_dir, "server/40_fpca.R"), warn = FALSE), collapse = "\n")
+# P11.1: the registration kernels moved out of server/40_fpca.R into a pure
+# kernel file, so that the app, this test and the exported script all read one
+# definition. The guards below read them there.
+src <- paste(readLines(file.path(app_dir, "server/05_helpers_warp.R"), warn = FALSE), collapse = "\n")
 checks <- c(
   'if (abs(alpha) < eps_id) t'                                   = TRUE,
   '"quadratic"   = list(identity = 0, lo = -0.999, hi = 0.999)'  = TRUE,

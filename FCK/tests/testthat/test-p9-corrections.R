@@ -38,6 +38,15 @@ code_of <- function(f) {
   paste(vapply(ln, strip, character(1), USE.NAMES = FALSE), collapse = "\n")
 }
 
+# AUDIT (P11.1): the registration kernels moved out of server/40_fpca.R into
+# server/05_helpers_warp.R. A guard that keeps reading only the old file does
+# not fail when that happens -- it goes VACUOUS, because every expect_false()
+# passes once the code is simply not in that file any more, and every
+# expect_true() fails for a reason that has nothing to do with the property.
+# Registration guards therefore read the registration source wherever it lives.
+warp_code <- function() paste(code_of("server/40_fpca.R"),
+                              code_of("server/05_helpers_warp.R"), sep = "\n")
+
 # ============================================ P9.1 one warp-amplitude rule ====
 test_that("P9.1: a periodic ZERO shift has warping amplitude exactly 0", {
   source(file.path(app_dir, "server/04_helpers_fd.R"), local = TRUE)
@@ -71,7 +80,7 @@ test_that("P9.1: a periodic ZERO shift has warping amplitude exactly 0", {
 test_that("P9.1: the definition exists once and all three sites call it", {
   fd <- code_of("server/04_helpers_fd.R")
   expect_true(grepl("fck_warp_amplitude <- function(warping_results)", fd, fixed = TRUE))
-  fp <- code_of("server/40_fpca.R")
+  fp <- warp_code()
   expect_true(grepl("warp_amplitude <- fck_warp_amplitude(warp_results)", fp, fixed = TRUE))
   # the three old bodies are gone
   expect_false(grepl("warp_amplitude[i] <- sqrt(mean((warp_results$warp_functions[,i]",

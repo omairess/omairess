@@ -25,6 +25,15 @@ code_of <- function(f) {
   paste(ln, collapse = "\n")
 }
 
+# AUDIT (P11.1): the registration kernels moved out of server/40_fpca.R into
+# server/05_helpers_warp.R. A guard that keeps reading only the old file does
+# not fail when that happens -- it goes VACUOUS, because every expect_false()
+# passes once the code is simply not in that file any more, and every
+# expect_true() fails for a reason that has nothing to do with the property.
+# Registration guards therefore read the registration source wherever it lives.
+warp_code <- function() paste(code_of("server/40_fpca.R"),
+                              code_of("server/05_helpers_warp.R"), sep = "\n")
+
 # ------------------------------------------------- P0.2 automatic smoothing
 test_that("auto lambda is a real search, not zero", {
   set.seed(3); n <- 16; t <- 1:n
@@ -180,7 +189,7 @@ test_that("smoothing handles 0, 1 and 2 observed points explicitly", {
 
 # ---------------------------------------------------------- P0.8 time warping
 test_that("warping is deterministic: no unseeded randomness in the estimator", {
-  src <- code_of("server/40_fpca.R")
+  src <- warp_code()
   expect_false(grepl("runif(1, -0.03, 0.03)", src, fixed = TRUE))
   expect_false(grepl("runif(1, -0.02, 0.02)", src, fixed = TRUE))
   expect_false(grepl("Add slight S-curve for visualization", src, fixed = TRUE))
@@ -191,7 +200,7 @@ test_that("warping is deterministic: no unseeded randomness in the estimator", {
 })
 
 test_that("a shift warp is monotone and the landmark branch actually warps", {
-  src <- code_of("server/40_fpca.R")
+  src <- warp_code()
   # the landmark branch used to hand the curves straight back
   expect_false(grepl("registered_curves[,i] <- curves[,i]\n        }\n      }\n      \n      basis <- fd_obj$basis",
                      src, fixed = TRUE))

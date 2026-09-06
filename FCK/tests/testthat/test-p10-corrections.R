@@ -38,6 +38,15 @@ code_of <- function(f) {
   paste(vapply(ln, strip, character(1), USE.NAMES = FALSE), collapse = "\n")
 }
 
+# AUDIT (P11.1): the registration kernels moved out of server/40_fpca.R into
+# server/05_helpers_warp.R. A guard that keeps reading only the old file does
+# not fail when that happens -- it goes VACUOUS, because every expect_false()
+# passes once the code is simply not in that file any more, and every
+# expect_true() fails for a reason that has nothing to do with the property.
+# Registration guards therefore read the registration source wherever it lives.
+warp_code <- function() paste(code_of("server/40_fpca.R"),
+                              code_of("server/05_helpers_warp.R"), sep = "\n")
+
 # ================================================= P10.1 the FFT bin offset ===
 test_that("P10.1: which.max() is 1-based and FFT bin 1 is zero lag", {
   # the arithmetic, in isolation, so the reason is pinned and not just the fix
@@ -66,7 +75,7 @@ test_that("P10.1: dropping the duplicated endpoint is required for a cycle", {
 })
 
 test_that("P10.1: the shipped estimator drops the endpoint and un-biases the lag", {
-  src <- code_of("server/40_fpca.R")
+  src <- warp_code()
   expect_true(grepl("circ_idx <- seq_len(n_time - 1L)", src, fixed = TRUE))
   expect_true(grepl("lag_idx <- which.max(cross_corr) - 1L", src, fixed = TRUE))
   expect_true(grepl("shifts[i] <- -lag_idx / n_circ", src, fixed = TRUE))
