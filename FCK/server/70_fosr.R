@@ -252,7 +252,10 @@
       factor_levels <- mod$gam_factor_levels
       
       # Build prediction dataframe using helper function
-      pred_df <- build_gam_pred_df(time_vec, preds, long_data, factor_levels, input_vals)
+      # P8.1: the fitted GAM's formula uses mod$gam_model_names, not the
+      # user's column names. The mapping is a required argument now.
+      pred_df <- build_gam_pred_df(time_vec, preds, mod$gam_model_names,
+                                   long_data, factor_levels, input_vals)
       if(is.null(pred_df)) return(NULL)
       
       # Get prediction with SE using safe helper
@@ -368,8 +371,11 @@
         
         if(!is.null(mod$gam_obj)) {
           # GAM reference lines
-          pred_df_min <- build_gam_pred_df(time_vec, preds, long_data, factor_levels, input_vals_min)
-          pred_df_max <- build_gam_pred_df(time_vec, preds, long_data, factor_levels, input_vals_max)
+          # P8.1: same mapping for the reference curves.
+          pred_df_min <- build_gam_pred_df(time_vec, preds, mod$gam_model_names,
+                                           long_data, factor_levels, input_vals_min)
+          pred_df_max <- build_gam_pred_df(time_vec, preds, mod$gam_model_names,
+                                           long_data, factor_levels, input_vals_max)
           
           if(!is.null(pred_df_min) && !is.null(pred_df_max)) {
             pred_min <- safe_gam_predict(mod$gam_obj, pred_df_min)

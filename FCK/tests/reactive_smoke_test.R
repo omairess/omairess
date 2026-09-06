@@ -178,6 +178,41 @@ server <- function(input, output, session) {
   render("reg_pvalue_plot renders (GAM, all-NA p)", output$reg_pvalue_plot)
   render("reg_coeff_plot renders (GAM, all-NA se)", output$reg_coeff_plot)
 
+  # P8.1: the GAM's formula refers to x1..xp, so a prediction frame keyed by the
+  # user's column names cannot be found by predict.gam(). The previous round
+  # tested that the GAM FITS; it did not test that it PREDICTS, and that is
+  # exactly where the bug was. Drive the real helper.
+  if (!is.null(m) && !is.null(m$gam_obj)) {
+    iv <- list(Age = mean(covs$Age), AGEcategory = "ADULT")
+    pd <- tryCatch(build_gam_pred_df(seq(0, 1, length.out = n_t),
+                                     m$gam_predictors, m$gam_model_names,
+                                     m$gam_long_data, m$gam_factor_levels, iv),
+                   error = function(e) structure(conditionMessage(e), class = "fckerr"))
+    if (inherits(pd, "fckerr")) {
+      fail("build_gam_pred_df ->", as.character(pd))
+    } else if (!all(m$gam_model_names %in% names(pd))) {
+      fail("the GAM prediction frame is not keyed by the model's own names: ",
+           paste(names(pd), collapse = ", "))
+    } else {
+      ok(sprintf("GAM prediction frame is keyed by the model names (%s)",
+                 paste(m$gam_model_names, collapse = ", ")))
+      pv <- tryCatch(predict(m$gam_obj, newdata = pd, se.fit = TRUE),
+                     error = function(e) structure(conditionMessage(e), class = "fckerr"))
+      if (inherits(pv, "fckerr")) fail("predict.gam ->", as.character(pv))
+      else if (!all(is.finite(pv$fit)) || !all(is.finite(pv$se.fit)))
+        fail("the GAM prediction is not finite")
+      else ok("predict.gam returns a finite curve with standard errors")
+    }
+    # and the mapping is not optional any more
+    bad <- tryCatch({
+      build_gam_pred_df(seq(0, 1, length.out = n_t), m$gam_predictors, NULL,
+                        m$gam_long_data, m$gam_factor_levels, iv); "no error" },
+      error = function(e) "refused")
+    if (!identical(bad, "refused"))
+      fail("build_gam_pred_df accepted a call with no model-name mapping")
+    else ok("a call without the name mapping is refused, not silently wrong")
+  }
+
   # ----------------------------------------------- fANOVA and its post-hocs --
   # P7.1: the pairwise permutation box was overridden by the omnibus count, so
   # a value typed there never reached the test. The check that catches that

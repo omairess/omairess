@@ -62,32 +62,52 @@ ui_tab_results <- tabItem(
                 )
               ),
               hr(),
-              # Warping Fit Statistics Section
-              h4("Warping Fit Statistics"),
-              p("Fit statistics comparing raw vs warped data, based on EFDA methodology."),
+              # AUDIT (P8.5): these headings were left over from the version
+              # whose statistics they described. The server was corrected at
+              # P5.2/P5.3 -- there is no AIC/BIC any more, and the dispersion
+              # numbers are explicitly NOT a variance decomposition -- so the UI
+              # was announcing "EFDA methodology", "Variance Decomposition" and
+              # "Model Selection Criteria" directly above output that says none
+              # of those things are on offer. A label that contradicts its own
+              # panel is worse than no label.
+              h4("Registration Diagnostics"),
+              p(HTML(paste(
+                "Descriptive measures of how much registration transformed the",
+                "curves, and how between-curve dispersion changed. <b>These are",
+                "not likelihood-based model-selection criteria</b> and there is",
+                "no AIC or BIC here: no probability model for the observed",
+                "curves under a candidate registration exists in this module.",
+                "Choose a registration method from what you know about the data."))),
               wellPanel(
                 style = "background-color: #f8f9fa;",
                 fluidRow(
                   column(6,
-                    h5("Summary Statistics (averaged over subjects)"),
+                    h5("Transformation summary (averaged over subjects)"),
                     verbatimTextOutput("warping_fit_summary")
                   ),
                   column(6,
-                    h5("Variance Decomposition"),
+                    h5("Pre/post registration dispersion"),
                     verbatimTextOutput("warping_variance_decomposition")
                   )
                 ),
                 hr(),
                 fluidRow(
                   column(12,
-                    h5("Model Selection Criteria"),
+                    h5("Registration summary"),
                     verbatimTextOutput("warping_model_criteria")
                   )
                 )
               ),
               hr(),
-              h4("Per-Subject Fit Statistics"),
-              p("Detailed fit statistics for each subject. R² measures how well the warped curve matches the original (functional R² via integrals). RMSE/MAE are errors between original and warped curves."),
+              h4("Per-Subject Transformation Diagnostics"),
+              p(HTML(paste(
+                "How far registration moved each subject's curve. <b>R&sup2;, RMSE",
+                "and MAE here compare each curve with its own registered version",
+                "&mdash; they measure the MAGNITUDE OF THE TRANSFORMATION, not",
+                "how well the sample was aligned.</b> Doing nothing gives a",
+                "perfect R&sup2; and zero RMSE, which is not a good registration;",
+                "read the dispersion panel above for whether the curves actually",
+                "came into alignment."))),
               DTOutput("warping_fit_per_subject"),
               downloadButton("download_warping_fit_stats", "Download Fit Statistics (CSV)", class = "btn-sm btn-info"),
               hr(),

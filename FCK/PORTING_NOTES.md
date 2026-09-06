@@ -2007,6 +2007,105 @@ After P7: **1,387 testthat assertions (0 failed, 0 skipped) and 13 standalone
 suites pass.**
 
 
+**4.53 P8: a fifth review. Four findings, all of which held, and the first is
+mine again.**
+
+*P8.1 &mdash; GAM PREDICTION still used the user's column names. Confirmed; my
+omission.* P4.3 made both FoSR branches fit on internal names `x1..xp`, and
+P5.1 fixed the consequent prediction failure &mdash; **for the OLS branch
+only**. `build_gam_pred_df()` went on keying its frame by the user's names,
+against a formula that refers to `x1..xp`. Reproduced:
+
+```
+ERROR: object 'x2' not found
+Warning: not all required variables have been supplied in newdata!
+```
+
+on every GAM prediction curve and both min/max reference curves. The mapping is
+now a REQUIRED argument of that helper, so a caller who has not thought about
+it cannot call the function at all; all three call sites pass
+`mod$gam_model_names`.
+
+The reviewer also identified exactly why it survived: *"Your new GAM test
+currently tests fit, not fit + prediction."* True. `tests/reactive_smoke_test.R`
+now drives the real helper, predicts, and checks the frame is keyed by the
+model's own names &mdash; and that a call without the mapping is refused.
+
+*P8.2 &mdash; the periodic-shift warp amplitude was a representation artefact.
+Confirmed, and it reached the statistics.* A wrapped warp
+h(t) = (t &minus; s) mod 1 is a CORRECT registration of a cycle &mdash; t = 1
+and t = 0 are the same instant &mdash; but drawn on [0,1] it contains one jump,
+and an RMS distance from the identity reads that jump as deformation. Measured
+on a 100-point grid:
+
+| true shift | RMS &#124;h &minus; t&#124; reported |
+|---|---|
+| 0.00 | **0.1000** |
+| 0.05 | 0.2179 |
+| 0.10 | 0.3000 |
+| 0.25 | 0.4330 |
+
+An unshifted curve carried the warping amplitude of a real 0.1 shift &mdash;
+2.4 hours on a 24-hour day &mdash; and the values are inflated and non-monotone
+in s. The velocity variance is worse: var(h') = 98 at every shift, zero
+included. **And this was not only a display number**: `fck_warp_params()` fed
+`warp_amplitude` into the group comparison on warping parameters, so a "do the
+groups differ in phase" test on periodic-shift data was testing the artefact.
+
+A translation's intensity is its displacement &mdash; the shortest CIRCULAR one
+when the design is periodic. Only an endpoint-preserving warp is measured by its
+distance from the identity. Velocity variance is NA for a periodic translation.
+One consequence worth recording: for a shift, `warp_amplitude` is now
+&#124;shift&#124;, a deterministic function of the `shift` column beside it, so
+the redundant column is dropped rather than spending a second entry of the
+multiplicity family on the same question.
+
+*P8.3 &mdash; a ratio between two incomparable lambdas. Confirmed.* The
+diagnostics printed `cv_lambda / reml_lambda` and concluded "REML and CV agree
+well on optimal smoothing". They are penalty weights on DIFFERENT penalties over
+DIFFERENT bases; the ratio is not a measure of agreement and a value near 1 does
+not mean the methods concur. Worse, the report converted the mgcv REML optimum
+to `-log10(lambda)` and offered it as a "Smoothing Factor" &mdash; a number the
+user could type into a control where it means something else. Both removed.
+(The CV lambda IS on the fda scale &mdash; the CV loop calls
+`fdPar(basis, 2, lambda)` and `smooth.basis` &mdash; so its smoothing factor
+remains transferable, and stays.)
+
+*P8.4 &mdash; the CV panel's estimand was mislabelled. Confirmed.* That CV
+smooths the TRAINING-GROUP MEAN and scores it against a held-out subject, so it
+answers "how much should the population curve be smoothed to predict a new
+person". The production smoother answers "how much should this person's own
+trajectory be smoothed". Different questions; recommending the first as
+"lambda for prediction tasks" invited the reader to use it for the second. The
+panel is now titled *Between-subject population-curve prediction CV* and says
+so explicitly.
+
+*P8.5 &mdash; the UI was contradicting its own output. Confirmed.*
+`ui/41_results.R` still announced "Warping Fit Statistics ... based on EFDA
+methodology", "Variance Decomposition" and "Model Selection Criteria" directly
+above panels that (since P5.2/P5.3) say there is no AIC or BIC and that the
+dispersion numbers are not a decomposition. Retitled to Registration
+Diagnostics / Pre-post registration dispersion / Registration summary, with the
+per-subject table relabelled as what it is: R&sup2;, RMSE and MAE there compare
+each curve with its OWN registered version, so they measure the magnitude of the
+transformation, and doing nothing scores perfectly. The README's summary section
+still said "automatic REML or manual lambda" and "warping fit statistics and
+variance decomposition" while its own detailed section said the opposite; both
+synchronised.
+
+On renv.lock, the reviewer now accepts the code is honest and asks only that a
+lockfile be generated before release. That is the position taken at P3.6 and it
+has not changed: it must be generated on the analysis machine, and
+`tools/renv_bootstrap.R` refuses to write one from a library that is missing
+required packages.
+
+After P8: **1,440 testthat assertions (0 failed, 0 skipped) and 13 standalone
+suites pass.** Anything read off the warping panel for a PERIODIC linear-shift
+registration should be re-run &mdash; the warp amplitudes, the velocity
+variances, and any group comparison on warping parameters were computed on the
+artefact.
+
+
 ## 5. Rename table
 
 | source | source app | merged app |

@@ -48,7 +48,7 @@ if any of these were missing):
    separator auto-detected or chosen. One variable-selection step defines the
    curve columns *and* the scalar variables.
 2. **Data Preprocessing/Smoothing** — B-spline or (for 24-hour data) Fourier
-   basis, automatic REML or manual lambda, per-subject smoothing that
+   basis, automatic GCV-selected lambda or manual lambda, per-subject smoothing that
    interpolates missing values, optional clamping to a range, per-subject
    R²/RMSE/EDF/GCV, with a control for how many curves the plot draws.
    Optionally spaces the time points by their **real clock
@@ -70,8 +70,9 @@ if any of these were missing):
 
 4. **fPCA/time-warped PCA Settings** and **5. Functional PCA Results** —
    components, loadings, variance explained, scores; time-warping with linear
-   shift / parametric / landmark alignment, warping fit statistics and variance
-   decomposition.
+   shift / parametric / landmark alignment, and registration diagnostics (see
+   "What the registration methods are, exactly" below — no AIC/BIC, and the
+   dispersion numbers are not a variance decomposition).
 6. **Functional ANOVA** — between-subjects and repeated-measures designs,
    pointwise and global permutation tests, effect sizes.
 7. **fANOVA: post-hoc tests** — pairwise curve comparisons with multiple-testing

@@ -453,57 +453,62 @@
       cat(sprintf("  K-folds: %d\n\n", values$cv_results$k_folds))
     }
     
+    # AUDIT (P8.3): this used to print
+    #     ratio_min <- cv_lambda / reml_lambda
+    #     "CV optimal / REML optimal: 1.20"
+    #     "-> REML and CV agree well on optimal smoothing"
+    # THE TWO LAMBDAS ARE NOT ON THE SAME SCALE, so their ratio means nothing
+    # and "agree" was never a finding. The CV lambda is an fda penalty weight
+    # (the CV loop calls fdPar(basis, 2, lambda) and smooth.basis), so it IS
+    # comparable with the production smoother and IS transferable to the
+    # manual smoothing factor. The REML lambda is mgcv's, on mgcv's own
+    # penalty for a different basis: it is an advisory diagnostic about how
+    # much structure the data supports, and it cannot be carried across.
+    # Its "-log10 -> Smoothing Factor" conversion was removed for the same
+    # reason: it produced a number the user could type into a control where it
+    # means something else.
     if(!is.null(values$reml_profile) && !is.null(values$cv_results)) {
-      reml_lambda <- values$reml_profile$optimal_lambda
-      cv_lambda <- values$cv_results$optimal_lambda
-      cv_lambda_1se <- values$cv_results$lambda_1se
-      
-      ratio_min <- cv_lambda / reml_lambda
-      ratio_1se <- cv_lambda_1se / reml_lambda
-      
-      cat("Comparison:\n")
-      cat(sprintf("  CV optimal / REML optimal: %.2f\n", ratio_min))
-      cat(sprintf("  CV 1-SE / REML optimal: %.2f\n\n", ratio_1se))
-      
-      if(ratio_min > 0.5 && ratio_min < 2) {
-        cat("  -> REML and CV agree well on optimal smoothing\n")
-      } else if(ratio_min > 2) {
-        cat("  -> CV prefers more smoothing than REML\n")
-        cat("  -> Consider using CV lambda for better prediction\n")
-      } else {
-        cat("  -> CV prefers less smoothing than REML\n")
-        cat("  -> Consider validating with held-out data\n")
-      }
+      cat("Comparing the two:\n")
+      cat("  No ratio is reported. The mgcv REML optimum and the fda CV optimum\n")
+      cat("  are penalty weights on DIFFERENT penalties over DIFFERENT bases;\n")
+      cat("  their ratio is not a measure of agreement and a value near 1 would\n")
+      cat("  not mean the two methods concur. Read the REML panel for the\n")
+      cat("  effective degrees of freedom the data supports, and the CV panel\n")
+      cat("  for a lambda on the scale this app actually smooths with.\n\n")
     }
-    
-    cat("\nRecommendation:\n")
+
+    cat("\nWhat to take from each panel:\n")
     if(!is.null(values$cv_results)) {
-      cat(sprintf("  For prediction tasks: lambda = %.2e (CV optimal)\n", 
-                  values$cv_results$optimal_lambda))
-      cat(sprintf("  For smooth visualization: lambda = %.2e (1-SE rule)\n", 
-                  values$cv_results$lambda_1se))
+      # P8.4: name the estimand. This CV smooths the TRAINING-GROUP MEAN and
+      # scores it against a held-out subject, so it answers "how much should the
+      # population curve be smoothed to predict a new person" -- NOT "how much
+      # should this person's own trajectory be smoothed", which is what the
+      # production smoother does. Recommending its lambda for per-subject
+      # smoothing was recommending the answer to a different question.
+      cat(sprintf("  Between-subject population-curve prediction CV\n"))
+      cat(sprintf("    optimal lambda  = %.2e   (smoothing factor %.2f)\n",
+                  values$cv_results$optimal_lambda,
+                  -log10(values$cv_results$optimal_lambda)))
+      cat(sprintf("    1-SE rule       = %.2e   (smoothing factor %.2f)\n",
+                  values$cv_results$lambda_1se, -log10(values$cv_results$lambda_1se)))
+      cat("    This is the smoothing that best predicts a HELD-OUT SUBJECT from\n")
+      cat("    the mean of the others. It is on the fda scale, so you can type\n")
+      cat("    the smoothing factor into Data Preprocessing -- but it is not the\n")
+      cat("    same question as how much to smooth one person's own trajectory.\n\n")
     }
     if(!is.null(values$reml_profile)) {
-      cat(sprintf("  mgcv REML profile optimum (advisory, different scale): %.2e\n", 
+      cat("  mgcv REML diagnostic (advisory)\n")
+      cat(sprintf("    optimal EDF     = %.2f\n",
+                  values$reml_profile$edf[values$reml_profile$optimal_idx]))
+      cat(sprintf("    REML optimum    = %.2e   (mgcv scale -- NOT transferable)\n",
                   values$reml_profile$optimal_lambda))
+      cat("    Read the EDF: it says how many effective degrees of freedom the\n")
+      cat("    data supports. Do NOT type this lambda into the smoothing factor.\n\n")
     }
-    
-    # Add smoothing factor conversion for manual smoothing
-    cat("\n--- For Manual Smoothing in Data Preprocessing ---\n")
-    cat("To use these lambdas, set 'Smoothing Factor' to:\n")
-    
-    if(!is.null(values$cv_results)) {
-      sf_cv <- -log10(values$cv_results$optimal_lambda)
-      sf_1se <- -log10(values$cv_results$lambda_1se)
-      cat(sprintf("  CV optimal: %.2f (lambda = %.2e)\n", sf_cv, values$cv_results$optimal_lambda))
-      cat(sprintf("  1-SE rule: %.2f (lambda = %.2e)\n", sf_1se, values$cv_results$lambda_1se))
-    }
-    if(!is.null(values$reml_profile)) {
-      sf_reml <- -log10(values$reml_profile$optimal_lambda)
-      cat(sprintf("  REML optimal: %.2f (lambda = %.2e)\n", sf_reml, values$reml_profile$optimal_lambda))
-    }
-    
-    cat("\nOr use the '📊 Use Diagnostic Results' button in Data Preprocessing tab!")
+    cat("  Production smoothing\n")
+    cat("    Automatic mode selects lambda by GCV on the fda smoother\n")
+    cat("    (fck_auto_lambda), per run, on this data. That is what the app\n")
+    cat("    fits. The 'Use Diagnostic Results' button runs that same search.\n")
   })
   
   # ============================================================================

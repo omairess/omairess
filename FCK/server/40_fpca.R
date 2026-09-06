@@ -709,10 +709,10 @@
     })
   })
 
-  # Variance decomposition output (EFDA-style)
+  # P8.5: pre/post registration dispersion (NOT a variance decomposition -- see P5.3)
   output$warping_variance_decomposition <- renderText({
     if(is.null(values$warping_results) || is.null(values$warping_results$fit_statistics)) {
-      return("Run time-warped PCA to see variance decomposition.")
+      return("Run time-warped PCA to see the pre/post registration dispersion.")
     }
 
     tryCatch({
@@ -761,7 +761,7 @@
     })
   })
 
-  # Model selection criteria output (AIC, BIC)
+  # P8.5: registration summary. There is no AIC or BIC here -- see P5.2.
   output$warping_model_criteria <- renderText({
     if(is.null(values$warping_results) || is.null(values$warping_results$fit_statistics)) {
       return("Run time-warped PCA to see model criteria.")
@@ -1056,7 +1056,9 @@
   # WARPING FIT STATISTICS CALCULATION
   # ============================================================================
   # Calculates fit statistics comparing raw vs warped data per subject and averaged
-  # Based on EFDA methodology: variance decomposition and elastic distances
+  # Descriptive registration diagnostics: transformation magnitude, pre/post
+  # dispersion, and SRVF distances. NOT a variance decomposition (P5.3) and
+  # NOT a model-selection criterion (P5.2).
   # ============================================================================
 
   # AUDIT (P5.2/P5.3/P5.4): this panel presented three things it had not
@@ -1202,7 +1204,7 @@
         warped_mean_i <- approx(time_points, reg_mean, xout = warp_i, rule = 2)$y
         template_deformation[i] <- sum((warped_mean_i - reg_mean)^2) * dt
 
-        # ---- Elastic Distances (EFDA-style) ----
+        # ---- Elastic (SRVF) distances ----
 
         # Full distance: L2 distance between aligned curve and mean
         full_dist[i] <- sqrt(sum((reg_i - reg_mean)^2) * dt)
@@ -1266,12 +1268,39 @@
         warp_deriv[warp_deriv < 0] <- 0   # only for the velocity summary below
 
         # ---- Warping Intensity Metrics ----
-
-        # Warping amplitude: RMSE deviation from identity h(t) = t
-        warp_amplitude[i] <- sqrt(mean((warp_i - time_points)^2))
-
-        # Warping velocity variance: how variable is the warping speed?
-        warp_velocity_var[i] <- var(warp_deriv, na.rm = TRUE)
+        #
+        # AUDIT (P8.2): both of these were computed with the same formula for
+        # every warp type, and both are artefacts on a PERIODIC shift. A wrapped
+        # warp h(t) = (t - s) mod 1 is a correct registration of a cycle -- t = 1
+        # and t = 0 are the same instant -- but its representation on [0,1]
+        # contains one jump, and an RMS distance from the identity reads that
+        # jump as deformation. Measured on a 100-point grid:
+        #
+        #   s = 0.00  RMS|h - t| = 0.1000   (the true displacement is ZERO)
+        #   s = 0.05             = 0.2179
+        #   s = 0.10             = 0.3000
+        #   s = 0.25             = 0.4330
+        #
+        # So an unshifted curve was reported with the warping amplitude of a
+        # real 0.1 shift -- 2.4 hours on a 24-hour day -- and every value was
+        # inflated and non-monotone in s. The velocity variance is worse still:
+        # the jump gives var(h') = 98 whatever the shift, including zero.
+        #
+        # This is not only cosmetic. fck_warp_params() feeds warp_amplitude into
+        # the group comparison on warping parameters, so a "do the groups differ
+        # in phase" test on periodic-shift data was testing this artefact.
+        #
+        # A translation's intensity is its displacement, and for a periodic one
+        # that is the SHORTEST circular displacement. An endpoint-preserving
+        # warp keeps the RMS distance, which is what it means there.
+        if (identical(geom, "shift")) {
+          warp_amplitude[i]    <- phase_displacement[i]   # |s|, circular if periodic
+          warp_velocity_var[i] <- if (isTRUE(periodic)) NA_real_ else
+                                  var(warp_deriv, na.rm = TRUE)
+        } else {
+          warp_amplitude[i]    <- sqrt(mean((warp_i - time_points)^2))
+          warp_velocity_var[i] <- var(warp_deriv, na.rm = TRUE)
+        }
       }
 
       # ---- AIC / BIC: REMOVED --------------------------------------------

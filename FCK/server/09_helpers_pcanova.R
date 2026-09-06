@@ -362,8 +362,27 @@ fck_warp_params <- function(warping_results, time_points = NULL) {
   sh <- warping_results$shifts
   tp <- time_points %||% warping_results$time_points
 
+  # AUDIT (P8.2): this measured warp intensity as the RMS distance of h from
+  # the identity, for every warp type. On a PERIODIC shift that is an artefact
+  # of the representation, not of the warping: h(t) = (t - s) mod 1 is a correct
+  # registration of a cycle, but drawn on [0,1] it contains one jump, and the
+  # RMS reads that jump as deformation. Measured on a 100-point grid it gives
+  # 0.1000 at s = 0 -- an UNSHIFTED curve carrying the amplitude of a real 0.1
+  # shift -- rising to 0.4330 at s = 0.25. These values then entered the group
+  # ANOVA below, so the phase comparison was testing the artefact.
+  #
+  # A translation's intensity is its displacement: the shortest CIRCULAR one
+  # when the design is periodic. Only an endpoint-preserving warp is measured
+  # by its distance from the identity.
+  periodic <- identical(warping_results$boundary, "periodic wrap")
+  is_shift <- identical(warping_results$method, "linear_shift")
+
   amp <- NULL
-  if (!is.null(wf) && !is.null(tp) && nrow(wf) == length(tp)) {
+  if (is_shift && !is.null(sh)) {
+    span <- if (!is.null(tp)) diff(range(tp)) else 1
+    amp <- if (periodic) abs(((as.numeric(sh) + span / 2) %% span) - span / 2)
+           else abs(as.numeric(sh))
+  } else if (!is.null(wf) && !is.null(tp) && nrow(wf) == length(tp)) {
     amp <- apply(wf, 2, function(h) sqrt(mean((h - tp)^2, na.rm = TRUE)))
   }
   if (is.null(sh) && is.null(amp)) return(NULL)
@@ -373,7 +392,13 @@ fck_warp_params <- function(warping_results, time_points = NULL) {
   # "replacement has n rows, data has 0" rather than growing it.
   cols <- list()
   if (!is.null(sh) && length(sh) == n) cols$shift <- as.numeric(sh)
-  if (!is.null(amp) && length(amp) == n) cols$warp_amplitude <- as.numeric(amp)
+  # P8.2: for a shift, warp_amplitude is now |shift| (circular if periodic) --
+  # a deterministic function of the column above it. Testing both would be the
+  # same hypothesis twice, and would spend two entries of the multiplicity
+  # family on one question. Keep the signed shift, which is the more
+  # informative of the two, and drop the redundant magnitude.
+  if (!is.null(amp) && length(amp) == n && !(is_shift && !is.null(sh)))
+    cols$warp_amplitude <- as.numeric(amp)
   if (!length(cols)) return(NULL)
   out <- as.data.frame(cols, stringsAsFactors = FALSE)
 
