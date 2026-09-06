@@ -27,8 +27,19 @@ ui_tab_posthoc <- tabItem(
                                           "Hochberg" = "hochberg",
                                           "None" = "none"),
                            selected = "bonferroni"),
+              # P6.6: was value = 200, min = 100. At B = 100 the smallest
+              # attainable p is 1/101 = 0.009901, so every clearly-significant
+              # pair reports that same number and the table looks broken. This
+              # control is only a fallback -- the pairwise tests reuse the
+              # omnibus permutation count when one exists -- but its default
+              # should not be one that cannot resolve a p-value.
               numericInput("pairwise_permutations", "Number of permutations:",
-                           value = 200, min = 100, max = 5000),
+                           value = 5000, min = 500, max = 50000),
+              helpText(HTML("The smallest p a permutation test can report is
+                             1/(B+1): 0.0099 at B = 100, 2.0e-4 at B = 5,000.
+                             Comparisons that are all clearly significant will
+                             show the <i>same</i> p-value if B is too small to
+                             separate them.")),
               checkboxInput("pairwise_confidence_bands", "Show confidence bands for differences", TRUE),
               sliderInput("pairwise_alpha", "Significance level:",
                           min = 0.01, max = 0.1, value = 0.05, step = 0.01),

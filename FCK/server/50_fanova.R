@@ -2121,7 +2121,30 @@
     cat("Number of comparisons:", length(res$pair_names), "\n")
     cat("Correction method:", res$correction_method, "\n")
     cat("Significance level:", res$alpha, "\n")
-    cat("Permutations:", res$n_permutations, "\n\n")
+    cat("Permutations:", res$n_permutations, "\n")
+
+    # AUDIT (P6.6): with B permutations the smallest attainable Monte Carlo
+    # p-value is 1/(B+1) -- at B = 100 that is 0.009901. When several
+    # comparisons are all clearly significant they ALL land on that floor and
+    # the table shows the identical number for every row, which reads as a bug
+    # and is indistinguishable from one. It is the resolution limit, and the
+    # readout has to say so rather than let the reader guess.
+    .B <- suppressWarnings(as.numeric(res$n_permutations))
+    .floor_p <- if (is.finite(.B) && .B > 0) 1 / (.B + 1) else NA_real_
+    if (is.finite(.floor_p)) {
+      .praw <- suppressWarnings(vapply(res$results,
+                 function(x) as.numeric(x$p_value_L2 %||% NA), numeric(1)))
+      .n_at <- sum(is.finite(.praw) & .praw <= .floor_p + 1e-12)
+      cat(sprintf("Smallest attainable p at this B: %.6f = 1/(B+1)\n", .floor_p))
+      if (.n_at > 0)
+        cat(sprintf(paste0("NOTE: %d of %d comparison%s sit AT that floor. Their true p-values\n",
+                           "      are somewhere below %.6f and this run cannot separate them --\n",
+                           "      identical p-values here are the resolution limit, not a tie.\n",
+                           "      Raise the permutation count to resolve them (B = 10,000 gives\n",
+                           "      1e-04); the omnibus tab defaults to 5,000.\n"),
+                    .n_at, length(.praw), if (.n_at == 1) "" else "s", .floor_p))
+    }
+    cat("\n")
     
     n_sig_global <- sum(sapply(res$results, function(x) x$sig_global))
     

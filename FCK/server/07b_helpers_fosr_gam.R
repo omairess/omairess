@@ -66,7 +66,10 @@ fck_fit_fosr_gam <- function(Y, df_reg, predictors, k = 10, notify = NULL) {
   long_data <- long_cov
   # the safe aliases, alongside the original columns (which stay for
   # display and for any downstream code that indexes by the user's name)
-  for (k in seq_along(preds)) {
+  # P6.1: this loop's index was `k`, which BOTH shadowed the k = 10 spline
+  # argument and was missed when P5.8 renamed the body's uses to `j` -- so the
+  # GAM branch died with "object 'j' not found" on its first line of real work.
+  for (j in seq_along(preds)) {
     v <- long_data[[preds[j]]]
     if (is.factor(v)) v <- droplevels(v)
     long_data[[mpred[j]]] <- v

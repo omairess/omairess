@@ -153,8 +153,25 @@ observeEvent(input$run_pca_anova, {
     return()
   }
   res$group_var <- gvar
+
+  # AUDIT (P6.2): `res$warping_method <- NULL` does not store NULL in a list --
+  # it DELETES the element. With `warping_method` gone, the only remaining name
+  # beginning with "warp" was `warped`, and R's `$` on a list falls back to
+  # PARTIAL MATCHING: `res$warp` then returned `res$warped`, a logical scalar.
+  # So `!is.null(res$warp)` was TRUE, the phase section ran, and `res[["warp"]]$k`
+  # died with "$ operator is invalid for atomic vectors" -- on every run where
+  # warping had NOT been used, which is the common case. (With BOTH `warped`
+  # and `warping_method` present the prefix is ambiguous and `$` returns NULL,
+  # which is why this only bit in the unwarped path.)
+  #
+  # Two defences, because one is not enough for a failure this quiet:
+  #   1. the slots are always created, with NA rather than NULL, so there is
+  #      never a dangling prefix to match;
+  #   2. every READ of these fields below uses [["..."]], which is exact.
   res$warped <- !is.null(values$warping_results)
-  res$warping_method <- if (res$warped) values$warping_results$method else NULL
+  res$warping_method <- if (res$warped) values$warping_results$method else NA_character_
+  res$warp <- NA          # placeholder, replaced below; never left dangling
+  res$warp_note <- NA_character_
 
   # AUDIT: registration splits a curve into phase and amplitude. The scores are
   # the amplitude half; the warping functions are the phase half, and stopping
@@ -162,7 +179,6 @@ observeEvent(input$run_pca_anova, {
   # in TIMING". The warping parameters get the same machinery, as their own
   # multiplicity family -- pooling them with the components would let one
   # question borrow the other's correction.
-  res$warp <- NULL
   if (res$warped) {
     wp <- fck_warp_params(values$warping_results)
     if (!is.null(wp) && nrow(wp) == length(g)) {
@@ -173,7 +189,8 @@ observeEvent(input$run_pca_anova, {
         posthoc_gate = suppressWarnings(as.numeric(input$pca_anova_gate %||% 0.05)),
         conf = suppressWarnings(as.numeric(input$pca_anova_conf %||% 0.95)),
         subject_ids = values$subject_ids, use_welch = use_welch)
-      if (!is.null(res$warp)) res$warp$names <- colnames(wp)
+      if (is.null(res[["warp"]])) res$warp <- NA
+      if (is.list(res[["warp"]])) res[["warp"]]$names <- colnames(wp)
     } else if (!is.null(wp)) {
       res$warp_note <- sprintf(
         "The warping parameters have %d rows but %d curves entered the PCA, so they could not be aligned. No phase comparison is shown rather than a guessed one.",
@@ -353,35 +370,36 @@ output$pca_anova_results <- renderPrint({
   }
 
   # ---- the phase half ------------------------------------------------------
-  if (!is.null(res$warp_note)) {
+  # P6.2: [["..."]] is exact; $ is not.
+  if (!is.null(res[["warp_note"]]) && !all(is.na(res[["warp_note"]]))) {
     hdr("Warping parameters")
-    cat(res$warp_note, "\n")
-  } else if (!is.null(res$warp)) {
+    cat(res[["warp_note"]], "\n")
+  } else if (is.list(res[["warp"]])) {
     hdr("Warping parameters (the PHASE half of the registration)")
     cat("The component scores above describe AMPLITUDE variation, because they\n")
     cat("were computed on the registered curves. These are what registration took\n")
     cat("OUT -- how far each curve had to be moved to align it. If the groups\n")
     cat("differ in timing rather than in magnitude, this is where it shows.\n")
-    cat("Corrected as their own family (", res$warp$k,
-        " test(s), ", res$warp$across_pc_correction,
+    cat("Corrected as their own family (", res[["warp"]]$k,
+        " test(s), ", res[["warp"]]$across_pc_correction,
         "), not pooled with the components: 'do groups differ in phase' is a\n",
         "different question from 'do they differ in the k-th mode of amplitude'.\n", sep = "")
 
     cat(sprintf("\n%-52s %11s %12s %9s\n", "parameter", "p", "p adj", "omega2"))
     cat(strrep("-", 88), "\n")
-    for (j in seq_len(res$warp$k)) {
-      o <- res$warp$omnibus[[j]]
-      nmj <- res$warp$names[j]
+    for (j in seq_len(res[["warp"]]$k)) {
+      o <- res[["warp"]]$omnibus[[j]]
+      nmj <- res[["warp"]]$names[j]
       lbl <- FCK_WARP_LABELS[[nmj]] %||% nmj
       if (is.null(o)) { cat(sprintf("%-52s  (not testable)\n", lbl)); next }
       cat(sprintf("%-52s %11s %12s %9s\n", lbl,
-                  format.pval(res$warp$p_omnibus[j], digits = 3, eps = 1e-16),
-                  format.pval(res$warp$p_omnibus_adj[j], digits = 3, eps = 1e-16),
+                  format.pval(res[["warp"]]$p_omnibus[j], digits = 3, eps = 1e-16),
+                  format.pval(res[["warp"]]$p_omnibus_adj[j], digits = 3, eps = 1e-16),
                   fmt3(o$omega2)))
       for (lv in o$levels)
         cat(sprintf("    %-16s mean %10s (SD %9s, n = %d)\n", lv,
                     fmt4(o$means[lv]), fmt4(o$sds[lv]), o$ns[lv]))
-      ph <- res$warp$posthoc[[j]]
+      ph <- res[["warp"]]$posthoc[[j]]
       if (!is.null(ph)) {
         cat(sprintf("    %-14s %-14s %11s %22s %11s %9s\n",
                     "group A", "group B", "diff", "CI", "p adj", "Hedges g"))

@@ -252,7 +252,9 @@ test_that("the component-scores slider cannot promise more than the PCA kept", {
   src <- paste(readLines(file.path(app_dir, "server/40_fpca.R"), warn = FALSE),
                collapse = "\n")
   expect_true(grepl('updateSliderInput(session, "effect_n_comp"', src, fixed = TRUE))
-  expect_true(grepl("max = n_avail", src, fixed = TRUE))
+  # P6.4 sends the whole specification (min/max/step), not just max, because
+  # updating max alone leaves the client recomputing ticks from the old range.
+  expect_true(grepl("max = max(1L, n_avail), step = 1", src, fixed = TRUE))
   # and the figure names the remedy when the two still disagree
   expect_true(grepl("Number of components to extract", src, fixed = TRUE))
   # extraction default raised so the common case is not capped at three

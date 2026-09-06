@@ -128,9 +128,42 @@
   output$reg_observed_plot <- renderPlotly({
     req(values$data, values$covariates, input$reg_color_var)
     Y <- if(!is.null(values$smooth_data)) values$smooth_data else values$data
-    subset_idx <- 1:min(nrow(Y), 200) 
+    col_all <- values$covariates[[input$reg_color_var]]
+
+    # AUDIT (P6.5): this took `1:min(nrow(Y), 200)` -- the FIRST 200 rows in
+    # file order. Data exported per group arrives sorted by group, so on a
+    # sample of 654 YOUTH, 410 ADULT, 181 MIDDLE_AGE and 59 ELDERLY the plot
+    # drew 200 YOUTH curves and one legend entry, and looked exactly like a
+    # dataset with one category in it. The cap is there to keep the plot
+    # drawable; it must not decide WHICH curves you see.
+    #
+    # Stratified instead: every level is represented, in proportion, with at
+    # least a few curves each, and the caption says what was drawn.
+    max_curves <- 300L
+    n_all <- nrow(Y)
+    if (n_all <= max_curves) {
+      subset_idx <- seq_len(n_all)
+      sample_note <- sprintf("all %d curves", n_all)
+    } else {
+      f <- as.factor(col_all)
+      lv <- levels(droplevels(f))
+      idx_by <- split(seq_len(n_all), f)[lv]
+      # proportional, floor 5 per level, then trim the largest levels back to
+      # the cap so the total is respected
+      take <- pmax(5L, round(max_curves * lengths(idx_by) / n_all))
+      take <- pmin(take, lengths(idx_by))
+      while (sum(take) > max_curves) {
+        big <- which.max(take); if (take[big] <= 5L) break; take[big] <- take[big] - 1L
+      }
+      set.seed(1)   # the same picture on every redraw of the same data
+      subset_idx <- sort(unlist(Map(function(ii, k)
+        if (length(ii) <= k) ii else sample(ii, k), idx_by, take), use.names = FALSE))
+      sample_note <- sprintf("a stratified sample of %d of %d curves (%s)",
+                             length(subset_idx), n_all,
+                             paste(sprintf("%s %d", lv, take), collapse = ", "))
+    }
     Y_subset <- Y[subset_idx, , drop=FALSE]
-    col_vals_raw <- values$covariates[[input$reg_color_var]][subset_idx]
+    col_vals_raw <- col_all[subset_idx]
     
     df_plot <- data.frame(
       Time = rep(seq(0, 1, length.out = ncol(Y)), times = nrow(Y_subset)),
@@ -144,9 +177,17 @@
     
     g <- ggplot(df_plot, aes(x = Time, y = Value, group = ID, color = Color)) +
       geom_line(alpha = 0.8, linewidth = 0.5) + theme_minimal() +
-      labs(title = paste("Observed Data colored by", input$reg_color_var))
-    
-    if(is_categorical) g <- g + scale_color_brewer(palette = "Set1") else g <- g + scale_color_viridis_c(option = "viridis")
+      labs(title = paste("Observed Data colored by", input$reg_color_var),
+           subtitle = paste("Showing", sample_note))
+
+    # P6.5: the app's own validated palette, so a group is the same colour here
+    # as everywhere else. scale_color_brewer("Set1") was a fourth palette in an
+    # app that already has one.
+    if(is_categorical) {
+      g <- g + scale_color_manual(values = fck_group_ramp(nlevels(df_plot$Color)))
+    } else {
+      g <- g + scale_color_viridis_c(option = "viridis")
+    }
     
     if(!is.null(values$time_labels)) {
       tick_idx <- seq(0, 1, length.out = length(values$time_labels))

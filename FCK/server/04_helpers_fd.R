@@ -135,3 +135,23 @@ fck_auto_lambda <- function(data_mat, argvals, basisobj,
   list(lambda = 10^best, log10_lambda = best, n_used = length(rows),
        gcv = mean_gcv(best))
 }
+
+# ==============================================================================
+# fck_n_harmonics(pca_res) -- how many components a pca.fd result actually holds
+# ==============================================================================
+# AUDIT (P6.3). Four places asked this question as `length(pca_res$harmonics)`.
+# `harmonics` is an **fd object**, and an fd object is a list of three elements
+# (coefs, basis, fdnames) -- so that expression returns 3 for every PCA ever
+# run, whatever nharm was. Every consumer took min(..., 3) and silently capped
+# itself at three components: the loadings plot drew three, the effect-of-scores
+# plot drew three, and the "Components to show" slider's ceiling was set to
+# three, so a user who asked for five got three with nothing saying why.
+#
+# The count lives in the coefficient matrix: one column per harmonic.
+fck_n_harmonics <- function(pca_res) {
+  if (is.null(pca_res) || is.null(pca_res$harmonics)) return(0L)
+  h <- pca_res$harmonics
+  n <- if (!is.null(h$coefs)) ncol(as.matrix(h$coefs)) else NA_integer_
+  if (!is.finite(n) || n < 1) return(0L)
+  as.integer(n)
+}

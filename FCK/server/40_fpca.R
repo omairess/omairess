@@ -266,12 +266,18 @@
   observeEvent(values$pca_results, {
     pr <- values$pca_results
     if(is.null(pr) || is.null(pr$scores)) return()
-    n_avail <- min(ncol(pr$scores), length(pr$values), length(pr$harmonics))
+    # P6.3: length() of an fd object is 3, always. Use the coefficient columns.
+    n_avail <- min(ncol(pr$scores), length(pr$values), fck_n_harmonics(pr))
     if(!is.finite(n_avail) || n_avail < 1) return()
     cur <- suppressWarnings(as.integer(isolate(input$effect_n_comp) %||% 3))
     if(!is.finite(cur) || cur < 1) cur <- 3
+    # P6.4: updating only `max` leaves the client recomputing its tick
+    # positions from the OLD range, which is why the slider drew ~19 ticks
+    # labelled 1,1,1,2,2,2,2,3,3,3 on a 1-to-3 range. Send the whole
+    # specification -- min, max, step -- so the widget is rebuilt consistently.
     updateSliderInput(session, "effect_n_comp",
-                      max = n_avail, value = min(cur, n_avail))
+                      min = 1, max = max(1L, n_avail), step = 1,
+                      value = min(cur, n_avail))
   }, ignoreNULL = TRUE)
 
   # PCA status output - FIXED
@@ -307,10 +313,21 @@
         }
         
         if(!is.null(pca_res$varprop)) {
+          # P6.3: this printed `1:min(3, length(varprop))` -- a hard-coded three,
+          # so a user who asked for five components was shown three and told
+          # nothing. Show every component the PCA retained, with the running
+          # total, which is what you need to decide how many to keep.
+          nk <- min(fck_n_harmonics(pca_res), length(pca_res$varprop))
+          if (nk < 1) nk <- length(pca_res$varprop)
           cat("Variance explained:\n")
-          for(i in 1:min(3, length(pca_res$varprop))) {
-            cat(sprintf("  PC%d: %.2f%%\n", i, pca_res$varprop[i] * 100))
+          cs <- 0
+          for(i in seq_len(nk)) {
+            cs <- cs + pca_res$varprop[i]
+            cat(sprintf("  PC%d: %6.2f%%   (cumulative %6.2f%%)\n",
+                        i, pca_res$varprop[i] * 100, cs * 100))
           }
+          cat(sprintf("  ---\n  %d component%s retained, %.2f%% of the total variance.\n",
+                      nk, if (nk == 1) "" else "s", cs * 100))
         }
         
         if(!is.null(values$warping_results)) {
@@ -352,11 +369,14 @@
                   name = "Mean", 
                   line = list(color = 'black', width = 2))
       
-      colors <- fck_component_colors(5)
-      n_comp <- min(ncol(pca_res$scores), 5, length(pca_res$harmonics))
+      colors <- fck_component_colors(max(1, min(ncol(pca_res$scores), fck_n_harmonics(pca_res))))
+      # P6.3: was min(ncol(scores), 5, length(harmonics)) -- the last term is
+      # always 3, so this plot never drew more than three components, and the
+      # hard 5 capped it again for anyone who asked for more.
+      n_comp <- min(ncol(pca_res$scores), fck_n_harmonics(pca_res))
       
       for(i in 1:n_comp) {
-        if(i <= length(pca_res$harmonics) && !is.null(pca_res$harmonics[i])) {
+        if(i <= fck_n_harmonics(pca_res)) {
           loading_vals <- eval.fd(time_points, pca_res$harmonics[i])
           p <- p %>% add_trace(x = time_points,
                                y = as.vector(loading_vals),
@@ -475,7 +495,7 @@
       # the app's shared one, so a component is the same colour here as in the
       # component-ANOVA figure. Past five, dash carries identity alongside hue --
       # see server/02b_helpers_palette.R.
-      n_avail <- min(ncol(pca_res$scores), length(pca_res$values), length(pca_res$harmonics))
+      n_avail <- min(ncol(pca_res$scores), length(pca_res$values), fck_n_harmonics(pca_res))
       n_req <- suppressWarnings(as.integer(input$effect_n_comp %||% 3))
       if(!is.finite(n_req) || n_req < 1) n_req <- 3
       n_show <- min(n_req, n_avail)
@@ -487,7 +507,7 @@
       colors <- fck_group_ramp(max(n_show, 1))
       
       for(i in 1:n_show) {
-        if(i <= length(pca_res$harmonics) && !is.null(pca_res$harmonics[i])) {
+        if(i <= fck_n_harmonics(pca_res)) {
           loading_vals <- eval.fd(time_points, pca_res$harmonics[i])
           
           # Plus 2 SD

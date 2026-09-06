@@ -1861,6 +1861,102 @@ every peaked profile. Anything read off the warping panel's AIC/BIC or its
 numbers did not mean what the panel said.
 
 
+**4.51 P6: seven bugs found by running the app.** Not a review this time --
+someone opened the app on real data and it misbehaved in seven places. Two of
+them are mine, from the previous two rounds, and *none* of them was visible to
+any test in this repository. That is the important finding, and it is addressed
+at the end.
+
+*P6.1 &mdash; FoSR GAM: "object 'j' not found". My regression, from P5.8.* When
+the GAM branch became a kernel I renamed its loop indices from `k` to `j`,
+because `k` shadowed the new spline-dimension argument. One loop got the
+rename in its BODY but not its HEADER: `for (k in seq_along(preds))` with
+`preds[j]` inside. The GAM branch died on its first line of real work.
+
+*P6.2 &mdash; fPCA-ANOVA: "$ operator is invalid for atomic vectors".* Two R
+behaviours compounding.
+`res$warping_method <- NULL` does not store NULL in a list, it **deletes the
+element**; and `$` on a list falls back to **partial matching**. With
+`warping_method` deleted, the only remaining name beginning with "warp" was
+`warped`, so `res$warp` returned `res$warped` &mdash; a logical scalar.
+`!is.null(res$warp)` was therefore TRUE, the phase-comparison section ran, and
+`res$warp$k` died. It fired on every run where warping had NOT been used, i.e.
+the common case. (With both `warped` and `warping_method` present the prefix is
+ambiguous and `$` returns NULL, which is why the warped path was fine and the
+bug looked intermittent.) Fixed twice over: the slots are always created, with
+NA rather than NULL, so no dangling prefix exists; and every read of that family
+uses `[["..."]]`, which is exact.
+
+*P6.3 &mdash; every fPCA display capped at three components.* Ask for five, get
+three, in the summary, the loadings plot, the effect-of-scores plot and the
+slider's ceiling. Four places asked "how many components are there?" as
+`length(pca_res$harmonics)`. **`harmonics` is an fd object, and an fd object is
+a list of three elements**, so that expression returns 3 for every PCA ever run.
+Every consumer took `min(..., 3)`. The summary had a hard-coded
+`1:min(3, length(varprop))` on top of that. Now `fck_n_harmonics()`, which reads
+the coefficient columns, and the summary prints every retained component with a
+running total.
+
+*P6.4 &mdash; the "Components to show" slider drew ~19 ticks labelled
+1,1,1,2,2,2,2,3,3,3 on a 1-to-3 range.* `updateSliderInput()` was sent only the
+new `max`; the client then recomputed tick positions from the old range. Send
+min, max and step together.
+
+*P6.5 &mdash; the FoSR observed-data plot showed one group out of four.*
+`subset_idx <- 1:min(nrow(Y), 200)` &mdash; the first 200 rows in FILE ORDER.
+Data exported per group arrives sorted by group, so on 654 YOUTH / 410 ADULT /
+181 MIDDLE_AGE / 59 ELDERLY the plot drew 200 YOUTH curves and one legend
+entry, and looked exactly like a dataset with one category in it. The cap is
+there to keep the plot drawable; it must not decide WHICH curves you see. Now a
+stratified draw with a floor of five per level, a fixed seed so the picture is
+stable, and a subtitle saying what was sampled. It also used
+`scale_color_brewer("Set1")` &mdash; a fourth palette in an app that has one;
+now the app's own.
+
+*P6.6 &mdash; six pairwise p-values, all exactly 0.009901.* Not a bug: with
+B permutations the smallest attainable Monte Carlo p is 1/(B+1), and at B = 100
+that is 0.009901. Six clearly-significant comparisons all land on the floor and
+the table shows the identical number six times, which is indistinguishable from
+a bug. The summary now states the floor, counts how many comparisons sit on it,
+and says the identical values are the resolution limit rather than a tie. The
+pairwise permutation default went from 200 (min 100) to 5,000 (min 500) to match
+the omnibus tab, which P1.1 already raised.
+
+*P6.7 &mdash; three defaults the wrong way round.* Data source defaulted to
+smoothed, when cosinor is a regression on the observations and handles gaps
+natively &mdash; smoothing first inflates R&sup2;, makes LOOCV optimistic and
+biases the zero-amplitude F test anticonservatively, all of which the app's own
+help text already said. Time origin defaulted to midnight, which with a
+saturating trend gives an intercept that is the value at neither origin. "Show
+raw data points" defaulted on, burying the fitted curve on a few hundred
+subjects. All three flipped, and the server-side `%||%` fallbacks flipped with
+them &mdash; a session that never touches a control must not run a different
+model from the one the UI displays.
+
+**The gap this exposed, and what was done about it.** Every test in this
+repository was either static (does it parse, does the source contain X) or
+numerical (does this kernel return the right number for this input). Nothing
+pressed a button. So a renamed loop variable and an R partial-match both shipped
+&mdash; neither is a statistical error, and both made the app unusable in a tab.
+
+`tests/reactive_smoke_test.R` is the missing layer. It builds a dataset shaped
+like the real one (sorted by group, unbalanced, four levels), drives the server
+with `shiny::testServer` through fPCA, the component ANOVA and both FoSR
+methods, and FORCES EVERY RELEVANT OUTPUT TO RENDER; an output that errors fails
+the test. It was verified by reintroducing P6.1 and P6.3 one at a time and
+confirming it fails on each, then restoring.
+
+One thing it surfaced immediately and worth recording: several plot outputs wrap
+their bodies in `tryCatch(..., error = function(e) cat(...))`, so a broken plot
+renders as an empty panel and prints to a console the user never sees. That is
+the same failure mode that let P5.1 survive a release. It is not fixed here, but
+it is now visible: the reactive test drives those outputs, so a future error in
+them shows up as text in the test log even when the app would have swallowed it.
+
+After P6: **1,372 testthat assertions (0 failed, 0 skipped) and 13 standalone
+suites pass.**
+
+
 ## 5. Rename table
 
 | source | source app | merged app |

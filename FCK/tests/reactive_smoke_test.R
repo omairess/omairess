@@ -1,0 +1,186 @@
+# ==============================================================================
+# tests/reactive_smoke_test.R — drive the app's reactives on real-shaped data
+#
+# WHY THIS EXISTS. Two bugs shipped in the last two rounds and neither was
+# visible to any test in this repo:
+#
+#   * the FoSR GAM branch died with "object 'j' not found" -- a loop whose
+#     header was renamed but whose body was not;
+#   * the fPCA-ANOVA report died with "$ operator is invalid for atomic
+#     vectors" -- R's `$` partial-matching on a list, on the unwarped path,
+#     which is the common one.
+#
+# Both were caught by a person opening the app. Everything the suite had was
+# either static (does it parse, does the source contain X) or numerical (does
+# the kernel return the right number for the right input). Nothing pressed the
+# buttons. This does: it builds a dataset shaped like the real one -- sorted by
+# group, unbalanced, four levels -- runs the analyses through the server, and
+# FORCES EVERY RELEVANT OUTPUT TO RENDER. An output that errors fails the test.
+#
+# Run with:   Rscript tests/reactive_smoke_test.R      (from the FCK directory)
+# ==============================================================================
+.libPaths(c("~/Rlib", .libPaths()))
+suppressPackageStartupMessages({
+  library(shiny); library(shinydashboard); library(DT); library(plotly)
+  library(fda); library(mgcv); library(ggplot2)
+})
+
+app_dir <- if (dir.exists("ui")) "." else "FCK"
+fck_source <- function(file, envir = parent.frame()) {
+  eval(parse(file, encoding = "UTF-8"), envir = envir); invisible(NULL)
+}
+ui_files     <- sort(list.files(file.path(app_dir, "ui"), full.names = TRUE, pattern = "[.]R$"))
+server_files <- sort(list.files(file.path(app_dir, "server"), full.names = TRUE, pattern = "[.]R$"))
+for (f in ui_files) fck_source(f, envir = globalenv())
+app_src  <- paste(readLines(file.path(app_dir, "app.R"), warn = FALSE), collapse = "\n")
+ui_names <- unique(regmatches(app_src, gregexpr("ui_tab_[A-Za-z0-9_]+", app_src))[[1]])
+ui_obj   <- do.call(tabItems, lapply(ui_names, get))
+
+failures <- 0L
+fail <- function(...) { cat("FAIL:", ..., "\n"); failures <<- failures + 1L }
+ok   <- function(...) cat("ok  :", ..., "\n")
+
+# Force an output to render and report the error instead of hiding it.
+render <- function(label, expr) {
+  v <- tryCatch(force(expr), error = function(e) structure(conditionMessage(e), class = "fckerr"))
+  if (inherits(v, "fckerr")) { fail(label, "->", as.character(v)); return(invisible(NULL)) }
+  ok(label)
+  invisible(v)
+}
+
+# ---- a dataset shaped like the one that broke the app ----------------------
+# Sorted by group, badly unbalanced, four levels: exactly the layout that made
+# "the first 200 rows" a single category (P6.5).
+set.seed(606)
+n_by  <- c(YOUTH = 60, ADULT = 40, MIDDLE_AGE = 18, ELDERLY = 8)
+n_sub <- sum(n_by); n_t <- 24; hrs <- 0:23
+grp   <- factor(rep(names(n_by), n_by), levels = names(n_by))
+shift_by <- c(YOUTH = 0, ADULT = 1.2, MIDDLE_AGE = 2.0, ELDERLY = 3.1)
+raw <- t(vapply(seq_len(n_sub), function(i) {
+  50 + rnorm(1, 0, 4) +
+    (8 + rnorm(1, 0, 1.5)) * cos(2 * pi * (hrs - 16 - shift_by[[as.character(grp[i])]]) / 24) +
+    rnorm(n_t, 0, 1.2)
+}, numeric(n_t)))
+rownames(raw) <- sprintf("S%03d", seq_len(n_sub))
+covs <- data.frame(Age = round(rnorm(n_sub, 40, 9), 2),
+                   Sex = factor(rep(c("F", "M"), length.out = n_sub)),
+                   AGEcategory = grp,
+                   stringsAsFactors = FALSE)
+
+server <- function(input, output, session) {
+  for (f in server_files) fck_source(f, envir = environment())
+
+  values$data        <- raw
+  values$time_labels <- sprintf("%02d:00", hrs)
+  values$covariates  <- covs
+  values$group_labels <- grp
+  values$group_variables <- list(AGEcategory = grp, Sex = covs$Sex)
+  values$subject_ids <- rownames(raw)
+
+  tp <- seq(0, 1, length.out = n_t)
+  basis  <- create.bspline.basis(rangeval = c(0, 1), nbasis = 12)
+  lambda <- fck_auto_lambda(raw, tp, basis)$lambda
+  values$fd_obj      <- smooth.basis(tp, t(raw), fdPar(basis, 2, lambda))$fd
+  values$smooth_data <- t(eval.fd(tp, values$fd_obj))
+  values$smooth_fit_metrics <- list(method = "manual", n_basis = 12, lambda = lambda,
+                                    mean_r_squared = NA, mean_rmse = NA,
+                                    mean_df = NA, time_axis = "hours")
+
+  session$setInputs(
+    n_components = 5, pca_type = "fpca", effect_n_comp = 3, effect_size = 1,
+    smooth_method = "manual", n_basis_manual = 12, n_basis = 12,
+    smooth_factor = -log10(lambda), is_cyclic = FALSE,
+    pca_anova_group_var = "AGEcategory", pca_anova_ncomp = 5,
+    pca_anova_posthoc = "holm", pca_anova_across = "holm",
+    pca_anova_gate = 0.05, pca_anova_conf = 0.95, pca_anova_omnibus = "auto",
+    reg_predictors = c("Age", "AGEcategory"), reg_color_var = "AGEcategory",
+    reg_method = "OLS_nosmooth", use_bootstrap = FALSE, n_boot = 0,
+    tick_freq_fanova = 4, tick_freq_results = 4, tick_freq_settings = 4,
+    tick_freq_preprocess = 4, tick_freq_pairwise = 4, tick_freq_kmeans = 4)
+
+  # ---------------------------------------------------------------- fPCA ----
+  cat("\n-- fPCA, 5 components requested ---------------------------------------\n")
+  values$pca_results <- pca.fd(values$fd_obj, nharm = 5)
+  session$flushReact()   # make the assignment visible to the outputs below
+
+  n_disp <- fck_n_harmonics(values$pca_results)
+  if (n_disp != 5L) fail(sprintf("fck_n_harmonics reports %d, expected 5", n_disp))
+  else ok("the PCA result reports all 5 components")
+
+  s <- render("pca_summary renders", output$pca_summary)
+  if (!is.null(s)) {
+    txt <- paste(as.character(s), collapse = "\n")
+    for (pc in paste0("PC", 1:5))
+      if (!grepl(pc, txt, fixed = TRUE)) fail(sprintf("the summary does not mention %s", pc))
+    if (grepl("PC1", txt) && grepl("PC5", txt)) ok("the summary lists PC1 through PC5")
+  }
+  render("loadings_plot renders", output$loadings_plot)
+  render("scores_plot renders", output$scores_plot)
+  render("variance_plot renders", output$variance_plot)
+  render("scores_table renders", output$scores_table)
+
+  # ------------------------------------------------------- fPCA group ANOVA --
+  cat("\n-- fPCA-ANOVA on an UNWARPED run (the path that errored) ---------------\n")
+  if (!is.null(values$warping_results)) fail("this run should not be warped")
+  session$setInputs(run_pca_anova = 1)
+  session$flushReact()
+  render("pca_anova_results renders", output$pca_anova_results)
+
+  # ---------------------------------------------------------------- FoSR ----
+  cat("\n-- FoSR, pointwise OLS -------------------------------------------------\n")
+  session$setInputs(run_fosr = 1)
+  session$flushReact()
+  if (is.null(values$reg_model)) fail("the OLS fit produced no model")
+  else ok(sprintf("OLS fitted: %s", values$reg_model$method))
+  render("reg_observed_plot renders", output$reg_observed_plot)
+  render("fosr_model_summary renders", output$fosr_model_summary)
+
+  if (!is.null(values$reg_model)) {
+    session$setInputs(reg_coeff_select = rownames(values$reg_model$beta.hat)[2])
+    render("reg_coeff_plot renders", output$reg_coeff_plot)
+    render("reg_pvalue_plot renders", output$reg_pvalue_plot)
+    render("reg_r2_plot renders", output$reg_r2_plot)
+
+    # the prediction path that P5.1 broke -- exercise the shared builder
+    nd <- as.data.frame(lapply(covs[, c("Age", "AGEcategory")], function(v)
+      if (is.numeric(v)) mean(v) else factor(levels(v)[1], levels = levels(v))),
+      check.names = FALSE)
+    X <- tryCatch(fck_fosr_design(values$reg_model, nd),
+                  error = function(e) structure(conditionMessage(e), class = "fckerr"))
+    if (inherits(X, "fckerr")) fail("fck_fosr_design ->", as.character(X))
+    else if (ncol(X) != nrow(values$reg_model$beta.hat))
+      fail("the prediction design has the wrong number of columns")
+    else {
+      yh <- as.vector(X %*% values$reg_model$beta.hat)
+      if (!all(is.finite(yh))) fail("the predicted curve is not finite")
+      else ok("a prediction design and curve can be built from the fitted model")
+    }
+  }
+
+  cat("\n-- FoSR, smoothed OLS (GAM) -------------------------------------------\n")
+  session$setInputs(reg_method = "OLS_smooth")
+  session$setInputs(run_fosr = 2)
+  session$flushReact()
+  m <- values$reg_model
+  if (is.null(m) || is.null(m$gam_obj)) fail("the GAM fit produced no model")
+  else {
+    ok(sprintf("GAM fitted: %d coefficient curves", nrow(m$beta.hat)))
+    if (!all(is.na(m$beta.se))) fail("the GAM reports non-NA standard errors it did not compute")
+    else ok("GAM SE/p are NA, not zero")
+    # one contrast curve per non-reference level of the factor
+    if (!all(c("AGEcategoryADULT", "AGEcategoryMIDDLE_AGE", "AGEcategoryELDERLY")
+             %in% rownames(m$beta.hat)))
+      fail("the GAM did not emit a curve per factor level: ",
+           paste(rownames(m$beta.hat), collapse = ", "))
+    else ok("the GAM emits one coefficient curve per non-reference level")
+  }
+  render("fosr_model_summary renders (GAM)", output$fosr_model_summary)
+  render("reg_pvalue_plot renders (GAM, all-NA p)", output$reg_pvalue_plot)
+  render("reg_coeff_plot renders (GAM, all-NA se)", output$reg_coeff_plot)
+
+  cat("\n")
+  if (failures) { cat(sprintf("Reactive smoke test FAILED (%d).\n", failures)); quit(status = 1) }
+  cat("Reactive smoke test passed.\n")
+}
+
+testServer(shinyApp(ui_obj, server), { NULL })

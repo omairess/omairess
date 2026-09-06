@@ -41,9 +41,15 @@ ui_tab_harmonic <- tabItem(
             hr(),
             h4("Data source"),
             radioButtons("harmonic_data_source", NULL,
-                         choices = c("Smoothed (FDA-interpolated)" = "smoothed",
-                                     "Raw (cosinor handles gaps natively)" = "raw"),
-                         selected = "smoothed"),
+                         choices = c("Raw (cosinor handles gaps natively)" = "raw",
+                                     "Smoothed (FDA-interpolated)" = "smoothed"),
+                         # P6.7: raw is the default. Cosinor is a regression on
+                         # the observations and handles gaps natively; smoothing
+                         # first buys nothing here and costs the inflation the
+                         # note below describes. Defaulting to the option that
+                         # inflates R2 and anticonservatively biases the
+                         # zero-amplitude test was the wrong way round.
+                         selected = "raw"),
             helpText(HTML("Fitting on smoothed data removes independent noise and
                            induces residual autocorrelation: R\u00b2 is inflated, LOOCV is
                            optimistic because a held-out point is partly rebuilt from
@@ -54,9 +60,16 @@ ui_tab_harmonic <- tabItem(
             hr(),
             h4("Model Specification"),
             radioButtons("harmonic_time_origin", "Time origin (t = 0 at):",
-                         choices = c("Midnight (current behaviour)" = "midnight",
-                                     "First observation" = "first_observation"),
-                         selected = "midnight"),
+                         choices = c("First observation" = "first_observation",
+                                     "Midnight" = "midnight"),
+                         # P6.7: the first observation is the default. With a
+                         # saturating trend, anchoring S(t) at the first
+                         # observation while the harmonics sit at midnight gives
+                         # an intercept that is the value at neither origin;
+                         # one origin makes it interpretable and conditions the
+                         # A_sat/tau pair better. Midnight remains available for
+                         # continuity with earlier runs.
+                         selected = "first_observation"),
             helpText(HTML("With a saturating trend the fitter anchors <i>S(t)</i> at the
                            first observation while the harmonics stay anchored at
                            midnight \u2014 two origins, one constant, so the intercept is
@@ -198,7 +211,10 @@ ui_tab_harmonic <- tabItem(
                               h4("Display Options"),
                               uiOutput("harmonic_subject_selector"),
                               checkboxInput("harmonic_show_ci", "Show Confidence Bands", TRUE),
-                              checkboxInput("harmonic_show_data", "Show Raw Data Points", TRUE),
+                              # P6.7: off by default. On a few hundred subjects
+                              # the points bury the fitted curve they are there
+                              # to support.
+                              checkboxInput("harmonic_show_data", "Show Raw Data Points", FALSE),
                               checkboxInput("harmonic_show_components", "Show Harmonic Components", FALSE)
                        )
                      )

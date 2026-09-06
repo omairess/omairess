@@ -1957,7 +1957,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       # report prints the two side by side so the inflation is visible rather
       # than argued about.
       # ======================================================================
-      data_source <- input$harmonic_data_source %||% "smoothed"
+      data_source <- input$harmonic_data_source %||% "raw"        # P6.7: matches the UI default
       if(identical(data_source, "smoothed") && is.null(values$smooth_data)) {
         data_source <- "raw"
       }
@@ -2199,7 +2199,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       # Default is "midnight" -- the current behaviour -- so nothing downstream
       # changes unless the user asks for it.
       # ======================================================================
-      time_origin <- input$harmonic_time_origin %||% "midnight"
+      time_origin <- input$harmonic_time_origin %||% "first_observation"   # P6.7
       time_vec_model <- time_vec
       origin_shift <- 0
       if(identical(time_origin, "first_observation")) {

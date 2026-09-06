@@ -169,6 +169,7 @@ Rscript tests/circular_density_test.R
 Rscript tests/warping_test.R
 Rscript tests/warp_family_test.R
 Rscript tests/registration_effectiveness_test.R
+Rscript tests/reactive_smoke_test.R
 Rscript tests/audit_test.R
 Rscript tests/polar_agreement_test.R
 Rscript -e 'testthat::test_dir("tests/testthat")'
@@ -178,6 +179,15 @@ Rscript -e 'testthat::test_dir("tests/testthat")'
 every sidebar entry reaches a uniquely-named tab, checks that no output id is
 assigned twice, and registers all 31 server files under a mock session. It
 needs only the UI packages, so it runs without `fda` or `fda.usc` installed.
+
+`reactive_smoke_test.R` is the layer the others were missing. It builds a
+dataset shaped like a real one — sorted by group, unbalanced, four levels —
+drives the server through fPCA, the component ANOVA and both FoSR methods with
+`shiny::testServer`, and **forces every relevant output to render**; an output
+that errors fails the test. Two bugs shipped in successive rounds because
+nothing pressed the buttons: a GAM loop whose header was renamed but whose body
+was not, and R's `$` partial-matching on a list. Both are now caught here — the
+test was checked by reintroducing each defect and confirming it fails.
 
 `codegen_test.R` checks that the exported script *parses* for every combination
 of results the generator might be asked about. `export_roundtrip_test.R` goes
