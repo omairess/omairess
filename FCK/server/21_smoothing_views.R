@@ -51,8 +51,12 @@
       cat("\n--- Smoothing Parameters ---\n")
       
       if(!is.null(metrics$method)) {
+        # AUDIT (P5.10): this said "Automatic (REML)". The app's automatic
+        # smoother selects lambda by GCV on fda::smooth.basis (fck_auto_lambda);
+        # it has never used REML, and smooth.basis has no REML option. A user
+        # reading this label would write the wrong method in a paper.
         method_label <- switch(metrics$method,
-                               "auto" = "Automatic (REML)",
+                               "auto" = "Automatic (lambda by GCV)",
                                "manual" = "Manual",
                                "none" = "None (Raw data)")
         cat("Method:", method_label, "\n")
@@ -69,7 +73,9 @@
       
       if(!is.null(metrics$lambda)) {
         if(metrics$lambda == 0) {
-          cat("Lambda: 0 (automatic REML optimization)\n")
+          # P5.10: lambda = 0 in fda is the UNPENALISED fit. It is not
+          # "automatic optimization" and it is not REML.
+          cat("Lambda: 0 (UNPENALISED interpolating fit -- no penalty applied)\n")
         } else {
           smooth_factor <- -log10(metrics$lambda)
           cat(sprintf("Lambda: %.3e (smoothing factor = %.2f)\n",

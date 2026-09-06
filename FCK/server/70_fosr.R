@@ -54,136 +54,16 @@
 
       } else {
         # --- METHOD B: Smoothed OLS (GAM) ---
-        showNotification("Fitting GAM with Splines...", type = "message")
-        
-        # IMPORTANT: Store original factor levels BEFORE any subsetting
-        # This is needed for prediction to work correctly
-        orig_factor_levels <- list()
-        for(v in input$reg_predictors) {
-          if(is.factor(df_reg[[v]])) {
-            orig_factor_levels[[v]] <- levels(df_reg[[v]])
-          } else if(!is.numeric(df_reg[[v]])) {
-            orig_factor_levels[[v]] <- sort(unique(as.character(df_reg[[v]])))
-          }
-        }
-        
-        # AUDIT (P4.3): this branch pasted UPLOADED COLUMN NAMES straight into
-        # formula text and re-parsed it with as.formula(). A column called
-        # "Age (years)" becomes a function call; anything executable is
-        # executed. The pointwise branch had the same problem, and the P1.4b
-        # note there wrongly claimed reformulate() solved it -- it does not,
-        # it parses text too.
-        #
-        # Same fix as the pointwise branch: the model is fitted on internal
-        # column names x1..xp, which cannot be anything but names, and the
-        # user's labels are restored afterwards as data. `preds` keeps the
-        # user-facing names for every readout; `mpred` is what the formula sees.
-        preds <- input$reg_predictors
-        mpred <- paste0("x", seq_along(preds))
+        # P5.8: the estimator lives in server/07b_helpers_fosr_gam.R as a named
+        # function, so the export can deparse the SAME object instead of
+        # maintaining a second, drifting transcription of it.
+        fit <- fck_fit_fosr_gam(
+          Y          = Y,
+          df_reg     = df_reg,
+          predictors = input$reg_predictors,
+          k          = 10,
+          notify     = function(msg, ...) showNotification(msg, type = "message"))
 
-        df_reg$id_temp <- 1:nrow(df_reg)
-        long_cov <- df_reg[rep(seq_len(nrow(df_reg)), each = n_time), ]
-        long_data <- long_cov
-        # the safe aliases, alongside the original columns (which stay for
-        # display and for any downstream code that indexes by the user's name)
-        for (k in seq_along(preds)) {
-          v <- long_data[[preds[k]]]
-          if (is.factor(v)) v <- droplevels(v)
-          long_data[[mpred[k]]] <- v
-        }
-        long_data$time <- rep(time_points, times = nrow(df_reg))
-        long_data$Y_val <- as.vector(t(Y))
-
-        # Build Formula: Y ~ s(time) + s(time, by = x_k) ...
-        gam_formula_str <- "Y_val ~ s(time, bs = 'ps', k = 10)"
-        for(k in seq_along(preds)) {
-          if(is.numeric(df_reg[[preds[k]]])) {
-            gam_formula_str <- paste0(gam_formula_str, " + s(time, by = ", mpred[k], ", bs='ps', k=10)")
-          } else {
-            # Factor interaction
-            gam_formula_str <- paste0(gam_formula_str, " + ", mpred[k],
-                                      " + s(time, by = ", mpred[k], ", bs='ps', k=10)")
-          }
-        }
-
-        gam_fit <- gam(as.formula(gam_formula_str), data = long_data, method = "REML")
-        
-        # Reconstruct Beta(t) for Visualization (Approximation)
-        pred_grid <- data.frame(time = time_points)
-        beta_hat <- matrix(0, nrow = length(preds) + 1, ncol = n_time)
-        rownames(beta_hat) <- c("(Intercept)", preds)
-        
-        # Intercept approx. The prediction frames are built on the MODEL names,
-        # because that is what the fitted formula refers to (P4.3).
-        d_int <- pred_grid
-        for(k in seq_along(preds)) {
-          mv <- mpred[k]
-          if(is.numeric(df_reg[[preds[k]]])) d_int[[mv]] <- 0
-          else {
-            # Use proper factor levels from long_data (which is what GAM was trained on)
-            orig_col <- long_data[[mv]]
-            if(is.factor(orig_col)) {
-              d_int[[mv]] <- factor(rep(levels(orig_col)[1], n_time), levels = levels(orig_col))
-            } else {
-              lvls <- sort(unique(as.character(orig_col)))
-              d_int[[mv]] <- factor(rep(lvls[1], n_time), levels = lvls)
-            }
-          }
-        }
-        beta_hat[1, ] <- predict(gam_fit, newdata = d_int, type = "response")
-        
-        # AUDIT (P1.4d): this loop populated beta_hat only when the predictor was
-        # NUMERIC. A factor predictor was fitted by the GAM, appeared in the
-        # results table, and its coefficient curve stayed a row of zeros -- a
-        # null effect displayed as though it had been estimated. A factor's
-        # effect is a contrast against the reference level, so there is one
-        # curve per non-reference level, not one per variable.
-        beta_rows <- list("(Intercept)" = beta_hat[1, ])
-        for(k in seq_along(preds)) {
-          v <- preds[k]; mv <- mpred[k]   # v names the ROW, mv drives the model
-          if(is.numeric(df_reg[[v]])) {
-            d_0 <- d_int; d_0[[mv]] <- 0
-            d_1 <- d_int; d_1[[mv]] <- 1
-            beta_rows[[v]] <- as.vector(predict(gam_fit, newdata = d_1) -
-                                        predict(gam_fit, newdata = d_0))
-          } else {
-            oc <- long_data[[mv]]
-            lv <- if (is.factor(oc)) levels(oc) else sort(unique(as.character(oc)))
-            if (length(lv) >= 2) {
-              d_ref <- d_int
-              d_ref[[mv]] <- factor(rep(lv[1], n_time), levels = lv)
-              base <- as.vector(predict(gam_fit, newdata = d_ref))
-              for (l in lv[-1]) {
-                d_l <- d_int
-                d_l[[mv]] <- factor(rep(l, n_time), levels = lv)
-                beta_rows[[paste0(v, l)]] <-
-                  as.vector(predict(gam_fit, newdata = d_l)) - base
-              }
-            }
-          }
-        }
-        beta_hat <- do.call(rbind, beta_rows)
-        rownames(beta_hat) <- names(beta_rows)
-        
-        fitted_vec <- predict(gam_fit, newdata = long_data)
-        fitted_vals <- matrix(fitted_vec, nrow = nrow(Y), ncol = n_time, byrow = TRUE)
-        residuals <- Y - fitted_vals
-        
-        # P4.6: same zero-variance guard as the pointwise branch.
-        rss <- colSums(residuals^2); y_bar <- colMeans(Y)
-        tss <- colSums(sweep(Y, 2, y_bar)^2)
-        tss_floor <- .Machine$double.eps * max(1, max(abs(Y), na.rm = TRUE))^2 * nrow(Y)
-        r2_t <- ifelse(tss > tss_floor, 1 - (rss / tss), NA_real_)
-
-        fit <- list(beta.hat = beta_hat, fitted.values = fitted_vals, resid = residuals, 
-                    beta.se = beta_hat*0, beta.p = beta_hat*0, # placeholders
-                    terms = terms(gam_fit), gam_model_names = mpred, 
-                    r2_t = r2_t, method = "Smoothed OLS (GAM)",
-                    gam_obj = gam_fit,
-                    gam_predictors = preds,
-                    gam_long_data = long_data,  # Store long_data for exact factor levels
-                    gam_factor_levels = orig_factor_levels,  # Store original factor levels
-                    gam_n_time = n_time)
       }
       
       # MERGED APP: what this fit actually used, for the code export.
@@ -233,6 +113,9 @@
       }
       cat("The interval and the test can therefore disagree at the margin; the\n")
       cat("interval is the percentile one, not an inversion of the t test.\n")
+    }
+    if(!is.null(mod$inference_note)) {
+      cat("\n"); cat(strwrap(mod$inference_note, width = 76), sep = "\n"); cat("\n")
     }
     if(!is.null(mod$gam_obj)) {
       cat("\nFamily:", mod$gam_obj$family$family, "\n")
@@ -368,12 +251,27 @@
           }
         }
       }
-      pred_df <- as.data.frame(pred_data)
-      
+      pred_df <- as.data.frame(pred_data, check.names = FALSE)
+
+      # AUDIT (P5.1): this used to call
+      #     model.matrix(delete.response(mod$terms), data = pred_df)
+      # directly. After P4.3 the model's terms refer to the internal names
+      # x1..xp while pred_df is keyed by the user's column names, so
+      # model.matrix could not find its variables and the tryCatch below
+      # returned NULL -- a blank prediction curve, on EVERY FoSR OLS fit, with
+      # no error shown. fck_fosr_design() does the rename and re-applies the
+      # fitted factor levels; it is the same code the fit itself uses.
       betas <- mod$beta.hat
-      f_clean <- delete.response(mod$terms)
-      X_new <- tryCatch({ model.matrix(f_clean, data = pred_df) }, error = function(e) NULL)
-      if(is.null(X_new)) return(NULL)
+      X_new <- tryCatch(fck_fosr_design(mod, pred_df),
+                        error = function(e) structure(conditionMessage(e), class = "fck_err"))
+      if(inherits(X_new, "fck_err")) {
+        # and it is REPORTED now. The old code swallowed the error and returned
+        # NULL, which draws nothing: a broken prediction looked like an empty
+        # plot, which is the failure mode that let P5.1 survive a release.
+        showNotification(paste("Could not build the prediction design:",
+                               as.character(X_new)), type = "error", duration = 12)
+        return(NULL)
+      }
       y_hat <- as.vector(X_new %*% betas)
       
       if(!is.null(mod$xtx_inv) && !is.null(mod$sigma2)) {
@@ -470,12 +368,12 @@
             }
           }
           
-          df_min <- as.data.frame(pred_data_min)
-          df_max <- as.data.frame(pred_data_max)
-          
-          f_clean <- delete.response(mod$terms)
-          X_min <- tryCatch({ model.matrix(f_clean, data = df_min) }, error = function(e) NULL)
-          X_max <- tryCatch({ model.matrix(f_clean, data = df_max) }, error = function(e) NULL)
+          df_min <- as.data.frame(pred_data_min, check.names = FALSE)
+          df_max <- as.data.frame(pred_data_max, check.names = FALSE)
+
+          # P5.1: same shared builder as the main prediction curve.
+          X_min <- tryCatch(fck_fosr_design(mod, df_min), error = function(e) NULL)
+          X_max <- tryCatch(fck_fosr_design(mod, df_max), error = function(e) NULL)
           
           if(!is.null(X_min) && !is.null(X_max)) {
             y_min <- as.vector(X_min %*% mod$beta.hat)
@@ -528,7 +426,10 @@
       p <- p %>% add_ribbons(x = t, ymin = ci_lower, ymax = ci_upper,
                              name = ci_name, line = list(color = 'transparent'), 
                              fillcolor = 'rgba(0, 191, 255, 0.3)')
-    } else if(sum(mod$beta.se[idx, ]) > 0) {
+    } else if(any(is.finite(mod$beta.se[idx, ]) & mod$beta.se[idx, ] > 0)) {
+      # P5.9: was sum(beta.se[idx, ]) > 0, which is NA when the SE row is all
+      # NA -- and `if (NA)` is an error, not a skip. The GAM branch now stores
+      # NA rather than zeros, so this has to test for a usable SE explicitly.
       se <- mod$beta.se[idx, ]
       p <- p %>% add_ribbons(x = t, ymin = beta - 1.96*se, ymax = beta + 1.96*se,
                              name = "95% Parametric CI", line = list(color = 'transparent'), 
@@ -558,7 +459,19 @@
     sel <- input$reg_coeff_select
     idx <- which(rownames(mod$beta.hat) == sel)
     pvals <- mod$beta.p[idx, ]
-    if(all(pvals == 0) || all(is.na(pvals))) return(NULL)
+    # P5.9: say why the panel is empty instead of drawing nothing. A blank plot
+    # is indistinguishable from a broken one -- that is how the P5.1 prediction
+    # regression survived a release.
+    if(all(is.na(pvals)) || all(pvals == 0, na.rm = TRUE)) {
+      return(plot_ly(type = 'scatter', mode = 'lines') %>%
+        layout(title = list(text = paste0(
+          "No coefficient-curve p-values for this fit",
+          "<br><sub>",
+          if (!is.null(mod$inference_note))
+            "GAM branch: the curves are prediction contrasts, and no standard error is propagated through them. Use summary(gam) below, or the pointwise-OLS method."
+          else "This model reports no pointwise inference.",
+          "</sub>"))))
+    }
     
     t <- seq(0, 1, length.out = length(pvals))
     p <- plot_ly(x = t, y = pvals, type = 'scatter', mode = 'lines', name = 'P-value',

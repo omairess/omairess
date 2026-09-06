@@ -124,7 +124,66 @@
                                           time_points = time_grid)
           
         } else if(warping_method == "landmark") {
-          # Simple landmark alignment
+          # ==========================================================================
+  # fck_landmark_warp(ref, own, time_points)
+  #
+  # The one place a landmark warp is built. Returns h with the module-wide
+  # contract (P5.6):
+  #
+  #     h maps REGISTERED time to ORIGINAL time, and registration is always
+  #         registered_i <- approx(time_points, original_i, xout = h_i)$y
+  #
+  # so h(t) answers "which point of the original curve belongs at registered
+  # time t". Every method in this file returns h in that direction. Before P5.6
+  # the two landmark branches disagreed: the manual branch used this contract,
+  # while the automatic branch built h from (own -> ref) and then applied it as
+  # approx(h, curve, xout = t), which is the INVERSE map. The registered curves
+  # came out plausible either way, because the second form inverts the map
+  # while interpolating -- but warp_functions then held two different objects
+  # depending on which branch ran, and every downstream statistic that reads
+  # warp_functions - time_points (the phase metrics, the warping plots, the
+  # per-subject table) was comparing incomparable things across methods.
+  #
+  # AUDIT (P5.5): the manual branch also had no monotonicity requirement at
+  # all. It took whatever the peak/valley search returned, pasted 0 and 1 on
+  # the ends and interpolated. On a noisy curve the detected landmarks can
+  # cross -- the search alternates peaks and valleys in fixed windows, and
+  # nothing stopped landmark 3 landing before landmark 2 -- and a crossed pair
+  # makes h non-monotone, which is not a reparameterisation of time. It is now
+  # a hard precondition: crossed or duplicated landmarks are REJECTED and the
+  # subject falls back to the identity, reported, rather than being registered
+  # with a fold in it.
+  #
+  # Returns NULL when the landmarks do not define a valid warp.
+  # ==========================================================================
+  fck_landmark_warp <- function(ref, own, time_points) {
+    if (length(ref) != length(own) || !length(ref)) return(NULL)
+    if (any(!is.finite(ref)) || any(!is.finite(own))) return(NULL)
+
+    t0 <- time_points[1]; t1 <- time_points[length(time_points)]
+    # order both by the REFERENCE position, so a reference given out of order
+    # does not silently reorder the correspondence
+    o   <- order(ref)
+    ref <- ref[o]; own <- own[o]
+
+    # strictly increasing, strictly interior, on BOTH sides
+    tol <- 1e-6 * max(1, t1 - t0)
+    if (any(diff(ref) <= tol) || any(diff(own) <= tol)) return(NULL)
+    if (ref[1] <= t0 + tol || ref[length(ref)] >= t1 - tol) return(NULL)
+    if (own[1] <= t0 + tol || own[length(own)] >= t1 - tol) return(NULL)
+
+    kx <- c(t0, ref, t1)     # registered time
+    ky <- c(t0, own, t1)     # original time
+    h  <- stats::approx(kx, ky, xout = time_points, rule = 2)$y
+
+    # the invariants this function exists to guarantee
+    if (!isTRUE(all.equal(h[1], t0, tolerance = 1e-8))) return(NULL)
+    if (!isTRUE(all.equal(h[length(h)], t1, tolerance = 1e-8))) return(NULL)
+    if (any(diff(h) <= 0)) return(NULL)
+    h
+  }
+
+  # Simple landmark alignment
           landmarks <- c(0.25, 0.5, 0.75)  # Default landmarks
           warp_fd <- landmark_alignment_simple(values$fd_obj, landmarks, time_grid)
         }
@@ -143,18 +202,23 @@
         if(!is.null(warp_fd$registered_curves) && !is.null(warp_fd$warp_functions)) {
           cat("Calculating warping fit statistics...\n")
           original_curves <- eval.fd(time_grid, values$fd_obj)
+          # P5.4: the statistics need the geometry. A translation and an
+          # endpoint-preserving reparameterisation do not share a phase metric.
           warp_fd$fit_statistics <- calculate_warping_fit_statistics(
             original_curves = original_curves,
             registered_curves = warp_fd$registered_curves,
             warp_functions = warp_fd$warp_functions,
-            time_points = time_grid
+            time_points = time_grid,
+            method = warp_fd$method,
+            shifts = warp_fd$shifts,
+            periodic = identical(warp_fd$boundary, "periodic wrap")
           )
           if(!is.null(warp_fd$fit_statistics)) {
             cat("Warping fit statistics calculated successfully\n")
             cat("  Mean R²:", sprintf("%.4f", warp_fd$fit_statistics$summary$mean_r_squared), "\n")
             cat("  Mean RMSE:", sprintf("%.4f", warp_fd$fit_statistics$summary$mean_rmse), "\n")
-            cat("  Variance explained by warping:",
-                sprintf("%.2f%%", warp_fd$fit_statistics$summary$variance_explained_by_warping * 100), "\n")
+            cat("  Between-curve dispersion reduced by:",
+                sprintf("%.2f%%", warp_fd$fit_statistics$summary$dispersion_reduction * 100), "\n")
           }
         }
 
@@ -634,28 +698,44 @@
     tryCatch({
       stats <- values$warping_results$fit_statistics$summary
 
-      # Calculate percentages
-      total_var <- stats$total_orig_variance
-      amp_pct <- if(total_var > 0) stats$total_amp_variance / total_var * 100 else NA
-      phase_pct <- if(total_var > 0) stats$total_phase_variance / total_var * 100 else NA
-      explained_pct <- stats$variance_explained_by_warping * 100
+      # AUDIT (P5.3): this panel was headed "EFDA Variance Decomposition" and
+      # split the total into "amplitude" and "phase" percentages. The three
+      # quantities were computed independently and do not sum, nothing here
+      # establishes orthogonality, and naming a published methodology asserted
+      # a property that had never been demonstrated. What the numbers actually
+      # are: between-curve dispersion before and after registration, and a
+      # separate descriptive measure of how far the template moves under each
+      # subject's warp. Reported as that, with the ratio named for what it is.
+      pre  <- stats$total_dispersion_pre
+      post <- stats$total_dispersion_post
+      g    <- stats$dispersion_reduction
 
       paste0(
-        "EFDA Variance Decomposition:\n",
-        "============================\n\n",
-        "Total Original Variance: ", sprintf("%.4f", total_var), "\n\n",
-        "After Alignment:\n",
-        "  Amplitude Variance: ", sprintf("%.4f", stats$total_amp_variance),
-        " (", sprintf("%.1f%%", amp_pct), " of original)\n",
-        "  Phase Variance: ", sprintf("%.4f", stats$total_phase_variance),
-        " (", sprintf("%.1f%%", phase_pct), " of original)\n\n",
-        "Variance Explained by Warping:\n",
-        "  ", sprintf("%.2f%%", explained_pct), "\n\n",
-        "Elastic Distances (mean):\n",
-        "  Full Distance: ", sprintf("%.4f", stats$mean_full_distance), "\n",
-        "  Amplitude Distance: ", sprintf("%.4f", stats$mean_elastic_amp_dist), "\n",
-        "  Phase Distance: ", sprintf("%.4f", stats$mean_elastic_phase_dist)
+        "Pre/post registration dispersion:\n",
+        "=================================\n\n",
+        "  V_pre  = sum_i integral (x_i(t) - xbar(t))^2 dt        : ",
+        sprintf("%.4f", pre), "\n",
+        "  V_post = sum_i integral (x_i(h_i(t)) - xbar_R(t))^2 dt : ",
+        sprintf("%.4f", post),
+        if (is.finite(pre) && pre > 0)
+          paste0("  (", sprintf("%.1f%%", 100 * post / pre), " of V_pre)") else "",
+        "\n\n",
+        "  G = 1 - V_post / V_pre : ",
+        if (is.null(g) || is.na(g)) "NA" else sprintf("%+.1f%%", 100 * g), "\n\n",
+        "G is the relative reduction in between-curve dispersion after\n",
+        "registration. A negative G means registration made the curves MORE\n",
+        "dispersed than they were.\n\n",
+        "THIS IS NOT AN AMPLITUDE/PHASE VARIANCE DECOMPOSITION. V_pre and\n",
+        "V_post are two dispersions of the same curves, before and after; they\n",
+        "are not orthogonal components of a total and they do not sum to one.\n",
+        "Do not report G as 'variance explained by phase'.\n\n",
+        "Template deformation (descriptive, not a component):\n",
+        "  sum_i integral (xbar_R(h_i(t)) - xbar_R(t))^2 dt : ",
+        sprintf("%.4f", stats$total_template_deformation), "\n",
+        "  How far each subject's warp moves the registered template. Large\n",
+        "  values mean the warps are doing a lot; they do not add to V_post.\n"
       )
+
     }, error = function(e) {
       paste("Error displaying variance decomposition:", e$message)
     })
@@ -671,17 +751,78 @@
       stats <- values$warping_results$fit_statistics$summary
       method <- values$warping_results$method
 
+      # P5.2: this panel used to print AIC, BIC, a log-likelihood and a
+      # parameter count, and told the user to pick a warping method by
+      # comparing them. None of those quantities existed. What can honestly be
+      # reported is how much between-curve dispersion the registration removed,
+      # and how far it moved the time axis to do it.
+      g   <- stats$dispersion_reduction
+      geo <- stats$geometry
       paste0(
-        "Warping Method: ", method, "\n\n",
-        "Model Selection Criteria:\n",
-        "=========================\n",
-        "AIC: ", sprintf("%.2f", stats$AIC), "\n",
-        "BIC: ", sprintf("%.2f", stats$BIC), "\n",
-        "Log-Likelihood: ", sprintf("%.2f", stats$log_likelihood), "\n",
-        "Number of Parameters: ", stats$n_parameters, "\n\n",
-        "Note: Lower AIC/BIC values indicate better model fit.\n",
-        "Compare these values across different warping methods\n",
-        "to select the optimal alignment approach."
+        "Warping Method: ", method,
+        if (!is.null(stats$periodic) && isTRUE(stats$periodic)) "  (periodic)" else "", "\n\n",
+        "Between-curve dispersion\n",
+        "========================\n",
+        "  V_pre  = sum_i integral (x_i - xbar)^2 dt      : ",
+        sprintf("%.4g", stats$total_dispersion_pre), "\n",
+        "  V_post = sum_i integral (x_i(h_i) - xbar_R)^2 dt: ",
+        sprintf("%.4g", stats$total_dispersion_post), "\n",
+        "  Relative reduction G = 1 - V_post/V_pre        : ",
+        if (is.na(g)) "NA" else sprintf("%+.1f%%", 100 * g), "\n\n",
+        "G is the proportion of between-curve dispersion removed by\n",
+        "registration. It is NOT an amplitude/phase variance decomposition:\n",
+        "nothing here establishes that the two are additive or orthogonal.\n",
+        "A NEGATIVE G means registration made the curves MORE dispersed.\n\n",
+        # P5.12: the amplitude-leakage signature. Least-squares registration on
+        # a sharply peaked curve can absorb AMPLITUDE differences with a tiny
+        # time shift -- near a peak, a 1% move in time changes the value a lot.
+        # Measured on curves that differ ONLY in amplitude, with the logistic
+        # family: G = 27.8% from warps averaging 0.0017 of the domain, with the
+        # peak heights unchanged. A deviation-from-identity penalty does not
+        # help (the offending warps are already near-identity), so the honest
+        # response is to make the signature visible rather than to add a knob
+        # that does not work.
+        if (is.finite(g) && g > 0.15 &&
+            is.finite(stats$mean_phase_displacement) &&
+            stats$mean_phase_displacement < 0.02) {
+          paste0(
+            "WARNING -- possible amplitude leakage.\n",
+            "  G is ", sprintf("%.0f%%", 100 * g), " but the warps move time by only ",
+            sprintf("%.4f", stats$mean_phase_displacement), " of the domain\n",
+            "  on average. A large dispersion reduction from a near-identity warp\n",
+            "  usually means the criterion is absorbing AMPLITUDE differences, not\n",
+            "  aligning phase -- near a peak, a small time move changes the value a\n",
+            "  lot. Check the registered curves against the originals before\n",
+            "  reporting G as evidence of phase variation.\n\n")
+        } else "",
+        "Time-axis displacement\n",
+        "======================\n",
+        if (identical(geo, "shift")) {
+          paste0("  Mean |shift| (",
+                 if (isTRUE(stats$periodic)) "circular" else "translation",
+                 ", fraction of domain): ",
+                 sprintf("%.4f", stats$mean_phase_displacement), "\n",
+                 "  Fisher-Rao phase distance is not defined for a translation\n",
+                 "  and is reported as NA (see P5.4).\n")
+        } else {
+          paste0("  RMS |h(t) - t|                 : ",
+                 sprintf("%.4f", stats$mean_phase_displacement), "\n",
+                 "  Fisher-Rao phase distance (mean): ",
+                 sprintf("%.4f", stats$mean_elastic_phase_dist),
+                 "  on ", stats$n_elastic_phase_valid, " of ",
+                 length(values$warping_results$fit_statistics$per_subject$Subject),
+                 " curves\n",
+                 if (isTRUE(stats$n_invalid_warp > 0))
+                   paste0("  ", stats$n_invalid_warp,
+                          " warp(s) were not endpoint-preserving monotone maps and\n",
+                          "  were excluded from the phase metric rather than clipped.\n")
+                 else "")
+        },
+        "\n",
+        "No AIC/BIC is reported. There is no likelihood for the observed\n",
+        "curves under a candidate registration in this module, so there is no\n",
+        "criterion to compare methods with. Choose a registration method from\n",
+        "what you know about the data, not from a fit index."
       )
     }, error = function(e) {
       paste("Error displaying model criteria:", e$message)
@@ -758,12 +899,13 @@
             RMSE = summary_stats$mean_rmse,
             Correlation = summary_stats$mean_correlation,
             MAE = summary_stats$mean_mae,
-            Orig_Variance = summary_stats$total_orig_variance,
-            Amp_Variance = summary_stats$total_amp_variance,
-            Phase_Variance = summary_stats$total_phase_variance,
+            Dispersion_Pre = summary_stats$total_dispersion_pre,
+            Dispersion_Post = summary_stats$total_dispersion_post,
+            Template_Deformation = summary_stats$total_template_deformation,
             Full_Distance = summary_stats$mean_full_distance,
             Elastic_Amp_Dist = summary_stats$mean_elastic_amp_dist,
             Elastic_Phase_Dist = summary_stats$mean_elastic_phase_dist,
+            Phase_Displacement = summary_stats$mean_phase_displacement,
             Warp_Amplitude = summary_stats$mean_warp_amplitude,
             Warp_Velocity_Var = NA
           )
@@ -775,28 +917,30 @@
             RMSE = summary_stats$sd_rmse,
             Correlation = summary_stats$sd_correlation,
             MAE = summary_stats$sd_mae,
-            Orig_Variance = NA,
-            Amp_Variance = NA,
-            Phase_Variance = NA,
+            Dispersion_Pre = NA,
+            Dispersion_Post = NA,
+            Template_Deformation = NA,
             Full_Distance = summary_stats$sd_full_distance,
             Elastic_Amp_Dist = NA,
             Elastic_Phase_Dist = NA,
+            Phase_Displacement = summary_stats$sd_phase_displacement,
             Warp_Amplitude = summary_stats$sd_warp_amplitude,
             Warp_Velocity_Var = NA
           )
 
           # Add metadata
           meta_rows <- data.frame(
-            Subject = c("---", "AIC", "BIC", "Variance_Explained_%", "Method"),
-            R_squared = c(NA, summary_stats$AIC, summary_stats$BIC,
-                          summary_stats$variance_explained_by_warping * 100,
-                          NA),
+            # P5.2: AIC and BIC removed -- they were not a likelihood.
+            Subject = c("---", "Dispersion_Reduction_G_%", "Geometry", "Method"),
+            R_squared = c(NA, summary_stats$dispersion_reduction * 100, NA, NA),
             RMSE = NA, Correlation = NA, MAE = NA,
-            Orig_Variance = NA, Amp_Variance = NA, Phase_Variance = NA,
+            Dispersion_Pre = NA, Dispersion_Post = NA, Template_Deformation = NA,
             Full_Distance = NA, Elastic_Amp_Dist = NA, Elastic_Phase_Dist = NA,
+            Phase_Displacement = NA,
             Warp_Amplitude = NA, Warp_Velocity_Var = NA
           )
-          meta_rows$Subject[5] <- values$warping_results$method
+          meta_rows$Subject[3] <- paste("Geometry:", summary_stats$geometry %||% "interval")
+          meta_rows$Subject[4] <- paste("Method:", values$warping_results$method)
 
           # Combine all
           output_df <- rbind(per_subj[, names(summary_row)], summary_row, sd_row, meta_rows)
@@ -895,8 +1039,15 @@
   # Based on EFDA methodology: variance decomposition and elastic distances
   # ============================================================================
 
+  # AUDIT (P5.2/P5.3/P5.4): this panel presented three things it had not
+  # earned. See the notes at each site below. The function now needs to know
+  # WHICH registration produced the warps, because a translation and an
+  # endpoint-preserving reparameterisation are different geometries and the
+  # same formula is not valid in both.
   calculate_warping_fit_statistics <- function(original_curves, registered_curves,
-                                                warp_functions, time_points) {
+                                                warp_functions, time_points,
+                                                method = NULL, shifts = NULL,
+                                                periodic = FALSE) {
     # Calculate comprehensive fit statistics for time warping alignment
     #
     # Args:
@@ -919,15 +1070,22 @@
       correlation <- numeric(n_subjects)
       mae <- numeric(n_subjects)
 
-      # Variance decomposition (EFDA-style)
-      orig_variance <- numeric(n_subjects)
-      amp_variance <- numeric(n_subjects)
-      phase_variance <- numeric(n_subjects)
+      # Pre/post registration dispersion (P5.3 -- not a variance decomposition)
+      disp_pre  <- numeric(n_subjects)
+      disp_post <- numeric(n_subjects)
+      template_deformation <- numeric(n_subjects)
 
-      # Elastic distances (EFDA-style)
+      # Elastic distances (SRVF)
       full_dist <- numeric(n_subjects)
       elastic_amp_dist <- numeric(n_subjects)
       elastic_phase_dist <- numeric(n_subjects)
+      phase_displacement <- numeric(n_subjects)   # P5.4, in the right geometry
+      n_invalid_warp <- 0L
+
+      # P5.4: which geometry are we in? A translation is not an
+      # endpoint-preserving reparameterisation and does not admit the same
+      # phase metric.
+      geom <- if (identical(method, "linear_shift")) "shift" else "interval"
 
       # Warping intensity metrics
       warp_amplitude <- numeric(n_subjects)
@@ -1001,18 +1159,28 @@
         # MAE: Mean absolute error from warped curve to ORIGINAL curve
         mae[i] <- mean(abs(orig_i[valid_idx] - reg_i[valid_idx]))
 
-        # ---- Variance Decomposition (EFDA-style) ----
+        # ---- Between-curve dispersion, before and after registration -------
+        #
+        # AUDIT (P5.3): these three quantities were computed separately and
+        # presented under the heading "Variance Decomposition (EFDA-style)",
+        # with a "variance explained by warping" derived from the first two.
+        # They are NOT a decomposition: nothing here establishes
+        # V_total = V_amplitude + V_phase, the three are not orthogonal, and
+        # they do not sum. Calling them a decomposition, and naming a published
+        # methodology, claims a property that was never demonstrated.
+        #
+        # What they honestly are: the integrated squared deviation of each
+        # curve from the sample mean, BEFORE registration and AFTER it, plus a
+        # third descriptive quantity (how far the template moves when pushed
+        # through this subject's warp). The first two are reported as pre- and
+        # post-registration dispersion, and their ratio as a relative
+        # reduction. The third is kept, renamed, and explicitly NOT presented
+        # as a component of anything.
+        disp_pre[i]  <- sum((orig_i - orig_mean)^2) * dt
+        disp_post[i] <- sum((reg_i  - reg_mean)^2)  * dt
 
-        # Original variance: integrated squared deviation from original mean
-        orig_variance[i] <- sum((orig_i - orig_mean)^2) * dt
-
-        # Amplitude variance: integrated squared deviation after alignment
-        amp_variance[i] <- sum((reg_i - reg_mean)^2) * dt
-
-        # Phase variance: variance captured by warping
-        # Computed from warped mean evaluated at individual warp functions
         warped_mean_i <- approx(time_points, reg_mean, xout = warp_i, rule = 2)$y
-        phase_variance[i] <- sum((warped_mean_i - reg_mean)^2) * dt
+        template_deformation[i] <- sum((warped_mean_i - reg_mean)^2) * dt
 
         # ---- Elastic Distances (EFDA-style) ----
 
@@ -1023,13 +1191,59 @@
         reg_i_srvf <- calc_srvf(reg_i, time_points)
         elastic_amp_dist[i] <- sqrt(sum((reg_i_srvf - reg_mean_srvf)^2) * dt)
 
-        # Elastic phase distance: arc-cosine of integrated psi
-        # psi = sqrt(d(warp)/dt) is the SRVF of the warping function
+        # ---- Phase displacement, in the geometry that applies --------------
+        #
+        # AUDIT (P5.4): the Fisher-Rao phase distance from the identity,
+        #     d(h, id) = arccos( integral sqrt(h\'(t)) dt ),
+        # is valid for an ENDPOINT-PRESERVING monotone reparameterisation of
+        # [0,1]. It was applied to every warp type this module produces, and
+        # for two of them it is meaningless. Measured on a 100-point grid:
+        #
+        #   non-periodic shift h(t) = t - s:  h' = 1 everywhere, so psi = 1 and
+        #     the distance is 0.000000 for EVERY s -- including a quarter of the
+        #     domain. The metric is identically blind to translation.
+        #   periodic shift (wrapped):  the wrap puts one large negative step in
+        #     the difference quotient, which the line above set to zero. The
+        #     result is 0.142254 for every s -- INCLUDING s = 0. An unshifted
+        #     curve was reported as having the same nonzero phase distance as a
+        #     quarter-cycle shift. That number is pure artefact of the
+        #     discontinuity; setting a negative derivative to zero does not turn
+        #     a rotation into a Fisher-Rao warp.
+        #
+        # So the phase summary is now computed per geometry, and the elastic
+        # distance is reported only where it means something.
         warp_deriv <- c(diff(warp_i) / diff(time_points), 0)
-        warp_deriv[warp_deriv < 0] <- 0  # Ensure non-negative (monotonic)
-        psi_i <- sqrt(pmax(0, warp_deriv))
-        psi_integral <- sum(psi_i) * dt
-        elastic_phase_dist[i] <- acos(min(1, max(-1, psi_integral)))
+
+        if (identical(geom, "shift")) {
+          # A translation has no Fisher-Rao phase distance from the identity
+          # that distinguishes it from the identity. Report the displacement.
+          elastic_phase_dist[i] <- NA_real_
+          s_i <- if (!is.null(shifts) && length(shifts) >= i) shifts[i] else
+                 mean(time_points - warp_i, na.rm = TRUE)
+          phase_displacement[i] <- if (isTRUE(periodic)) {
+            # circular: wrap to [-span/2, span/2] and report the magnitude
+            span <- diff(range(time_points))
+            d <- ((s_i + span / 2) %% span) - span / 2
+            abs(d)
+          } else abs(s_i)
+        } else {
+          # Endpoint-preserving monotone warp: check that it IS one before
+          # computing a metric that assumes it. A warp that fails these is
+          # reported as NA rather than silently repaired by clipping.
+          endpoints_ok <- abs(warp_i[1] - time_points[1]) < 1e-6 &&
+                          abs(warp_i[length(warp_i)] - time_points[length(time_points)]) < 1e-6
+          monotone_ok  <- all(diff(warp_i) > -1e-12)
+          if (endpoints_ok && monotone_ok) {
+            psi_i <- sqrt(pmax(0, warp_deriv))
+            psi_integral <- sum(psi_i) * dt
+            elastic_phase_dist[i] <- acos(min(1, max(-1, psi_integral)))
+          } else {
+            elastic_phase_dist[i] <- NA_real_
+            n_invalid_warp <- n_invalid_warp + 1L
+          }
+          phase_displacement[i] <- sqrt(mean((warp_i - time_points)^2))
+        }
+        warp_deriv[warp_deriv < 0] <- 0   # only for the velocity summary below
 
         # ---- Warping Intensity Metrics ----
 
@@ -1040,37 +1254,49 @@
         warp_velocity_var[i] <- var(warp_deriv, na.rm = TRUE)
       }
 
-      # ---- Model Selection Criteria (adapted for functional data) ----
-      # AIC and BIC based on residual variance after alignment
+      # ---- AIC / BIC: REMOVED --------------------------------------------
+      #
+      # AUDIT (P5.2): this block computed
+      #     residual_var <- mean(rmse^2)
+      #     log_lik <- -n_obs/2 * (log(2*pi) + log(residual_var) + 1)
+      #     AIC <- -2*log_lik + 2*k_params;  k_params <- 2 * n_subjects
+      # and the tab told the user "Lower AIC/BIC values indicate better model
+      # fit. Compare these values across different warping methods to select
+      # the optimal alignment approach." Both halves are wrong.
+      #
+      # First, `rmse` here is the distance between each curve and its OWN
+      # registered version -- how much the registration MOVED the curve, not
+      # how well it aligned the curve with anything. Deforming the time axis is
+      # exactly what registration is for, so a good registration can and should
+      # have a large value; treating it as residual error means the criterion
+      # rewards doing nothing. Second, there is no likelihood here: no
+      # probability model for the observed functional data under a candidate
+      # registration was ever written down, so -2 log L + 2k is a formula
+      # applied to a number that is not a log-likelihood. Third, k_params was
+      # hard-coded at 2 per subject regardless of method, while a shift fits
+      # one parameter per subject, a parametric warp fits one, and a landmark
+      # warp fits as many as there are landmarks -- so the penalty term did not
+      # even distinguish the methods it was being used to compare.
+      #
+      # An AIC that cannot be computed is not replaced by a worse AIC. The
+      # criterion is gone, and the panel reports the descriptive quantities
+      # below, which mean what they say. Restoring model selection here needs a
+      # probabilistic registration model with an actual likelihood; that is a
+      # separate piece of work, not a relabelling.
 
-      n_obs <- n_time * n_subjects  # Total observations
-      residual_var <- mean(rmse^2, na.rm = TRUE)  # Mean squared error
+      # ---- Pre/post registration dispersion (P5.3) ------------------------
+      # V_pre  = sum_i integral (x_i(t)      - xbar(t))^2   dt
+      # V_post = sum_i integral (x_i(h_i(t)) - xbar_R(t))^2 dt
+      # G      = 1 - V_post / V_pre
+      # G is the RELATIVE REDUCTION IN BETWEEN-CURVE DISPERSION after
+      # registration. It is not "variance explained by warping" in the sense of
+      # an additive phase/amplitude split, and it is not called that any more.
+      total_disp_pre  <- sum(disp_pre,  na.rm = TRUE)
+      total_disp_post <- sum(disp_post, na.rm = TRUE)
+      total_template_deformation <- sum(template_deformation, na.rm = TRUE)
 
-      # Number of parameters: depends on warping method
-      # For linear shift: 1 parameter (shift) per subject
-      # For parametric: 1 parameter (alpha) per subject
-      # For landmark: k parameters (landmark positions) per subject
-      # Estimate as 2 parameters per subject (location + scale)
-      k_params <- 2 * n_subjects
-
-      # Log-likelihood (assuming Gaussian errors)
-      log_lik <- -n_obs/2 * (log(2 * pi) + log(residual_var) + 1)
-
-      # AIC = -2*logLik + 2*k
-      aic <- -2 * log_lik + 2 * k_params
-
-      # BIC = -2*logLik + k*log(n)
-      bic <- -2 * log_lik + k_params * log(n_obs)
-
-      # ---- Variance Explained by Alignment ----
-      # Similar to R-squared but at group level
-      total_orig_var <- sum(orig_variance, na.rm = TRUE)
-      total_amp_var <- sum(amp_variance, na.rm = TRUE)
-      total_phase_var <- sum(phase_variance, na.rm = TRUE)
-
-      # Proportion of variance explained by warping
-      var_explained_by_warping <- if(total_orig_var > 0) {
-        1 - total_amp_var / total_orig_var
+      dispersion_reduction <- if(total_disp_pre > 0) {
+        1 - total_disp_post / total_disp_pre
       } else {
         NA
       }
@@ -1084,12 +1310,13 @@
           RMSE = round(rmse, 4),
           Correlation = round(correlation, 4),
           MAE = round(mae, 4),
-          Orig_Variance = round(orig_variance, 4),
-          Amp_Variance = round(amp_variance, 4),
-          Phase_Variance = round(phase_variance, 4),
+          Dispersion_Pre = round(disp_pre, 4),
+          Dispersion_Post = round(disp_post, 4),
+          Template_Deformation = round(template_deformation, 4),
           Full_Distance = round(full_dist, 4),
           Elastic_Amp_Dist = round(elastic_amp_dist, 4),
           Elastic_Phase_Dist = round(elastic_phase_dist, 4),
+          Phase_Displacement = round(phase_displacement, 4),
           Warp_Amplitude = round(warp_amplitude, 4),
           Warp_Velocity_Var = round(warp_velocity_var, 6)
         ),
@@ -1106,27 +1333,31 @@
           mean_mae = mean(mae, na.rm = TRUE),
           sd_mae = sd(mae, na.rm = TRUE),
 
-          # Variance decomposition
-          total_orig_variance = total_orig_var,
-          total_amp_variance = total_amp_var,
-          total_phase_variance = total_phase_var,
-          variance_explained_by_warping = var_explained_by_warping,
+          # Pre/post registration dispersion (P5.3 -- NOT a decomposition)
+          total_dispersion_pre  = total_disp_pre,
+          total_dispersion_post = total_disp_post,
+          total_template_deformation = total_template_deformation,
+          dispersion_reduction  = dispersion_reduction,
 
           # Elastic distances (averaged)
           mean_full_distance = mean(full_dist, na.rm = TRUE),
           sd_full_distance = sd(full_dist, na.rm = TRUE),
           mean_elastic_amp_dist = mean(elastic_amp_dist, na.rm = TRUE),
           mean_elastic_phase_dist = mean(elastic_phase_dist, na.rm = TRUE),
+          n_elastic_phase_valid = sum(!is.na(elastic_phase_dist)),
+          n_invalid_warp = n_invalid_warp,
+
+          # Phase displacement in the geometry that applies (P5.4)
+          geometry = geom,
+          periodic = isTRUE(periodic),
+          mean_phase_displacement = mean(phase_displacement, na.rm = TRUE),
+          sd_phase_displacement = sd(phase_displacement, na.rm = TRUE),
 
           # Warping intensity
           mean_warp_amplitude = mean(warp_amplitude, na.rm = TRUE),
-          sd_warp_amplitude = sd(warp_amplitude, na.rm = TRUE),
-
-          # Model selection criteria
-          AIC = aic,
-          BIC = bic,
-          log_likelihood = log_lik,
-          n_parameters = k_params
+          sd_warp_amplitude = sd(warp_amplitude, na.rm = TRUE)
+          # AIC / BIC / log-likelihood / n_parameters removed at P5.2 -- see
+          # the note above. They were not a likelihood.
         ),
 
         n_subjects = n_subjects,
@@ -1284,6 +1515,7 @@
         warp_functions = warp_functions,
         shifts = shifts,
         extrap_frac = extrap_frac,
+        warp_direction = "registered -> original",   # P5.6, module-wide
         boundary = if(periodic) "periodic wrap" else "constant extrapolation",
         method = "linear_shift",
         time_points = time_points
@@ -1410,6 +1642,41 @@
         pmin(1, pmax(0, h))
       }
       
+      # AUDIT (P5.11, found by tests/registration_effectiveness_test.R): the
+      # search was a bare optimize() over the whole parameter range.
+      # optimize() is golden-section plus parabolic interpolation and it
+      # assumes the objective is UNIMODAL on the interval. The registration
+      # objective is not. On a sharply peaked curve -- which is what a
+      # circadian profile is -- the alignment SSE has a deep, narrow well at
+      # the correct parameter surrounded by a wide plateau where the curve has
+      # been pushed off its own peak. Measured on an already-aligned sample
+      # with the power family: SSE is 0.008 at alpha = 1 and about 20 for
+      # alpha anywhere in 0.05-0.5 or 1.5-6, and optimize() on [0.05, 6]
+      # returned alpha = 6.000, deforming the time axis by 0.58 of the domain
+      # on curves that needed no registration at all.
+      #
+      # This got WORSE at P4.1, not better: widening the ranges to make each
+      # family's identity reachable was right, but a wider interval gives
+      # optimize() more plateau to get lost on. Registrations run with the
+      # narrow pre-P4.1 ranges were partly protected by luck.
+      #
+      # A coarse grid scan followed by refinement inside the winning bracket
+      # is robust to this and costs about 40 extra evaluations per curve --
+      # the same pattern fck_auto_lambda() already uses for the GCV search.
+      fck_min_1d <- function(f, lo, hi, n_grid = 41) {
+        g <- seq(lo, hi, length.out = n_grid)
+        v <- vapply(g, function(z) {
+          y <- tryCatch(f(z), error = function(e) NA_real_)
+          if (is.finite(y)) y else Inf
+        }, numeric(1))
+        if (all(!is.finite(v))) return(NA_real_)
+        k <- which.min(v)
+        a <- g[max(1, k - 1)]; b <- g[min(length(g), k + 1)]
+        if (a < b) tryCatch(stats::optimize(f, c(a, b), tol = 1e-5)$minimum,
+                            error = function(e) g[k])
+        else g[k]
+      }
+
       # Optimize warping for each curve
       for(i in 1:n_curves) {
         # Objective function
@@ -1418,9 +1685,10 @@
           warped_curve <- approx(time_points, curves[,i], xout = warped_time, rule = 2)$y
           sum((warped_curve - mean_curve)^2, na.rm = TRUE)
         }
-        
-        # Optimize
-        result <- optimize(objective, interval = param_range, tol = 1e-4)
+
+        a_hat <- fck_min_1d(objective, param_range[1], param_range[2])
+        if (!is.finite(a_hat)) a_hat <- fam_spec$identity
+        result <- list(minimum = a_hat)
         alpha_values[i] <- result$minimum
         
         # Apply warping
@@ -1439,6 +1707,7 @@
         warp_functions = warp_functions,
         alpha_values = alpha_values,
         family = family,
+        warp_direction = "registered -> original",   # P5.6, module-wide
         param_range_used = param_range,
         identity_alpha = fam_spec$identity,
         method = "parametric",
@@ -1480,7 +1749,8 @@
         # Find corresponding landmark points in each curve
         warp_functions <- matrix(NA, n_time, n_curves)
         registered_curves <- matrix(NA, n_time, n_curves)
-        
+        n_rejected <- 0L; rejected_ids <- integer(0)
+
         for(i in 1:n_curves) {
           # For each curve, find the actual landmarks (peaks/valleys near the specified times)
           curve_landmarks <- numeric(n_landmarks)
@@ -1503,19 +1773,31 @@
             }
           }
           
-          # Create warping function using piecewise linear interpolation
-          # Add boundary points
-          all_landmark_times <- c(0, landmark_times, 1)
-          all_curve_landmarks <- c(0, curve_landmarks, 1)
-          
-          # Interpolate warping function
-          warp_functions[,i] <- approx(all_landmark_times, all_curve_landmarks, 
-                                       xout = time_points, rule = 2)$y
-          
-          # Apply warping
-          registered_curves[,i] <- approx(time_points, curves[,i], 
-                                          xout = warp_functions[,i], rule = 2)$y
+          # P5.5: built and VALIDATED in one place. A subject whose detected
+          # landmarks cross does not get a folded warp; it gets the identity,
+          # and is counted.
+          h <- fck_landmark_warp(landmark_times, curve_landmarks, time_points)
+          if (is.null(h)) {
+            n_rejected <- n_rejected + 1L
+            rejected_ids <- c(rejected_ids, i)
+            h <- time_points
+          }
+          warp_functions[, i] <- h
+
+          # P5.6: the module-wide contract, x_R(t) = x(h(t)).
+          registered_curves[, i] <- approx(time_points, curves[, i],
+                                           xout = h, rule = 2)$y
         }
+
+        if (n_rejected > 0)
+          showNotification(sprintf(
+            paste("Landmark registration: %d of %d curve(s) had crossed or duplicated",
+                  "landmarks, which cannot define a monotone time warp. Those curves",
+                  "were left UNREGISTERED (identity warp) rather than folded:",
+                  "subject%s %s. Adjust the landmark positions or use fewer."),
+            n_rejected, n_curves, if (n_rejected == 1) "" else "s",
+            paste(rejected_ids, collapse = ", ")),
+            type = "warning", duration = 15)
       } else {
         # No landmarks provided, use automatic detection
         cat("No manual landmarks provided, using automatic landmark detection\n")
@@ -1571,22 +1853,35 @@
           best <- turn[which.max(abs(d[turn]))]
           time_points[w[best + 1]]
         }
+        n_rejected <- 0L; rejected_ids <- integer(0)
         for(i in 1:n_curves) {
           own <- vapply(ref_lm, function(tt) find_lm(curves[, i], tt), numeric(1))
-          own <- sort(own)
-          # strictly increasing knots, endpoints pinned, so h is a bijection
-          kx <- c(0, own, 1); ky <- c(0, ref_lm, 1)
-          keep <- c(TRUE, diff(kx) > 1e-6)
-          kx <- kx[keep]; ky <- ky[keep]
-          if (length(kx) < 2 || any(diff(ky[seq_along(kx)]) <= 0)) {
-            warp_functions[, i] <- time_points
-          } else {
-            warp_functions[, i] <- approx(kx, ky[seq_along(kx)],
-                                          xout = time_points, rule = 2)$y
+          # P5.6: knots are (reference -> own), i.e. h maps REGISTERED time to
+          # ORIGINAL time -- the same direction as the manual branch. This
+          # branch used to build (own -> reference), the inverse map, and then
+          # apply it as approx(h, curve, xout = t), which inverts it again. The
+          # registered curves were right; warp_functions held the wrong object,
+          # and every statistic computed from it was not comparable with the
+          # other methods'. P5.5: crossed landmarks are rejected, not clipped.
+          h <- fck_landmark_warp(ref_lm, own, time_points)
+          if (is.null(h)) {
+            n_rejected <- n_rejected + 1L
+            rejected_ids <- c(rejected_ids, i)
+            h <- time_points
           }
-          registered_curves[, i] <- approx(warp_functions[, i], curves[, i],
-                                           xout = time_points, rule = 2)$y
+          warp_functions[, i] <- h
+          registered_curves[, i] <- approx(time_points, curves[, i],
+                                           xout = h, rule = 2)$y
         }
+
+        if (n_rejected > 0)
+          showNotification(sprintf(
+            paste("Automatic landmark registration: %d of %d curve(s) gave crossed or",
+                  "duplicated landmarks and were left UNREGISTERED (identity warp)",
+                  "rather than folded: subject%s %s."),
+            n_rejected, n_curves, if (n_rejected == 1) "" else "s",
+            paste(rejected_ids, collapse = ", ")),
+            type = "warning", duration = 15)
       }
       
       basis <- fd_obj$basis
@@ -1597,6 +1892,9 @@
         registered_curves = registered_curves,
         warp_functions = warp_functions,
         method = "landmark",
+        n_rejected = n_rejected,
+        rejected_ids = rejected_ids,
+        warp_direction = "registered -> original",   # P5.6, module-wide
         time_points = time_points,
         landmarks_used = if(!is.null(values$landmark_points) && nrow(values$landmark_points) > 0) 
           values$landmark_points$x else NULL

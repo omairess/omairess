@@ -484,7 +484,7 @@
                   values$cv_results$lambda_1se))
     }
     if(!is.null(values$reml_profile)) {
-      cat(sprintf("  For automatic REML: lambda = 0 (or %.2e from profile)\n", 
+      cat(sprintf("  mgcv REML profile optimum (advisory, different scale): %.2e\n", 
                   values$reml_profile$optimal_lambda))
     }
     

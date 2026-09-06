@@ -168,6 +168,7 @@ Rscript tests/posthoc_source_test.R
 Rscript tests/circular_density_test.R
 Rscript tests/warping_test.R
 Rscript tests/warp_family_test.R
+Rscript tests/registration_effectiveness_test.R
 Rscript tests/audit_test.R
 Rscript tests/polar_agreement_test.R
 Rscript -e 'testthat::test_dir("tests/testthat")'
@@ -233,7 +234,35 @@ of each curve that was extrapolated is reported. Shifts are capped at a quarter
 of the domain, beyond which a lag is not identified.
 
 **Landmark alignment** builds a monotone piecewise-linear map through the
-matched landmarks with the endpoints pinned.
+matched landmarks with the endpoints pinned. Landmarks that cross or duplicate
+cannot define a time warp; those curves are **left unregistered** and named in a
+warning, rather than being registered with a fold in them.
+
+All three return the warp in one direction — `h` maps **registered time to
+original time**, and registration is always
+`registered <- approx(time_points, original, xout = h)` — so `h(t) - t` means
+the same thing whichever method produced it.
+
+**What the warping panel reports, and what it does not.** It reports `V_pre`
+and `V_post`, the between-curve dispersion before and after registration, and
+`G = 1 - V_post/V_pre`. G is the relative reduction in dispersion. It is **not**
+an amplitude/phase variance decomposition — nothing here establishes that the
+two are additive or orthogonal — and it is not labelled as one. There is **no
+AIC or BIC**: no likelihood for the observed curves under a candidate
+registration is written down anywhere in this module, so there is no criterion
+to select a method with. Choose a registration method from what you know about
+the data.
+
+Two honest caveats the panel will tell you about. A Fisher–Rao phase distance is
+computed only for endpoint-preserving warps; for a shift it is undefined (a
+translation has `h' = 1` everywhere) and the panel reports the displacement
+instead. And a large G obtained from a near-identity warp is flagged as possible
+**amplitude leakage**: near a peak a 1% move in time changes the value a lot, so
+least-squares registration can absorb amplitude differences as phase. Measured on
+curves differing only in amplitude, the logistic family reports G = 28% from
+warps averaging 0.014 of the domain, with peak heights unchanged. A
+deviation-from-identity penalty does not fix this — the offending warps are
+already near-identity — so the panel names the signature instead of hiding it.
 
 Not implemented: SRVF / Fisher–Rao elastic registration, and any separation of
 amplitude from phase variance beyond what these three give you. If your question

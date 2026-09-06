@@ -1328,22 +1328,35 @@
         add("cat('Mean R2 across time:', round(mean(fosr_fit$r2_t, na.rm = TRUE), 3), '\\n')")
         add("")
       } else {
-        add("# Smoothed OLS: one GAM over the (subject, time) long form, with a")
-        add("# penalised spline in time and a by-smooth per predictor.")
-        add("long_data <- data.frame(")
-        add("  value   = as.vector(t(Y)),")
-        add("  time    = rep(seq(0, 1, length.out = ncol(Y)), times = nrow(Y)),")
-        add("  subject = rep(seq_len(nrow(Y)), each = ncol(Y)))")
-        add("for (v in fosr_predictors) long_data[[v]] <- rep(df_reg[[v]], each = ncol(Y))")
-        add("gam_formula <- as.formula(paste('value ~ s(time) +',")
-        add("  paste(sprintf('s(time, by = %s)', fosr_predictors), collapse = ' + '),")
-        add("  '+', paste(fosr_predictors, collapse = ' + ')))")
-        add("gam_fit <- mgcv::gam(gam_formula, data = long_data, method = 'REML')")
-        add("summary(gam_fit)")
+        # AUDIT (P5.8): this was a hand-written reconstruction of the GAM
+        # branch and it was wrong twice over. It emitted
+        #     gam_formula <- as.formula(paste('value ~ s(time) +',
+        #       paste(sprintf('s(time, by = %s)', fosr_predictors), ...)))
+        # which pastes UPLOADED COLUMN NAMES back into parsed formula text --
+        # the defect P4.3 removed from the live estimator -- and it specified a
+        # DIFFERENT model from the app's: no basis, no k, and none of the app's
+        # factor main-effect terms. The exported script could not reproduce the
+        # numbers on screen, and could fail outright on a column called
+        # "Age (years)".
+        #
+        # The GAM estimator is now a named function too, so it is emitted
+        # verbatim on the same footing as the OLS, fANOVA and cosinor kernels.
+        add("# Smoothed OLS (GAM). The app's own estimator, emitted verbatim:")
+        emit_kernel("fck_fit_fosr_gam")
+        add(sprintf("fosr_fit <- fck_fit_fosr_gam(Y, df_reg, fosr_predictors, k = %d)",
+                    values$reg_model$gam_k %||% 10))
+        add("")
+        add("summary(fosr_fit$gam_obj)")
+        add("")
+        add("beta_hat <- fosr_fit$beta.hat   # coefficient curves")
+        add("cat('Mean R2 across time:', round(mean(fosr_fit$r2_t, na.rm = TRUE), 3), '\\n')")
         add("")
         add("# NOTE: the app turns this fit into coefficient curves by prediction")
         add("# contrasts (predict at x = 1 minus predict at x = 0), which is exact")
-        add("# for numeric predictors and an approximation for factors.")
+        add("# for numeric predictors and, for factors, one contrast curve per")
+        add("# non-reference level. No pointwise standard error is propagated")
+        add("# through those contrasts, so beta.se and beta.p are NA by design")
+        add("# (P5.9) -- use summary(gam_obj) above for the term-level tests.")
         add("")
       }
       add(sprintf("# Method as fitted: %s", values$reg_model$method))

@@ -55,10 +55,11 @@ test_that("P4.3: the FoSR estimator never puts user text in a formula", {
   expect_false(grepl("stats::reformulate(predictors)", src, fixed = TRUE))
   expect_true(grepl('model_names <- paste0("x", seq_along(predictors))', src, fixed = TRUE))
   expect_true(grepl("stats::reformulate(model_names)", src, fixed = TRUE))
-  # the GAM branch too
-  gam <- code_of("server/70_fosr.R")
+  # the GAM branch too (moved to its own kernel file at P5.8)
+  gam <- code_of("server/07b_helpers_fosr_gam.R")
   expect_true(grepl('mpred <- paste0("x", seq_along(preds))', gam, fixed = TRUE))
   expect_false(grepl('" + s(time, by = ", p_var, ", bs=', gam, fixed = TRUE))
+  expect_false(grepl("input$", gam, fixed = TRUE))
 })
 
 test_that("P4.3: a hostile column name is fitted as a column, not executed", {

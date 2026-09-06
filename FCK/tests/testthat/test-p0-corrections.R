@@ -195,7 +195,12 @@ test_that("a shift warp is monotone and the landmark branch actually warps", {
   # the landmark branch used to hand the curves straight back
   expect_false(grepl("registered_curves[,i] <- curves[,i]\n        }\n      }\n      \n      basis <- fd_obj$basis",
                      src, fixed = TRUE))
-  expect_true(grepl("registered_curves[, i] <- approx(warp_functions[, i]", src, fixed = TRUE))
+  # P5.6 unified the warp direction: every method now applies
+  # registered <- approx(time_points, curve, xout = h). The property this guard
+  # exists for -- that the landmark branch actually warps rather than handing
+  # the curves back -- is checked on the new form.
+  expect_true(grepl("registered_curves[, i] <- approx(time_points, curves[, i],", src, fixed = TRUE))
+  expect_true(grepl("fck_landmark_warp(ref_lm, own, time_points)", src, fixed = TRUE))
 
   # the shipped shift warp, exercised directly
   tp <- seq(0, 1, length.out = 60)

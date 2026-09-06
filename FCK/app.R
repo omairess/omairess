@@ -7,9 +7,8 @@
 #                 -> fPCA / time-warped PCA, functional ANOVA (between and
 #                    repeated measures), post-hoc tests, functional clustering
 #   CIRCAREG.R  "Functional Regression Suite"
-#                 -> function-on-scalar regression, scalar-on-function
-#                    regression, harmonic (cosinor) regression, pairwise
-#                    comparisons of circadian parameters
+#                 -> function-on-scalar regression, harmonic (cosinor)
+#                    regression, pairwise comparisons of circadian parameters
 #
 # The two apps had four steps in common — file import, variable selection,
 # smoothing, and smoothing diagnostics — implemented twice, with the same
@@ -17,7 +16,7 @@
 # four steps exist ONCE.  Every analysis downstream of them reads the same
 # `values$data`, `values$smooth_data`, `values$fd_obj`, `values$covariates`
 # and `values$time_numeric`, so a curve is imported and smoothed one way and
-# then analysed by any of the seven analysis tabs.
+# then analysed by any of the analysis tabs.
 #
 # Everything downstream of smoothing is the original code, carried across by
 # line range (see tools/port_fck.py and PORTING_NOTES.md), so each analysis

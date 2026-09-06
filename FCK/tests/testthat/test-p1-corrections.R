@@ -242,7 +242,9 @@ test_that("P3.2: the FoSR p-values come from the analytical SE and ignore the se
 })
 
 test_that("the GAM branch emits a coefficient curve for factor levels", {
-  src <- code_of("server/70_fosr.R")
+  # P5.8 moved the GAM estimator into its own kernel file so the export can
+  # deparse it. The guard follows; what it checks is unchanged.
+  src <- code_of("server/07b_helpers_fosr_gam.R")
   # the old loop wrote nothing unless the predictor was numeric
   expect_false(grepl("if(is.numeric(df_reg[[v]])) {\n            d_0 <- d_int; d_0[[v]] <- 0\n            d_1 <- d_int; d_1[[v]] <- 1\n            beta_hat[i+1, ]",
                      src, fixed = TRUE))

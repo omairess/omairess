@@ -67,6 +67,10 @@ fck_fit_fosr_ols <- function(Y, df_reg, predictors,
 
   f <- stats::reformulate(model_names)
   X <- model.matrix(f, data = model_df)
+  # Factor levels as fitted. Prediction on new data MUST use these, or a new
+  # frame that happens to contain only one level of a factor silently builds a
+  # design with the wrong number of columns.
+  xlev <- stats::.getXlevels(terms(f), model_df)
 
   # Map the safe names on the design columns back to the user's labels. Done by
   # string surgery on the COLUMN NAMES only -- nothing here is ever parsed.
@@ -237,9 +241,73 @@ fck_fit_fosr_ols <- function(Y, df_reg, predictors,
          "OLS (analytical SE and p-values; bootstrap percentile CI)"
        else "OLS (analytical SE and p-values)",
        inference = "analytic-t-fdr", df_resid = n - p, n_obs = n,
+       # AUDIT (P5.1): the terms object above refers to x1..xp, NOT to the
+       # user's column names -- that is the whole point of P4.3. Anything that
+       # later builds a design matrix for PREDICTION has to rename its new data
+       # the same way first. It did not, so from P4.3 until now every FoSR OLS
+       # prediction curve failed with "object 'x1' not found" and was swallowed
+       # by a tryCatch that returns NULL, showing the user a blank curve rather
+       # than an error. This is a regression I introduced in the fix for P4.3.
+       #
+       # The mapping and the level set now travel WITH the fit, and
+       # fck_fosr_design() below is the one place that turns new data into a
+       # design matrix. Fit and prediction cannot drift again because they are
+       # the same code path.
+       model_names = model_names, predictor_names = predictors, xlevels = xlev,
        xtx_inv = xtx_inv, sigma2 = sigma2,
        boot_ci_lower = boot_ci_lower, boot_ci_upper = boot_ci_upper,
        se_ratio_range = if(isTRUE(use_bootstrap))
          c(se_ratio_min, se_ratio_max) else NULL,
        n_boot = if(use_bootstrap) n_boot else NULL)
+}
+
+
+# ==========================================================================
+# fck_fosr_design(fit, newdata)
+#
+# The ONE way to build a design matrix for a fitted pointwise-OLS model. Takes
+# new data keyed by the USER's column names, renames it to the internal
+# x1..xp the model was fitted on, and applies the factor levels recorded at fit
+# time. Used by the fit itself, by the interactive prediction curve, by the
+# min/max reference curves, and by the exported script -- so there is no second
+# implementation to fall out of step (P5.1).
+# ==========================================================================
+fck_fosr_design <- function(fit, newdata) {
+  if (is.null(fit$model_names) || is.null(fit$predictor_names))
+    stop("This fit carries no predictor-name mapping; it predates P5.1 and cannot be used for prediction. Re-run the FoSR fit.")
+
+  newdata <- as.data.frame(newdata, stringsAsFactors = FALSE,
+                           check.names = FALSE)
+  missing_cols <- setdiff(fit$predictor_names, names(newdata))
+  if (length(missing_cols))
+    stop("New data is missing predictor(s): ", paste(missing_cols, collapse = ", "))
+
+  md <- newdata[, fit$predictor_names, drop = FALSE]
+  names(md) <- fit$model_names
+
+  # Re-apply the levels the model was fitted with, so a one-row prediction
+  # frame produces the same columns as the full design.
+  for (nm in names(fit$xlevels)) {
+    if (!is.null(md[[nm]])) {
+      lv <- fit$xlevels[[nm]]
+      bad <- setdiff(as.character(md[[nm]]), lv)
+      if (length(bad))
+        stop("Level(s) not seen when the model was fitted: ",
+             paste(unique(bad), collapse = ", "))
+      md[[nm]] <- factor(as.character(md[[nm]]), levels = lv)
+    }
+  }
+
+  X <- stats::model.matrix(stats::delete.response(fit$terms), data = md,
+                           xlev = fit$xlevels)
+
+  # The same terms and levels give the same column order as the fit, so the
+  # coefficient row names carry straight over. Check rather than assume: a
+  # mismatch here would multiply the right numbers in the wrong order.
+  if (!is.null(fit$beta.hat) && ncol(X) != nrow(fit$beta.hat))
+    stop(sprintf(
+      "Design matrix has %d columns but the fit has %d coefficients. The prediction data does not match the fitted model.",
+      ncol(X), nrow(fit$beta.hat)))
+  if (!is.null(fit$beta.hat)) colnames(X) <- rownames(fit$beta.hat)
+  X
 }

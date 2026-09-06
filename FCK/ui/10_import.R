@@ -25,12 +25,12 @@ ui_tab_import <- tabItem(
       title = "F*CK — Functional data analysis, Circadian regression, K-means clustering",
       status = "success", solidHeader = TRUE, width = 12, collapsible = TRUE,
       helpText(HTML(
-        "One import, one smoothing step, seven analyses.<br>",
+        "One import, one smoothing step, every analysis.<br>",
         "<b>Import &rarr; Preprocessing/Smoothing</b> are shared: do them once and every ",
         "tab below reads the same curves.<br>",
         "<b>F</b> &mdash; functional PCA / time-warped PCA, functional ANOVA and post-hoc tests.<br>",
-        "<b>C</b> &mdash; function-on-scalar and scalar-on-function regression, harmonic ",
-        "(cosinor) regression and pairwise tests on circadian parameters.<br>",
+        "<b>C</b> &mdash; function-on-scalar regression, harmonic (cosinor) ",
+        "regression and pairwise tests on circadian parameters.<br>",
         "<b>K</b> &mdash; functional clustering (k-means, hierarchical, DCF) with elbow and ",
         "silhouette diagnostics."))
     )

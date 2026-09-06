@@ -1714,6 +1714,153 @@ SHOULD be re-run &mdash; those results were produced with the identity outside
 the search space.
 
 
+**4.50 P5: a fourth review, and a regression of my own.** Nine findings, all of
+which held. One of them is a bug I introduced in the previous round's fix, and
+acting on the review's suggested tests turned up a tenth defect that had been
+silently wrong since the merge.
+
+*P5.1 &mdash; FoSR prediction was broken by my P4.3 fix. Confirmed; my
+regression.* P4.3 made the estimator fit on internal column names `x1..xp` so
+that uploaded names could never reach a parser. It returned `terms = terms(f)`,
+which therefore refers to `x1..xp` &mdash; and the three prediction sites went
+on building their new-data frames with the USER's column names and calling
+`model.matrix(delete.response(mod$terms), data = pred_df)`. Reproduced:
+`object 'x1' not found`. Not for hostile names &mdash; **for every FoSR OLS fit,
+every time**. And the call sat inside `tryCatch(..., error = function(e) NULL)`,
+so the user got a blank prediction curve rather than an error. A broken panel
+that looks like an empty panel is how this survived a release.
+
+The mapping and the fitted factor levels now travel with the fit, and
+`fck_fosr_design()` is the single place that turns new data into a design
+matrix &mdash; used by the fit, the interactive prediction, both reference
+curves and the export. The error is reported rather than swallowed.
+
+*P5.2 &mdash; the warped-PCA AIC/BIC. Confirmed; removed.* The "residual
+variance" they were built on was `mean(rmse^2)` where `rmse` is the distance
+between each curve and its OWN registered version &mdash; how much the
+registration moved the curve, which is what registration is FOR. As a
+criterion it rewarded doing nothing. There was also no likelihood: no
+probability model for the observed curves under a candidate registration exists
+anywhere in the module, so `-2 log L + 2k` was applied to a number that is not a
+log-likelihood. And `k_params <- 2 * n_subjects` was hard-coded regardless of
+method, so the penalty did not distinguish the methods it was being used to
+compare. The tab told the user to select a warping method by comparing them.
+All of it is gone; the panel reports dispersion instead, and says plainly that
+there is no criterion here.
+
+*P5.3 &mdash; the "EFDA variance decomposition" was not a decomposition.
+Confirmed.* Three quantities computed independently, presented as a split of a
+total, under the name of a published methodology. They do not sum and nothing
+established orthogonality. Renamed to pre/post registration dispersion with
+`G = 1 - V_post/V_pre` defined explicitly on screen, and an explicit line
+saying not to report G as "variance explained by phase".
+
+*P5.4 &mdash; the elastic phase distance was invalid for two of the three warp
+types. Confirmed, and worse than described.* Measured on a 100-point grid:
+
+| warp | phase distance as computed |
+|---|---|
+| shift h(t) = t &minus; s, any s | **0.000000** &mdash; h' = 1, so the metric is identically blind to translation |
+| periodic shift, wrapped, any s | **0.142254**, *including s = 0* |
+| power &alpha; = 1 / 1.3 / 2 | 0.000 / 0.130 / 0.340 &mdash; behaves correctly |
+
+The periodic case is the sharper defect: an unshifted curve was reported with
+the same nonzero phase distance as a quarter-cycle shift, an artefact of the
+wrap discontinuity that the `warp_deriv[warp_deriv < 0] <- 0` line converted
+into a plausible-looking number. The metric is now computed per geometry:
+Fisher-Rao only for endpoint-preserving warps (and only after checking the warp
+IS one), displacement for a translation, circular displacement for a periodic
+shift.
+
+*P5.5 / P5.6 &mdash; landmark registration. Both confirmed.* The manual branch
+had no monotonicity requirement at all; crossed landmarks produced a folded
+"warp" and were registered with it. And the two branches stored **inverse maps
+of each other**: the manual branch used h: registered &rarr; original, the
+automatic branch built h: original &rarr; registered and then applied it as
+`approx(h, curve, xout = t)`, which inverts it again. The registered curves came
+out plausible either way, but `warp_functions` held two different objects
+depending on which branch ran, and every statistic that reads
+`warp_functions - time_points` was comparing incomparable things across
+methods. One validated builder now serves both, the direction is a stated
+module-wide contract stamped on all three methods' output, and rejected curves
+are named in a warning instead of folded.
+
+*P5.7 &mdash; RM-fANOVA turned undefined into "no effect". Confirmed.* P4.7
+fixed this in the between-subjects branch; the RM branch still did
+`F_stat[is.na(F_stat)] <- 0`, entered `0` for permutation draws with no residual
+variation, and finished with `p[is.na(p)] <- 1`. Entering zero is not neutral:
+zero is the SMALLEST possible F, so it never exceeds the observed statistic and
+biases every p-value DOWN (pinned in a test). NA now travels through.
+
+*P5.8 / P5.9 &mdash; the GAM branch. Both confirmed.* The export still carried a
+hand-written reconstruction that pasted uploaded column names into parsed
+formula text (the P4.3 defect) and specified a different model from the app's
+(no basis, no k, no factor main effects). It is now a kernel,
+`fck_fit_fosr_gam()`, emitted verbatim like the others, with the spline
+dimension as an argument rather than three hard-coded literals. And its
+`beta.se`/`beta.p` were `beta_hat * 0` labelled "placeholders" &mdash; SE = 0
+asserts an estimate known exactly and p = 0 asserts overwhelming significance.
+NA now, with a note saying why, and the consumer that did
+`if (sum(beta.se[idx, ]) > 0)` had to be fixed too: on an all-NA row that is
+`if (NA)`, which is an error, not a skip.
+
+*P5.10 &mdash; stale REML labels. Confirmed.* The smoothing readout said
+"Automatic (REML)" and "Lambda: 0 (automatic REML optimization)" over a GCV
+smoother, and the diagnostics tab told the user lambda = 0 uses REML. This is a
+documentation defect with a real consequence in a statistical application: the
+user writes the wrong method in a paper. Corrected everywhere, with the mgcv
+REML panels relabelled as advisory and on a different scale.
+
+*P5.11 &mdash; the parametric search was using an optimiser whose assumption the
+objective violates. FOUND BY THE TEST THE REVIEW ASKED FOR, not by the review.*
+The reviewer suggested a registration-effectiveness test: simulate phase-only
+data and check that registration reduces between-curve dispersion. Written, and
+it failed immediately &mdash; the power family gave **G = &minus;7.4%** on
+phase-only data (registration made it worse) and deformed already-aligned curves
+by **0.58 of the domain**.
+
+The cause is not the families, which P4.1 fixed. It is `optimize()`. Golden
+section plus parabolic interpolation assumes a UNIMODAL objective. The
+registration SSE on a sharply peaked curve &mdash; which is what a circadian
+profile is &mdash; is not: measured on an aligned sample, SSE is 0.008 at
+&alpha; = 1 and about 20 everywhere else in [0.05, 6], a deep narrow well in a
+wide plateau, and `optimize()` returned &alpha; = 6.000. **This got worse at
+P4.1, not better**: widening the ranges to make each identity reachable was
+right, but a wider interval gives `optimize()` more plateau to get lost on, so
+registrations run with the narrow pre-P4.1 ranges were partly protected by luck.
+Replaced with a coarse grid scan plus refinement in the winning bracket &mdash;
+the pattern `fck_auto_lambda()` already used.
+
+| | before | after |
+|---|---|---|
+| G, phase-only data (power) | &minus;7.4% | **+99.8%** |
+| deformation of aligned curves (power) | 0.5816 | **0.0010** |
+
+*P5.12 &mdash; amplitude leakage, and a knob I declined to add.* With the search
+fixed, one case remained: on curves differing ONLY in amplitude, the logistic
+family reports G = 27.8% from warps averaging 0.014 of the domain, peak heights
+unchanged. That is amplitude being absorbed as phase &mdash; near a peak a 1%
+move in time changes the value a lot &mdash; and it is intrinsic to
+least-squares registration, not a coding error. The standard remedy is a
+deviation-from-identity penalty. I implemented and calibrated one, and **it does
+not work here**: across &lambda; from 0 to 0.2 it moves G by 1.4 points, because
+the offending warps are already near-identity so there is nothing for the
+penalty to bite on. Shipping it would have been a tuning knob that looks like a
+fix. Instead the panel now WARNS on the signature &mdash; a large G from a
+near-identity warp &mdash; and the README states the measured example.
+
+After P5: 32 server files, **1,309 testthat assertions (0 failed, 0 skipped) and
+12 standalone suites pass**, including the new
+`tests/registration_effectiveness_test.R`. The Circaflex data is still absent
+from this container; the cosinor files are untouched by this round.
+
+**Re-run anything registered with a parametric warp.** P5.11 changes the fitted
+parameter on any data whose alignment objective is multimodal, which includes
+every peaked profile. Anything read off the warping panel's AIC/BIC or its
+"variance explained by warping" should be discarded outright &mdash; those
+numbers did not mean what the panel said.
+
+
 ## 5. Rename table
 
 | source | source app | merged app |

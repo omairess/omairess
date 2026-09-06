@@ -454,7 +454,16 @@
         cat("=========================================\n\n")
         
         # Handle NAs in F-statistics
-        F_stat[is.na(F_stat)] <- 0
+        # AUDIT (P5.7): this said F_stat[is.na(F_stat)] <- 0, and the
+        # permutation branch and the p-values did the same thing in their own
+        # way (F* set to 0, p set to 1). Undefined is not the same as "no
+        # effect". A time point where the repeated-measures residual sum of
+        # squares is exactly zero has NO F ratio -- reporting F = 0, p = 1
+        # asserts that the conditions were tested there and found equal, which
+        # is a claim the data cannot support. P4.7 fixed exactly this in the
+        # between-subjects branch; the RM branch kept the old behaviour.
+        # NA is now carried through to the p-value and out to the readout.
+        n_undefined_F <- sum(!is.finite(F_stat))
         
         # PERMUTATION TEST for p-values (matching pairwise approach)
         cat("Computing permutation-based p-values (", n_permutations, " permutations)...\n")
@@ -510,10 +519,15 @@
                 if(df_residual > 0 && SS_residual_perm > 0) {
                   F_stat_perm[t, perm] <- (SS_visit_perm / df_visit) / (SS_residual_perm / df_residual)
                 } else {
-                  F_stat_perm[t, perm] <- 0
+                  # P5.7: a permutation draw with no residual variation supplies
+                  # no null value. It is dropped from the reference set (which
+                  # the p-value below counts), not entered as a zero -- a zero
+                  # is the SMALLEST possible F, so it never exceeds the
+                  # observed statistic and silently biases every p-value down.
+                  F_stat_perm[t, perm] <- NA_real_
                 }
               } else {
-                F_stat_perm[t, perm] <- 0
+                F_stat_perm[t, perm] <- NA_real_
               }
             }
           }
@@ -524,13 +538,14 @@
           # AUDIT (P1.1): mean(perm >= obs) can be exactly 0, reporting p = 0
           # for a Monte Carlo test of finitely many draws. The observed
           # statistic counts as one of its own null draws.
+          # P5.7: an undefined OBSERVED statistic has no test either.
           .np <- sum(is.finite(F_stat_perm[t, ]))
-          p_values_pointwise[t] <- if (.np < 1) NA_real_ else
+          p_values_pointwise[t] <- if (!is.finite(F_stat[t]) || .np < 1) NA_real_ else
             (1 + sum(F_stat_perm[t, ] >= F_stat[t], na.rm = TRUE)) / (1 + .np)
         }
         
-        # Handle any remaining NAs
-        p_values_pointwise[is.na(p_values_pointwise)] <- 1
+        # P5.7: NAs are NOT converted to p = 1. A time point with no defined
+        # F, or with no usable null draws, has no test, and says so.
         
         cat("Permutation testing complete.\n")
         
@@ -584,7 +599,15 @@
       # Continue with common processing...
       # Adjust p-values for multiple comparisons
       p_values_adjusted <- p.adjust(p_values_pointwise, method = "fdr")
-      sig_regions <- p_values_adjusted < alpha
+      # P5.7: NA is not significant and is not non-significant. It is excluded
+      # and counted, the same rule the between-subjects branch uses (P4.7).
+      sig_regions <- !is.na(p_values_adjusted) & p_values_adjusted < alpha
+      n_undefined <- sum(is.na(p_values_pointwise))
+      if (n_undefined > 0)
+        notify(sprintf(
+          paste("%d of %d time points have no defined repeated-measures F (no residual",
+                "variation there). They are reported as NA, not as p = 1."),
+          n_undefined, length(p_values_pointwise)), "warning")
       
       # ---- Effect size --------------------------------------------------
       # AUDIT (P3.3): this block used to compute
@@ -751,6 +774,7 @@
         # counts n*(k-1) instead of the (n-1)*(k-1) the F test actually uses.
         df_within = (length(unique(subject_id)) - 1) * (n_visits - 1),
         eta_squared_type = eta_squared_type,
+        n_undefined = n_undefined,
         L2_stat_classical = L2_stat_classical,
         eta_squared_classical = eta_squared_classical,
         SS_condition = SS_visit_t,
