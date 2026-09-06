@@ -88,6 +88,7 @@
       list(
         fit = as.numeric(pred$fit),
         se = as.numeric(pred$se.fit),
+        se_available = TRUE,
         success = TRUE
       )
     }, error = function(e) {
@@ -100,9 +101,17 @@
       if(is.null(pred)) {
         return(list(fit = NULL, se = NULL, success = FALSE))
       }
+      # AUDIT (P9.4): this returned se = rep(0, ...). SE = 0 asserts an
+      # estimate known EXACTLY -- it is the strongest possible claim, returned
+      # here precisely when the standard error could not be computed at all.
+      # Downstream that produced a confidence band of zero width, which reads
+      # as a perfectly determined prediction. NA says what is true, and the
+      # caller omits the band. Same rule as P5.9 for the GAM coefficient
+      # curves: unknown is not zero.
       list(
         fit = as.numeric(pred),
-        se = rep(0, length(pred)),
+        se = rep(NA_real_, length(pred)),
+        se_available = FALSE,
         success = TRUE
       )
     })

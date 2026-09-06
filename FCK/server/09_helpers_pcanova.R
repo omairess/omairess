@@ -374,17 +374,11 @@ fck_warp_params <- function(warping_results, time_points = NULL) {
   # A translation's intensity is its displacement: the shortest CIRCULAR one
   # when the design is periodic. Only an endpoint-preserving warp is measured
   # by its distance from the identity.
-  periodic <- identical(warping_results$boundary, "periodic wrap")
+  # P9.1: one definition, in server/04_helpers_fd.R, shared with the
+  # per-subject table and the registration statistics.
   is_shift <- identical(warping_results$method, "linear_shift")
-
-  amp <- NULL
-  if (is_shift && !is.null(sh)) {
-    span <- if (!is.null(tp)) diff(range(tp)) else 1
-    amp <- if (periodic) abs(((as.numeric(sh) + span / 2) %% span) - span / 2)
-           else abs(as.numeric(sh))
-  } else if (!is.null(wf) && !is.null(tp) && nrow(wf) == length(tp)) {
-    amp <- apply(wf, 2, function(h) sqrt(mean((h - tp)^2, na.rm = TRUE)))
-  }
+  amp <- if (exists("fck_warp_amplitude", mode = "function"))
+    fck_warp_amplitude(warping_results) else NULL
   if (is.null(sh) && is.null(amp)) return(NULL)
 
   n <- max(length(sh), length(amp))

@@ -255,7 +255,10 @@
     tryCatch({
       n_time <- ncol(values$data)
       n_subjects <- nrow(values$data)
-      time_points <- 1:n_time
+      # P9.3: the same time coordinates production smooths against -- real
+      # elapsed hours when the user asked for them, the column index otherwise.
+      cv_axis     <- fck_smoothing_axis(input, values)
+      time_points <- cv_axis$t_full
       k_folds <- input$cv_k_folds
       
       # Lambda range
@@ -286,15 +289,22 @@
         for(lambda_idx in seq_along(lambda_seq)) {
           lambda <- lambda_seq[lambda_idx]
           
-          # Create basis for this lambda
-          # MERGED APP: follow the user's basis count (CIRCAREG's behaviour) so
-          # the recommended smoothing factor applies to the smoothing they will
-          # actually run. WaPaa fixed this at 20 regardless.
+          # AUDIT (P9.3): this used to build its own basis --
+          #     create.bspline.basis(rangeval = c(1, n_time), nbasis = nb)
+          # on the integer column index -- and the report then told the user to
+          # type its smoothing factor into Data Preprocessing. That is the
+          # production basis only in the default case. Under cyclic smoothing
+          # production fits a FOURIER basis; on real clock times it fits over
+          # elapsed hours on an uneven grid, where the roughness penalty is per
+          # hour. In either case this lambda was a weight on a different penalty
+          # over a different basis, so the advice to transfer it was wrong for
+          # the same reason the mgcv/fda ratio was (P8.3), one level less
+          # obvious. It now builds the SAME object production does.
           nb_user <- if(!is.null(input$smooth_method) && input$smooth_method == "manual")
             input$n_basis_manual else input$n_basis
           if(is.null(nb_user) || !is.finite(nb_user)) nb_user <- 20
           nb <- max(4, min(as.integer(nb_user), n_time - 2))
-          basis <- create.bspline.basis(rangeval = c(1, n_time), nbasis = nb)
+          basis <- fck_smoothing_basis(cv_axis, nb, input$smooth_method %||% "manual")
           fdParobj <- fdPar(basis, 2, lambda)
           
           for(i in 1:n_subjects) {
@@ -355,7 +365,18 @@
         optimal_idx = optimal_idx,
         optimal_lambda = optimal_lambda,
         lambda_1se = lambda_1se,
-        k_folds = k_folds
+        k_folds = k_folds,
+        # P9.3: which model this lambda belongs to, so the report can say it
+        # rather than leave the reader to assume.
+        basis_label = tryCatch(
+          fck_basis_label(cv_axis, fck_smoothing_basis(
+            cv_axis,
+            max(4, min(as.integer(if(!is.null(input$smooth_method) &&
+                                     input$smooth_method == "manual")
+                                    input$n_basis_manual else input$n_basis) %||% 20,
+                       n_time - 2)),
+            input$smooth_method %||% "manual")),
+          error = function(e) NA_character_)
       )
       
       showNotification(
@@ -486,15 +507,21 @@
       # production smoother does. Recommending its lambda for per-subject
       # smoothing was recommending the answer to a different question.
       cat(sprintf("  Between-subject population-curve prediction CV\n"))
+      if (!is.null(values$cv_results$basis_label) &&
+          !is.na(values$cv_results$basis_label))
+        cat(sprintf("    fitted on: %s\n", values$cv_results$basis_label))
       cat(sprintf("    optimal lambda  = %.2e   (smoothing factor %.2f)\n",
                   values$cv_results$optimal_lambda,
                   -log10(values$cv_results$optimal_lambda)))
       cat(sprintf("    1-SE rule       = %.2e   (smoothing factor %.2f)\n",
                   values$cv_results$lambda_1se, -log10(values$cv_results$lambda_1se)))
       cat("    This is the smoothing that best predicts a HELD-OUT SUBJECT from\n")
-      cat("    the mean of the others. It is on the fda scale, so you can type\n")
-      cat("    the smoothing factor into Data Preprocessing -- but it is not the\n")
-      cat("    same question as how much to smooth one person's own trajectory.\n\n")
+      cat("    the mean of the others. It is fitted on exactly the\n")
+      cat("    basis and time axis the production smoother uses, so the\n")
+      cat("    smoothing factor IS on the same scale and can be typed into Data\n")
+      cat("    Preprocessing. It still answers a different question from the\n")
+      cat("    production smoother, which asks how much to smooth one person's\n")
+      cat("    OWN trajectory, not how to predict a new person from the others.\n\n")
     }
     if(!is.null(values$reml_profile)) {
       cat("  mgcv REML diagnostic (advisory)\n")

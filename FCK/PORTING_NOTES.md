@@ -2106,6 +2106,75 @@ variances, and any group comparison on warping parameters were computed on the
 artefact.
 
 
+**4.54 P9: a sixth review. Four findings, all of which held.** No new
+statistical blocker; these are the last of the "the code says one thing and the
+label says another" class, plus one more instance of the recurring pattern.
+
+*P9.1 &mdash; the per-subject "Warping Amplitude Scores" table still carried the
+periodic-shift artefact. Confirmed. THE THIRD COPY.* P8.2 corrected "how much
+was this curve warped" in the registration statistics and in
+`fck_warp_params()`. There was a third body, in the table, and it was missed.
+Every linear-shift result carries `warp_functions`, so its first branch always
+won and the table went on reporting a PERIODIC ZERO SHIFT as 0.1 of the domain.
+Its third branch, `abs(alpha_values - 1)`, was wrong for a different reason:
+since P4.1 only the power family has its identity at alpha = 1.
+
+The reviewer's framing is the right one &mdash; *"You've repeatedly found that
+duplicated statistical definitions drift apart; this is another example."* It is
+the fourth time in this audit. There is now one definition,
+`fck_warp_amplitude()` in `server/04_helpers_fd.R`, called by the table, the
+registration statistics and the group comparison. Verified numerically: a
+periodic zero shift returns exactly 0, a 0.9 shift returns 0.1 (0.9 forward is
+0.1 backward), and an endpoint-preserving warp still returns its RMS distance
+from the identity.
+
+*P9.2 &mdash; the diagnostics UI still said the two lambdas should agree.
+Confirmed.* P8.3 removed the ratio and the "REML and CV agree well" verdict from
+the server, and left `ui/30_diagnostics.R` telling the user *"Compare REML vs
+CV: Should agree on optimal range"* and *"If REML and CV agree: use their
+recommended lambda"*. The app could state both positions at once. Replaced with
+what each panel is for, and a plain instruction not to compare them numerically.
+
+The reviewer also caught something I should not have needed telling: **internal
+audit tags had leaked into user-facing text**. "(P5.10)" appeared three times in
+the diagnostics UI, and "(P3.2)", "(P3.3)" and "(P5.9)" in output the user
+reads &mdash; the last of them emitted into the generated analysis script. They
+belong in source comments. A test now scans every string literal in `ui/` and
+`server/` for the pattern and requires none.
+
+*P9.3 &mdash; the CV lambda was not on the production scale after all.
+Confirmed, and it makes P8.4's "you can type this in" wrong.* The CV built
+`create.bspline.basis(rangeval = c(1, n_time), nbasis = nb)` on the integer
+column index. That is production's basis only in the default case: under cyclic
+smoothing production fits a FOURIER basis, and on real clock times it fits over
+elapsed hours on an uneven grid where the roughness penalty is per hour. In
+either case the CV's lambda weighted a different penalty over a different basis
+&mdash; the same category of error as the mgcv/fda ratio, one level less
+obvious, and I had just certified the transfer as sound.
+
+The reviewer offered a simple option (stop claiming transferability) and a
+preferred one (make the CV build the production basis). The preferred one is
+taken, because it also removes the duplicated definition rather than papering
+over it: `fck_smoothing_axis()` and `fck_smoothing_basis()` now serve both, and
+a test checks the extracted builder reproduces all three production branches
+exactly &mdash; including that a cyclic basis on real elapsed hours gets a
+24-hour period rather than the length of the recording. The CV result records
+which basis it used and the report prints it.
+
+*P9.4 &mdash; an unavailable standard error was reported as 0. Confirmed.*
+`safe_gam_predict()` returned `se = rep(0, ...)` on its fallback path, and the
+FoSR prediction did the same when the SE vector came back the wrong length. SE =
+0 is the strongest possible claim &mdash; the prediction known exactly &mdash;
+returned precisely when the standard error could not be computed. Downstream it
+drew a confidence band of zero width. NA now, the band is omitted, and the plot
+says why: a missing band and a zero-width band look identical and mean opposite
+things. Same rule as P5.9 for the GAM coefficient curves.
+
+After P9: **1,536 testthat assertions (0 failed, 0 skipped) and 13 standalone
+suites pass.** Anything read off the per-subject Warping Amplitude Scores table
+for a periodic registration should be re-run.
+
+
 ## 5. Rename table
 
 | source | source app | merged app |

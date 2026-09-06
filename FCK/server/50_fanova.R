@@ -1633,7 +1633,7 @@
         cat("\nFor comparison, classical eta-squared (SS_between / SS_total over all\n")
         cat("curves, subject margin NOT removed) has mean ",
             round(mean(res$eta_squared_classical, na.rm = TRUE), 4), ".\n", sep = "")
-        cat("Versions of this app before the P3.3 correction reported THAT number\n")
+        cat("Earlier versions of this app reported THAT number\n")
         cat("under a repeated-measures F. It is biased downward here and is shown\n")
         cat("only so earlier output can be reconciled; do not report it.\n")
       }

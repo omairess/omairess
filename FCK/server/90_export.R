@@ -1356,7 +1356,7 @@
         add("# for numeric predictors and, for factors, one contrast curve per")
         add("# non-reference level. No pointwise standard error is propagated")
         add("# through those contrasts, so beta.se and beta.p are NA by design")
-        add("# (P5.9) -- use summary(gam_obj) above for the term-level tests.")
+        add("# -- use summary(gam_obj) above for the term-level tests.")
         add("")
       }
       add(sprintf("# Method as fitted: %s", values$reg_model$method))

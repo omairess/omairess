@@ -610,25 +610,17 @@
       warp_results <- values$warping_results
       n_subjects <- ncol(values$fd_obj$coefs)
       
-      # Calculate warping amplitude (deviation from identity)
-      if(!is.null(warp_results$warp_functions)) {
-        n_time <- nrow(warp_results$warp_functions)
-        time_points <- seq(0, 1, length.out = n_time)
-        
-        warp_amplitude <- numeric(n_subjects)
-        for(i in 1:n_subjects) {
-          # Calculate deviation from identity line
-          warp_amplitude[i] <- sqrt(mean((warp_results$warp_functions[,i] - time_points)^2))
-        }
-      } else if(!is.null(warp_results$shifts)) {
-        # Use shifts if available
-        warp_amplitude <- abs(warp_results$shifts)
-      } else if(!is.null(warp_results$alpha_values)) {
-        # Use alpha values for parametric warping
-        warp_amplitude <- abs(warp_results$alpha_values - 1)
-      } else {
-        warp_amplitude <- rep(0, n_subjects)
-      }
+      # AUDIT (P9.1): this block had its own copy of "how much was this curve
+      # warped", and P8.2 corrected the other two copies without it. Every
+      # linear-shift result carries warp_functions, so its first branch always
+      # won and this table went on showing the wrapped-shift artefact -- a
+      # PERIODIC ZERO SHIFT displayed as 0.1 of the domain. (Its alpha branch
+      # was wrong too: since P4.1 only the power family has its identity at
+      # alpha = 1.) One definition now, in server/04_helpers_fd.R.
+      warp_amplitude <- fck_warp_amplitude(warp_results)
+      if (is.null(warp_amplitude)) warp_amplitude <- rep(0, n_subjects)
+      if (length(warp_amplitude) != n_subjects)
+        warp_amplitude <- rep(warp_amplitude, length.out = n_subjects)
       
       warping_df <- data.frame(
         Subject = 1:n_subjects,
@@ -1293,6 +1285,9 @@
         # A translation's intensity is its displacement, and for a periodic one
         # that is the SHORTEST circular displacement. An endpoint-preserving
         # warp keeps the RMS distance, which is what it means there.
+        # P9.1: the same definition as the per-subject table and the group
+        # comparison, from server/04_helpers_fd.R. phase_displacement[i] is
+        # exactly what fck_warp_amplitude() returns for a shift, computed above.
         if (identical(geom, "shift")) {
           warp_amplitude[i]    <- phase_displacement[i]   # |s|, circular if periodic
           warp_velocity_var[i] <- if (isTRUE(periodic)) NA_real_ else

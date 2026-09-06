@@ -18,7 +18,7 @@ ui_tab_smooth_diag <- tabItem(
               "Explore smoothing parameters with an mgcv REML GAM, cross-validation",
               "and effective degrees of freedom.<br><b>These are advisory diagnostics.</b>",
               "The app's production smoother is <code>fda::smooth.basis</code> with",
-              "lambda selected by GCV (P5.10); mgcv's REML penalty is on a different",
+              "lambda selected by GCV; mgcv's REML penalty is on a different",
               "scale and its optimum does not transfer directly. Use the",
               "<i>GCV vs n-basis</i> panel and the \"suggest a lambda\" button for",
               "numbers that apply to the fit the app actually performs.")))
@@ -92,7 +92,7 @@ ui_tab_smooth_diag <- tabItem(
                            - <b>Optimal lambda:</b> Minimum of the REML curve<br>
                            - <b>Flat region:</b> Multiple good lambda values (robust)<br>
                            - <b>Sharp minimum:</b> Sensitive to lambda choice<br>
-                           - <b>Note (P5.10):</b> this profile is an mgcv REML score. The app's
+                           - <b>Note:</b> this profile is an mgcv REML score. The app's
                              automatic smoother uses fda GCV, not REML, and lambda = 0 there is the
                              UNPENALISED fit, not an automatic one. Read this panel as advisory."))
           ),
@@ -109,7 +109,9 @@ ui_tab_smooth_diag <- tabItem(
                            - <b>Optimal lambda:</b> Minimum CV error<br>
                            - <b>1-SE rule:</b> Most parsimonious model within 1 SE of minimum<br>
                            - <b>U-shape:</b> Underfitting (left) vs overfitting (right)<br>
-                           - <b>Compare REML vs CV:</b> Should agree on optimal range"))
+                           - <b>Do NOT compare the two lambdas numerically.</b> The mgcv REML
+                             score and the FDA cross-validation score are penalty weights on
+                             different penalties; their ratio is not a measure of agreement."))
           )
         ),
         
@@ -122,10 +124,16 @@ ui_tab_smooth_diag <- tabItem(
             width = 12,
             verbatimTextOutput("smoothing_comparison_summary"),
             helpText(HTML("<b>Decision Guide:</b><br>
-                           - <b>If REML and CV agree:</b> Use their recommended lambda<br>
-                           - <b>If REML and CV disagree:</b> Prefer CV for prediction, REML for smoothness<br>
+                           - <b>mgcv REML:</b> read the effective degrees of freedom, which say how
+                             much flexibility the data supports. Its lambda is on mgcv's scale and is
+                             <b>not transferable</b> to this app's smoothing factor.<br>
+                           - <b>Population-curve CV:</b> evaluates how well a smoothed group mean
+                             predicts a held-out subject. It is fitted on the same basis and time axis
+                             as the production smoother, so its smoothing factor can be used here.<br>
+                           - <b>Production smoothing:</b> automatic mode selects lambda by GCV on the
+                             FDA smoother, per run, on your data. That is what the app fits.<br>
                            - <b>For automatic smoothing:</b> the app selects lambda by GCV on the
-                             fda smoother (P5.10). Lambda = 0 is the UNPENALISED fit, not an
+                             fda smoother. Lambda = 0 is the UNPENALISED fit, not an
                              automatic one, and REML is not used anywhere in the production path<br>
                            - <b>For manual smoothing:</b> See 'Smoothing Factor' values above, or use the button below<br>
                            - <b>Trade-off:</b> Smooth curves (high lambda) vs capturing variability (low lambda)<br>

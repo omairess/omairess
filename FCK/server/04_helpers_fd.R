@@ -155,3 +155,116 @@ fck_n_harmonics <- function(pca_res) {
   if (!is.finite(n) || n < 1) return(0L)
   as.integer(n)
 }
+
+# ==============================================================================
+# fck_smoothing_axis(input, values) / fck_smoothing_basis(...)
+# ==============================================================================
+# AUDIT (P9.3). The smoothing basis was built inline in server/20_smoothing.R,
+# and the cross-validation diagnostic built its OWN with
+#     create.bspline.basis(rangeval = c(1, n_time), nbasis = nb)
+# on the integer column index. That is the production basis only in the
+# default case. When the user has ticked cyclic smoothing, production fits a
+# FOURIER basis; when they have ticked real clock times, production fits over
+# elapsed hours with an uneven grid and a per-hour roughness penalty. In either
+# case the CV's lambda is a penalty weight on a different penalty over a
+# different basis, and the diagnostic's advice to type its smoothing factor
+# into Data Preprocessing was wrong -- the same category of error as the
+# mgcv-vs-fda ratio removed at P8.3, one level less obvious.
+#
+# Rather than adding a disclaimer, the two now build the SAME object. This
+# repository has been bitten repeatedly by one statistical definition existing
+# in two places and drifting; the fix is to have one.
+#
+# fck_smoothing_axis() resolves the time coordinates exactly as production
+# does, and reports whether real clock time was actually usable.
+fck_smoothing_axis <- function(input, values) {
+  n_time <- ncol(values$data)
+  real_time <- NULL
+  if (isTRUE(input$use_real_time)) {
+    real_time <- tryCatch(fck_cumulative_hours(values$time_labels),
+                          error = function(e) NULL)
+    if (is.null(real_time) || length(real_time) != n_time) real_time <- NULL
+  }
+  using_real_time <- !is.null(real_time)
+  t_full <- if (using_real_time) real_time else seq_len(n_time)
+  list(n_time = n_time, t_full = t_full, t_rng = range(t_full),
+       using_real_time = using_real_time,
+       cyclic = isTRUE(input$is_cyclic))
+}
+
+# The basis production fits. `nb` is the requested number of B-spline
+# functions; it is ignored for a Fourier basis, which follows CIRCAREG's
+# min(n_time, 13) rule (fda rounds an even count up to the next odd number,
+# which is the behaviour CIRCAREG shipped).
+fck_smoothing_basis <- function(axis, nb, method = "manual") {
+  nb <- max(4L, min(as.integer(nb), axis$n_time))
+  if (isTRUE(axis$cyclic)) {
+    nb_used <- min(axis$n_time, 13)
+    b <- if (isTRUE(axis$using_real_time))
+      fda::create.fourier.basis(rangeval = axis$t_rng, nbasis = nb_used, period = 24)
+    else
+      fda::create.fourier.basis(rangeval = axis$t_rng, nbasis = nb_used)
+  } else if (identical(method, "none")) {
+    b <- fda::create.bspline.basis(rangeval = axis$t_rng, breaks = axis$t_full,
+                                   norder = 4)
+  } else {
+    b <- fda::create.bspline.basis(rangeval = axis$t_rng, nbasis = nb)
+  }
+  b
+}
+
+# A one-line description, so a diagnostic can say which model its lambda
+# belongs to instead of leaving the reader to assume.
+fck_basis_label <- function(axis, basisobj) {
+  sprintf("%s basis, %d functions, over %s [%.4g, %.4g]",
+          if (isTRUE(axis$cyclic)) "Fourier" else "B-spline",
+          basisobj$nbasis,
+          if (isTRUE(axis$using_real_time)) "elapsed hours" else "column index",
+          axis$t_rng[1], axis$t_rng[2])
+}
+
+
+# ==============================================================================
+# fck_warp_amplitude(warping_results) -- one definition, used everywhere
+# ==============================================================================
+# AUDIT (P9.1). "How much was this curve warped" was computed in three places
+# with three bodies. P8.2 corrected two of them and MISSED the third: the
+# per-subject "Warping Amplitude Scores" table in server/40_fpca.R still read
+#
+#     if (!is.null(warp_results$warp_functions)) {
+#       warp_amplitude[i] <- sqrt(mean((warp_functions[, i] - time_points)^2))
+#     } else if (!is.null(warp_results$shifts)) { ... }
+#
+# and every linear-shift result carries warp_functions, so the first branch
+# always won and the table went on showing the wrapped-shift artefact -- a
+# PERIODIC ZERO SHIFT reported as 0.1 of the domain. Its third branch,
+# abs(alpha_values - 1), was wrong for a different reason: since P4.1 only the
+# power family has its identity at alpha = 1.
+#
+# The lesson is the recurrence, not the arithmetic. A duplicated statistical
+# definition drifts; this is the fourth time in this audit. There is now one.
+#
+# A translation's amplitude is its displacement -- the shortest CIRCULAR one
+# when the registration wrapped. An endpoint-preserving warp is measured by its
+# RMS distance from the identity, which is what that means there.
+fck_warp_amplitude <- function(warping_results) {
+  if (is.null(warping_results)) return(NULL)
+  sh <- warping_results$shifts
+  wf <- warping_results$warp_functions
+  tp <- warping_results$time_points
+
+  if (identical(warping_results$method, "linear_shift") && !is.null(sh)) {
+    sh <- as.numeric(sh)
+    if (identical(warping_results$boundary, "periodic wrap")) {
+      span <- if (!is.null(tp)) diff(range(tp)) else 1
+      return(abs(((sh + span / 2) %% span) - span / 2))
+    }
+    return(abs(sh))
+  }
+  if (!is.null(wf)) {
+    if (is.null(tp) || length(tp) != nrow(wf))
+      tp <- seq(0, 1, length.out = nrow(wf))
+    return(apply(wf, 2, function(h) sqrt(mean((h - tp)^2, na.rm = TRUE))))
+  }
+  NULL
+}

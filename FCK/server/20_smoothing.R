@@ -93,22 +93,16 @@ observeEvent(input$apply_smooth, {
     # Cyclic: CIRCAREG's Fourier basis with min(n_time, 13) functions. fda
     # rounds an even nbasis up to the next odd number; that is the behaviour
     # CIRCAREG shipped, so it is kept rather than silently changed here.
-    if(cyclic) {
-      nb_used <- min(n_time, 13)
-      # On real elapsed hours the period is 24 h, not "however long the
-      # recording happened to be" (fda's default period = diff(rangeval)).
-      basis   <- if(using_real_time)
-        create.fourier.basis(rangeval = t_rng, nbasis = nb_used, period = 24)
-      else
-        create.fourier.basis(rangeval = t_rng, nbasis = nb_used)
-      nb_used <- basis$nbasis
-    } else if(input$smooth_method == "none") {
-      basis   <- create.bspline.basis(rangeval = t_rng, breaks = t_full, norder = 4)
-      nb_used <- nb
-    } else {
-      basis   <- create.bspline.basis(rangeval = t_rng, nbasis = nb)
-      nb_used <- nb
-    }
+    # P9.3: built by fck_smoothing_basis() in server/04_helpers_fd.R, so the
+    # cross-validation diagnostic can construct the SAME object and its lambda
+    # is genuinely on this scale. The rules are unchanged: Fourier when cyclic
+    # (CIRCAREG's min(n_time, 13), period 24 h on real elapsed time), an
+    # interpolating B-spline through every observation when smoothing is off,
+    # and an nb-function B-spline otherwise.
+    axis    <- list(n_time = n_time, t_full = t_full, t_rng = t_rng,
+                    using_real_time = using_real_time, cyclic = cyclic)
+    basis   <- fck_smoothing_basis(axis, nb, input$smooth_method)
+    nb_used <- if(cyclic) basis$nbasis else nb
 
     # The 0-1 basis used for the fd object every downstream analysis reads.
     make_basis_01 <- function(k) {

@@ -93,7 +93,7 @@
     cat("Coefficients:", paste(rownames(mod$beta.hat), collapse=", "), "\n")
     if(!is.null(mod$r2_t)) cat("Mean R2:", round(mean(mod$r2_t, na.rm=TRUE), 3), "\n")
     if(identical(mod$inference, "analytic-t-fdr")) {
-      cat("\nInference (P3.2): p-values come from the ANALYTICAL OLS standard\n")
+      cat("\nInference: p-values come from the ANALYTICAL OLS standard\n")
       cat(sprintf("error, beta / sqrt(diag((X'X)^-1) * sigma2(t)), referred to t on %s df,\n",
                   if(is.null(mod$df_resid)) "n - p" else format(mod$df_resid)))
       cat("then FDR-adjusted across time points. They do not depend on a seed.\n")
@@ -274,7 +274,10 @@
         return(NULL)
       }
       if(length(se_pred) != n_t) {
-        se_pred <- rep(0, n_t)  # Fallback to no CI if SE has wrong length
+        # P9.4: NA, not 0. A zero standard error claims the prediction is known
+        # exactly, which is the opposite of "the standard error is unavailable".
+        # The band is omitted below rather than drawn with zero width.
+        se_pred <- rep(NA_real_, n_t)
       }
       
     } else {
@@ -322,7 +325,9 @@
         scale_factor <- as.numeric(X_new %*% mod$xtx_inv %*% t(X_new))
         se_pred <- sqrt(scale_factor * mod$sigma2)
       } else {
-        se_pred <- rep(0, length(y_hat))
+        # P9.4: the fit carries no xtx_inv/sigma2, so there is no standard
+        # error to report. NA, and no band.
+        se_pred <- rep(NA_real_, length(y_hat))
       }
     }
     
@@ -330,6 +335,7 @@
     # Build main plot
     # ==========================================================================
     # Compute CI bounds
+    # NA standard errors give NA bounds, which plotly simply does not draw.
     ci_lower <- y_hat - 1.96 * se_pred
     ci_upper <- y_hat + 1.96 * se_pred
     
@@ -345,11 +351,26 @@
       add_trace(y = ~y_hat, type = 'scatter', mode = 'lines',
                 line = list(color = 'red', width = 3), name = "Predicted Mean")
     
-    # Only add ribbon if SE is non-zero
-    if(any(se_pred > 0)) {
+    # P9.4: a band only where a standard error actually exists. NA means the
+    # SE could not be computed and the curve is drawn without an interval; the
+    # subtitle says so, because a prediction with no visible band and one with a
+    # band of zero width look identical and mean opposite things.
+    se_ok <- is.finite(se_pred) & se_pred > 0
+    if(any(se_ok)) {
       p <- p %>% add_ribbons(ymin = ~ci_lower, ymax = ~ci_upper,
-                             name = "95% CI", line = list(color = 'transparent'), 
+                             name = "95% CI", line = list(color = 'transparent'),
                              fillcolor = 'rgba(255, 0, 0, 0.2)')
+      if(!all(se_ok))
+        p <- p %>% layout(annotations = list(list(
+          x = 0, y = 1.06, xref = "paper", yref = "paper", showarrow = FALSE,
+          xanchor = "left", font = list(size = 11, color = FCK_ALERT),
+          text = sprintf("No standard error at %d of %d time points; the band is missing there.",
+                         sum(!se_ok), length(se_ok)))))
+    } else {
+      p <- p %>% layout(annotations = list(list(
+        x = 0, y = 1.06, xref = "paper", yref = "paper", showarrow = FALSE,
+        xanchor = "left", font = list(size = 11, color = FCK_ALERT),
+        text = "No confidence band: the standard error could not be computed for this prediction.")))
     }
     
     # ==========================================================================

@@ -139,10 +139,13 @@ test_that("P8.2: the module measures shift intensity in the right geometry", {
                     src, fixed = TRUE))
   expect_true(grepl("warp_velocity_var[i] <- if (isTRUE(periodic)) NA_real_ else",
                     src, fixed = TRUE))
-  pc <- code_of("server/09_helpers_pcanova.R")
-  expect_true(grepl('periodic <- identical(warping_results$boundary, "periodic wrap")',
-                    pc, fixed = TRUE))
-  expect_true(grepl("abs(((as.numeric(sh) + span / 2) %% span) - span / 2)", pc, fixed = TRUE))
+  # P9.1 moved this definition into the one shared helper; the property it
+  # guards is unchanged, and test-p9-corrections.R exercises it numerically.
+  fd <- code_of("server/04_helpers_fd.R")
+  expect_true(grepl('identical(warping_results$boundary, "periodic wrap")', fd, fixed = TRUE))
+  expect_true(grepl("abs(((sh + span / 2) %% span) - span / 2)", fd, fixed = TRUE))
+  expect_true(grepl("fck_warp_amplitude(warping_results)",
+                    code_of("server/09_helpers_pcanova.R"), fixed = TRUE))
 })
 
 # ============================================ P8.3 / P8.4 the diagnostics ====
