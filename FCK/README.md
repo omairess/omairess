@@ -377,6 +377,16 @@ And it states plainly that these are two-stage tests on per-participant point
 estimates, not the population-mean cosinor, so a participant whose own rhythm is
 poorly determined counts as much as one whose rhythm is precise.
 
+Each caveat is matched to the estimator that produced the numbers above it, not
+to the family in general — the pointwise-OLS warning about non-simultaneous bands
+is not printed under a GAM fit, which has no such bands. The report also states
+**which curves each analysis was computed on**: with a registration in the
+session, a group difference found on registered curves is a difference in
+amplitude at aligned time, and one found on unregistered curves may be timing,
+amplitude or both. That flag records what the analysis actually ran on, not what
+was requested, because the app falls back to the original curves when a warped
+representation is unavailable.
+
 Sections appear only for analyses you actually ran. The report is regenerated
 on every download from the current state, so it cannot go stale against the
 screen, and it recomputes nothing, so it cannot disagree with it.

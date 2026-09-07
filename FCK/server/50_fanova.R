@@ -1067,6 +1067,16 @@
       # Determine which data to use based on user selection
       fd_to_use <- NULL
       
+      # AUDIT (P13.4): `used_warped` records what the analysis ACTUALLY ran on,
+      # which is not the same as what was asked for -- the branches below fall
+      # back to the original curves when a warped representation is requested but
+      # unavailable, and say so only in a transient notification. The stored
+      # data_source held the REQUEST, so the publication report could state that
+      # a group comparison was made on registered curves when it was not. The
+      # distinction is not cosmetic: on registered curves the test is about
+      # amplitude alone, because the phase differences have been removed into the
+      # warps; on the original curves it is about amplitude and phase together.
+      used_warped <- FALSE
       # Check if user wants to use warped curves and if they're available
       if(input$fanova_data_source == "warped" && !is.null(values$warping_results)) {
         cat("Using time-warped curves for FANOVA\n")
@@ -1074,6 +1084,7 @@
         # Try to get the registered fd object from warping results
         if(!is.null(values$warping_results$regfd)) {
           fd_to_use <- values$warping_results$regfd
+          used_warped <- TRUE
           showNotification("Using time-warped curves for FANOVA", type = "message", duration = 3)
         } else if(!is.null(values$warping_results$registered_curves)) {
           # If no regfd but registered curves exist, create fd from them
@@ -1086,6 +1097,7 @@
           # Use lambda=0: registered curves are already processed, just need fd representation
           fd_to_use <- smooth.basis(time_points, values$warping_results$registered_curves, 
                                     fdPar(basis, 2, 0))$fd
+          used_warped <- TRUE
           showNotification("Using time-warped curves for FANOVA", type = "message", duration = 3)
         } else {
           showNotification("No warped curves available, using original data", type = "warning", duration = 5)
@@ -1242,8 +1254,11 @@
         values$fanova_results$rm_factor  <- as.character(rm_factor_data)
       }
       
-      # Store which data source was used
+      # Store which data source was REQUESTED and which was actually used (P13.4)
       values$fanova_results$data_source <- input$fanova_data_source
+      values$fanova_results$used_warped <- used_warped
+      values$fanova_results$warp_method_used <-
+        if (used_warped) values$warping_results$method else NULL
 
       # MERGED APP: the post-hoc tab reads these back so it compares the same
       # variable, the same levels and the same curves the omnibus did.

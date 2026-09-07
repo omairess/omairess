@@ -2530,6 +2530,79 @@ New: `tests/testthat/test-p12-corrections.R` (39 assertions).
 After this round: **1,777 testthat assertions (0 failed, 0 skipped) and 16
 standalone suites pass.**
 
+**4.60 P13: reading the whole report end to end.** The user named the cosinor
+section as an EXAMPLE of what needed polishing, so the rest of the document got
+the same treatment: generate a full report from a real session and read every
+line of it. Four more findings. The first is the worst thing this audit has
+shipped in several rounds, and I shipped it one commit earlier.
+
+*A rebound variable silently emptied the post-hoc section.* `pw` holds the
+fANOVA post-hoc object, assigned near the top of `fck_apa_report()` and read much
+further down, in Results. The cosinor Methods block I added at P12 wrote
+`pw <- values$hp_pairwise_results` in between. So on any run with both a
+functional-ANOVA post-hoc and a cosinor group comparison, the post-hoc Results
+section printed
+
+```
+0 of 0 comparisons remained significant after the -- correction at alpha = --.
+```
+
+four lines below its own Methods paragraph, which correctly described 6
+comparisons at *B* = 777. Nothing errored; the table was simply absent and the
+sentence was filled with placeholders. It takes a report containing BOTH kinds of
+pairwise result to show it, and no test generated one. The local name is scoped
+now, and `tests/testthat/test-p13-corrections.R` builds exactly that arrangement
+and asserts the real sentence, plus a structural guard that there is exactly one
+assignment to `pw` in the file.
+
+*A caveat that described a different estimator.* The function-on-scalar
+"what these numbers do not establish" note was printed unconditionally and says
+"each time point was fitted separately" and "the pointwise intervals are not
+simultaneous bands". Under the GAM branch both halves are false: the whole point
+of that branch is a penalised spline in time, and the sentence immediately above
+it has just said no pointwise inference is available, so there are no intervals
+for it to warn about. A caveat naming the wrong estimator is not a stylistic
+problem -- it tells a reader their coefficient curves are unsmoothed when they
+are penalised, and warns them about the coverage of bands that do not exist. The
+GAM branch now gets its own note, which says what the curves ARE (prediction
+contrasts with no sampling distribution attached), that the smoothness is imposed
+by a penalty whose amount was chosen by REML from the same data, and that
+term-level *p*-values from the model summary are approximate for that reason.
+
+*Missing data was reported only if you had smoothed.* The statement was gated on
+`values$fill_status`, which the smoothing step creates. Cosinor is a regression
+on the observations and needs no smoothing, so import -> cosinor -> report gave a
+document that never mentioned missingness at all. APA 7 asks for the amount and
+the handling either way. The raw matrix is always available, so the count always
+is; the observed/interpolated/extrapolated split still needs the smoother,
+because only it knows which side of a curve's own range a filled cell fell on.
+
+*The report never said which curves an analysis ran on.* With a registration in
+the session that is the difference between a claim about amplitude alone and a
+claim about amplitude and phase together, and nothing in the output distinguished
+them. Worse, the flag that existed recorded the wrong thing: `data_source` held
+the user's REQUEST, and the fANOVA falls back to the original curves when a
+warped representation is asked for but unavailable, announcing it only in a
+transient notification. So the report could have stated the opposite of what
+happened. `used_warped` now records what the analysis actually ran on, set inside
+the two branches that actually take that path, and the Methods paragraph says
+which it was and what that means for the interpretation. The landmark sentence
+also now says how the landmarks were obtained -- placed by hand at stated
+positions, or detected automatically by the deterministic rule -- and states the
+crossed-landmark rejection rule even when nothing was rejected, because "0 curves
+were rejected" is a result and silence is not.
+
+One test expectation of mine was wrong and the code was right: landmark positions
+keep their leading zero, because a position on the time axis is not a statistic
+bounded by 1 and APA 6.36 does not apply to it.
+
+New: `tests/testthat/test-p13-corrections.R` (34 assertions), and the reactive
+smoke test now generates a report while a registration result is present, so that
+subsection is produced from a real run rather than never being exercised.
+
+After this round: **1,811 testthat assertions (0 failed, 0 skipped) and 16
+standalone suites pass.**
+
 ## 5. Rename table
 
 | source | source app | merged app |

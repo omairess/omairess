@@ -304,6 +304,24 @@ server <- function(input, output, session) {
       fail("the registration summary does not report its own resolution")
     else ok("the registration summary reports the resolution of the estimate")
   }
+  # P13: generate the report while a registration result is present, so the
+  # registration subsection is produced from a real run rather than never being
+  # exercised at all -- the gap that let two whole sections ship wrong.
+  reg_md <- tryCatch(fck_apa_report(values, input, "Registration check"),
+                     error = function(e) structure(conditionMessage(e), class = "fckerr"))
+  if (inherits(reg_md, "fckerr")) {
+    fail(paste("the report errored with a registration result present:", as.character(reg_md)))
+  } else {
+    rtxt <- paste(reg_md, collapse = "\n")
+    if (!grepl("Registration diagnostics", rtxt, fixed = TRUE))
+      fail("the report has a registration result but no registration section")
+    else ok("the registration section is generated from a real registration")
+    for (bad in c("AIC", "BIC", "variance explained by warping"))
+      if (grepl(bad, rtxt, fixed = TRUE))
+        fail(sprintf("the registration section mentions '%s', which this module does not compute", bad))
+    ok("the registration section reports no criterion it cannot justify")
+    if (nzchar(Sys.getenv("FCK_DUMP_REG"))) writeLines(reg_md, Sys.getenv("FCK_DUMP_REG"))
+  }
   values$warping_results <- NULL
 
   # ------------------------------------------------- cosinor + groups -------
@@ -365,6 +383,7 @@ server <- function(input, output, session) {
     fail("fck_apa_report ->", as.character(md))
   } else {
     ok(sprintf("report generated (%d lines)", length(md)))
+  if (nzchar(Sys.getenv("FCK_DUMP_REPORT"))) writeLines(md, Sys.getenv("FCK_DUMP_REPORT"))
     txt <- paste(md, collapse = "\n")
     # it must describe the analyses that ran, and only those
     must <- c("Statistical analysis", "Results", "Reproducibility",

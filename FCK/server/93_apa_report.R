@@ -202,7 +202,35 @@ fck_apa_report <- function(values, input, title = NULL) {
       add("Each row is a distinct participant (*n* = ", n_id, ").")
   }
 
+  # AUDIT (P13.3). This was the report's ONLY statement about missing data, and
+  # it is gated on values$fill_status, which the smoothing step creates. Cosinor
+  # is a regression on the observations and needs no smoothing, so a perfectly
+  # ordinary workflow -- import, fit cosinor, write the report -- produced a
+  # document that never mentioned missingness at all. APA 7 asks for the amount
+  # and the handling of missing data whether or not an imputation step ran, and
+  # a reader cannot judge a curve analysis without knowing how much of it was
+  # measured. The raw matrix is always available, so the count is always
+  # reportable; the observed/interpolated/extrapolated split still requires the
+  # smoother, because only it knows which side of a curve's own range a filled
+  # cell fell on.
   fs <- values$fill_status
+  if (is.null(fs) && !is.null(values$data)) {
+    dm <- as.matrix(values$data)
+    n_cell <- length(dm); n_miss <- sum(is.na(dm))
+    if (n_miss == 0) {
+      add("No values were missing: every one of the ", n_cell,
+          " participant-by-time cells was measured.")
+    } else {
+      rows_aff <- sum(apply(dm, 1, function(r) any(is.na(r))))
+      add("Of ", n_cell, " participant-by-time cells, ", n_miss, " (",
+          fck_apa_num(100 * n_miss / n_cell, 1), "%) were missing, affecting ",
+          rows_aff, " of ", nrow(dm), " curve", if (rows_aff == 1) "" else "s",
+          ". No smoothing step has been run in this session, so these were ",
+          "handled by whichever analysis read them: the cosinor fits drop ",
+          "missing rows per participant and are unbiased under MCAR, while any ",
+          "curve method requires a smoothed representation first.")
+    }
+  }
   if (!is.null(fs)) {
     n_cell <- length(fs)
     cnt <- function(k) sum(fs == k, na.rm = TRUE)
@@ -286,7 +314,11 @@ fck_apa_report <- function(values, input, title = NULL) {
       linear_shift = "shift registration, a translation of the time axis",
       parametric   = sprintf("parametric registration in the %s family",
                              wr$family %|% "selected"),
-      landmark     = "landmark registration, a monotone piecewise-linear map through matched landmarks",
+      landmark     = paste0("landmark registration, a monotone piecewise-linear map through matched landmarks",
+                            if (!is.null(wr$landmarks_used) && length(wr$landmarks_used))
+                              sprintf(" placed by hand at %s",
+                                      paste(fck_apa_num(wr$landmarks_used, 3), collapse = ", "))
+                            else " detected automatically, by the same deterministic rule for every curve (the strongest turning point of that curve nearest each reference position taken from the sample mean)"),
       wr$method %|% "an unnamed method")
     add("**Curve registration.** Curves were registered by ", mlab, ". ")
     if (identical(wr$method, "linear_shift"))
@@ -302,11 +334,21 @@ fck_apa_report <- function(values, input, title = NULL) {
           "and widened where necessary to contain that family's identity, so ",
           "that \"this curve needs no registration\" was always an available ",
           "answer.")
-    if (!is.null(wr$n_rejected) && wr$n_rejected > 0)
-      add(" ", wr$n_rejected, " curve", if (wr$n_rejected == 1) "" else "s",
-          " yielded crossed or duplicated landmarks, which cannot define a ",
-          "monotone time warp, and ", if (wr$n_rejected == 1) "was" else "were",
-          " left unregistered rather than registered with a fold.")
+    if (identical(wr$method, "landmark")) {
+      # P13.4: state the rule, not only its exceptions. "0 curves were rejected"
+      # is a result; silence is not, and a reader cannot tell the two apart.
+      if (!is.null(wr$n_rejected) && wr$n_rejected > 0)
+        add(" Landmarks that cross or duplicate cannot define a monotone time ",
+            "warp; ", wr$n_rejected, " curve", if (wr$n_rejected == 1) "" else "s",
+            " yielded such landmarks and ", if (wr$n_rejected == 1) "was" else "were",
+            " left UNREGISTERED rather than registered with a fold, and ",
+            if (wr$n_rejected == 1) "is" else "are",
+            " therefore carried through the analyses in their original time.")
+      else
+        add(" Landmarks that cross or duplicate cannot define a monotone time ",
+            "warp, and such curves are left unregistered rather than registered ",
+            "with a fold; no curve required that here.")
+    }
     # P11.4: the estimate has a resolution, and a paper is the last place a
     # difference below it should be read as a finding. The report states the
     # floor next to the method, in the Methods section, where a reader checks
@@ -324,6 +366,26 @@ fck_apa_report <- function(values, input, title = NULL) {
   fa <- values$fanova_results
   if (!is.null(fa)) {
     add("**Functional ANOVA.** ")
+    # AUDIT (P13.4). The report described the test and never said WHICH CURVES it
+    # was computed on. With a registration in the session that is the difference
+    # between a claim about amplitude alone and a claim about amplitude and phase
+    # together, and a reader has no way to tell the two apart from the output.
+    # `used_warped` is what the analysis actually ran on, not what was requested.
+    if (!is.null(values$warping_results) || isTRUE(fa$used_warped)) {
+      if (isTRUE(fa$used_warped))
+        add("This test was computed on the REGISTERED curves",
+            if (!is.null(fa$warp_method_used))
+              paste0(" (", fa$warp_method_used, " registration)") else "",
+            ". Registration removes phase variation into the warping functions, ",
+            "so a group difference found here is a difference in AMPLITUDE at ",
+            "aligned time; it is not evidence that the groups differ in timing. ",
+            "Differences in timing are the warping parameters, and are tested ",
+            "separately if at all. ")
+      else
+        add("This test was computed on the UNREGISTERED curves, even though a ",
+            "registration exists in this session, so a group difference here ",
+            "may reflect a difference in timing, in amplitude, or in both. ")
+    }
     if (identical(fa$design, "within"))
       add("A pointwise repeated-measures ANOVA was computed at each evaluation ",
           "point on the complete cases available there. The null distribution ",
@@ -423,9 +485,19 @@ fck_apa_report <- function(values, input, title = NULL) {
         "identified at that level and is reported as such rather than as a ",
         "point estimate.")
     if (!is.null(hm$group_var_name)) {
-      pw <- values$hp_pairwise_results
+      # AUDIT (P13.1). This was `pw <- ...`, which REBOUND the name the fANOVA
+      # post-hoc object is held in (assigned once near the top of the function
+      # and read much further down, in Results). The cosinor Methods paragraph
+      # runs in between, so the post-hoc Results block was reading a cosinor
+      # data frame: it printed "0 of 0 comparisons remained significant after
+      # the -- correction at alpha = --" on a run whose Methods paragraph, four
+      # lines above, correctly described 6 comparisons at B = 777. Introduced by
+      # me at P12 and shipped. The name is scoped to the cosinor block now, and
+      # tests/testthat/test-p13-corrections.R generates a report with BOTH kinds
+      # of pairwise result present, which is the only arrangement that shows it.
+      hp_pw <- values$hp_pairwise_results
       add(" Participants were grouped by ", hm$group_var_name, ".")
-      if (!is.null(pw) && nrow(pw) > 0) {
+      if (!is.null(hp_pw) && nrow(hp_pw) > 0) {
         prm  <- fck_cosinor_param_label(values$hp_pairwise_param %|% "")
         circ <- grepl("acro", values$hp_pairwise_param %|% "")
         add(" Group differences in ", prm, " were tested pairwise on the ",
@@ -440,7 +512,7 @@ fck_apa_report <- function(values, input, title = NULL) {
               cr <- values$hp_pairwise_correction %|% "none"
               if (identical(cr, "none"))
                 "No correction was applied for the number of comparisons, so the pairwise *p*-values are nominal."
-              else paste0("*p*-values were adjusted for the ", nrow(pw),
+              else paste0("*p*-values were adjusted for the ", nrow(hp_pw),
                           " comparisons by the ", fck_apa_method(cr), " method.")
             }))
       }
@@ -723,15 +795,17 @@ fck_apa_report <- function(values, input, title = NULL) {
                           param = values$hp_pairwise_param %|% "",
                           correction = values$hp_pairwise_correction %|% "none"))
     for (entry in pw_all) {
-      pw <- entry$results
-      if (is.null(pw) || !nrow(pw)) next
+      # P13.1: named for the loop it belongs to, not `hp_pw` -- see the note in the
+      # Methods block above for what reusing that name cost.
+      hp_pw <- entry$results
+      if (is.null(hp_pw) || !nrow(hp_pw)) next
       prm  <- fck_cosinor_param_label(entry$param %|% "")
       circ <- grepl("acro", entry$param %|% "")
       cr   <- entry$correction %|% "none"
       add("**Group differences in ", prm, ".**")
       blank()
-      prows <- do.call(rbind, lapply(seq_len(nrow(pw)), function(i) {
-        r <- pw[i, ]
+      prows <- do.call(rbind, lapply(seq_len(nrow(hp_pw)), function(i) {
+        r <- hp_pw[i, ]
         data.frame(
           Comparison = r$comparison,
           `Group 1`  = sprintf("%s (%.2f, n = %d)", r$group1, r$mean1, as.integer(r$n1)),
@@ -760,7 +834,7 @@ fck_apa_report <- function(values, input, title = NULL) {
       L <- c(L, fck_md_table(prows)); blank()
       add("*p* is ", if (identical(cr, "none")) "unadjusted"
           else paste0("adjusted by the ", fck_apa_method(cr), " method"),
-          " across the ", nrow(pw), " comparisons of this parameter",
+          " across the ", nrow(hp_pw), " comparisons of this parameter",
           if (length(pw_all) > 1)
             "; the correction was applied within each parameter, not across parameters, so the family being controlled is the set of pairwise contrasts for one parameter"
           else "",
@@ -843,11 +917,36 @@ fck_apa_report <- function(values, input, title = NULL) {
           fck_apa_num(mean(rg$r2_t, na.rm = TRUE), 3, bounded = TRUE),
           " (range ", fck_apa_range(rg$r2_t, 3, TRUE), ").")
     blank()
-    add("*What these numbers do not establish.* Each time point was fitted ",
-        "separately, so the coefficient curves carry no smoothness constraint ",
-        "and the pointwise intervals are not simultaneous bands: the ",
-        "probability that the whole curve lies inside them is lower than the ",
-        "nominal level at any single point.")
+    # AUDIT (P13.2). This caveat was printed unconditionally, and it describes
+    # the POINTWISE OLS fit: "each time point was fitted separately", "the
+    # pointwise intervals are not simultaneous bands". Under the GAM branch both
+    # halves are false -- the whole point of that branch is a penalised spline in
+    # time, so the curves are not fitted independently, and the sentence above it
+    # has just said that NO pointwise inference is available, so there are no
+    # intervals for it to be talking about. A caveat that describes a different
+    # estimator is not a small stylistic problem: it tells a reader their
+    # coefficient curves are unsmoothed when they are penalised, and warns them
+    # about the coverage of bands that do not exist.
+    if (identical(rg$inference, "analytic-t-fdr")) {
+      add("*What these numbers do not establish.* Each time point was fitted ",
+          "separately, so the coefficient curves carry no smoothness constraint ",
+          "and the pointwise intervals are not simultaneous bands: the ",
+          "probability that the whole curve lies inside them is lower than the ",
+          "nominal level at any single point. The false-discovery-rate ",
+          "adjustment controls the expected proportion of false positives among ",
+          "the flagged time points, not the familywise error.")
+    } else {
+      add("*What these numbers do not establish.* The coefficient curves are ",
+          "prediction contrasts read off the fitted model, not estimated ",
+          "parameters with a sampling distribution attached: no standard error ",
+          "is propagated through them, so nothing in this subsection is a test ",
+          "of where a predictor matters, and the curves should not be read as ",
+          "if they carried confidence bands. The smoothness you see is imposed ",
+          "by the penalty and its amount was chosen by REML from these same ",
+          "data. For term-level inference use the model summary, whose ",
+          "*p*-values are approximate because the smoothing parameters were ",
+          "estimated rather than fixed.")
+    }
   }
 
   if (!is.null(cl)) {
