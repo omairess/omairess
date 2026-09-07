@@ -2760,6 +2760,70 @@ pass vacuously instead.
 After this round: **1,982 testthat assertions (0 failed, 0 skipped) and 16
 standalone suites pass.**
 
+**4.63 P16: the app got slower, and both halves were mine.** Reported by the
+user as "everything is slowed down, the analyses and the GUI". Measured, not
+guessed at, in both cases.
+
+*The GUI.* The resize wrapper added one round earlier did a full
+`document.querySelectorAll` on **every** `shiny:value` -- an event that fires
+once per output, for all 159 of them, on every render -- and its
+`ResizeObserver` dispatched a **global** window resize, which makes Shiny
+recompute sizes for every bound output and re-render every base-R plot. And
+`ResizeObserver` fires once when observation begins, so merely creating the
+wrappers fired one global resize per plot during page load. Instrumented in
+Chromium on a page with 40 plots and 60 text outputs:
+
+```
+                     before            after
+page load        301 scans, 40 resizes  ->   2 scans, 0 resizes
+one refresh      100 scans              ->   0 scans
+drag ONE plot    100 scans,  1 resize   ->   0 scans, 0 resizes
+```
+
+The drag row is the one that matches what the user described: dragging a single
+plot re-rendered all of them. Now `shiny:value` enhances only the element that
+just rendered; a full scan happens on load and tab change, coalesced into one
+animation frame; plotly is resized directly and returns before the window event
+is reached, so only a box actually holding a base-R plot -- 5 of 47 -- can ever
+reach it; and the observer's first callback is skipped. Resizing still works,
+checked the same way: plotly svg 294 -> 614 px, base-R image regenerated at
+840x534.
+
+*The analyses.* P12.1 removed the 60-subject cap from `fck_auto_lambda()`, which
+was right -- the report claimed the whole sample and did not have it -- but it
+made every automatic smoothing, and every step of the n-basis sweep, which calls
+that search once per candidate basis, proportional to the sample.
+
+That cost was never necessary. `fda::smooth.basis` accepts a MATRIX of curves
+and returns one GCV per column, and the app was calling it once per subject
+inside a 25-point lambda grid. The only thing that differs between subjects is
+which time points they have; the basis, the penalty and the argvals are shared.
+So subjects with the same missingness pattern can be fitted in one call, and
+complete data -- the usual case -- is one pattern. Measured, 150 subjects x 24
+points, against the previous implementation as the oracle:
+
+```
+complete data        13.32 s -> 0.13 s   (101x)   identical lambda
+one shared gap       13.43 s -> 0.16 s    (83x)   identical lambda
+every subject its
+  own gap pattern    13.82 s -> 9.65 s     (1x)   identical lambda
+```
+
+The last row is the worst case -- as many groups as subjects, so no sharing is
+possible -- and it is still not slower than before. Every case returns the same
+lambda, the same `n_used` and the same GCV: this is the same computation with
+the redundancy removed, not an approximation, and
+`tests/testthat/test-p16-corrections.R` keeps the pre-P16 implementation as the
+oracle to prove it. **The cap stays gone.**
+
+Two costs are deliberate and remain: the whole-sample GCV search itself (asked
+for at P12.1, and now cheap), and the model-selection grid at three harmonics,
+which fits 12 cells against the old 9 because it gained the logarithmic trend
+the UI offers. At one harmonic it fits 4 where it used to fit 9.
+
+After this round: **2,006 testthat assertions (0 failed, 0 skipped) and 16
+standalone suites pass.**
+
 ## 5. Rename table
 
 | source | source app | merged app |

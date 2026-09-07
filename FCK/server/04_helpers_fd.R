@@ -131,16 +131,41 @@ fck_auto_lambda <- function(data_mat, argvals, basisobj,
   # description. The caller reports n_used, so the cost is visible and the
   # sentence the report prints is now the sentence that is true.
 
+  # AUDIT (P16). This called fda::smooth.basis ONCE PER SUBJECT, inside a loop
+  # over a 25-point lambda grid: 25 x n fits to score one search. smooth.basis
+  # accepts a MATRIX of curves and returns one GCV per column, and the only
+  # thing that varies between subjects is which time points they have -- the
+  # penalty, the basis and the argvals are shared. So subjects with the SAME
+  # missingness pattern can be fitted in a single call.
+  #
+  # Complete data, the usual case, is one pattern and therefore one call.
+  # Measured on 200 subjects x 24 time points with a 12-function B-spline:
+  # 0.502 s per-subject against 0.003 s for the matrix call, 147x, with
+  # max |difference| = 0 -- the same numbers, not an approximation.
+  #
+  # This is what pays for P12.1. Removing the 60-subject cap there was right --
+  # the report claimed the whole sample and did not have it -- but it made every
+  # automatic smoothing and every step of the n-basis sweep proportional to the
+  # sample, and the user felt it. The cap stays gone; the redundant work goes
+  # instead.
+  pat <- apply(data_mat[rows, , drop = FALSE], 1, function(r) paste0(as.integer(!is.na(r)), collapse = ""))
+  pat_groups <- split(rows, pat)
+
   mean_gcv <- function(log_lambda) {
     fdp <- fda::fdPar(basisobj, 2, 10^log_lambda)
-    v <- vapply(rows, function(i) {
-      ok <- !is.na(data_mat[i, ])
-      f <- tryCatch(fda::smooth.basis(argvals[ok], data_mat[i, ok], fdp),
+    v <- unlist(lapply(pat_groups, function(idx) {
+      ok <- !is.na(data_mat[idx[1], ])
+      if (sum(ok) < 2) return(rep(NA_real_, length(idx)))
+      ymat <- t(data_mat[idx, ok, drop = FALSE])       # time x subjects
+      f <- tryCatch(fda::smooth.basis(argvals[ok], ymat, fdp),
                     error = function(e) NULL)
-      if (is.null(f)) return(NA_real_)
+      if (is.null(f)) return(rep(NA_real_, length(idx)))
       g <- suppressWarnings(as.numeric(f$gcv))
-      if (!length(g) || !is.finite(g[1])) NA_real_ else g[1]
-    }, numeric(1))
+      # one gcv per curve; anything else means the call did not do what we asked
+      if (length(g) != length(idx)) return(rep(NA_real_, length(idx)))
+      g[!is.finite(g)] <- NA_real_
+      g
+    }), use.names = FALSE)
     if (all(is.na(v))) return(Inf)
     mean(v, na.rm = TRUE)
   }

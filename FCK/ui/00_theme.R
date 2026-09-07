@@ -80,10 +80,37 @@ ui_theme_css <- tags$head(
     // P15.1: wrap each plot output in a resizable box and keep the plot filling
     // it. Dependency-free on purpose -- shinyjqui would add a package to an app
     // whose environment is not pinned (see the README on renv).
+    //
+    // AUDIT (P16). The first version of this was measured, after the user
+    // reported the whole GUI had got slower, and it was the cause. Three
+    // separate mistakes, all mine:
+    //
+    //   scan() did a full document.querySelectorAll and ran on EVERY
+    //   shiny:value -- an event that fires once per output, for all 159 of
+    //   them, on every render. Measured on a page with 40 plots and 60 text
+    //   outputs: 301 full scans to load the page, and 100 more per refresh.
+    //
+    //   The ResizeObserver dispatched a GLOBAL window resize, which makes Shiny
+    //   recompute sizes for every bound output and re-render every base-R plot.
+    //   So dragging one plot re-rendered all of them.
+    //
+    //   ResizeObserver fires once when observation starts, so simply creating
+    //   the wrappers fired 40 of those global resizes during page load.
+    //
+    // Now: shiny:value enhances only the element that just rendered; a full
+    // scan happens on load and on tab changes, coalesced into one animation
+    // frame; a plotly widget is resized directly and never through a global
+    // event; and only a box actually containing a base-R plot falls back to the
+    // window event, since that is the one output kind Shiny re-measures that
+    // way. The first observer callback per box is ignored.
     (function () {
+      var SEL = '.shiny-plot-output, .html-widget-output, .plotly.html-widget';
+
       function enhance(el) {
-        if (!el || el.dataset.fckResizable === '1') return;
+        if (!el || !el.matches || !el.matches(SEL)) return;
+        if (el.dataset.fckResizable === '1') return;
         if (el.closest('.fck-resizable')) return;
+
         var h = el.offsetHeight || parseInt(el.style.height, 10) || 400;
         var box = document.createElement('div');
         box.className = 'fck-resizable';
@@ -93,37 +120,49 @@ ui_theme_css <- tags$head(
         el.dataset.fckResizable = '1';
 
         if (typeof ResizeObserver === 'undefined') return;
-        var t = null;
+
+        // Does this box hold a base-R plot? Only those need Shiny to re-measure.
+        var isRPlot = el.classList.contains('shiny-plot-output');
+        var first = true, t = null;
+
         new ResizeObserver(function () {
-          // Plotly resizes precisely and immediately.
+          if (first) { first = false; return; }   // the initial observe() call
+
           if (window.Plotly) {
             var g = el.classList.contains('js-plotly-plot')
                   ? el : el.querySelector('.js-plotly-plot');
-            if (g) { try { Plotly.Plots.resize(g); } catch (e) {} }
+            if (g) { try { Plotly.Plots.resize(g); } catch (e) {} return; }
           }
-          // Base-R plotOutput re-renders when Shiny recomputes output sizes,
-          // which it does on a window resize. Debounced: the observer fires on
-          // every pixel of a drag and a re-render per pixel would be unusable.
+          if (!isRPlot) return;
+
+          // Debounced: the observer fires on every pixel of a drag, and a
+          // re-render per pixel is unusable.
           if (t) clearTimeout(t);
           t = setTimeout(function () {
             window.dispatchEvent(new Event('resize'));
-          }, 150);
+          }, 200);
         }).observe(box);
       }
 
-      function scan() {
-        document.querySelectorAll(
-          '.shiny-plot-output, .html-widget-output, .plotly.html-widget'
-        ).forEach(enhance);
+      var pending = false;
+      function scanSoon() {
+        if (pending) return;
+        pending = true;
+        requestAnimationFrame(function () {
+          pending = false;
+          document.querySelectorAll(SEL).forEach(enhance);
+        });
       }
 
-      if (document.readyState !== 'loading') scan();
-      document.addEventListener('DOMContentLoaded', scan);
-      // tabs render lazily, so rescan whenever Shiny paints an output
+      if (document.readyState !== 'loading') scanSoon();
+      document.addEventListener('DOMContentLoaded', scanSoon);
       if (window.jQuery) {
-        jQuery(document).on('shiny:value shiny:visualchange', function () {
-          setTimeout(scan, 0);
+        // one element, not one scan, for the common case
+        jQuery(document).on('shiny:value', function (e) {
+          if (e.target && e.target.nodeType === 1) enhance(e.target);
         });
+        // tabs render lazily; a whole panel appears at once, so scan then
+        jQuery(document).on('shiny:visualchange shown.bs.tab', scanSoon);
       }
     })();
   "))
