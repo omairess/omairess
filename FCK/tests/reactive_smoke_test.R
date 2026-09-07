@@ -335,6 +335,7 @@ server <- function(input, output, session) {
   cat("\n-- cosinor regression, with a grouping variable -------------------------\n")
   session$setInputs(harmonic_data_source = "raw", harmonic_period = 24,
                     n_harmonics = 1, harmonic_trend_type = "none",
+                    harmonic_model_selection = FALSE,
                     harmonic_time_var = "_columns_",
                     harmonic_dv_name = "Activity", harmonic_dv_units = "counts/min",
                     harmonic_group_var = "AGEcategory",
@@ -373,6 +374,53 @@ server <- function(input, output, session) {
                     values$hp_acrophase_differs))
   }
   render("pairwise cosinor results render", output$hp_results)
+
+  # ---- the nested model-selection diagnostic (P14) --------------------------
+  # The grid used to be hardcoded as {none, linear, exp_sat} x 1:3: it omitted
+  # the `log` trend the UI offers -- so a user who chose it was shown a table
+  # their own model was not in, with Akaike weights normalised over a set that
+  # excluded it -- and it ran to three harmonics whatever had been selected.
+  # Driven here with the user's own example: saturating exponential, 2 harmonics.
+  cat("\n-- nested model selection: exp_sat + 2 harmonics -----------------------\n")
+  t0 <- Sys.time()
+  session$setInputs(n_harmonics = 2, harmonic_trend_type = "exp_sat",
+                    harmonic_model_selection = TRUE, run_harmonic = 2)
+  session$flushReact()
+  el <- as.numeric(Sys.time() - t0, units = "secs")
+  ms <- values$harmonic_model$model_selection
+  if (is.null(ms)) {
+    fail("the model-selection diagnostic produced no table")
+  } else {
+    ok(sprintf("model set fitted in %.1f s: %d candidates", el, nrow(ms)))
+    want <- c("none + H1", "none + H1-H2", "linear + H1", "linear + H1-H2",
+              "log + H1", "log + H1-H2", "exp_sat + H1", "exp_sat + H1-H2")
+    missing <- setdiff(want, ms$model)
+    extra   <- setdiff(ms$model, want)
+    if (length(missing)) fail(paste("model set is missing:", paste(missing, collapse = ", ")))
+    else ok("every trend the UI offers appears, crossed with H1 and H1-H2")
+    if (length(extra)) fail(paste("model set fits models beyond the selection:",
+                                  paste(extra, collapse = ", ")))
+    else ok("nothing beyond the 2 harmonics selected was fitted")
+    # a higher harmonic must never appear without the lower ones
+    if (any(grepl("\\+ H[23]$", ms$model)))
+      fail("a higher harmonic is being fitted on its own")
+    else ok("no harmonic is fitted without the ones below it")
+    if (!isTRUE(all.equal(sum(ms$weight), 1)))
+      fail(sprintf("Akaike weights sum to %.6f, not 1", sum(ms$weight)))
+    else ok("Akaike weights sum to 1 over the candidate set")
+    if (!identical(attr(ms, "selected"), "exp_sat + H1-H2"))
+      fail(paste("the reported model is not marked; got", attr(ms, "selected")))
+    else ok("the specification actually reported is marked in the table")
+    if (nzchar(Sys.getenv("FCK_DUMP_MS"))) {
+      con <- file(Sys.getenv("FCK_DUMP_MS"), "w")
+      writeLines(sprintf("%-18s %12s %10s %8s%s", ms$model,
+                         sprintf("%.2f", ms$AICc), sprintf("%.2f", ms$dAICc),
+                         sprintf("%.3f", ms$weight),
+                         ifelse(ms$model == attr(ms, "selected"), "  <-- reported", "")),
+                 con)
+      close(con)
+    }
+  }
 
   # ------------------------------------------------- the APA report --------
   cat("\n-- APA report ----------------------------------------------------------\n")

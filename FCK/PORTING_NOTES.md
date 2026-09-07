@@ -2603,6 +2603,85 @@ subsection is produced from a real run rather than never being exercised.
 After this round: **1,811 testthat assertions (0 failed, 0 skipped) and 16
 standalone suites pass.**
 
+**4.61 P14: the nested model set is the user's model set.** Reported by the
+user: the diagnostic fitted trend x harmonics as a full grid to three harmonics
+whatever had been selected, and a higher harmonic should never be considered
+without the lower ones.
+
+*One half of that was already true, and saying so matters.* `fit_cosinor()`
+builds its design with `for (h in 1:n_harmonics)`, so `n_harmonics = 2` fits
+cos1, sin1, cos2, sin2 -- the candidates were always properly nested and no
+harmonic was ever fitted alone. What was wrong was the LABEL: the table printed
+`exp_sat + H2`, which reads as "harmonic 2 by itself", a model this app cannot
+fit and which nobody intended. Labels now say `H1-H2`, and the readout states
+that harmonics are cumulative rather than leaving it to be inferred.
+
+*The grid omitted a trend the UI offers.* It was hardcoded
+
+```
+ms_trends <- c("none", "linear", "exp_sat")
+ms_harms  <- 1:3
+```
+
+and the UI offers FOUR trends. `log` is one of them, the fitter implements it,
+and the on-screen parameter-count line already accounted for it -- but the
+comparison never fitted it. So a user who selected a logarithmic trend was shown
+a Delta-AICc table that did not contain their own model, and the Akaike weights
+were normalised over a set their specification had been excluded from. The
+weights were wrong, not merely incomplete. Sixth instance in this audit of one
+definition written twice and drifting.
+
+*The grid ignored the selection.* Running to three harmonics when two were
+selected does not only waste compute; it spreads Akaike weight over models the
+user has already decided against, which changes the weight the reported model
+receives. The set now stops where the user stopped. Cell counts, old against
+new:
+
+```
+selected      old cells   new cells   change
+1 harmonic            9           4         -5
+2 harmonics           9           8         -1
+3 harmonics           9          12         +3
+```
+
+The three-harmonic case fits MORE than before, because it now includes the
+`log` trend it should always have had. That is the correct trade and it is
+stated rather than sold as a speedup.
+
+`fck_cosinor_model_set()`, `FCK_TREND_TYPES`, `fck_trend_npar()`,
+`fck_model_npar()` and the label helpers live in `server/08_helpers_cosinor.R`,
+and the two remaining copies of the parameter-count `switch()` in the readout
+now call the shared rule. Driven end to end with the user's own example --
+saturating exponential, 2 harmonics -- the app fits exactly the eight they
+listed, in 53.5 s over 126 subjects, with weights summing to 1 and the reported
+specification marked.
+
+*And the diagnostic finally reaches the report.* It contributed NOTHING to the
+publication document, though "which specification did you report, and how did you
+choose it" is a Methods question a reviewer asks of any cosinor paper that fits
+more than one harmonic or any trend at all. The report now describes the
+candidate set, prints the Delta-AICc table with Akaike weights, and -- on the
+smoke-test run, where the reported model is deliberately not the best one --
+says so:
+
+> The specification reported above (exp_sat + H1-H2) is not the best-supported
+> candidate: none + H1 has the lowest AICc, and the reported model is 11.05 AICc
+> units behind it with an Akaike weight of .002. Say why it was preferred, or
+> report the better-supported one.
+
+with the two caveats that make such a table honest: Akaike weights are
+conditional on the candidate set, so .90 means "best of these" and not "probably
+correct"; and every parameter, interval and *p*-value elsewhere in the document
+was computed on a specification chosen from these same data and is not adjusted
+for that selection.
+
+New: `tests/testthat/test-p14-corrections.R` (116 assertions), and the reactive
+smoke test drives the diagnostic with the user's settings and checks the
+candidate set is exactly the eight expected.
+
+After this round: **1,933 testthat assertions (0 failed, 0 skipped) and 16
+standalone suites pass.**
+
 ## 5. Rename table
 
 | source | source app | merged app |

@@ -484,6 +484,25 @@ fck_apa_report <- function(values, input, title = NULL) {
         "(1982); where the ellipse contains the origin the acrophase is not ",
         "identified at that level and is reported as such rather than as a ",
         "point estimate.")
+    # AUDIT (P14). The model-selection diagnostic contributed NOTHING to this
+    # document. "Which specification did you report, and how did you choose it"
+    # is a Methods question a reviewer will ask of any cosinor paper that fits
+    # more than one harmonic or any trend at all, and the app was computing the
+    # answer and then dropping it.
+    ms <- hm$model_selection
+    if (!is.null(ms) && nrow(ms) > 0) {
+      kmax <- attr(ms, "n_harmonics_max") %|% hm$n_harmonics
+      add(" The reported specification was chosen from a nested set of ",
+          nrow(ms), " candidates: every trend the app offers (none, linear, ",
+          "logarithmic and saturating exponential) crossed with the cumulative ",
+          "harmonic sets up to the ", kmax, " selected (H1",
+          if (kmax > 1) paste0(" through H1-H", kmax) else "",
+          "). Harmonics are cumulative, so a higher harmonic is never fitted ",
+          "without the ones below it. Candidates were ranked by AICc, ",
+          "corrected for the small ratio of observations to parameters that a ",
+          "single participant's series gives, averaged per participant over ",
+          "the same participants in every cell, with Akaike weights.")
+    }
     if (!is.null(hm$group_var_name)) {
       # AUDIT (P13.1). This was `pw <- ...`, which REBOUND the name the fANOVA
       # post-hoc object is held in (assigned once near the top of the function
@@ -757,6 +776,46 @@ fck_apa_report <- function(values, input, title = NULL) {
           else "", ".")
     }
     blank()
+
+    # ---- model selection ------------------------------------------------------
+    ms <- hm$model_selection
+    if (!is.null(ms) && nrow(ms) > 0) {
+      sel <- attr(ms, "selected")
+      add("**Model selection.**")
+      blank()
+      mrows <- data.frame(
+        Model    = ifelse(!is.null(sel) & ms$model == sel,
+                          paste0(ms$model, " (reported)"), ms$model),
+        AICc     = fck_apa_num(ms$AICc, 2),
+        `ΔAICc`  = fck_apa_num(ms$dAICc, 2),
+        `Akaike weight` = fck_apa_num(ms$weight, 3, bounded = TRUE),
+        check.names = FALSE, stringsAsFactors = FALSE)
+      L <- c(L, fck_md_table(mrows)); blank()
+      best <- ms$model[which.min(ms$dAICc)]
+      if (!is.null(sel) && !identical(sel, best)) {
+        d <- ms$dAICc[ms$model == sel]
+        add("The specification reported above (", sel, ") is not the ",
+            "best-supported candidate: ", best, " has the lowest AICc, and the ",
+            "reported model is ", fck_apa_num(d, 2), " AICc units behind it ",
+            "with an Akaike weight of ",
+            fck_apa_num(ms$weight[ms$model == sel], 3, bounded = TRUE),
+            ". Say why it was preferred, or report the better-supported one.")
+      } else {
+        add("The specification reported above has the lowest AICc in this set.")
+      }
+      blank()
+      add("*What these numbers do not establish.* Akaike weights are ",
+          "conditional on the candidate set: they redistribute over whatever ",
+          "was fitted, so a weight of .90 means \"best of these\", not ",
+          "\"probably correct\". The set here contains no model outside the ",
+          "cosinor family, so nothing in this table tests whether a sinusoid ",
+          "is the right shape for these data. And the parameters, intervals ",
+          "and *p*-values reported elsewhere in this document were computed on ",
+          "a specification chosen from these same data; they are not adjusted ",
+          "for that selection and are anticonservative to the extent that the ",
+          "choice was data-driven.")
+      blank()
+    }
 
     # ---- per-group description ----------------------------------------------
     gf <- hm$group_fits

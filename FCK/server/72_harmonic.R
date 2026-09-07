@@ -2981,30 +2981,48 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       # ======================================================================
       model_selection <- NULL
       if(isTRUE(input$harmonic_model_selection)) {
-        ms_trends <- c("none", "linear", "exp_sat")
-        ms_harms  <- 1:3
+        # AUDIT (P14). The grid used to be hardcoded here as
+        # c("none", "linear", "exp_sat") x 1:3. It omitted the `log` trend the
+        # UI offers -- so a user who selected it saw a table their own model was
+        # not in, with weights normalised over a set that excluded it -- and it
+        # ran to three harmonics whatever had been selected, spending compute on
+        # models the user had already ruled out and diluting the Akaike weight
+        # of the one they were reporting. The set now comes from
+        # fck_cosinor_model_set(), which crosses every trend the UI offers with
+        # the CUMULATIVE harmonic sets up to the number selected.
+        ms_models <- fck_cosinor_model_set(n_harmonics)
         ms_rows <- list()
         withProgress(message = "Fitting the nested model set...", value = 0, {
-          for(tt in ms_trends) for(hh in ms_harms) {
-            incProgress(1 / (length(ms_trends) * length(ms_harms)),
-                        detail = sprintf("trend=%s, H=%d", tt, hh))
-            need <- 2 * hh + 1 + switch(tt, "none" = 0, "linear" = 1, "exp_sat" = 2, 0) + 1
+          for(m in ms_models) {
+            incProgress(1 / length(ms_models),
+                        detail = sprintf("%s, %s", fck_trend_label(m$trend),
+                                         fck_harmonic_label(m$k)))
+            # parameters + 1: a fit needs at least one observation more than it
+            # has parameters for the residual variance to be estimable
+            need <- fck_model_npar(m$trend, m$k) + 1L
             if(n_time < need) next
             aicc_sum <- 0; k_ok <- 0L
             for(i in seq_len(n_subjects)) {
               y_i <- as.numeric(Y[i, ])
               if(sum(!is.na(y_i)) < need) next
               f <- tryCatch(fit_cosinor(time_vec_model, y_i, period = period,
-                                        n_harmonics = hh, trend_type = tt),
+                                        n_harmonics = m$k, trend_type = m$trend),
                             error = function(e) NULL)
               if(is.null(f) || !isTRUE(f$success) || !is.finite(f$aicc)) next
               aicc_sum <- aicc_sum + f$aicc; k_ok <- k_ok + 1L
             }
-            if(k_ok > 0) ms_rows[[sprintf("%s + H%d", tt, hh)]] <- aicc_sum / k_ok * 1
+            if(k_ok > 0) ms_rows[[m$label]] <- aicc_sum / k_ok
           }
         })
         model_selection <- fck_akaike_table(ms_rows)
-        if(!is.null(model_selection)) attr(model_selection, "per_subject_mean") <- TRUE
+        if(!is.null(model_selection)) {
+          attr(model_selection, "per_subject_mean") <- TRUE
+          # Which row is the specification the user actually ran, so the readout
+          # and the report can point at it instead of leaving them to match a
+          # label by eye.
+          attr(model_selection, "selected") <- fck_model_label(trend_type, n_harmonics)
+          attr(model_selection, "n_harmonics_max") <- n_harmonics
+        }
       }
 
       # ======================================================================
@@ -3677,17 +3695,29 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     # ========================================================================
     if(!is.null(mod$model_selection)) {
       hdr("Model selection (Delta-AICc across a nested set)")
-      ms <- mod$model_selection
-      cat(sprintf("  %-18s %12s %10s %8s\n", "model", "AICc", "dAICc", "weight"))
-      for(i in seq_len(nrow(ms)))
-        cat(sprintf("  %-18s %12s %10s %8s\n", ms$model[i],
-                    fmt2(ms$AICc[i]), fmt2(ms$dAICc[i]), fmt3(ms$weight[i])))
+      ms  <- mod$model_selection
+      sel <- attr(ms, "selected")
+      cat(sprintf("  %-20s %12s %10s %8s\n", "model", "AICc", "dAICc", "weight"))
+      for(i in seq_len(nrow(ms))) {
+        # P14: mark the specification actually reported, so the reader does not
+        # have to match a label by eye to find their own model in the table.
+        mark <- if(!is.null(sel) && identical(ms$model[i], sel)) " <-- reported" else ""
+        cat(sprintf("  %-20s %12s %10s %8s%s\n", ms$model[i],
+                    fmt2(ms$AICc[i]), fmt2(ms$dAICc[i]), fmt3(ms$weight[i]), mark))
+      }
       cat("\n  AICc averaged per subject over the same subjects for every cell.\n")
+      # P14: the set is every trend the UI offers crossed with the CUMULATIVE
+      # harmonic sets up to the number selected. Say so: "H1-H2" is not "H2",
+      # and the old label invited exactly that reading.
+      cat("  Harmonics are cumulative: H1-H2 is the model containing harmonics 1 AND 2.\n")
+      cat("  The set stops at the ", attr(ms, "n_harmonics_max") %||% "selected",
+          " harmonic(s) you selected; models beyond that are not fitted, so they\n",
+          "  cannot take Akaike weight away from the ones you are choosing between.\n",
+          sep = "")
       cat("  Absolute AIC/AICc/BIC means with SDs are not reported: with no competing\n")
       cat("  model they are constant offsets of one another (which is why all three\n")
       cat("  SDs printed identically), and with n/k = ", fmtn(length(mod$time_vec), 0),
-          "/", fmtn(2 * nh + 1 +
-                    switch(trend_type, "none" = 0, "linear" = 1, "log" = 1, "exp_sat" = 2, 0) + 1, 0),
+          "/", fmtn(fck_model_npar(trend_type, nh) + 1, 0),   # P14: one rule
           " a high R-squared is near-guaranteed.\n", sep = "")
     } else if("aicc" %in% names(params)) {
       hdr("Model selection")
@@ -3740,7 +3770,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       cat("  (C) is the dominant component' from overlapping R-squareds; and any such\n")
       cat("  claim would have to account for C using ", 2 * nh,
           " parameters against S's ",
-          switch(trend_type, "none" = 0, "linear" = 1, "log" = 1, "exp_sat" = 2, 0),
+          fck_trend_npar(trend_type),                        # P14: one rule
           ".\n", sep = "")
     }
 

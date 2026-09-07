@@ -998,3 +998,80 @@ fck_gaussian_loglik <- function(ss_resid, n, y_scale = NULL) {
   if (sigma_sq < floor_sq) sigma_sq <- floor_sq
   -n / 2 * (log(2 * pi) + log(sigma_sq) + 1)
 }
+
+
+# ==============================================================================
+# The cosinor model set, in one place
+# ==============================================================================
+# AUDIT (P14). The nested-model diagnostic hardcoded its own grid:
+#
+#     ms_trends <- c("none", "linear", "exp_sat")
+#     ms_harms  <- 1:3
+#
+# Two things were wrong with it, and both are the same mistake this audit has
+# now made six times -- a definition written twice, drifting apart.
+#
+#   1. The UI offers FOUR trends. `log` is one of them, the fitter implements it
+#      and the on-screen parameter-count line already accounted for it, but the
+#      comparison grid never fitted it. A user who selected a logarithmic trend
+#      was shown a Delta-AICc table that did not contain their own model, and
+#      the Akaike weights were normalised over a set their specification was
+#      excluded from -- so the weights were wrong, not merely incomplete.
+#
+#   2. The harmonic grid ran to 3 whatever the user had selected. Fitting H1-H3
+#      to answer a question about a two-harmonic analysis costs a third more
+#      compute and, worse, spreads the Akaike weight over models the user has
+#      already decided against, which changes the weight the reported model
+#      receives.
+#
+# The harmonics were, and are, CUMULATIVE: fit_cosinor() builds its design with
+# `for (h in 1:n_harmonics)`, so n_harmonics = 2 fits cos1, sin1, cos2, sin2.
+# The set was therefore always properly nested. What was wrong was the LABEL:
+# "exp_sat + H2" reads as "harmonic 2 alone", which is a different model and not
+# one this app can fit. The labels now say H1-H2 explicitly.
+#
+# Everything that needs to know what the model set is -- the diagnostic, the
+# parameter counts, the readout, the publication report -- asks these functions.
+
+# The trend types the UI offers, in the order it offers them.
+FCK_TREND_TYPES <- c("none", "linear", "log", "exp_sat")
+
+# Free parameters each trend contributes, beyond the MESOR.
+fck_trend_npar <- function(trend) {
+  switch(trend, "none" = 0L, "linear" = 1L, "log" = 1L, "exp_sat" = 2L, 0L)
+}
+
+fck_trend_label <- function(trend) {
+  switch(trend,
+         "none"    = "no trend",
+         "linear"  = "linear trend",
+         "log"     = "logarithmic trend",
+         "exp_sat" = "saturating-exponential trend",
+         trend)
+}
+
+# "H1", "H1-H2", "H1-H3": the harmonics are cumulative and the label must say so.
+fck_harmonic_label <- function(k) {
+  k <- as.integer(k)
+  if (!is.finite(k) || k < 1) return("H0")
+  if (k == 1) "H1" else sprintf("H1-H%d", k)
+}
+
+fck_model_label <- function(trend, k) paste0(trend, " + ", fck_harmonic_label(k))
+
+# Total free parameters: MESOR + trend + 2 per harmonic. The +1 a caller adds on
+# top is the residual variance, when a fit needs one more observation than
+# parameters.
+fck_model_npar <- function(trend, k) 1L + fck_trend_npar(trend) + 2L * as.integer(k)
+
+# The candidate set for a run that selected `n_harmonics`. Every trend the UI
+# offers, crossed with the CUMULATIVE harmonic sets up to the one selected --
+# never beyond it, and never a higher harmonic without the ones below it.
+fck_cosinor_model_set <- function(n_harmonics) {
+  k_max <- max(1L, as.integer(n_harmonics))
+  out <- list()
+  for (tt in FCK_TREND_TYPES) for (k in seq_len(k_max))
+    out[[length(out) + 1L]] <- list(trend = tt, k = k,
+                                    label = fck_model_label(tt, k))
+  out
+}
