@@ -208,6 +208,33 @@
     values$hp_pairwise_param <- param
     values$hp_pairwise_correction <- correction
 
+    # AUDIT (P12.2): these three slots hold only the MOST RECENT comparison, so
+    # a user who compares MESOR, then amplitude, then acrophase -- which is what
+    # a chronobiology paper reports -- had the first two silently overwritten and
+    # the publication report showed only the last. The panel above is a live view
+    # of one comparison and stays as it is; the report needs the set, so every
+    # run is also kept, keyed by parameter, and re-running a parameter replaces
+    # its own entry rather than appending a duplicate.
+    all_pw <- values$hp_pairwise_all
+    if (is.null(all_pw)) all_pw <- list()
+    all_pw[[param]] <- list(results = results, param = param,
+                            correction = correction, run_at = Sys.time())
+    values$hp_pairwise_all <- all_pw
+
+    # AUDIT (P12.2). Bingham et al. (1982) note that a difference in AMPLITUDE
+    # is not interpretable when the same groups also differ in ACROPHASE: the
+    # amplitude is then being estimated about different phases. The publication
+    # report states that caution, and a caution that is merely recited is worth
+    # little -- so the acrophase verdict is recorded here, when the user runs
+    # that comparison, and the report checks it instead of telling the reader to.
+    # It is deliberately NOT computed on the fly from whatever is in memory: it
+    # is the result of a comparison the user actually ran, or it is unknown.
+    if (grepl("acro", param)) {
+      values$hp_acrophase_differs <-
+        any(is.finite(results$p_adjusted) & results$p_adjusted < 0.05)
+      values$hp_acrophase_param <- param
+    }
+
     showNotification("Pairwise comparisons completed!", type = "message", duration = 3)
   })
 

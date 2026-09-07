@@ -686,7 +686,19 @@
     acro_se <- numeric(n_harmonics)
     
     vcov_mat <- vcov(fit)
-    
+    # AUDIT (P12.2): the joint elliptical confidence region was computed only by
+    # the NONLINEAR fitter, so the default analysis -- a linear cosinor with no
+    # trend, which is what most users run -- reported an amplitude and an
+    # acrophase with no confidence limits at all. Cornelissen (2014) and Bingham
+    # et al. (1982) both prescribe limits read off the error ellipse of the
+    # (cosine, sine) pair rather than intervals that treat amplitude and phase as
+    # independent, and the ellipse is also what tells you when a phase is not
+    # identified (the region contains the origin). fck_bingham_ci() is already a
+    # shared helper and this fitter already has the covariance matrix; there was
+    # no reason for the two fitters to differ, and a reader cannot tell from the
+    # output which fitter produced their numbers.
+    bingham <- vector("list", n_harmonics)
+
     for(h in 1:n_harmonics) {
       cos_idx <- coef_offset + 2 * (h - 1) + 1
       sin_idx <- coef_offset + 2 * (h - 1) + 2
@@ -697,7 +709,13 @@
       amplitudes[h] <- sqrt(beta_cos^2 + beta_sin^2)
       acrophases[h] <- atan2(beta_sin, beta_cos)
       if(acrophases[h] < 0) acrophases[h] <- acrophases[h] + 2 * pi
-      
+
+      bingham[[h]] <- fck_bingham_ci(as.numeric(beta_cos), as.numeric(beta_sin),
+                                     vcov_mat[c(cos_idx, sin_idx),
+                                              c(cos_idx, sin_idx), drop = FALSE],
+                                     length(y), length(coefs),
+                                     level = 0.95, period = period, harmonic = h)
+
       if(amplitudes[h] > 1e-10) {
         grad_amp <- c(beta_cos, beta_sin) / amplitudes[h]
         idx <- c(cos_idx, sin_idx)
@@ -894,6 +912,7 @@
       acrophases_time = acrophases_time,
       acro_se = acro_se,
       acro_se_time = acro_se_time,
+      bingham = bingham,                # P12.2: joint elliptical CI per harmonic
       coefs = coefs,
       se = se,
       vcov = vcov_mat,

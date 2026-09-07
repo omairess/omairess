@@ -2436,6 +2436,100 @@ lives.
 After this round: **1,738 testthat assertions (0 failed, 0 skipped) and 16
 standalone suites pass.**
 
+**4.59 P12: the report's own sentence was false, and its cosinor section was not
+publication-grade.** Both reported directly by the user, not by a reviewer.
+
+*"Over the whole sample" was not true.* The report said the smoothing parameter
+was "chosen by generalised cross-validation over the whole sample".
+`fck_auto_lambda()` capped its objective at 60 subjects, taken as a systematic
+subsample, and returned `n_used` &mdash; which the report ignored. The cap is
+gone. Measured, 24 hourly columns and a 12-function B-spline basis:
+
+```
+   50 subjects  (uncapped before and after)   4.0 s ->  4.2 s
+  200 subjects   capped  5.3 s -> uncapped   17.3 s
+  500 subjects   capped  4.4 s -> uncapped   42.0 s
+ 1000 subjects   capped  4.6 s -> uncapped   78.1 s
+```
+
+Worth being exact about what was wrong: the cap was not producing a WRONG
+lambda. On the same data capped and uncapped returned 10.2 against 9.86 (200
+subjects) and 11.4 against 9.84 (1000) &mdash; differences far inside the range
+over which GCV is flat. It produced a true number under a false description, in
+the one document written to be pasted into a paper. The sentence now STATES the
+count rather than asserting a scope, because the two can legitimately differ: a
+subject with too few observed points cannot be scored and is excluded.
+
+*The cosinor section was missing most of what a chronobiology reviewer expects.*
+Checked against Cornelissen's *Cosinor-based rhythmometry* (2014) and Bingham et
+al. (1982), the reporting conventions those establish are: the period and
+whether it was fixed or estimated; the reference time the acrophase is measured
+from; MESOR, amplitude and acrophase WITH intervals; the zero-amplitude test;
+percentage rhythm; and, for groups, tests of the three parameters with the
+caution that an amplitude difference is uninterpretable when the acrophases also
+differ. The section reported pooled means, a rhythm-detection rate and an
+*R*-squared, and **nothing at all about groups** &mdash; while the app had
+already computed per-group fits and pairwise tests and was storing them.
+
+It now carries the dependent variable and units, the fixed period, the phase
+reference, what the zero-amplitude *F* test does and does not test, the Bingham
+ellipse and how often the acrophase was identified, a per-group table, and a
+pairwise table per parameter with exact df, adjusted *p* and an effect.
+
+Four defects surfaced while doing it, all mine:
+
+*(a) The linear fitter never computed the Bingham region.* `fck_bingham_ci()`
+was called only from the NONLINEAR fitter, so the default analysis &mdash; a
+linear cosinor with no trend, which is what most users run &mdash; produced an
+amplitude and an acrophase with no confidence limits at all, and no way to know
+when a phase was unidentified. The helper was already shared and the fitter
+already had the covariance matrix; there was no reason for the two paths to
+differ, and nothing in the output told a reader which fitter produced their
+numbers.
+
+*(b) The circular "effect size" answered a different question from its test.*
+The pairwise module stores `r1 - r2`, the difference in mean resultant lengths,
+in the `cohens_d` column for the acrophase comparison, and the report printed it
+beside a Watson-Williams test. Watson-Williams tests a difference of MEANS;
+mean resultant length measures CONCENTRATION. On concentrated data &mdash; the
+usual case for acrophase &mdash; every row printed `-0.00` while the group means
+differed by up to 3.1 hours. The report now prints the angular difference on the
+shortest arc, in hours, which is the quantity the test is about and what a
+chronobiology paper reports; delta-r is described on screen as what it is.
+
+*(c) `fck_apa_M()` had no `bounded` argument*, so *R*-squared printed as
+`M = 0.958` &mdash; a leading zero on a quantity that cannot exceed 1, the APA 7
+(6.36) error the suite already tested for in *p*-values and in ranges, shipped
+in the round that added those tests.
+
+*(d) Only the last comparison survived.* `hp_pairwise_results` held one result,
+so a user who compared MESOR, then amplitude, then acrophase &mdash; which is
+what a cosinor paper reports &mdash; had the first two silently overwritten. Every
+run is now kept, keyed by parameter, and the report prints them all and says
+that the correction was applied within a parameter rather than across them.
+
+The Bingham caution is **checked, not recited**: the acrophase verdict is
+recorded when the user runs that comparison, and the report says either "the
+acrophase comparison WAS significant, so the amplitude result above should not
+be read as a difference in rhythm strength", or that it was not, or &mdash; when
+the acrophase was never compared &mdash; that it should be. Watson-Williams's own
+assumptions (von Mises, common and sufficiently high concentration) are stated,
+and so is the fact that this is a TWO-STAGE procedure on per-participant point
+estimates and not the population-mean cosinor of Bingham et al., so a
+participant whose own rhythm is poorly determined counts as much as one whose
+rhythm is precise.
+
+*And the same coverage gap as P11.2, in the same shape.* The reactive smoke test
+never drove the cosinor tab, which is why a report section could ship having
+never been generated from a real fit with a grouping variable. It now runs the
+cosinor fit, the grouping, and pairwise comparisons on two parameters through
+the actual buttons, and the report is generated from that session.
+
+New: `tests/testthat/test-p12-corrections.R` (39 assertions).
+
+After this round: **1,777 testthat assertions (0 failed, 0 skipped) and 16
+standalone suites pass.**
+
 ## 5. Rename table
 
 | source | source app | merged app |

@@ -106,9 +106,30 @@ fck_auto_lambda <- function(data_mat, argvals, basisobj,
   rows <- which(rowSums(!is.na(data_mat)) >= min_points_needed)
   if (!length(rows)) return(NULL)
 
-  # Cap the work: GCV is a smooth function of the sample, so a large study does
-  # not need every subject in the objective.
-  if (length(rows) > 60) rows <- rows[round(seq(1, length(rows), length.out = 60))]
+  # AUDIT (P12.1). This used to cap the objective at 60 subjects, taken as a
+  # systematic subsample, under the argument that GCV is a smooth function of
+  # the sample. The argument is not wrong, but it made the app's own description
+  # of what it had done FALSE: the publication report said the parameter was
+  # "chosen by generalised cross-validation over the whole sample", and on any
+  # study with more than 60 usable subjects it was not. A method sentence that
+  # overstates what was computed is the exact failure this whole audit exists to
+  # prevent, and it is worse in the report than anywhere else, because that
+  # sentence is the one that goes into a paper.
+  #
+  # So the cap is gone and the mean GCV is taken over every scorable subject.
+  # Measured on 24 hourly columns with a 12-function B-spline basis, the search
+  # is dominated by the fixed 25-point grid rather than by the sample:
+  #     50 subjects (uncapped before and after)   4.0 s ->  4.2 s
+  #    200 subjects   capped  5.3 s -> uncapped  17.3 s
+  #    500 subjects   capped  4.4 s -> uncapped  42.0 s
+  #   1000 subjects   capped  4.6 s -> uncapped  78.1 s
+  #
+  # Worth saying plainly: the cap was not producing a WRONG lambda. On the same
+  # data the capped and uncapped searches returned 10.2 against 9.86 (200
+  # subjects) and 11.4 against 9.84 (1000) -- differences far inside the range
+  # over which GCV is flat. What it produced was a true number under a false
+  # description. The caller reports n_used, so the cost is visible and the
+  # sentence the report prints is now the sentence that is true.
 
   mean_gcv <- function(log_lambda) {
     fdp <- fda::fdPar(basisobj, 2, 10^log_lambda)

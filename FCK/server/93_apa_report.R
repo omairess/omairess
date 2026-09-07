@@ -72,11 +72,42 @@ fck_apa_F <- function(Fv, df1, df2, p = NULL) {
   out
 }
 
-fck_apa_M <- function(x, digits = 2) {
+# AUDIT (P12.2): `bounded` was missing here, so the cosinor section printed
+# "R-squared M = 0.958" -- a leading zero on a quantity that cannot exceed 1,
+# which is an APA 7 error (6.36) in exactly the same way the p-values and ranges
+# were. The SD of a bounded quantity is itself bounded, so both parts follow the
+# rule. The APA test suite checked p-values and ranges and not this, which is
+# why it shipped.
+fck_apa_M <- function(x, digits = 2, bounded = FALSE) {
   x <- x[is.finite(x)]
   if (!length(x)) return("--")
-  sprintf("*M* = %s, *SD* = %s", fck_apa_num(mean(x), digits),
-          fck_apa_num(stats::sd(x), digits))
+  sprintf("*M* = %s, *SD* = %s", fck_apa_num(mean(x), digits, bounded),
+          fck_apa_num(stats::sd(x), digits, bounded))
+}
+
+# AUDIT (P12.2): the pairwise controls carry internal ids (amplitude_1,
+# acrophase_time_1, mesor_adj). Those were being printed into report prose --
+# "Group differences in amplitude_1" -- which is not something that can go into
+# a paper. One mapping, used by every sentence that names a parameter.
+fck_cosinor_param_label <- function(p) {
+  if (is.null(p) || !nzchar(p)) return("the selected parameter")
+  if (grepl("^amplitude_([0-9]+)$", p))
+    return(sprintf("the amplitude of harmonic %s", sub("^amplitude_", "", p)))
+  if (grepl("^acrophase_time_([0-9]+)$", p))
+    return(sprintf("the acrophase of harmonic %s", sub("^acrophase_time_", "", p)))
+  switch(p,
+    mesor          = "the constant term",
+    mesor_adj      = "the MESOR (rhythm-adjusted mean)",
+    value_at_start = "the predicted value at the first observation",
+    p)
+}
+
+fck_cosinor_origin_label <- function(x) {
+  if (is.null(x) || !nzchar(x)) return(NULL)
+  switch(x,
+    first_observation = "the first observation in each series",
+    midnight          = "midnight",
+    x)
 }
 
 # `bounded` propagates the no-leading-zero rule to both ends of a range: an
@@ -218,10 +249,27 @@ fck_apa_report <- function(values, input, title = NULL) {
         if (identical(meth, "none"))
           "No roughness penalty was applied: the basis interpolates the observations, so each curve passes through every measured value."
         else if (identical(meth, "auto"))
-          paste0("The smoothing parameter was chosen by generalised ",
-                 "cross-validation over the whole sample, giving lambda = ",
+          # P12.1: this used to say "over the whole sample", which was not true
+          # -- the search capped its objective at 60 subjects. The cap is gone,
+          # and rather than assert a scope the sentence now STATES the count, so
+          # a reader can check it against the reported n. They can still differ
+          # legitimately: a subject with too few observed points cannot be
+          # scored and is excluded from the objective.
+          paste0("The smoothing parameter was chosen by minimising the mean ",
+                 "generalised cross-validation score across ",
+                 if (!is.null(sm$lambda_n_used) && is.finite(sm$lambda_n_used))
+                   paste0("all ", sm$lambda_n_used, " ",
+                          if (!is.null(sm$n_subjects) &&
+                              is.finite(sm$n_subjects) &&
+                              sm$n_subjects != sm$lambda_n_used)
+                            paste0("of the ", sm$n_subjects, " ") else "",
+                          "subjects with enough observed time points to be scored")
+                 else "the sample",
+                 ", giving lambda = ",
                  formatC(sm$lambda %|% NA, format = "e", digits = 2),
-                 ". (In *fda*, lambda = 0 is the unpenalised fit rather than an ",
+                 ". A single parameter was used for the whole sample rather ",
+                 "than one per subject, so the curves remain comparable. ",
+                 "(In *fda*, lambda = 0 is the unpenalised fit rather than an ",
                  "automatic selection; the value quoted here is the one the GCV ",
                  "search returned.)")
         else
@@ -348,6 +396,55 @@ fck_apa_report <- function(values, input, title = NULL) {
           "Fitting on smoothed rather than raw data removes independent noise and induces residual autocorrelation: *R*-squared is inflated, leave-one-out cross-validation is optimistic, and the zero-amplitude *F* test is anticonservative. Consider re-running on the raw series and reporting the difference."
         else
           "Cosinor is a regression on the observations and handles missing time points natively, so no smoothing was required.")
+    # AUDIT (P12.2). Everything below was missing, and each item is something a
+    # chronobiology reviewer expects to see. Cornelissen (2014) and the
+    # CosinorOnline reporting convention ask for the period, the reference time
+    # the acrophase is measured from, MESOR/amplitude/acrophase with intervals,
+    # the zero-amplitude test, and the percentage rhythm. The app computes all
+    # of them; the report simply did not print them.
+    if (!is.null(hm$dv_name))
+      add(" The dependent variable was ", hm$dv_name,
+          if (!is.null(hm$dv_units)) paste0(" (", hm$dv_units, ")") else "", ".")
+    add(" The period was FIXED at ", format(hm$period),
+        " rather than estimated, so the acrophase and amplitude are conditional ",
+        "on that choice.")
+    if (!is.null(fck_cosinor_origin_label(hm$time_origin)))
+      add(" Acrophase is reported in clock time, measured from ",
+          fck_cosinor_origin_label(hm$time_origin), "; a phase has no meaning ",
+          "without the origin it is measured from.")
+    add(" Rhythm detection used the zero-amplitude *F* test, which compares the ",
+        "full model against a refit containing the trend but no harmonics; it ",
+        "tests whether the rhythmic amplitude is distinguishable from zero, ",
+        "not whether the cosinor is the correct functional form.")
+    add(" Joint confidence regions for amplitude and acrophase were obtained ",
+        "from the error ellipse of the (cosine, sine) coefficient pair rather ",
+        "than by treating the two as independent, following Bingham et al. ",
+        "(1982); where the ellipse contains the origin the acrophase is not ",
+        "identified at that level and is reported as such rather than as a ",
+        "point estimate.")
+    if (!is.null(hm$group_var_name)) {
+      pw <- values$hp_pairwise_results
+      add(" Participants were grouped by ", hm$group_var_name, ".")
+      if (!is.null(pw) && nrow(pw) > 0) {
+        prm  <- fck_cosinor_param_label(values$hp_pairwise_param %|% "")
+        circ <- grepl("acro", values$hp_pairwise_param %|% "")
+        add(" Group differences in ", prm, " were tested pairwise on the ",
+            "per-participant estimates",
+            if (circ)
+              paste0(", using the Watson-Williams *F* test for circular means, ",
+                     "which assumes a von Mises distribution with a common and ",
+                     "sufficiently high concentration in each group")
+            else ", using Welch's *t* test, which does not assume equal variances",
+            ". ",
+            local({
+              cr <- values$hp_pairwise_correction %|% "none"
+              if (identical(cr, "none"))
+                "No correction was applied for the number of comparisons, so the pairwise *p*-values are nominal."
+              else paste0("*p*-values were adjusted for the ", nrow(pw),
+                          " comparisons by the ", fck_apa_method(cr), " method.")
+            }))
+      }
+    }
     blank()
   }
 
@@ -563,9 +660,122 @@ fck_apa_report <- function(values, input, title = NULL) {
       add(" A detectable rhythm (zero-amplitude *F* test, alpha = .05) was ",
           "present in ", nsig, " of ", sum(ok), " series (",
           fck_apa_num(100 * nsig / sum(ok), 1), "%). Model fit was ",
-          "*R*<sup>2</sup> ", fck_apa_M(g1("r_squared"), 3), ".")
+          "*R*<sup>2</sup> ", fck_apa_M(g1("r_squared"), 3, bounded = TRUE), ".")
+    }
+
+    # ---- the joint confidence regions the app already computes --------------
+    # AUDIT (P12.2): fck_bingham_ci() builds the error ellipse for every
+    # subject and the report never printed it. An amplitude without an interval
+    # and an acrophase without one are not publication-grade, and the
+    # "identified" count is the honest way to say how often the ellipse
+    # contained the origin -- i.e. how often the phase is not estimable at all.
+    bs <- hm$bingham_summary
+    if (!is.null(bs) && length(bs) >= 1 && !is.null(bs[[1]])) {
+      b1 <- bs[[1]]
+      add(" Joint 95% confidence regions (first harmonic) had a median ",
+          "half-width of ", fck_apa_num(b1$median_amp_halfwidth, 3),
+          " for the amplitude",
+          if (is.finite(b1$median_acro_halfwidth_h %|% NA_real_))
+            paste0(" and ", fck_apa_num(b1$median_acro_halfwidth_h, 2),
+                   " h for the acrophase") else "",
+          ". The acrophase was identified at the 95% level in ",
+          b1$n_identified, " of ", b1$n, " series",
+          if (b1$n_identified < b1$n)
+            "; in the remainder the confidence ellipse contained the origin, so no phase is estimable at that level"
+          else "", ".")
     }
     blank()
+
+    # ---- per-group description ----------------------------------------------
+    gf <- hm$group_fits
+    if (!is.null(hm$group_var_name) && !is.null(gf) && length(gf) >= 1) {
+      gf <- gf[!vapply(gf, function(g) isTRUE(g$is_unassigned), logical(1))]
+    }
+    if (!is.null(hm$group_var_name) && length(gf) >= 1) {
+      add("**By ", hm$group_var_name, ".**")
+      blank()
+      grows <- do.call(rbind, lapply(names(gf), function(nm) {
+        g <- gf[[nm]]
+        data.frame(
+          Group      = nm,
+          `n`        = g$n %|% NA,
+          `MESOR`    = fck_apa_num(g$rhythm_adjusted_mean %|% g$intercept %|% NA_real_, 2),
+          `Amplitude`= paste0(fck_apa_num(g$mean_amplitude %|% NA_real_, 2), " (",
+                              fck_apa_num(g$sd_amplitude %|% NA_real_, 2), ")"),
+          `Acrophase (h)` = fck_apa_num(g$mean_acrophase_time %|% NA_real_, 2),
+          check.names = FALSE, stringsAsFactors = FALSE)
+      }))
+      L <- c(L, fck_md_table(grows)); blank()
+      add("MESOR is the rhythm-adjusted mean. Amplitude is given as *M* (*SD*) ",
+          "of the per-participant estimates. Acrophase is a group mean of a ",
+          "circular quantity and is reported for description only; the test ",
+          "below is the inferential statement.")
+      blank()
+    }
+
+    # ---- pairwise group comparisons ------------------------------------------
+    # P12.2: every comparison the user ran, not just the last one. A cosinor
+    # paper reports MESOR, amplitude AND acrophase; the app kept only the most
+    # recent, so the report showed one of the three.
+    pw_all <- values$hp_pairwise_all
+    if (is.null(pw_all) && !is.null(values$hp_pairwise_results))
+      pw_all <- list(list(results = values$hp_pairwise_results,
+                          param = values$hp_pairwise_param %|% "",
+                          correction = values$hp_pairwise_correction %|% "none"))
+    for (entry in pw_all) {
+      pw <- entry$results
+      if (is.null(pw) || !nrow(pw)) next
+      prm  <- fck_cosinor_param_label(entry$param %|% "")
+      circ <- grepl("acro", entry$param %|% "")
+      cr   <- entry$correction %|% "none"
+      add("**Group differences in ", prm, ".**")
+      blank()
+      prows <- do.call(rbind, lapply(seq_len(nrow(pw)), function(i) {
+        r <- pw[i, ]
+        data.frame(
+          Comparison = r$comparison,
+          `Group 1`  = sprintf("%s (%.2f, n = %d)", r$group1, r$mean1, as.integer(r$n1)),
+          `Group 2`  = sprintf("%s (%.2f, n = %d)", r$group2, r$mean2, as.integer(r$n2)),
+          Statistic  = if (circ)
+                         sprintf("*F*(1, %d) = %s", as.integer(r$df),
+                                 fck_apa_num(r$t_stat, 2))
+                       else
+                         sprintf("*t*(%s) = %s", fck_apa_num(r$df, 1),
+                                 fck_apa_num(r$t_stat, 2)),
+          `p`        = fck_apa_pval(r$p_adjusted),
+          # AUDIT (P12.2): for the circular comparison this column used to print
+          # r$cohens_d, which in that branch holds the difference in MEAN
+          # RESULTANT LENGTHS -- a difference in concentration. Watson-Williams
+          # tests a difference in MEANS, so the reported "effect" answered a
+          # different question from the test beside it, and on concentrated data
+          # (the usual case for acrophase) it printed -0.00 for every row while
+          # the means differed by hours. The effect for a difference of circular
+          # means is the angular difference itself, which the app already
+          # computes on the shortest arc and which is what a chronobiology paper
+          # reports. Delta-r is still described in the note below, as what it is.
+          `Effect`   = if (circ) paste0(fck_apa_num(r$mean_diff, 2), " h")
+                       else fck_apa_num(r$cohens_d, 2),
+          check.names = FALSE, stringsAsFactors = FALSE)
+      }))
+      L <- c(L, fck_md_table(prows)); blank()
+      add("*p* is ", if (identical(cr, "none")) "unadjusted"
+          else paste0("adjusted by the ", fck_apa_method(cr), " method"),
+          " across the ", nrow(pw), " comparisons of this parameter",
+          if (length(pw_all) > 1)
+            "; the correction was applied within each parameter, not across parameters, so the family being controlled is the set of pairwise contrasts for one parameter"
+          else "",
+          ". The effect column is ",
+          if (circ)
+            paste0("the difference between the group circular means, on the ",
+                   "shortest arc, in hours -- the quantity the test above is ",
+                   "about. (The app also reports the difference in mean ",
+                   "resultant length on screen; that measures a difference in ",
+                   "CONCENTRATION, not in mean phase, and is not an effect size ",
+                   "for this test.)")
+          else "Cohen's *d*.")
+      blank()
+    }
+
     add("*What these numbers do not establish.* Acrophase is a **circular** ",
         "quantity. The mean quoted above is arithmetic and is interpretable ",
         "only when the acrophases do not straddle the period boundary; use the ",
@@ -574,6 +784,35 @@ fck_apa_report <- function(values, input, title = NULL) {
         if (isTRUE(hm$using_smoothed))
           " Because the fits were computed on smoothed curves, the *R*-squared and the proportion of detectable rhythms are both optimistic."
         else "")
+    if (length(pw_all) > 0) {
+      params_run <- vapply(pw_all, function(e) e$param %|% "", character(1))
+      circ <- any(grepl("acro", params_run))
+      # AUDIT (P12.2). Two limitations that a chronobiology reviewer WILL raise,
+      # and which the app was silent about.
+      add(" These comparisons are a two-stage procedure: a cosinor is fitted ",
+          "per participant and the resulting point estimates are then compared ",
+          "between groups. That is not the population-mean cosinor of Bingham ",
+          "et al. (1982), and it treats each participant's estimate as if it ",
+          "were measured without error, so a participant whose own rhythm is ",
+          "poorly determined counts as much as one whose rhythm is precise.")
+      if (circ)
+        add(" The Watson-Williams test additionally assumes von Mises ",
+            "distributions with a common, sufficiently high concentration; it ",
+            "is unreliable when the phases are widely dispersed, and the ",
+            "concentration is reported with the circular summary.")
+      # Bingham's own caveat, checked rather than merely recited.
+      if (any(grepl("amp", params_run))) {
+        ac <- values$hp_acrophase_differs
+        add(" Bingham et al. (1982) note that a difference in amplitude cannot ",
+            "be interpreted when the groups also differ in acrophase, because ",
+            "the amplitude is then estimated about different phases",
+            if (isTRUE(ac))
+              ": in these data the acrophase comparison WAS significant, so the amplitude result above should not be read as a difference in rhythm strength."
+            else if (identical(ac, FALSE))
+              ": the acrophase comparison on these data was not significant, so that caution does not apply here."
+            else ". Run the same comparison on acrophase to check whether it applies here.")
+      }
+    }
   }
 
   if (!is.null(rg) && !is.null(rg$beta.hat)) {

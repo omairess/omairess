@@ -334,7 +334,9 @@ run in the session, in APA 7th-edition style, as HTML (open in a browser, print
 to PDF) or Markdown (paste into a manuscript).
 
 It is not a numbers dump. The **Statistical analysis** section states the
-choices: the basis and how the smoothing parameter was selected, the
+choices: the basis and how the smoothing parameter was selected — including
+the number of subjects the GCV search actually scored, because until 4.59 that
+sentence claimed the whole sample while the search was capped at 60 — the
 registration method and its boundary rule, the estimator, the multiplicity
 correction, the permutation count *and the smallest p that count can produce*.
 The **Results** section reports the numbers in APA form — exact *df*, *p* to
@@ -352,6 +354,28 @@ says, next to each result, that a pointwise procedure answers *where* and not
 acrophase is circular and its arithmetic mean is not always meaningful; that a
 permutation *p* cannot go below 1/(*B*+1); that the registration dispersion
 reduction is not a phase/amplitude split.
+
+The **cosinor section follows the reporting conventions of the chronobiology
+literature** — Cornelissen's *Cosinor-based rhythmometry* (2014) and Bingham et
+al. (1982). It states the period and that it was fixed rather than estimated,
+the reference time the acrophase is measured from (a phase means nothing without
+its origin), what the zero-amplitude *F* test does and does not test, and the
+joint confidence region for amplitude and acrophase read off the error ellipse
+of the (cosine, sine) pair — together with how many series had an *identified*
+acrophase, since an ellipse containing the origin means no phase is estimable at
+all. With a grouping variable it gives a per-group table and a pairwise table for
+every parameter you compared, each with exact *df*, an adjusted *p*, and an
+effect that matches its test: Cohen's *d* for a mean difference, and for the
+circular comparison the angular difference in hours rather than a difference in
+concentration.
+
+It also carries Bingham's caution that an amplitude difference cannot be
+interpreted when the groups also differ in acrophase — **checked, not recited**.
+If you ran the acrophase comparison, the report says whether it was significant
+and what that means for your amplitude result; if you did not, it says to run it.
+And it states plainly that these are two-stage tests on per-participant point
+estimates, not the population-mean cosinor, so a participant whose own rhythm is
+poorly determined counts as much as one whose rhythm is precise.
 
 Sections appear only for analyses you actually ran. The report is regenerated
 on every download from the current state, so it cannot go stale against the

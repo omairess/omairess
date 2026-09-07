@@ -306,6 +306,56 @@ server <- function(input, output, session) {
   }
   values$warping_results <- NULL
 
+  # ------------------------------------------------- cosinor + groups -------
+  #
+  # AUDIT (P12.2). The cosinor tab was never driven here, and as a result the
+  # publication report's cosinor section had been shipped without anyone
+  # generating it from a real fit with a grouping variable: it reported pooled
+  # descriptives only, and said nothing about between-group differences even
+  # when the app had computed them. Same shape of gap as P11.2 -- the machinery
+  # existed and nothing pressed the button.
+  cat("\n-- cosinor regression, with a grouping variable -------------------------\n")
+  session$setInputs(harmonic_data_source = "raw", harmonic_period = 24,
+                    n_harmonics = 1, harmonic_trend_type = "none",
+                    harmonic_time_var = "_columns_",
+                    harmonic_dv_name = "Activity", harmonic_dv_units = "counts/min",
+                    harmonic_group_var = "AGEcategory",
+                    run_harmonic = 1)
+  session$flushReact()
+  hm <- values$harmonic_model
+  if (is.null(hm)) {
+    fail("the cosinor fit produced no model")
+  } else {
+    ok(sprintf("cosinor fitted: period %s, %d harmonic(s), %d series",
+               format(hm$period), hm$n_harmonics, length(hm$individual_fits)))
+    if (is.null(hm$group_var_name)) fail("the grouping variable was not recorded")
+    else ok(sprintf("grouped by '%s' with %d group fit(s)",
+                    hm$group_var_name, length(hm$group_fits)))
+    if (is.null(hm$bingham_summary) || is.null(hm$bingham_summary[[1]]))
+      fail("no Bingham joint confidence regions were computed")
+    else ok(sprintf("Bingham regions computed for %d series, %d with an identified acrophase",
+                    hm$bingham_summary[[1]]$n, hm$bingham_summary[[1]]$n_identified))
+
+    # the pairwise comparison the report needs, on BOTH an amplitude and the
+    # acrophase -- the acrophase run is what lets the report CHECK Bingham's
+    # caveat instead of reciting it
+    for (prm in c("acrophase_time_1", "amplitude_1")) {
+      session$setInputs(hp_param = prm, hp_correction = "holm",
+                        hp_show_ci = TRUE, hp_show_effect_size = TRUE,
+                        hp_run = which(c("acrophase_time_1", "amplitude_1") == prm))
+      session$flushReact()
+      pr <- values$hp_pairwise_results
+      if (is.null(pr) || !nrow(pr)) fail(sprintf("pairwise on '%s' produced nothing", prm))
+      else ok(sprintf("pairwise on '%s': %d comparison(s), correction '%s'",
+                      prm, nrow(pr), values$hp_pairwise_correction))
+    }
+    if (is.null(values$hp_acrophase_differs))
+      fail("the acrophase verdict was not recorded for the Bingham caveat")
+    else ok(sprintf("acrophase verdict recorded: groups differ = %s",
+                    values$hp_acrophase_differs))
+  }
+  render("pairwise cosinor results render", output$hp_results)
+
   # ------------------------------------------------- the APA report --------
   cat("\n-- APA report ----------------------------------------------------------\n")
   session$setInputs(apa_report_title = "Diurnal profiles by age group")

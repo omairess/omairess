@@ -164,6 +164,7 @@ observeEvent(input$apply_smooth, {
       # does the smoothing, which is the only way the selected lambda means
       # anything for the fit that follows. See fck_auto_lambda() in
       # server/04_helpers_fd.R.
+      lambda_n_used <- NA_integer_   # how many subjects entered the GCV objective
       lam <- if(input$smooth_method == "auto") {
         al <- fck_auto_lambda(values$data, t_full, basis, min_points_needed =
                                 if(cyclic) 3 else 4)
@@ -177,6 +178,12 @@ observeEvent(input$apply_smooth, {
             sprintf("Automatic smoothing (GCV): lambda = %s, chosen by minimising the mean GCV score across %d subjects.",
                     format(al$lambda, digits = 3), al$n_used),
             type = "message", duration = 10)
+          # P12.1: carried through so the report can STATE the number instead of
+          # claiming a scope. The search is over every scorable subject now, and
+          # a subject with too few observed points is still excluded, so the
+          # count and the sample size need not be equal -- which is exactly why
+          # the report prints the count.
+          lambda_n_used <- al$n_used
           al$lambda
         }
       } else 10^(-input$smooth_factor)
@@ -308,6 +315,8 @@ observeEvent(input$apply_smooth, {
         sd_rmse        = sd(rmse_vec, na.rm = TRUE),
         n_basis        = nb_used,
         lambda         = lam,
+        lambda_n_used  = lambda_n_used,
+        n_subjects     = n_subjects,
         method         = input$smooth_method,
         basis_type     = if(cyclic) "fourier" else "bspline",
         time_axis      = if(using_real_time) "real clock time (hours)" else "column index",
