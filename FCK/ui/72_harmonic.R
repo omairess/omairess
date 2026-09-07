@@ -127,20 +127,35 @@ ui_tab_harmonic <- tabItem(
 
             hr(),
             h4("Diagnostics"),
+            # AUDIT (P15.2). These are TWO INDEPENDENT diagnostics that sat under
+            # one heading with nothing separating them, so the tau field read as
+            # if it fed the nested table. It does not: the nested set estimates
+            # tau FREELY in its saturating-exponential cells. They are now
+            # labelled as separate checks.
+            tags$p(tags$b("1. Which specification?"), style = "margin-bottom:4px"),
             checkboxInput("harmonic_model_selection",
                           "Compare nested models (\u0394AICc table)", FALSE),
-            helpText(HTML("Fits trend \u2208 {none, linear, saturating} \u00d7 harmonics \u2208 {1,2,3}
-                           and reports \u0394AICc with Akaike weights. Absolute AIC/AICc/BIC
-                           with no competing model are constant offsets of one another
-                           and carry no information. <b>Slow:</b> 9 fits per subject.")),
+            # P15.2: rendered from the current setting rather than written out by
+            # hand. The old text said "{none, linear, saturating} x {1,2,3} ...
+            # 9 fits per subject", which stopped being true when the set began
+            # following the harmonic count and gained the logarithmic trend.
+            uiOutput("harmonic_model_selection_help"),
+
+            tags$p(tags$b("2. Is \u03c4 identified?"), style = "margin-top:12px; margin-bottom:4px"),
             numericInput("harmonic_tau_fixed",
                          "\u03c4 held at (h), for the free-vs-fixed \u0394AIC:", value = 18,
                          min = 1, max = 72, step = 0.5),
-            helpText(HTML("Daan, Beersma & Borb\u00e9ly (1984) give \u03c4_rise \u2248 18 h under
-                           extended wakefulness. If free \u03c4 does not beat fixed \u03c4 on AIC,
-                           \u03c4 is not identified by these data and a between-group
-                           comparison of it is a comparison of where the optimiser
-                           stopped on a ridge.")),
+            helpText(HTML("A <b>separate</b> check, and not part of the \u0394AICc table
+                           above: that table estimates \u03c4 freely in every
+                           saturating-exponential cell. Here the same model is refitted
+                           with \u03c4 <i>held</i> at the value above and the two are
+                           compared on AIC. Daan, Beersma &amp; Borb\u00e9ly (1984) give
+                           \u03c4_rise \u2248 18 h under extended wakefulness. If free
+                           \u03c4 does not beat fixed \u03c4, \u03c4 is not identified by
+                           these data and a between-group comparison of it is a
+                           comparison of where the optimiser stopped on a ridge.
+                           <b>Clear the field to skip this check</b> \u2014 the readout
+                           then says it was not run, rather than omitting it silently.")),
 
             hr(),
             h4("Bootstrap Options"),

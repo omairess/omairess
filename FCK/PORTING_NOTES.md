@@ -2682,6 +2682,84 @@ candidate set is exactly the eight expected.
 After this round: **1,933 testthat assertions (0 failed, 0 skipped) and 16
 standalone suites pass.**
 
+**4.62 P15: four things asked directly.**
+
+*(1) Every plot is resizable.* All 47 plot outputs carried a fixed pixel height,
+chosen once by whoever wrote that tab; a 300 px polar plot or a 24-column
+heatmap is unreadable at the size that suited the author's screen, and there was
+no way to change it short of editing the source. `ui/00_theme.R` now wraps each
+plot at runtime in a `.fck-resizable` box with the native CSS handle. Plotly is
+resized directly through `Plotly.Plots.resize`; base-R `plotOutput` re-renders
+when Shiny recomputes output sizes, which a debounced window-resize event
+triggers -- debounced because the observer fires on every pixel of a drag and a
+re-render per pixel is unusable. No new package: `shinyjqui` would add a
+dependency to an app the README explicitly says is not environment-pinned.
+
+Verified in a real browser rather than asserted. The full app cannot start here
+(`shinyWidgets` is not installable in this container, which is already recorded
+in section 6), so the check ran against a minimal page that sources the SAME
+`ui/00_theme.R`, driven with Playwright:
+
+```
+wrappers found: 2
+  resize=both h=300 <- plotly html-widget html-widget-output
+  resize=both h=250 <- shiny-plot-output html-fill-item
+plotly svg height: 294 -> 634
+base-R plot img: 1250x244 -> 820x514
+```
+
+The base-R line is the one worth reading twice: the image dimensions changed, so
+Shiny regenerated the PNG at the new size rather than stretching the old one.
+
+*(2) The diagnostics text described an analysis that no longer existed.* The
+help under the nested-model checkbox still read "trend in {none, linear,
+saturating} x harmonics in {1,2,3} ... 9 fits per subject". None of that
+survived P14. It is now rendered by `renderUI()` from
+`fck_cosinor_model_set()` -- the same function that builds the set that gets
+fitted -- so it names the actual candidates and the actual count, and cannot go
+stale again. It also says that harmonics are cumulative, which is the
+misreading the old `H2` label invited.
+
+*(3) The tau field and the Delta-AICc table are unrelated, and nothing said so.*
+They sat under one "Diagnostics" heading with nothing between them, so tau = 18
+read as if it fed the nested table. It does not: that table estimates tau
+FREELY in every saturating-exponential cell. The tau box drives a separate
+free-vs-fixed AIC comparison. They are now two labelled checks, and the tau help
+says explicitly that it is not part of the table above.
+
+And clearing the box was worse than unclear. A cleared `numericInput` yields
+**NA, not NULL**, so `input$harmonic_tau_fixed %||% 18` never fired,
+`is.finite(NA)` was FALSE, and the whole check was skipped -- silently, because
+the readout only prints that line when a result exists. "I left the box empty"
+and "this was tested and found nothing" looked identical on screen. The skip is
+recorded now and the readout says **NOT RUN** and why.
+
+*(4) The fitted model's own information criteria are printed again.* They had
+been removed on the argument that "with no competing model they are constant
+offsets of one another and carry no information". That was right when it was
+made and is not right any more, for two reasons: there IS a competing set now,
+and a reader locating the reported model in the Delta-AICc table needs its
+absolute value; and the free-vs-fixed tau check DIFFERENCES the free-tau AIC, so
+quoting the difference while withholding both terms leaves nothing to check. The
+new block reports mean AIC, AICc and BIC over subjects with n and k stated, k
+coming from the shared `fck_model_npar()`, and flags that tau was estimated
+freely. The part of the old argument that survives is kept: for a single
+specification the three criteria rank subjects identically, so they separate
+models and not subjects.
+
+New: `tests/testthat/test-p15-corrections.R` (49 assertions), and the reactive
+smoke test renders the help text at two harmonic settings and checks it reports
+the real fit count.
+
+One of my own guards fired on my own AUDIT comment -- the note explaining that
+"9 fits per subject" was removed contains that string. The guard now drops
+comment LINES rather than everything after a `#`, because this file carries hex
+colours and HTML that a blanket strip would delete, which would make the guard
+pass vacuously instead.
+
+After this round: **1,982 testthat assertions (0 failed, 0 skipped) and 16
+standalone suites pass.**
+
 ## 5. Rename table
 
 | source | source app | merged app |

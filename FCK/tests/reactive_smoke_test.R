@@ -375,6 +375,29 @@ server <- function(input, output, session) {
   }
   render("pairwise cosinor results render", output$hp_results)
 
+  # ---- the diagnostics panel's own text and the tau check (P15) -------------
+  cat("\n-- harmonic diagnostics: help text and the free-vs-fixed tau check ------\n")
+  for (k in c(1L, 2L)) {
+    session$setInputs(n_harmonics = k)
+    session$flushReact()
+    h <- render(sprintf("model-selection help renders (n_harmonics = %d)", k),
+                output$harmonic_model_selection_help)
+    if (!is.null(h)) {
+      htxt <- paste(as.character(h), collapse = " ")
+      want <- if (k == 1L) "4 fits per subject" else "8 fits per subject"
+      if (!grepl(want, htxt, fixed = TRUE))
+        fail(sprintf("the help text does not say '%s'", want))
+      else ok(sprintf("the help text reports the real fit count (%s)", want))
+      if (grepl("{1,2,3}", htxt, fixed = TRUE) || grepl("9 fits", htxt, fixed = TRUE))
+        fail("the help text still describes the pre-P14 grid")
+      else ok("the help text no longer describes the old fixed grid")
+      if (!grepl("logarithmic", htxt, fixed = TRUE))
+        fail("the help text omits the logarithmic trend, which the set fits")
+      else ok("the help text names every trend the set fits")
+    }
+  }
+  session$setInputs(n_harmonics = 2)
+
   # ---- the nested model-selection diagnostic (P14) --------------------------
   # The grid used to be hardcoded as {none, linear, exp_sat} x 1:3: it omitted
   # the `log` trend the UI offers -- so a user who chose it was shown a table

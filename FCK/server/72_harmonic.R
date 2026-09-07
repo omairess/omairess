@@ -1952,6 +1952,28 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
   # MAIN HARMONIC REGRESSION EVENT HANDLER
   # ==============================================================================
   
+  # AUDIT (P15.2). The help text under the nested-model checkbox was written by
+  # hand and said "trend in {none, linear, saturating} x harmonics in {1,2,3} ...
+  # 9 fits per subject". None of that survived P14: the set follows the harmonic
+  # count, and the logarithmic trend was added. Rendering it from the same
+  # function that builds the set is the only version that cannot go stale.
+  output$harmonic_model_selection_help <- renderUI({
+    k  <- suppressWarnings(as.integer(input$n_harmonics %||% 1))
+    if (!is.finite(k) || k < 1) k <- 1L
+    ms <- fck_cosinor_model_set(k)
+    helpText(HTML(sprintf(
+      paste0("Fits every trend the app offers (none, linear, logarithmic, ",
+             "saturating exponential) crossed with the <b>cumulative</b> harmonic ",
+             "sets up to the %d you have selected &mdash; %s &mdash; and reports ",
+             "&Delta;AICc with Akaike weights. Harmonics are cumulative, so H1&ndash;H2 ",
+             "is the model containing harmonics 1 <i>and</i> 2; a higher harmonic is ",
+             "never fitted without the ones below it, and nothing beyond your ",
+             "selection is fitted at all. <b>Slow:</b> %d fits per subject."),
+      k,
+      paste(vapply(ms, function(m) m$label, character(1)), collapse = ", "),
+      length(ms))))
+  })
+
   observeEvent(input$run_harmonic, {
     req(values$data)
     
@@ -3081,7 +3103,18 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
         }
 
         # tau held at a literature value: is the extra parameter earning its keep?
-        tau_fix <- suppressWarnings(as.numeric(input$harmonic_tau_fixed %||% 18))
+        #
+        # AUDIT (P15.3). A cleared numericInput yields NA, not NULL, so `%||%`
+        # never fired and `is.finite(NA)` was FALSE: the whole free-vs-fixed
+        # check was skipped, and because the readout only prints the line when
+        # the result exists, it vanished with nothing said. "I left the box
+        # empty" and "this comparison was run and found nothing" then looked
+        # identical on screen. The skip is now recorded and reported.
+        tau_raw <- input$harmonic_tau_fixed
+        tau_fix <- suppressWarnings(as.numeric(if (is.null(tau_raw)) NA else tau_raw))
+        if(!is.finite(tau_fix) || tau_fix <= 0) {
+          conditioning$tau_fixed_skipped <- TRUE
+        }
         if(is.finite(tau_fix) && tau_fix > 0) {
           aic_free <- mean(individual_params$aic, na.rm = TRUE)
           aic_fix <- NA_real_
@@ -3692,7 +3725,49 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
 
     # ========================================================================
     # AUDIT 2.4: Delta-AICc, not mean AIC
+    # AUDIT (P15.4): ... but the FITTED model's own criteria are now printed too.
+    #
+    # These were removed on the argument that "with no competing model they are
+    # constant offsets of one another and carry no information". That argument
+    # was correct when it was made and is not correct any more, for two reasons.
+    # First, there IS a competing set now, and a reader who wants to locate the
+    # reported model in the Delta-AICc table needs its absolute value to do it.
+    # Second -- and this is what the user actually asked -- the free-tau fit's
+    # AIC is what the free-vs-fixed tau check differences, so quoting a Delta
+    # while withholding both terms leaves no way to check the subtraction.
+    #
+    # What stays true is the reason the SDs were dropped: AICc - AIC and
+    # BIC - AIC are deterministic functions of n and k, so with a single
+    # specification their spreads carry the spread of AIC and nothing else.
+    # They are printed as means over subjects, with that stated.
     # ========================================================================
+    if(any(c("aic", "aicc", "bic") %in% names(params))) {
+      hdr("Information criteria for the fitted model")
+      n_obs <- length(mod$time_vec)
+      k_par <- fck_model_npar(trend_type, nh) + 1L   # + residual variance
+      cat(sprintf("  Specification: %s, fitted per subject on n = %s observations,
+",
+                  fck_model_label(trend_type, nh), fmtn(n_obs, 0)))
+      cat(sprintf("  k = %s free parameters%s.
+", fmtn(k_par, 0),
+                  if(identical(trend_type, "exp_sat"))
+                    " (tau estimated freely; see the free-vs-fixed check below)" else ""))
+      for(nmi in c("aic", "aicc", "bic")) {
+        if(!nmi %in% names(params)) next
+        v <- suppressWarnings(as.numeric(params[[nmi]]))
+        v <- v[is.finite(v)]
+        if(!length(v)) next
+        cat(sprintf("    mean %-4s = %s  (SD %s, over %s subjects)\n",
+                    toupper(nmi), fmt2(mean(v)), fmt2(stats::sd(v)), fmtn(length(v), 0)))
+      }
+      cat("  These are means over subjects of a per-subject criterion, not the\n")
+      cat("  criterion of a single pooled fit. AICc - AIC and BIC - AIC are fixed\n")
+      cat("  functions of n and k here, so for ONE specification the three rank\n")
+      cat("  subjects identically; they separate models, not subjects. Compare them\n")
+      cat("  only against the same quantity from another specification -- which is\n")
+      cat("  what the Delta-AICc table does.\n")
+    }
+
     if(!is.null(mod$model_selection)) {
       hdr("Model selection (Delta-AICc across a nested set)")
       ms  <- mod$model_selection
@@ -3785,12 +3860,24 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
         print(round(cn$mean_cor, 3))
         cat("\n")
       }
-      if(!is.null(cn$tau_fixed_delta_aic))
+      if(!is.null(cn$tau_fixed_delta_aic)) {
         cat(sprintf("Free-tau vs tau fixed at %s h:  Delta-AIC = %s (%s)\n",
                     fmt1(cn$tau_fixed_value), fmt2(cn$tau_fixed_delta_aic),
                     if(cn$tau_fixed_delta_aic > 0)
                       "the free-tau fit is NOT better by AIC: tau is not identified by these data"
                     else "the free-tau fit is preferred"))
+        cat(sprintf("  Delta-AIC = AIC(free tau) - AIC(tau fixed), averaged over the %s subject(s)\n",
+                    fmtn(cn$tau_fixed_n %||% NA, 0)))
+        cat("  scorable in BOTH fits. This is a separate check from the Delta-AICc
+")
+        cat("  table above, which estimates tau freely in every saturating cell.\n")
+      } else if(isTRUE(cn$tau_fixed_skipped)) {
+        # P15.3: an empty box is a choice, and it must not look like a result.
+        cat("Free-tau vs fixed-tau: NOT RUN -- no value was given for tau.\n")
+        cat("  Enter a value in 'tau held at (h)' to test whether the free tau\n")
+        cat("  earns its extra parameter. Until then, nothing here says whether\n")
+        cat("  tau is identified by these data.\n")
+      }
       if(!is.null(cn$kappa_before))
         cat(sprintf("Design-matrix condition number: %s (midnight origin) -> %s (first-observation origin)\n",
                     fmt1(cn$kappa_before), fmt1(cn$kappa_after)))
