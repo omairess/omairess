@@ -2824,6 +2824,80 @@ the UI offers. At one harmonic it fits 4 where it used to fit 9.
 After this round: **2,006 testthat assertions (0 failed, 0 skipped) and 16
 standalone suites pass.**
 
+**4.64 P17: the app is DANCE, and it can analyse a mixed design.**
+
+*The rename.* DANCE — Direct Analysis of multivariate Nonlinear and Circadian
+Effects in R. `FCK/` became `DANCE/`, 132 distinct `fck_` helpers (1,315
+occurrences) became `dance_`, 29 `FCK_` constants became `DANCE_`, and every
+user-facing string, byline and document followed. Two things were checked rather
+than assumed: a session saved under the old name still loads (the restore path
+validates `format` and `values` and never reads the `app` marker), and the
+escaped-asterisk machinery in the report stays, because it protects a literal
+`\*` anywhere in the Markdown — a user's column name can contain one — even
+though the app's own name no longer does.
+
+*The gap the user found.* Asked whether a design with one between-subject factor
+(CTI-FLEX group) and one within-subject factor (condition) could be analysed,
+the honest answer was no. `perform_functional_anova()` is one-way between,
+`perform_rm_fanova()` is one-factor repeated measures, and **neither carries an
+interaction** — so the question a mixed design is usually run to answer, does the
+within-subject effect DIFFER between groups, could not be asked at all. Worse,
+the available workaround was harmful: running the between-subjects kernel on a
+long file makes a participant who contributes two conditions appear as two
+independent curves, and the permutation is then anticonservative. The import
+step already warns when identifiers repeat; there was nothing for that warning to
+point at.
+
+The cosinor side was no better. Group comparisons are two-stage — fit per
+participant, then compare the estimates — with Welch's *t* test, **unpaired**. On
+a within-subject factor that discards the pairing.
+
+*What was added.* `server/06_helpers_mixed.R`, pure and therefore testable and
+emittable, with two kernels answering different questions:
+
+`dance_mixed_fanova()` fits a penalised spline of time in each cell of the design
+plus a factor-smooth random curve per participant, by `mgcv::bam`. The repeated
+measurement is IN the model rather than permuted around. The interaction is
+judged by refitting without it and comparing on AIC, because with penalised
+smooths there is no single exact test of "the cell curves differ".
+
+`dance_mixed_cosinor()` fits one linear mixed model with the cosine/sine pair
+crossed with both factors and a random MESOR and rhythm per participant, giving a
+MESOR, amplitude and acrophase per cell. Differences are tested by
+likelihood-ratio tests that drop a cosine/sine PAIR, so each is a two-degree-of-
+freedom question about amplitude or phase rather than either alone; marginality
+is respected, so a test of one factor drops its higher-order terms too. Terms are
+dropped with `update()`, not rebuilt with `reformulate()` — the random part
+appears in `term.labels` as the string `1 + c1 + s1 | subject`, and reformulate
+parses text, so putting that back through it silently produces a different model.
+
+Neither is a permutation test, and both say so: the smoothing parameters and
+variance components were estimated from the same data and the tests condition on
+those estimates. That is stated in the readout and in the report rather than left
+for the reader to infer.
+
+`dance_mixed_check()` refuses what is not a mixed design and names the reason — a
+"between" factor that varies within a participant, nothing repeated within
+participant, an empty cell — instead of letting it surface as a fitting error.
+
+On the reporter's own data (27 participants x 2 conditions, 2 between-groups, 17
+unevenly spaced points over 25 hours, 1.2% missing) the functional model fits in
+1.5 s and the mixed cosinor in 0.7 s, and the two agree: the mean-level
+interaction is not significant (*p* = .543) while the rhythm's interaction is
+(chi-square(2) = 16.80, *p* < .001) and AIC favours keeping the shape interaction
+by 33.5. The mean shift does not differ by group; its timing does.
+
+*Testing.* `tests/mixed_design_test.R` (36 checks) plants a known interaction and
+requires both kernels to recover it, requires the design checks to REFUSE three
+kinds of non-mixed design, and then drives the tab end to end through
+`setInputs` — because a direct call to a pure kernel supplies exactly the scope
+the app does not, which is how P11.2 shipped. It also generates the publication
+report for both kinds and checks each carries its Methods sentence, its results
+section and its caveat paragraph.
+
+After this round: **2,013 testthat assertions (0 failed, 0 skipped) and 17
+standalone suites pass.**
+
 ## 5. Rename table
 
 | source | source app | merged app |

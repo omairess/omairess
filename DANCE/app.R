@@ -53,7 +53,11 @@ optional_packages <- c(
   rmfanova     = "global repeated-measures functional ANOVA test",
   fda.usc      = "functional k-means clustering",
   reticulate   = "DCF (density-core-finding) clustering via Python",
-  minpack.lm   = "robust exponential-saturation cosinor fits"
+  minpack.lm   = "robust exponential-saturation cosinor fits",
+  # The mixed-design tab. mgcv is already required (the FoSR GAM branch needs
+  # it), so only lme4 is added here -- and it is optional for the same reason
+  # as the rest: a missing lme4 must cost you the mixed cosinor, not the app.
+  lme4         = "mixed (between x within) cosinor"
 )
 
 # AUDIT (P2.2): this block used to call install.packages() at startup -- for the
@@ -170,6 +174,8 @@ ui <- dashboardPage(
       menuItem("Functional PCA Results", tabName = "results",
                icon = icon("chart-line")),
       menuItem("Functional ANOVA", tabName = "fanova", icon = icon("chart-bar")),
+      menuItem("Mixed design (between x within)", tabName = "mixed",
+               icon = icon("layer-group")),
       menuItem("fANOVA: post-hoc tests", tabName = "pairwise",
                icon = icon("exchange-alt")),
 
@@ -198,6 +204,7 @@ ui <- dashboardPage(
       ui_tab_results,
       ui_tab_fanova,
       ui_tab_posthoc,
+      ui_tab_mixed,
       ui_tab_fosr,
       ui_tab_harmonic,
       ui_tab_cosinor_pairwise,

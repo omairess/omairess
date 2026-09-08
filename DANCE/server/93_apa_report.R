@@ -363,6 +363,36 @@ dance_apa_report <- function(values, input, title = NULL) {
     blank()
   }
 
+  mx <- values$mixed_results
+  if (!is.null(mx) && isTRUE(mx$ok)) {
+    add("**Mixed design.** ", mx$between_name, " varied between participants and ",
+        mx$within_name, " within them. ")
+    if (identical(mx$kind, "fanova"))
+      add("A generalised additive mixed model was fitted over the ",
+          "(participant, time) long form with a penalised spline of time in ",
+          "each cell of the design and a factor-smooth random curve per ",
+          "participant, estimated by ", mx$method, ". The repeated measurement ",
+          "is therefore part of the model rather than something permuted ",
+          "around. The interaction was assessed by refitting without it and ",
+          "comparing by AIC, because with penalised smooths there is no single ",
+          "exact test of \"the cell curves differ\".")
+    else
+      add("A linear mixed model was fitted over all observations with the ",
+          "cosine and sine pair of a period-", format(mx$period), " cosinor ",
+          "crossed with both factors, and a random intercept",
+          if (isTRUE(mx$random_rhythm)) " and random cosine/sine pair" else "",
+          " per participant. Differences in the rhythm were tested by ",
+          "likelihood-ratio tests that drop a cosine/sine pair together, so ",
+          "each is a two-degree-of-freedom test of amplitude or phase rather ",
+          "than of either alone; the models were refitted by maximum ",
+          "likelihood for those comparisons, since REML likelihoods are not ",
+          "comparable across different fixed effects.")
+    add(" Neither model is a permutation test: the smoothing parameters and ",
+        "variance components were estimated from these data and the tests ",
+        "condition on those estimates, so the *p* values are approximate.")
+    blank()
+  }
+
   fa <- values$fanova_results
   if (!is.null(fa)) {
     add("**Functional ANOVA.** ")
@@ -946,6 +976,86 @@ dance_apa_report <- function(values, input, title = NULL) {
             else ". Run the same comparison on acrophase to check whether it applies here.")
       }
     }
+  }
+
+  if (!is.null(mx) && isTRUE(mx$ok)) {
+    any_result <- TRUE
+    h(3, if (identical(mx$kind, "fanova")) "Mixed functional model" else "Mixed cosinor")
+    b <- mx$balance
+    add("The design had ", b$n_subjects, " participants",
+        if (b$n_partial > 0)
+          paste0(", of whom ", b$n_partial, " did not contribute every level of ",
+                 mx$within_name)
+        else ", each contributing every level of the within-participant factor",
+        ", giving ", mx$n_obs, " observations.")
+    blank()
+
+    if (identical(mx$kind, "fanova")) {
+      if (!is.null(mx$s_table)) {
+        st <- mx$s_table
+        rows <- data.frame(
+          Term = rownames(st),
+          `edf` = dance_apa_num(st[["edf"]], 2),
+          `F`   = dance_apa_num(st[["F"]], 2),
+          `p`   = vapply(st[["p-value"]], dance_apa_pval, character(1)),
+          check.names = FALSE, stringsAsFactors = FALSE)
+        L <- c(L, dance_md_table(rows)); blank()
+      }
+      if (is.finite(mx$aic_delta))
+        add("Removing the interaction changed AIC by ",
+            dance_apa_num(mx$aic_delta, 1), " (", dance_apa_num(mx$aic_full, 1),
+            " with it, ", dance_apa_num(mx$aic_additive, 1), " without), so ",
+            if (mx$aic_delta > 2)
+              paste0("the shape of the ", mx$within_name, " effect differs between ",
+                     mx$between_name, " groups")
+            else if (mx$aic_delta < -2)
+              "the additive model is preferred and there is no evidence the shape differs between groups"
+            else "this comparison does not separate the two models", ".")
+      if (is.finite(mx$dev_expl %|% NA_real_))
+        add(" The model accounted for ", dance_apa_num(100 * mx$dev_expl, 1),
+            "% of the deviance.")
+      blank()
+      add("*What these numbers do not establish.* A smooth term's *p* value ",
+          "tests whether THAT cell's curve is flat, not whether two cells ",
+          "differ; the AIC comparison is what addresses the interaction. The ",
+          "participant term is a random functional effect, so the fitted cell ",
+          "curves are population curves and describe no individual. And the ",
+          "*p* values are approximate, for the reason given in the Methods.")
+    } else {
+      cl <- mx$cells
+      rows <- data.frame(
+        Cell = paste(cl$within, cl$between, sep = " x "),
+        MESOR = dance_apa_num(cl$mesor, 2),
+        Amplitude = dance_apa_num(cl[["amplitude_1"]], 2),
+        `Acrophase` = dance_apa_num(cl[["acrophase_1"]], 2),
+        check.names = FALSE, stringsAsFactors = FALSE)
+      L <- c(L, dance_md_table(rows)); blank()
+      add("Acrophase is in time units from the start of the observation window.")
+      blank()
+      if (!is.null(mx$tests)) {
+        trows <- data.frame(
+          Test = mx$tests$term,
+          `chi-square` = dance_apa_num(mx$tests$chisq, 2),
+          df = mx$tests$df,
+          p = vapply(mx$tests$p, dance_apa_pval, character(1)),
+          check.names = FALSE, stringsAsFactors = FALSE)
+        L <- c(L, dance_md_table(trows)); blank()
+      }
+      add("*What these numbers do not establish.* No interval is quoted for ",
+          "amplitude or acrophase: amplitude is a norm and acrophase an angle, ",
+          "both nonlinear in the coefficients, and a delta-method interval on ",
+          "a phase near the period boundary misleads. The tests above are on ",
+          "the coefficient pair, which is what the model tests exactly. The ",
+          "period was fixed rather than estimated, so every rhythm parameter ",
+          "here is conditional on that choice.",
+          if (isTRUE(mx$singular))
+            " The random-effects fit was SINGULAR: a variance component is estimated at zero, so the random structure is not supported by this sample."
+          else "",
+          if (!isTRUE(mx$random_rhythm))
+            " Only a random intercept was fitted; the full random rhythm did not converge, so between-participant variation in the rhythm itself is not modelled."
+          else "")
+    }
+    blank()
   }
 
   if (!is.null(rg) && !is.null(rg$beta.hat)) {
