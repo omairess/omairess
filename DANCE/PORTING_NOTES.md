@@ -2898,6 +2898,84 @@ section and its caveat paragraph.
 After this round: **2,013 testthat assertions (0 failed, 0 skipped) and 17
 standalone suites pass.**
 
+**4.65 P18: a ninth review, on the module added at P17. Six findings, all of
+which held, and the first one led somewhere worse.**
+
+*Stale results survived a change of dataset.* `values$mixed_results` was created
+dynamically by its module, never declared in the state, and never cleared by
+`dance_reset_analyses()`. Load dataset A, run a mixed model, load dataset B: the
+old result survives, and `server/93_apa_report.R` reads it.
+
+Checking that found **four more slots with the same defect, all older and all
+mine**, from P12: `hp_pairwise_all`, `hp_pairwise_param`,
+`hp_pairwise_correction`, `hp_acrophase_param`, `hp_acrophase_differs`. Those are
+worse than the one reported, because the report reads `hp_pairwise_all` as its
+PRIMARY source for cosinor group comparisons and `hp_acrophase_differs` as the
+evidence for the Bingham amplitude caution — so a stale pair could put dataset
+A's comparisons, and a caution derived from them, into a publication report about
+dataset B.
+
+Then a structural guard — read every `values$x <- ` in the server modules and
+require each derived slot to be cleared — found **four more**: `pca_anova`
+(the component-score ANOVA, a third slot the report reads), `fanova_selected_groups`,
+`gam_reml_fit` and `gam_data_label`. Nine slots in total; the review named one.
+That guard is the actual fix. Patching nine names would leave the tenth for the
+next reviewer.
+
+The one deliberate asymmetry is kept and justified in place: mixed models are
+fitted to `values$data`, which a re-smooth does not touch, so they survive
+`keep_smoothing = TRUE` while everything computed from the smoothed curves does
+not. A test asserts both halves, and asserts that the smoothing module never
+rewrites `values$data` — which is what makes the asymmetry sound rather than
+convenient.
+
+*The mixed analyses were absent from the reproducible export.* The same class of
+gap that took several rounds to remove from the warping section, in the newest
+family. The kernels were written pure precisely so this would be easy:
+`emit_kernel()` now writes all six into the script. And the test does not stop at
+parsing — a script full of the wrong algorithm parses — it executes the emitted
+section in a clean `Rscript` session and compares: **max difference 4.13e-11**.
+
+*Session restore had not caught up.* None of the eight mixed controls were in
+`RESTORE_INPUTS`, so a restored session brought back the result with none of the
+settings that produced it. And `dance_package_versions()` omitted `lme4`, which
+fits the mixed cosinor — making the saved file's claim to carry "the package
+versions they were computed under" false for exactly the newest analysis. Both
+fixed, and `harmonic_model_selection` was missing too.
+
+*The raw-observations choice was right but undocumented.* The mixed models read
+`values$data`, not `values$smooth_data`, and that is correct — the model
+estimates the temporal structure itself, so pre-smoothing would smooth twice and
+distort the residual model. But the README promised that everything ran on the
+same smoothed curves. Now said in three places: the tab, the report's Methods,
+and the exported script.
+
+*The interaction comparison used the wrong likelihood.* AIC was read off the
+fREML fits, and the two models differ in their FIXED-effect structure, so the
+restricted likelihoods are computed on different contrast sets and are not on a
+common scale. The reported model keeps its fREML fit (the better basis for the
+smoothing parameters, and hence for the plotted curves); the comparison is now
+made on a pair refitted by ML. Worth stating plainly: on the data this was raised
+against **the verdict does not change** — +33.5 by fREML against +32.1 by ML. The
+fix is for the method, not because the answer was wrong. The wording changed too,
+from a decision at a threshold to what it is: "a ML-based comparison favoured …
+by N AIC units. This is model-comparison evidence, not a hypothesis test, and no
+*p* value follows from it."
+
+*Documentation.* The README still carried the old F/C/K expansion under the DANCE
+name, skipped from tab 10 to 12, omitted `lme4`, and still claimed "everything
+downstream of smoothing is the original code" — plainly untrue after eighteen
+rounds. All corrected, and the numbering test allows a skipped number only when
+the preceding heading names it (item 4 covers tabs 4 and 5), which is exactly the
+case the 10-to-12 jump was not.
+
+New: `tests/testthat/test-p18-corrections.R` (55 assertions, including the
+structural stale-slot guard) and an executed-export check in
+`tests/mixed_design_test.R`, now 46 checks.
+
+After this round: **2,068 testthat assertions (0 failed, 0 skipped) and 17
+standalone suites pass.**
+
 ## 5. Rename table
 
 | source | source app | merged app |

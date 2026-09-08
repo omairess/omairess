@@ -1,4 +1,4 @@
-# DANCE — **F**unctional data analysis, **C**ircadian regression, **K**-means clustering
+# DANCE — Direct Analysis of multivariate Nonlinear and Circadian Effects in R
 
 One Shiny app combining two previously separate tools:
 
@@ -10,14 +10,23 @@ One Shiny app combining two previously separate tools:
 Both apps started with the same four steps — load a file, pick the variables,
 smooth the curves, check the smoothing — implemented twice. **In this app those
 four steps exist once.** Import and smooth your curves, then run any of the
-analyses on them without re-importing, re-selecting or re-smoothing, and
-without any risk that the fPCA and the cosinor fit were run on differently
+curve-based analyses on them without re-importing, re-selecting or re-smoothing,
+and without any risk that the fPCA and the cosinor fit were run on differently
 smoothed data.
 
-Everything downstream of smoothing is the original code, carried across by line
-range, so each analysis computes and prints exactly what it did in its own app.
-See `PORTING_NOTES.md` for the full record of what was merged, what was
-renamed, and the handful of deliberate behaviour changes.
+Two analyses deliberately sit outside that guarantee, and say so on screen: the
+**cosinor** can be fitted to the raw observations (it is a regression on the
+observations and needs no smoothing), and the **mixed-design** models always are,
+because they estimate the temporal structure themselves and pre-smoothing would
+smooth twice.
+
+The merge began as a port — each analysis carried across by line range so it
+computed exactly what it did in its own app. That is no longer a fair
+description: eighteen rounds of audit have rewritten the registration, corrected
+the smoothing and its diagnostics, extracted shared kernels, replaced estimators
+that were wrong, and added mixed modelling that neither source app had. Read
+`PORTING_NOTES.md` for what was merged and, more usefully, for the record of
+what was found wrong and how each thing was measured before and after.
 
 ## Running it
 
@@ -38,6 +47,7 @@ if any of these were missing):
 | `fda.usc` | functional k-means clustering |
 | `reticulate` | DCF (density-core-finding) clustering via Python |
 | `minpack.lm` | robust exponential-saturation cosinor fits |
+| `lme4` | mixed (between × within) cosinor |
 | `gridExtra`, `viridis` | plot export, continuous colour scales |
 
 ## The tabs
@@ -98,6 +108,16 @@ if any of these were missing):
     not two), or the signal itself averaged over the clock.
 10. **Cosinor: pairwise tests** — pairwise group comparisons of any cosinor
     parameter, with corrections, effect sizes and confidence intervals.
+11. **Mixed design (between × within)** — for a design with one factor varying
+    *between* participants and another *within* them, which neither the
+    between-subjects nor the repeated-measures fANOVA can represent (both are
+    one-factor and carry no interaction). Two analyses: a penalised spline of
+    time per design cell plus a random curve per participant (`mgcv`), with the
+    interaction judged by an ML-based model comparison; and a mixed cosinor
+    (`lme4`) giving MESOR, amplitude and acrophase per cell, with differences
+    tested by dropping a cosine/sine *pair* — a 2-df question about amplitude or
+    phase. Both are fitted to the **raw observations**, not the smoothed curves.
+    Neither is a permutation test, and the readout says so.
 
 **K — clustering**
 

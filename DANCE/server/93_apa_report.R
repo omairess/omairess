@@ -387,6 +387,12 @@ dance_apa_report <- function(values, input, title = NULL) {
           "than of either alone; the models were refitted by maximum ",
           "likelihood for those comparisons, since REML likelihoods are not ",
           "comparable across different fixed effects.")
+    # AUDIT (P18.4): say which data the model saw. The rest of the pipeline runs
+    # on the smoothed curves, so a reader is entitled to assume these did too.
+    add(" Mixed models were fitted to the RAW observations rather than to the ",
+        "smoothed curves: the model estimates the temporal structure itself, ",
+        "so supplying it with pre-smoothed data would smooth twice and distort ",
+        "the residual model.")
     add(" Neither model is a permutation test: the smoothing parameters and ",
         "variance components were estimated from these data and the tests ",
         "condition on those estimates, so the *p* values are approximate.")
@@ -1002,15 +1008,20 @@ dance_apa_report <- function(values, input, title = NULL) {
         L <- c(L, dance_md_table(rows)); blank()
       }
       if (is.finite(mx$aic_delta))
-        add("Removing the interaction changed AIC by ",
-            dance_apa_num(mx$aic_delta, 1), " (", dance_apa_num(mx$aic_full, 1),
-            " with it, ", dance_apa_num(mx$aic_additive, 1), " without), so ",
-            if (mx$aic_delta > 2)
-              paste0("the shape of the ", mx$within_name, " effect differs between ",
-                     mx$between_name, " groups")
+        # P18.5: a maximum-likelihood comparison, reported as weight of evidence
+        # rather than as a decision at a threshold.
+        add("A ", mx$aic_basis %|% "ML", "-based comparison favoured the model ",
+            "allowing each cell its own temporal shape by ",
+            dance_apa_num(abs(mx$aic_delta), 1), " AIC units (",
+            dance_apa_num(mx$aic_full, 1), " with the interaction, ",
+            dance_apa_num(mx$aic_additive, 1), " without)",
+            if (mx$aic_delta <= 2 && mx$aic_delta >= -2)
+              ", which is too small a difference to separate them"
             else if (mx$aic_delta < -2)
-              "the additive model is preferred and there is no evidence the shape differs between groups"
-            else "this comparison does not separate the two models", ".")
+              " -- read the other way: the additive model is the better-supported one"
+            else "",
+            ". This is model-comparison evidence, not a hypothesis test, and no ",
+            "*p* value follows from it.")
       if (is.finite(mx$dev_expl %|% NA_real_))
         add(" The model accounted for ", dance_apa_num(100 * mx$dev_expl, 1),
             "% of the deviance.")

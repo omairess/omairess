@@ -89,19 +89,58 @@ values <- reactiveValues(
   harmonic_model        = NULL,   # cosinor
   hp_pairwise_results   = NULL,   # pairwise tests on cosinor parameters
   hp_pairwise_param     = NULL,
-  hp_pairwise_correction = NULL
+  hp_pairwise_correction = NULL,
+  # AUDIT (P18.1). These were created dynamically by their modules and never
+  # declared here, which is how they came to be missed by the reset below.
+  # hp_pairwise_all and hp_acrophase_differs are the worse pair: the publication
+  # report READS both, so a stale one could put the previous dataset's cosinor
+  # comparisons into a report about the current one.
+  hp_pairwise_all       = NULL,   # every parameter compared, not just the last
+  hp_acrophase_param    = NULL,
+  hp_acrophase_differs  = NULL,   # the Bingham amplitude caution's evidence
+  mixed_results         = NULL,   # mixed (between x within) model
+  pca_anova             = NULL,   # component-score ANOVA -- also read by the report
+  fanova_selected_groups = NULL,
+  gam_reml_fit          = NULL,
+  gam_data_label        = NULL
 )
 
 # Everything downstream of the shared data step is invalidated whenever the
 # data step re-runs.  Both source apps did this partially and for their own
 # analyses only; here it is one list so a new selection cannot leave a stale
 # cosinor fit sitting next to a fresh fPCA.
+# AUDIT (P18.1). Four slots were being written by their modules and never
+# cleared here, so a result computed on one dataset could survive into the next.
+# A reviewer found the mixed one; the cosinor ones are older, mine, and worse,
+# because server/93_apa_report.R reads hp_pairwise_all and hp_acrophase_differs
+# directly -- a stale pair could put dataset A's group comparisons, and the
+# Bingham caution derived from them, into a publication report about dataset B.
+#
+# The rule this function now follows, and which
+# tests/testthat/test-p18-corrections.R enforces structurally rather than by
+# name, is: anything a module DERIVES from the data must be cleared when the
+# data changes. What survives is only what the data step itself owns.
+#
+# `keep_smoothing = TRUE` is the re-smoothing call: values$data is untouched
+# there, only the curves derived from it. So results that are functions of the
+# SMOOTHED curves must go, while the mixed models -- which are fitted to the raw
+# observations on purpose (see server/06_helpers_mixed.R) -- remain valid and
+# are kept. That is the one asymmetry here, and it is deliberate.
 dance_reset_analyses <- function(values, keep_smoothing = FALSE) {
   if (!keep_smoothing) {
     values$smooth_data <- NULL
     values$fd_obj <- NULL
     values$smooth_fit_metrics <- NULL
     values$smoothing_avg_metrics <- NULL
+    # smoothing diagnostics describe a dataset, not just a smoothing choice
+    values$cv_results <- NULL
+    values$nbasis_gcv <- NULL
+    values$reml_profile <- NULL
+    values$gam_reml_fit <- NULL
+    values$gam_data_label <- NULL
+    # fitted to values$data, so a re-smooth does not invalidate them but a new
+    # dataset or a new variable selection does
+    values$mixed_results <- NULL
   }
   values$pca_results <- NULL
   values$warping_results <- NULL
@@ -111,6 +150,16 @@ dance_reset_analyses <- function(values, keep_smoothing = FALSE) {
   values$cluster_optimization <- NULL
   values$reg_model <- NULL
   values$harmonic_model <- NULL
+  # P18.1, found by the structural guard rather than by the review: these are
+  # analysis results too, and pca_anova is a third one the report reads.
+  values$pca_anova <- NULL
+  values$fanova_selected_groups <- NULL
+  # everything derived from harmonic_model goes when it does
   values$hp_pairwise_results <- NULL
+  values$hp_pairwise_all <- NULL
+  values$hp_pairwise_param <- NULL
+  values$hp_pairwise_correction <- NULL
+  values$hp_acrophase_param <- NULL
+  values$hp_acrophase_differs <- NULL
   invisible(NULL)
 }

@@ -79,11 +79,17 @@ dance_mixed_frame <- reactive({
   axis <- dance_smoothing_axis(
     list(use_real_time = isTRUE(input$mixed_real_time),
          is_cyclic = FALSE), values)
-  tryCatch(
+  out <- tryCatch(
     dance_mixed_long(values$data, axis$t_full, subject = values$subject_ids,
                      between = values$covariates[[bn]],
                      within  = values$covariates[[wn]]),
     error = function(e) NULL)
+  # P18.2: the exported script has to rebuild this exact axis, so the values
+  # travel with the frame rather than being recomputed from a description of
+  # them -- the same reason the registration kernels are emitted rather than
+  # re-implemented.
+  if (!is.null(out)) attr(out, "time_values") <- axis$t_full
+  out
 })
 
 # --- run ---------------------------------------------------------------------
@@ -123,6 +129,7 @@ observeEvent(input$run_mixed, {
   }
   res$between_name <- input$mixed_between
   res$within_name  <- input$mixed_within
+  res$time_values  <- attr(d, "time_values")
   res$time_axis    <- if (isTRUE(input$mixed_real_time)) "real elapsed time" else "column index"
   values$mixed_results <- res
   showNotification("Mixed model fitted.", type = "message", duration = 4)
@@ -174,13 +181,20 @@ output$mixed_results <- renderPrint({
     }
     cat(sprintf("Deviance explained: %s%%\n", f2(100 * res$dev_expl)))
     if (is.finite(res$aic_delta)) {
-      cat(sprintf("Interaction in the SHAPE: AICc-free comparison, AIC %s (full) vs %s (additive), delta %+.1f\n",
+      cat(sprintf("Interaction in the SHAPE (%s-based model comparison)\n",
+                  res$aic_basis %||% "ML"))
+      cat(sprintf("  AIC %s with the interaction, %s without; delta %+.1f\n",
                   f2(res$aic_full), f2(res$aic_additive), res$aic_delta))
+      # P18.5: reported as model-comparison evidence, not as a hypothesis test.
+      # A delta is a weight of evidence; calling it a decision at 2 units dresses
+      # a continuous quantity as a verdict.
       cat(sprintf("  %s\n", if (res$aic_delta > 2)
-        "the additive model is worse: the shape of the within-subject effect differs between groups"
+        "the comparison favours letting each cell have its own temporal shape"
         else if (res$aic_delta < -2)
-        "the additive model is better: no evidence the shape differs between groups"
-        else "the two are within 2 AIC of each other: this comparison does not separate them"))
+        "the comparison favours the additive model: no support for cell-specific shapes"
+        else "the two models are within 2 AIC: this comparison does not separate them"))
+      cat("  This is evidence for one model over another, not a test of a null\n")
+      cat("  hypothesis, and no p-value should be quoted from it.\n")
     }
     cat("\nWhat this does not establish\n----------------------------\n")
     cat("  The p-values are APPROXIMATE. The smoothing parameters were estimated\n")

@@ -164,8 +164,30 @@ dance_mixed_fanova <- function(d, k_time = 12, k_subject = 6, method = "fREML") 
   m_add  <- fit_one(f_add)
 
   an <- tryCatch(mgcv::anova.gam(m_full), error = function(e) NULL)
-  aic_full <- tryCatch(stats::AIC(m_full), error = function(e) NA_real_)
-  aic_add  <- if (is.null(m_add)) NA_real_ else tryCatch(stats::AIC(m_add), error = function(e) NA_real_)
+
+  # AUDIT (P18.5). The comparison used to read AIC off the fREML fits. The two
+  # models differ in their FIXED-effect structure -- the full one has the
+  # within x between interaction and cell-specific smooths, the additive one
+  # does not -- and a restricted likelihood is computed on a different set of
+  # contrasts for each, so the two scores are not on a common scale. The
+  # reported model keeps its fREML fit, because that is the better basis for
+  # the smoothing parameters and hence for the fitted curves; the COMPARISON is
+  # made on a pair refitted by ML.
+  #
+  # On the data this was raised against the verdict does not change (+33.5 by
+  # fREML, +32.1 by ML), which is worth stating rather than hiding: the fix is
+  # for the method, not because the answer was wrong.
+  fit_ml <- function(form) tryCatch(
+    mgcv::bam(form, data = d, method = "ML"), error = function(e) NULL)
+  m_full_ml <- fit_ml(f_full)
+  m_add_ml  <- fit_ml(f_add)
+  aic_basis <- if (!is.null(m_full_ml) && !is.null(m_add_ml)) "ML" else method
+
+  aic_full <- tryCatch(stats::AIC(m_full_ml %||% m_full), error = function(e) NA_real_)
+  aic_add  <- {
+    mm <- m_add_ml %||% m_add
+    if (is.null(mm)) NA_real_ else tryCatch(stats::AIC(mm), error = function(e) NA_real_)
+  }
 
   list(
     ok = TRUE,
@@ -178,6 +200,7 @@ dance_mixed_fanova <- function(d, k_time = 12, k_subject = 6, method = "fREML") 
     aic_full     = aic_full,
     aic_additive = aic_add,
     aic_delta    = aic_add - aic_full,     # > 0 favours keeping the interaction
+    aic_basis    = aic_basis,              # "ML" when the comparison refit worked
     dev_expl     = tryCatch(summary(m_full)$dev.expl, error = function(e) NA_real_),
     k_time       = k_time,
     k_subject    = k_subject,

@@ -557,6 +557,15 @@
       }
     }
 
+    # P18.2: one way to write a literal vector into the script. deparse() is what
+    # this generator already uses for functions, and it round-trips a character
+    # or numeric vector exactly, including the NAs a covariate can carry.
+    dance_export_vec <- function(x) {
+      if (is.null(x)) return("NULL")
+      if (is.factor(x)) x <- as.character(x)
+      paste(deparse(x, width.cutoff = 500), collapse = "\n")
+    }
+
     # fit_cosinor_nonlinear uses %||%, which app.R defines outside any of the
     # emitted functions, so findGlobals cannot reach it. Define it once here.
     add("# The app's null-coalescing operator, used by the estimators below.")
@@ -1377,6 +1386,63 @@
       add("")
     }
 
+
+    # ---- SECTION 12: MIXED (BETWEEN x WITHIN) DESIGN ----
+    #
+    # AUDIT (P18.2). The mixed module shipped without an export branch, so the
+    # script reproduced every analysis family except the newest one -- the same
+    # class of reproducibility gap that took several rounds to remove from the
+    # warping section. The kernels were written pure precisely so this would be
+    # easy, and emit_kernel() resolves their helper closure, so the script gets
+    # the app's own functions rather than a description of them.
+    if(!is.null(values$mixed_results) && isTRUE(values$mixed_results$ok)) {
+      mx <- values$mixed_results
+      add("# -----------------------------------------------------------------------------")
+      add("# 12. MIXED DESIGN (between x within)")
+      add("# -----------------------------------------------------------------------------")
+      add("#   between-subject factor: ", mx$between_name)
+      add("#   within-subject factor : ", mx$within_name)
+      add("#   time axis             : ", mx$time_axis)
+      add("")
+      add("# Mixed models are fitted to the RAW observations, not to the smoothed")
+      add("# curves: the model estimates the temporal structure itself, so feeding it")
+      add("# pre-smoothed data would smooth twice and distort the residual model.")
+      add("")
+      emit_kernel("dance_mixed_long")
+      emit_kernel("dance_mixed_check")
+      emit_kernel("dance_mixed_balance")
+
+      add("mixed_subject <- ", dance_export_vec(values$subject_ids))
+      add("mixed_between <- ", dance_export_vec(values$covariates[[mx$between_name]]))
+      add("mixed_within  <- ", dance_export_vec(values$covariates[[mx$within_name]]))
+      add("mixed_time    <- ", dance_export_vec(mx$time_values))
+      add("")
+      add("mixed_long <- dance_mixed_long(raw_data, mixed_time,")
+      add("                               subject = mixed_subject,")
+      add("                               between = mixed_between,")
+      add("                               within  = mixed_within)")
+      add("stopifnot(length(dance_mixed_check(mixed_long)) == 0)")
+      add("")
+
+      if(identical(mx$kind, "fanova")) {
+        emit_kernel("dance_mixed_fanova")
+        emit_kernel("dance_mixed_fanova_curves")
+        add(sprintf("mixed_fit <- dance_mixed_fanova(mixed_long, k_time = %d, k_subject = %d, method = '%s')",
+                    mx$k_time, mx$k_subject, mx$method))
+        add("print(mixed_fit$s_table)")
+        add("print(mixed_fit$p_table)")
+        add("cat('AIC full', mixed_fit$aic_full, 'vs additive', mixed_fit$aic_additive,")
+        add("    ' delta', mixed_fit$aic_delta, '\\n')")
+        add("mixed_curves <- dance_mixed_fanova_curves(mixed_fit)")
+      } else {
+        emit_kernel("dance_mixed_cosinor")
+        add(sprintf("mixed_fit <- dance_mixed_cosinor(mixed_long, period = %s, n_harmonics = %d)",
+                    format(mx$period), mx$n_harmonics))
+        add("print(mixed_fit$cells)")
+        add("print(mixed_fit$tests)")
+      }
+      add("")
+    }
 
     add("# =============================================================================")
     add("# END OF ANALYSIS CODE")

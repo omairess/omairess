@@ -24,17 +24,26 @@
 
 # Settings that DEFINE an analysis, restored with the proper update*Input call.
 # Anything not here is cosmetic; the results themselves come back via `values`.
+# AUDIT (P18.3). The mixed-design controls were missing, so a restored session
+# brought back the RESULT with none of the settings that produced it -- the
+# reader could see a mixed cosinor and not which factors, period or time axis it
+# was fitted with. Anything the reset in server/00_state.R clears has settings
+# that belong here; a result without its settings is not a restored analysis.
 RESTORE_INPUTS <- list(
   numeric  = c("n_basis", "n_basis_manual", "smooth_factor", "min_bound",
                "max_bound", "n_components", "n_permutations", "alpha_level",
-               "harmonic_period", "n_harmonics", "n_clusters", "n_boot"),
+               "harmonic_period", "n_harmonics", "n_clusters", "n_boot",
+               "mixed_k_time", "mixed_k_subject", "mixed_period",
+               "mixed_harmonics"),
   checkbox = c("is_cyclic", "use_real_time", "constrain_bounds",
-               "use_bootstrap", "cv_stratified"),
+               "use_bootstrap", "cv_stratified", "mixed_real_time",
+               "harmonic_model_selection"),
   select   = c("smooth_method", "pca_type", "fanova_design", "fanova_test_type",
                "fanova_data_source", "fanova_group_var", "harmonic_time_var",
                "harmonic_trend_type", "harmonic_group_var", "reg_method",
                "cluster_method", "pairwise_correction", "hp_param",
-               "hp_correction", "data_format"),
+               "hp_correction", "data_format",
+               "mixed_between", "mixed_within", "mixed_analysis"),
   text     = c("harmonic_manual_times")
 )
 
@@ -44,9 +53,13 @@ DANCE_SESSION_FORMAT <- 1L
 if (!exists("%||%")) `%||%` <- function(a, b) if (is.null(a)) b else a
 
 dance_package_versions <- function() {
+  # P18.3: lme4 fits the mixed cosinor, so a session that contains one must
+  # record the version it was fitted under. The saved file claims to carry "the
+  # package versions they were computed under"; a missing entry makes that claim
+  # false for exactly the newest analysis.
   pkgs <- c("shiny", "shinydashboard", "shinyWidgets", "fda", "mgcv", "plotly",
             "DT", "dplyr", "tidyr", "ggplot2", "cluster", "readxl",
-            "rmfanova", "fda.usc", "reticulate", "minpack.lm")
+            "rmfanova", "fda.usc", "reticulate", "minpack.lm", "lme4")
   vapply(pkgs, function(p) tryCatch(as.character(utils::packageVersion(p)),
                                     error = function(e) "not installed"),
          character(1))

@@ -55,6 +55,14 @@ ui_tab_mixed <- tabItem(
            Cosinor tabs, which cannot respect pairing."))
       ),
 
+      helpText(HTML(
+        "<b>These models are fitted to the raw observations</b>, not to the
+         smoothed curves from the Preprocessing tab. That is deliberate: the
+         model estimates the temporal structure itself, so feeding it
+         pre-smoothed data would smooth twice and distort the residual model.
+         Re-smoothing therefore does not invalidate a mixed fit, and the app
+         does not clear one when you re-smooth.")),
+
       checkboxInput("mixed_real_time",
                     "Use real elapsed clock time as the time axis", TRUE),
       helpText(HTML(

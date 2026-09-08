@@ -220,6 +220,74 @@ suppressWarnings(shiny::testServer(server_fn, {
   }
 }))
 
+# ---- the exported script must RUN and reproduce the fit (P18.2) -------------
+# The mixed module shipped with no export branch at all, so the script covered
+# every family except the newest one. Parsing is not the bar -- a script full of
+# the wrong algorithm parses -- so the emitted text is executed in a clean
+# session and its numbers compared against the app's.
+cat("\n-- the exported script, executed ---------------------------------------\n")
+suppressWarnings(shiny::testServer(server_fn, {
+  session$setInputs(mixed_between = "Group", mixed_within = "Condition",
+                    mixed_real_time = FALSE, mixed_analysis = "cosinor",
+                    mixed_period = 24, mixed_harmonics = 1,
+                    mixed_k_time = 10, mixed_k_subject = 5, run_mixed = 1)
+  session$flushReact()
+  chk(!is.null(values$mixed_results), "a mixed cosinor result exists to export",
+      "no mixed result to export")
+
+  code <- tryCatch(generate_analysis_code(full = TRUE), error = function(e) e)
+  if (inherits(code, "error")) {
+    chk(FALSE, "", paste("the generator errored:", conditionMessage(code)))
+  } else {
+    chk(grepl("12. MIXED DESIGN", code, fixed = TRUE),
+        "the script carries a mixed-design section",
+        "the exported script has no mixed-design section")
+    for (fn in c("dance_mixed_long", "dance_mixed_check", "dance_mixed_cosinor"))
+      chk(grepl(paste0(fn, " <- function"), code, fixed = TRUE),
+          paste("the script defines", fn, "from the live function"),
+          paste("the script calls", fn, "but never defines it"))
+    chk(grepl("fitted to the RAW observations", code, fixed = TRUE),
+        "the script says the mixed fit uses raw observations",
+        "the script does not say which data the mixed model used")
+
+    f <- tempfile(fileext = ".R"); writeLines(code, f)
+    chk(!inherits(tryCatch(parse(f), error = function(e) e), "error"),
+        "the exported script parses", "the exported script does not parse")
+
+    # Run just the mixed section in a clean session, against the app's numbers.
+    # generate_analysis_code() returns ONE string, so it is split first; the
+    # section runs from its own header to the end marker, and emit_kernel()
+    # writes the kernel definitions inside that range.
+    live  <- values$mixed_results
+    lines <- strsplit(code, "\n", fixed = TRUE)[[1]]
+    i0 <- grep("12. MIXED DESIGN", lines, fixed = TRUE)[1]
+    i1 <- grep("END OF ANALYSIS CODE", lines, fixed = TRUE)[1]
+    chk(!is.na(i0) && !is.na(i1) && i1 > i0,
+        sprintf("the mixed section is locatable in the script (lines %s-%s)", i0, i1),
+        "the mixed section could not be located in the script")
+    rf <- tempfile(fileext = ".rds"); saveRDS(Y, rf)
+    runner <- tempfile(fileext = ".R")
+    writeLines(c(
+      '.libPaths(c("~/Rlib", .libPaths()))',
+      'suppressMessages(library(lme4))',
+      sprintf('raw_data <- as.matrix(readRDS("%s"))', rf),
+      lines[i0:(i1 - 1)],
+      'cat(sprintf("%.10f", mixed_fit$cells$amplitude_1), sep="\n")'), runner)
+    out <- suppressWarnings(system2("Rscript", runner, stdout = TRUE, stderr = FALSE))
+    got <- suppressWarnings(as.numeric(out[grepl("^[0-9.]+$", out)]))
+    chk(length(got) == nrow(live$cells),
+        sprintf("the exported script runs and returns %d cell amplitudes", length(got)),
+        sprintf("the exported script returned %d values, expected %d",
+                length(got), nrow(live$cells)))
+    if (length(got) == nrow(live$cells)) {
+      d <- max(abs(got - live$cells$amplitude_1))
+      chk(d < 1e-6,
+          sprintf("exported amplitudes match the app (max diff %.2e)", d),
+          sprintf("exported amplitudes differ from the app by %.6f", d))
+    }
+  }
+}))
+
 cat(sprintf("\n%s  (%d passed, %d failed)\n",
             if (bad == 0) "Mixed design tests PASSED" else "Mixed design tests FAILED", ok_n, bad))
 quit(status = if (bad == 0) 0 else 1)
