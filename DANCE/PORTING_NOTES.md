@@ -3071,6 +3071,204 @@ exists.
 After this round: **2,081 testthat assertions (0 failed, 0 skipped) and 19
 standalone suites pass.**
 
+### 4.20 P20 — twelve findings, and one of my own claims withdrawn
+
+A twelfth review, in twelve numbered findings. Every one was reproduced against
+the checkout before anything was changed; four turned out to be worse than
+reported, and one of them refuted a claim this document itself made two rounds
+ago.
+
+**R1 — two p-value conventions in one result object.** Both post-hoc kernels in
+`server/50_fanova.R` computed the global *p* as `(1 + #{T* >= T}) / (1 + B)` and
+the pointwise *p* as the plain proportion `#{T* >= T} / B`, in the same returned
+list. The plain proportion can be exactly zero, which asserts an impossible
+event, and at the smaller permutation counts the app offers it is badly
+anti-conservative in the tail: with *B* = 49 it reports *p* = 0 at a point where
+the observed statistic was merely the largest of 50 exchangeable values, where
+the correct answer is 1/50 = .02. Both now call one shared `dance_perm_p()`
+(`server/06_helpers_posthoc.R`), and so does the fANOVA kernel; the denominator
+is the number of permutations DRAWN, except where a permuted statistic is
+genuinely undefined at a time point, which is the documented P4.7/P5.7 rule and
+is passed explicitly.
+
+**R7 — the most extreme result reported as the least.** Both kernels wrote
+`t_stat[!is.finite(t_stat)] <- 0`. Twelve participants whose paired difference is
+identical and non-zero have zero dispersion, so the paired *t* is +Inf: unanimous
+separation. Coerced to zero it was reported as *t* = 0, *d* = 0 and — because
+every permuted statistic was then compared against zero too — *p* = 1. The one
+dataset where the answer is unambiguous was the one dataset the test could not
+see. `dance_studentise()` distinguishes the two zero-denominator cases: `0/0` is
+genuinely undefined and stays 0; `c/0` is +/-Inf and is carried through, where it
+compares correctly against a permutation set (only an infinite permuted value
+matches it, which under sign-flipping is the two all-same-sign flips).
+
+**R2 — a standard test, re-derived and got wrong by a factor of two.**
+`hotelling_t2()`'s multigroup branch rolled its own Wilks-to-*F* step. For *p* = 2
+response variables Rao's transformation is exact with constant *s* = 2, so
+df2 = 2(*N* − *k* − 1); the code used *N* − *k* − 1, half of it, and the same
+halving went into the *F* multiplier. On a three-group, twenty-per-group fixture
+the true answer is *F* = 3.644338 on (4, 112) df, *p* = .0079; the old code
+reported *F* = 1.822169 on (4, 56) df, *p* = .1387 — a real group difference
+reported as null. Rather than fix the algebra and leave a second implementation
+of a standard procedure in the tree, it delegates to a shared
+`dance_bivariate_manova()` built on `stats::manova`. Checked against R's own
+Wilks on 200 random fixtures: agreement to machine zero, and it reduces exactly
+to the two-sample Hotelling *T*² when *k* = 2.
+
+**R3 — the acrophase scale, on a harmonic the fix of extra-i had already
+corrected elsewhere.** `acrophase_time_h` is stored on the effective period
+*T*/*h*, because `phi_to_hours()` divides by *h*.
+`server/73_cosinor_pairwise.R` converted it back to radians with `2*pi/period`
+regardless, so H2 angles spanning 0–12 h were mapped onto half a circle. The
+damage goes both ways depending on where the cluster sits, which is why it is not
+a rescaling that cancels in a contrast. Measured: a cluster near 3 h was squeezed
+(r̄ 0.769 → 0.930, Watson–Williams *p* .208 → .115); a cluster straddling the wrap
+was torn in half (r̄ 0.991 → 0.084, the circular mean moved from 0.03 h to 2.54 h,
+a real 0.2 h difference reported as 2.21 h, and *p* went from .017 to .574). One
+shared `dance_effective_period()` now supplies the divisor.
+
+**R4 — a test that cannot see the largest possible difference.** Bingham's
+acrophase *F* ratio is the squared displacement PERPENDICULAR to the pooled mean
+direction, and that is half-cycle periodic: two groups exactly antiphase lie on
+the same line through the origin, so every displacement is zero. With group
+acrophases at 0 h and 12 h, `dance_pop_cosinor()` returned *F* = 0.011, *p* = .918,
+concluded the acrophases did not differ, and set
+`amplitude_interpretable = TRUE` — the exact opposite of Bingham's caution, on
+two rhythms in perfect antiphase. The failure is one of power, not of level, so
+the test is kept: it now grades its own angular separation, refuses to license the
+amplitude comparison on a null verdict from a test with no power there, and
+returns the joint MANOVA on the (cosine, sine) pair, which has no blind spot
+(*p* = 2 × 10⁻⁴¹ on the same fixture). The report says which case it is in
+instead of reporting a null result as reassurance.
+
+**R5 — my own claim, withdrawn.** Section 4.19 said all three effects of the
+mixed permutation were exact, and the header of
+`server/07_helpers_mixed_perm.R` said it twice. That is true only of the
+within-participant scheme, which relabels inside a participant. The two schemes
+that move participants across groups are exact only if the groups are
+EXCHANGEABLE — identical distributions, not merely equal means — and unequal
+group sizes with unequal dispersion is the classic Behrens–Fisher case where
+they are not. Reproduced and worse than reported: with 5 participants against
+30 and a 5:1 dispersion ratio in the within-subject contrast, the unstudentised
+interaction test rejected **.698** of null datasets at a nominal .05.
+
+The statistic is Welch-type studentised now (Janssen 1997; Pauly, Brunner &
+Konietschke 2015), and `tests/mixed_calibration_test.R` measures what that
+bought across balanced and unbalanced samples, equal and unequal dispersion, two
+and three within levels, AR(1) errors, two missingness patterns and strong
+nuisance main effects, with a binomial band rather than a demand for exactly
+.05. The honest summary, from that grid:
+
+* the excess appears **only** when the dispersions differ — at 1:1 both
+  statistics sit at nominal at every size tried;
+* it **shrinks with group size** and is gone by about 40 per group even at 5:1
+  (.056, .041, .047 at *n* = 40, 50, 80) — the signature of an asymptotically
+  valid, finite-sample-liberal procedure;
+* studentising is the right default **and is not free**: the unstudentised
+  statistic is fine at equal group sizes even at 5:1 (.064 at 20 per group,
+  marginally better than the studentised .082), but cannot survive unequal *n*
+  with unequal dispersion (.698 → .253 at 5 against 30). Two points of level in
+  the balanced case to avoid a seventy-point failure in the unbalanced one;
+* .253 is still not a usable test, so that configuration is **flagged, not
+  presented**. Each run grades its own configuration and the readout, the APA
+  Methods paragraph, the Results section and the README all carry the same
+  three-way status instead of the blanket word "exact".
+
+One more thing had to be measured before the grading could work at all. The
+first version flagged any observed dispersion ratio above 2, and on data with
+genuinely EQUAL dispersions and 15 participants per group it graded the
+between-participant effect anti-conservative — because a ratio of two variances
+each estimated from 15 subject means exceeds 2 about a fifth of the time by
+chance. So the threshold is now the 95th percentile of the ratio UNDER EQUAL
+TRUE DISPERSIONS, measured (400 datasets per cell) rather than assumed, and it
+differs enormously between the two effects: at 5 per group the between ratio's
+null 95th percentile is 6.35, the interaction's is 1.94, because the between
+ratio compares variances of one number per participant while the interaction
+ratio compares variances of a curve averaged over eight time points. One
+threshold for both would have to be either useless for one or wrong for the
+other.
+
+An earlier draft of this note said the pointwise statistic was calibrated
+throughout. It is not — .072 and .076 at 10 and 15 per group with a 5:1 ratio —
+and that draft was reading four large-*n* cells and over-generalising. It is
+consistently *less* affected than the global statistic (.102, .104 in the same
+cells), which is what one expects when `sqrt(∫S²)` is dominated by the largest
+pointwise value; that is stated, and no more.
+
+**R6 — the export wrote its own version of the post-hoc tests.** Section 8 of the
+generated script was a loop of independent, unpaired `stats::t.test()` calls with
+`p.adjust()`, over a variable `n_time_eval` that no part of the emitted file ever
+defined. Three failures in one block: it did not run; it was the wrong test even
+in principle (the app's post-hoc is a permutation test with an L2 global
+statistic, bootstrap intervals and Cohen's *d*); and it ignored the design, so a
+within-subject comparison the app had run as a paired sign-flip test was exported
+as an unpaired Welch test on the same curves. The real kernels are emitted now —
+their Shiny progress calls became inert callbacks, the same treatment
+`perform_rm_fanova` got at P3.5 — and `tests/codegen_test.R` drives that section
+for both designs, which it never did before.
+
+**R8 — a result that depended on the row order of the file.** The array builder
+writes `Y[subject, condition, time] <- y` by index assignment, which keeps the
+last value written. A frame with two rows for the same design cell therefore used
+whichever happened to come last, and reordering the rows could change every
+*p*-value with nothing anywhere saying the data were ambiguous. Duplicates are
+refused, with the offending keys named. Row-order invariance is asserted.
+
+**R9 — a global statistic that depended on which files were loaded.**
+`dance_mixed_permutation()` computed it as
+`if (exists("dance_l2_norm")) dance_l2_norm(v, t) else sum(diff(t) * ...)`, and
+those two branches are different functionals: `sqrt(∫v²dt)` against `∫v dt`.
+`dance_l2_norm` moved to `server/01c_helpers_norm.R`, ahead of every caller, and
+the branch is gone.
+
+**R10 — twenty-four settings that silently never restored.** Session restore
+called every updater as `fn(session, nm, value = ...)`, and `updateSelectInput()`
+has no `value` argument — its selection parameter is `selected`. R raised
+"unused argument" on every call and the surrounding `tryCatch` returned `NULL`.
+So a reloaded session came back with its results but with `fanova_design`,
+`fanova_group_var`, `harmonic_trend_type`, `hp_approach` and the mixed factor
+choices at their defaults, describing an analysis that was not the one on screen.
+Each updater gets its own setter now; selects are pushed on the next flush, after
+the observers that rebuild their choice lists have run; and a failure is
+collected and reported in the session note instead of discarded.
+
+**R11 — a cross-validation for a question nobody asked.** The smoothing CV
+smooths the training-group MEAN and scores it against a held-out individual's raw
+observations. Its error is dominated by between-subject scatter, which no
+smoothing parameter can reduce, and the curve it smooths is a group mean
+estimated from many participants and therefore far smoother than any one of them.
+P8.4 had already relabelled the panel; it still ended by telling the reader the
+lambda was transferable to Data Preprocessing. It is relabelled as the
+template-prediction diagnostic it is, and the per-curve GCV — generalised
+cross-validation on each participant's own curve, which is the criterion
+production smoothing actually uses — is computed alongside and is what the panel
+now points at.
+
+**R12 — "corrected" without saying across what.** Every readout that prints an
+adjusted *p* now names its multiplicity family. In the post-hoc tests there are
+two of them at once: the pointwise values are adjusted across evaluation points
+within a comparison, the global L2 values across comparisons.
+
+**Efficiency, with no statistical change.** The CV refits the held-out template
+once per fold instead of once per subject (1,200 → 150 `smooth.basis` calls on a
+40-subject, 30-lambda run; 5.97 s → 0.95 s; the CV error matrix bit-identical and
+the selected lambda unchanged). The clustering distance matrix is computed once
+per run rather than once per candidate *k*. The fANOVA permutation loop
+accumulates exceedance counts instead of materialising an `n_time × B` matrix.
+The mixed permutation caches the subject means and centred profiles, which a
+group relabelling cannot change (199 permutations, three effects: 0.35 s;
+interaction only: 0.05 s), and `dance_welch_between()` uses column operations on
+complete data. Nothing here changes a randomisation scheme, a number of draws, a
+precision or a fitted objective. Two proposals were measured and **not** taken:
+caching the parsed server files saves 62 ms of a 41-file, 27,500-line parse and
+costs the ability to pick up an edit without restarting; and the FoSR bootstrap
+already reuses one QR factorisation (P1.4a), so there was nothing to reuse.
+
+New: `server/01c_helpers_norm.R`, `tests/mixed_calibration_test.R`,
+`tests/pairwise_perm_test.R`. `tests/reactive_smoke_test.R` no longer writes to a
+hard-coded scratch directory that exists on one machine, which had been killing
+every check after it everywhere else.
+
 ## 5. Rename table
 
 | source | source app | merged app |

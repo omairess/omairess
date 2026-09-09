@@ -90,14 +90,32 @@ if any of these were missing):
    between groups?* It offers two estimators, and inherits this tab's
    permutation count, alpha and correction:
 
-   - **Exact permutation (default).** All three effects have a valid relabelling
+   - **Permutation (default).** All three effects have a valid relabelling
      scheme, the interaction included, which is the case usually said not to:
      an interaction is a between-group difference in the within-subject
      contrast, and under its null those participant-centred profiles are
      exchangeable across groups whatever the main effects are doing. Calibrated
-     by simulation, not argued — `tests/mixed_permutation_test.R` re-runs it.
-     Needs every participant to have every condition; scattered missing
-     observations are fine, a missing condition is not.
+     by simulation, not argued — `tests/mixed_permutation_test.R` and the wider
+     grid in `tests/mixed_calibration_test.R` re-run it. Needs every participant
+     to have every condition; scattered missing observations are fine, a missing
+     condition is not, and duplicated participant-by-condition-by-time cells are
+     refused rather than silently resolved.
+
+     **How exact is "exact"?** Not uniformly, and the readout says which case
+     you are in rather than leaving you to assume. The **within**-participant
+     effect is exact: its relabelling happens inside a participant, so nothing
+     about the groups can disturb it. The **between** and **interaction**
+     effects relabel participants *across* groups, and that is a symmetry only
+     if the groups are exchangeable — which needs their distributions to be
+     identical, not merely to have equal means. Unequal group sizes together
+     with unequal dispersion is exactly where that fails, and it failed badly:
+     before this was fixed, an interaction null with 5 against 30 participants
+     and a 5:1 dispersion ratio rejected 225 of 300 times at a nominal .05. The
+     statistic is Welch-type studentised now (Janssen 1997; Pauly, Brunner &
+     Konietschke 2015), which is asymptotically valid under unequal variances
+     and still exact under exchangeability. Each run grades its own
+     configuration and, where the residual bias is material, labels the
+     *p*-values anti-conservative and points at the model-based estimator.
    - **Mixed model (`mgcv`).** A spline per cell plus a random curve per
      participant. Handles an unbalanced design and returns fitted curves, but
      its *p* values are approximate.
@@ -225,6 +243,8 @@ Rscript tests/warp_export_roundtrip_test.R
 Rscript tests/diagnostic_axis_test.R
 Rscript tests/mixed_design_test.R
 Rscript tests/mixed_permutation_test.R
+Rscript tests/mixed_calibration_test.R   # the wider level/power grid; slow
+Rscript tests/pairwise_perm_test.R
 Rscript tests/pop_cosinor_test.R
 Rscript -e 'testthat::test_dir("tests/testthat")'
 ```
@@ -406,8 +426,11 @@ Two analyses, answering different questions:
 
 Neither is a permutation test, and the readout says so: the smoothing parameters
 and variance components were estimated from the same data, so the *p* values are
-approximate. That is the standard trade for a design the exact procedures cannot
-represent at all.
+approximate. That is the standard trade for a design the permutation procedures
+cannot represent at all — and it is also the route to take when the permutation
+test grades your configuration as anti-conservative, because a model that
+*estimates* the group dispersions does not have the failure mode that permuting
+across them does.
 
 ## The publication report
 

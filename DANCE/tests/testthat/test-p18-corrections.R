@@ -230,7 +230,14 @@ test_that("P18.6: the README describes DANCE, not the app it replaced", {
   expect_true(grepl("mixed\n   (between", rd, fixed = TRUE) ||
               grepl("mixed (between", rd, fixed = TRUE) ||
               grepl("**and mixed", rd, fixed = TRUE))
-  expect_true(grepl("Exact permutation (default)", rd, fixed = TRUE))
+  # P20/R5: the README used to call this "Exact permutation (default)". Only the
+  # WITHIN-participant scheme is exact; the two that relabel across groups are
+  # exact under exchangeability and asymptotic otherwise, and the README now has
+  # to say which is which rather than claim the stronger thing for all three.
+  expect_true(grepl("Permutation (default)", rd, fixed = TRUE))
+  expect_false(grepl("Exact permutation (default)", rd, fixed = TRUE))
+  expect_true(grepl("How exact is \"exact\"?", rd, fixed = TRUE))
+  expect_true(grepl("Welch-type studentised", rd, fixed = TRUE))
   expect_true(grepl("Population-mean cosinor", rd, fixed = TRUE))
   expect_true(grepl("| `lme4` |", rd, fixed = TRUE))
 })

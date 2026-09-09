@@ -453,7 +453,8 @@ if (identical(res$kind, "permutation")) {
   cat("\n")
   lab <- c(within = "within-subject effect", between = "between-subject effect",
            interaction = "interaction")
-  status_lab <- c(exact = "exact", calibrated = "asymptotic", liberal = "ANTI-CONSERVATIVE")
+  status_lab <- c(exact = "exact", calibrated = "asymptotic",
+                  liberal = "global p ANTI-CONSERVATIVE")
   for (nm in c("within", "between", "interaction")) {
     r <- res[[nm]]
     if (is.null(r)) next

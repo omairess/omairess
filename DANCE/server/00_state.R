@@ -103,6 +103,10 @@ values <- reactiveValues(
   hp_pairwise_all       = NULL,   # every parameter compared, not just the last
   hp_acrophase_param    = NULL,
   hp_acrophase_differs  = NULL,   # the Bingham amplitude caution's evidence
+  # P20/R4: whether the acrophase verdict above comes from a test with power at
+  # the observed angular separation. A null verdict from a blind test is not a
+  # licence for the amplitude comparison.
+  hp_acrophase_supported = NULL,
   mixed_results         = NULL,   # mixed (between x within) model
   pop_cosinor           = NULL,   # population-mean cosinor (Bingham 1982)
   pca_anova             = NULL,   # component-score ANOVA -- also read by the report
@@ -168,6 +172,7 @@ dance_reset_analyses <- function(values, keep_smoothing = FALSE) {
   values$hp_pairwise_spec <- NULL
   values$hp_acrophase_param <- NULL
   values$hp_acrophase_differs <- NULL
+  values$hp_acrophase_supported <- NULL
   values$pop_cosinor <- NULL
   invisible(NULL)
 }

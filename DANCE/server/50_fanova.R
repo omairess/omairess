@@ -902,7 +902,12 @@
                        NA_real_)
       fin <- is.finite(F_perm)
       perm_finite <- perm_finite + fin
-      perm_exceed <- perm_exceed + (fin & F_perm >= F_stat)
+      # isTRUE-per-element: a time point whose OBSERVED F is undefined compares
+      # to NA, and an NA must not poison the accumulator. Those points get no
+      # p-value at all (they are masked below), but the count has to stay an
+      # integer for the ones that do.
+      hit <- fin & is.finite(F_stat) & F_perm >= F_stat
+      perm_exceed <- perm_exceed + (hit & !is.na(hit))
       L2_stat_perm[perm] <- dance_l2_norm(SSB_perm / n_curves, time_points)
     }
     
@@ -913,9 +918,11 @@
     # the permutations at which the statistic WAS defined, which is what
     # perm_finite counts. P20/R1: the arithmetic itself is dance_perm_p(), the
     # one implementation the post-hoc kernels also use.
-    p_values_pointwise <- ifelse(
-      !is.finite(F_stat) | perm_finite < 1L, NA_real_,
-      dance_perm_p(perm_exceed, perm_finite))
+    defined <- is.finite(F_stat) & perm_finite >= 1L
+    p_values_pointwise <- rep(NA_real_, n_time)
+    if (any(defined))
+      p_values_pointwise[defined] <- dance_perm_p(perm_exceed[defined],
+                                                  perm_finite[defined])
 
     p_value_L2 <- dance_perm_p(sum(L2_stat_perm >= L2_stat, na.rm = TRUE),
                                sum(is.finite(L2_stat_perm)))
@@ -2217,6 +2224,9 @@
       }
 
 
+      if (!exists(".Random.seed", envir = globalenv(), inherits = FALSE)) set.seed(NULL)
+      .posthoc_rng_state <- get(".Random.seed", envir = globalenv())
+
       if(spec$design == "within") {
         cat("Performing PAIRED comparisons for within-subjects design\n")
 
@@ -2261,6 +2271,10 @@
       # the kernel. `family` names what the correction was applied over, so a
       # reader can see the multiplicity family instead of inferring it (R12).
       values$pairwise_results$spec <- list(
+        # P20/R6: the random state the permutations and the bootstrap were drawn
+        # under, so the run can be reproduced exactly rather than only to Monte
+        # Carlo error.
+        rng_state = .posthoc_rng_state, rng_kind = RNGkind(),
         design = spec$design,
         source = if (isTRUE(spec$matches_omnibus)) "fanova" else "custom",
         description = spec$description,

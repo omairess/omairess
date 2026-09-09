@@ -38,16 +38,24 @@ ui_tab_fanova <- tabItem(
 
               radioButtons("fanova_mixed_estimator", "Estimator:",
                            choices = list(
-                             "Exact permutation (recommended)" = "permutation",
+                             "Permutation (recommended)" = "permutation",
                              "Mixed model (mgcv), for unbalanced designs" = "model"),
                            selected = "permutation"),
               helpText(HTML(
-                "<b>Permutation</b> is the default because it is <i>exact</i>: all
-                 three effects have a valid relabelling scheme, the interaction
-                 included &mdash; an interaction is a between-group difference in
-                 the within-subject contrast, and under its null those contrasts
-                 are exchangeable across groups whatever the main effects do. It
-                 needs every participant to have every level of the within factor.<br>
+                "<b>Permutation</b> is the default because all three effects have
+                 a valid relabelling scheme, the interaction included &mdash; an
+                 interaction is a between-group difference in the within-subject
+                 contrast, and under its null those contrasts are exchangeable
+                 across groups whatever the main effects do. It needs every
+                 participant to have every level of the within factor.<br>
+                 <small>The within-participant effect is <i>exact</i>: its
+                 relabelling happens inside a participant. The between and
+                 interaction effects are exact only when the groups are
+                 exchangeable, which needs their distributions to be identical
+                 and not merely to have equal means; their statistic is
+                 Welch-type studentised so that unequal dispersions are handled
+                 asymptotically. Each result grades its own configuration and
+                 says which case it is in.</small><br>
                  <b>Mixed model</b> fits a spline per cell plus a random curve per
                  participant. It handles an unbalanced design and returns fitted
                  curves, but its <i>p</i> values are approximate: the smoothing

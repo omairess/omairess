@@ -367,8 +367,8 @@ dance_apa_report <- function(values, input, title = NULL) {
   if (!is.null(mx) && isTRUE(mx$ok)) {
     add("**Mixed design.** ", mx$between_name, " varied between participants and ",
         mx$within_name, " within them. ")
-    if (identical(mx$kind, "permutation"))
-      add("The three effects were tested by EXACT permutation. Condition labels ",
+    if (identical(mx$kind, "permutation")) {
+      add("The three effects were tested by permutation. Condition labels ",
           "were relabelled within each participant for the within-participant ",
           "effect; whole participants were relabelled across groups for the ",
           "between-participant effect; and for the interaction, group labels ",
@@ -381,6 +381,32 @@ dance_apa_report <- function(values, input, title = NULL) {
           "smallest attainable value is ", dance_apa_num(mx$p_floor, 4, bounded = TRUE),
           ". Pointwise values were adjusted across time points by ", mx$correction,
           " and evaluated at alpha = ", dance_apa_num(mx$alpha, 2, bounded = TRUE), ".")
+      # AUDIT (P20/R5). This paragraph used to say EXACT permutation, full stop.
+      # Only the within-participant scheme is exact; the two that move
+      # participants across groups are exact only under exchangeability, which
+      # unequal dispersion breaks. A Methods section that overstates the
+      # guarantee is a Methods section a reviewer is entitled to reject.
+      add(" The within-participant relabelling is stratified inside a ",
+          "participant and is therefore exact. The two schemes that move ",
+          "participants across groups are exact only when the groups are ",
+          "exchangeable -- identical distributions, not merely equal means -- ",
+          "so their statistic was Welch-type studentised (Janssen, 1997; ",
+          "Pauly, Brunner, & Konietschke, 2015), which is asymptotically valid ",
+          "under unequal variances and remains exact under exchangeability.")
+      liberal <- Filter(function(nm) identical(mx[[nm]]$calibration$status, "liberal"),
+                        intersect(c("between", "interaction"), names(mx)))
+      if (length(liberal))
+        add(" **Caution.** For the ",
+            paste(c(between = "between-participant effect",
+                    interaction = "interaction")[liberal], collapse = " and the "),
+            ", the smallest group had ", mx$min_group_n, " participants and the ",
+            "groups' dispersions differed enough that the studentised ",
+            "permutation is anti-conservative at this sample size. Those ",
+            "*p* values should be read as descriptive, and the inferential ",
+            "claim taken from the model-based estimator instead.")
+      if (!is.null(mx$multiplicity_family))
+        add(" Multiplicity: ", mx$multiplicity_family, ".")
+    }
     else if (identical(mx$kind, "fanova") || identical(mx$kind, "model"))
       add("A generalised additive mixed model was fitted over the ",
           "(participant, time) long form with a penalised spline of time in ",
@@ -987,13 +1013,21 @@ dance_apa_report <- function(values, input, title = NULL) {
       # Bingham's own caveat, checked rather than merely recited.
       if (any(grepl("amp", params_run))) {
         ac <- values$hp_acrophase_differs
+        sup <- values$hp_acrophase_supported
         add(" Bingham et al. (1982) note that a difference in amplitude cannot ",
             "be interpreted when the groups also differ in acrophase, because ",
             "the amplitude is then estimated about different phases",
             if (isTRUE(ac))
               ": in these data the acrophase comparison WAS significant, so the amplitude result above should not be read as a difference in rhythm strength."
+            # P20/R4: a null acrophase verdict clears the amplitude comparison
+            # only if it came from a test that could have detected a difference.
+            # Bingham's marginal is half-cycle periodic and has no power past a
+            # quarter cycle, so at a large angular separation "not significant"
+            # carries no information and must not be reported as reassurance.
+            else if (identical(ac, FALSE) && identical(sup, FALSE))
+              ": the acrophase comparison on these data was not significant, but the groups' acrophases are more than a quarter cycle apart, where that test has no power. The null result is uninformative and the amplitude comparison is NOT cleared by it."
             else if (identical(ac, FALSE))
-              ": the acrophase comparison on these data was not significant, so that caution does not apply here."
+              ": the acrophase comparison on these data was not significant, and the groups' acrophases are close enough together for that test to have had power, so the caution does not apply here."
             else ". Run the same comparison on acrophase to check whether it applies here.")
       }
     }
@@ -1037,6 +1071,13 @@ dance_apa_report <- function(values, input, title = NULL) {
           "not the familywise error. No permutation *p* can fall below ",
           dance_apa_num(mx$p_floor, 4, bounded = TRUE),
           ", so identical values are the resolution of this run, not a tie.")
+      # P20/R5: the per-effect status, in the Results section as well as Methods.
+      for (nm in c("within", "between", "interaction")) {
+        r <- mx[[nm]]
+        if (is.null(r) || is.null(r$calibration)) next
+        blank()
+        add("*", lab[[nm]], ".* ", r$calibration$message)
+      }
     } else if (identical(mx$kind, "fanova") || identical(mx$kind, "model")) {
       if (!is.null(mx$s_table)) {
         st <- mx$s_table

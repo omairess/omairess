@@ -1,5 +1,5 @@
 # ==============================================================================
-# server/07_helpers_mixed_perm.R — exact permutation for a mixed design
+# server/07_helpers_mixed_perm.R — permutation inference for a mixed design
 # ==============================================================================
 # The one-way kernels get their authority from exchangeability: under the null,
 # relabelling is a symmetry of the data, so the permutation distribution is the
@@ -7,8 +7,22 @@
 # its p-values condition on estimated smoothing parameters -- and for a module
 # whose whole character is exact inference, that is a real loss.
 #
-# It turns out not to be necessary. All three effects in a mixed design have an
-# exact scheme, including the interaction, which is the one usually said not to.
+# It turns out not to be necessary. All three effects in a mixed design have a
+# relabelling scheme, the interaction included, which is the one usually said not
+# to have one.
+#
+# WHAT "EXACT" DOES AND DOES NOT COVER (corrected at P20/R5). This header used to
+# say all three schemes were exact. A relabelling is a symmetry only if the
+# things being relabelled are EXCHANGEABLE, which requires their distributions to
+# be identical -- not merely to have equal means. The within scheme relabels
+# inside a participant and is exact whatever the groups look like. The two schemes
+# that move participants ACROSS GROUPS are exact only when the groups are
+# exchangeable, and unequal group sizes with unequal dispersion is precisely the
+# case where they are not. Measured, on an interaction null with 5 against 30
+# participants and a 5:1 dispersion ratio in the contrast: the unstudentised test
+# rejected 225 of 300 times at a nominal .05. The statistic is Welch-type
+# studentised below, and each run grades its own configuration -- see
+# dance_mixed_calibration().
 #
 # Write Y[s, c, t] for subject s, condition c, time t, and
 #     Z[s, c, t] = Y[s, c, t] - mean_c Y[s, c, t]
@@ -29,13 +43,21 @@
 #   profiles Z are identically distributed across groups -- whatever the two main
 #   effects are doing, because centring removes the subject's level and the
 #   within effect is common to all groups. So group labels can be permuted on the
-#   Z profiles, exactly.
+#   Z profiles -- exactly when those profiles are identically distributed across
+#   groups, asymptotically otherwise.
 #
-# Calibrated by simulation rather than argued: under a null with NO interaction
-# but strong main effects in BOTH factors, 1500 simulations at B = 499, the
-# interaction test rejected at 0.053 against a nominal .05 (KS test against
-# uniform, p = .758), while the two real main effects were detected at 1.000 and
-# 0.950. tests/mixed_permutation_test.R re-runs that calibration.
+# Calibrated by simulation rather than argued. Under a null with NO interaction
+# but strong main effects in BOTH factors and equal dispersions, 1500
+# simulations at B = 499, the interaction test rejected at 0.053 against a
+# nominal .05 (KS against uniform, p = .758), while the two real main effects
+# were detected at 1.000 and 0.950; tests/mixed_permutation_test.R re-runs that.
+# tests/mixed_calibration_test.R is the wider grid added at P20 -- balanced and
+# unbalanced, equal and unequal dispersion, two and three within levels,
+# correlated errors, missingness, strong nuisance effects -- and it asserts a
+# binomial band rather than an exact .05, and asserts that the configuration
+# known to remain liberal FLAGS ITSELF rather than that it is calibrated.
+# DANCE_CALIB_NSIM=15 runs it as a wiring check in a fraction of the time; the
+# numbers quoted below come from the default simulation count.
 #
 # Everything here is PURE. It takes arrays, not reactives.
 # ==============================================================================
@@ -294,72 +316,176 @@ dance_mixed_stats <- function(Y, group, usable, studentise = TRUE, prep = NULL,
 # HOW FAR THE STUDENTISED PERMUTATION CAN BE TRUSTED (P20/R5)
 # ==============================================================================
 # Studentising fixed most of the miscalibration, not all of it, and pretending
-# otherwise would repeat the original mistake in a quieter voice. What was
+# otherwise would repeat the original mistake in a quieter voice. What follows is
 # measured, on a two-group interaction null with no true interaction, 8 time
-# points, B = 199 and 300 simulations per cell (Monte Carlo 95% half-width about
-# +/- .03), rejection rate at a nominal .05:
+# points, B = 199, and the two statistics this kernel actually reports: the
+# global sqrt(integral S(t)^2 dt) and a single pointwise S(t). Rejection rate at
+# a nominal .05; Monte Carlo 95% half-width about +/- .014 at 1000 simulations,
+# +/- .021 at 500, +/- .035 at 150.
 #
-#     group n     dispersion ratio     unstudentised     studentised
-#     -------------------------------------------------------------
-#      5 / 30           5 : 1              .750              .143
-#      5 / 30           3 : 1                 -              .103
-#      5 / 30           2 : 1                 -              .073
-#      8 / 30           5 : 1                 -              .097
-#     10 / 30           5 : 1                 -              .087
-#     15 / 30           5 : 1                 -              .073
-#     20 / 30           5 : 1                 -              .070
-#     10 / 10           5 : 1                 -              .077
-#     15 / 15           5 : 1                 -              .053
-#     20 / 20           5 : 1                 -              .060
-#     30 / 30           5 : 1                 -              .063
-#      5 / 30           1 : 1              .060              .050
-#     10 / 10           1 : 1                 -              .047
+#   group n   dispersion   STUDENTISED (what runs)   UNSTUDENTISED   sims
+#             ratio        global      pointwise     global
+#   -------------------------------------------------------------------
+#     5 / 30     5 : 1       .253          -            .698        200/500
+#    10 / 10     5 : 1       .102         .072            -          500
+#    15 / 15     5 : 1       .104         .076            -          500
+#    15 / 15     2 : 1       .053           -             -         1000
+#    20 / 20     1 : 1       .052         .059          .052        1000/500
+#    20 / 20     2 : 1       .058 / .065  .066            -         500/1000
+#    20 / 20     3 : 1       .066 / .073  .064            -         500/1000
+#    20 / 20     5 : 1       .082         .058          .064        1000/500
+#    30 / 30     5 : 1       .060 / .070  .058            -         500/1000
+#    40 / 40     3 : 1       .052           -             -         1000
+#    40 / 40     5 : 1       .056         .041          .042        1000/500
+#    50 / 50     5 : 1       .041           -             -         1000
+#    80 / 80     5 : 1       .047         .046            -         1000
+#    10 / 25     3 : 1       .098         .066            -          500
+#    12 / 20     3 : 1       .113           -             -          150  (+ strong
+#                                                                     main effects)
 #
-# Read off the table: with equal dispersions the test is calibrated at any group
-# sizes, and with equal group sizes it is calibrated at any dispersion ratio
-# tested. What remains liberal is the two together, and the residual is governed
-# by the SMALLER group -- it is the reciprocal-variance weight of a group whose
-# variance is estimated from a handful of participants that carries the bias,
-# and E[1/s^2] exceeds 1/sigma^2 by (n-1)/(n-3), which is 2x at n = 5 and 1.15x
-# at n = 15.
+# WHAT THE TABLE SETTLES.
+#
+#   The excess appears ONLY when the groups' dispersions differ. At a 1:1 ratio
+#   both statistics sit at the nominal level at every size tried.
+#
+#   The excess SHRINKS WITH GROUP SIZE and is gone by about 40 participants per
+#   group even at a 5:1 ratio (.056, .041, .047 at n = 40, 50, 80). That is the
+#   signature of a procedure that is asymptotically valid and finite-sample
+#   liberal, which is exactly what a studentised permutation is (Janssen 1997;
+#   Pauly, Brunner & Konietschke 2015).
+#
+#   STUDENTISING IS THE RIGHT DEFAULT, AND IT IS NOT FREE. The unstudentised
+#   statistic is FINE at equal group sizes even at a 5:1 ratio (.064 at 20 per
+#   group) and marginally better than the studentised one there (.082). What it
+#   cannot survive is unequal n TOGETHER WITH unequal dispersion -- the classic
+#   Behrens-Fisher case -- where it rejected .698 of null datasets at 5 against
+#   30. Studentising takes that to .253: an enormous improvement and still not a
+#   usable test, which is why that configuration is flagged rather than
+#   presented. Paying two points of level in the balanced case to avoid a
+#   seventy-point failure in the unbalanced one is the trade this kernel makes,
+#   deliberately.
+#
+#   The GLOBAL statistic is the worse of the two in the bad corner -- .102
+#   against .072 at 10 per group, .104 against .076 at 15, .098 against .066 at
+#   10/25 -- because sqrt(integral S^2) is dominated by the largest pointwise
+#   statistic and a tail converges more slowly than a centre. But the POINTWISE
+#   statistic is NOT clean there either: .072 and .076 are above nominal, and
+#   an earlier draft of this note that called it "calibrated" was reading four
+#   large-n cells and over-generalising from them. Both are reported as what
+#   they are.
 #
 # So the test is not offered as though it were calibrated everywhere. It grades
-# ITS OWN configuration against that table and says which of three regimes it is
-# in. Nothing is suppressed -- the statistic and the pointwise curves are
-# descriptive and stay -- but a p-value in the third regime is labelled as
-# anti-conservative, with the model-based estimator named as the route that does
-# not have this failure mode.
+# ITS OWN configuration against that table. Nothing is suppressed -- the
+# statistic and the pointwise curves stay, and they are the right description of
+# WHERE the effect sits -- but in the flagged regime the p-values are labelled
+# anti-conservative and the model-based estimator is named as the route that
+# does not have this failure mode, because it fits the dispersions rather than
+# permuting across them.
 dance_mixed_calibration <- function(min_n, dispersion_ratio, effect) {
   if (identical(effect, "within"))
-    return(list(status = "exact", message = paste(
-      "Exact. Condition labels are permuted INSIDE each participant, so the",
-      "reference distribution is a randomisation distribution conditional on that",
-      "participant. Differences in dispersion between the between-participant",
-      "groups cannot disturb a within-participant symmetry.")))
-  ok <- !is.finite(dispersion_ratio) || dispersion_ratio <= 1.5 ||
-        min_n >= 15 || (min_n >= 10 && dispersion_ratio <= 3)
-  if (ok) return(list(status = "calibrated", message = paste0(
-    "Asymptotically valid under unequal variances (Welch-type studentised ",
-    "permutation; Janssen 1997, Pauly, Brunner & Konietschke 2015), and exact ",
-    "if the groups are exchangeable. This configuration -- smallest group ",
-    min_n, ", observed dispersion ratio ",
-    if (is.finite(dispersion_ratio)) sprintf("%.1f", dispersion_ratio) else "undefined",
-    " -- is inside the range where simulation put the rejection rate at the ",
-    "nominal level.")))
-  list(status = "liberal", message = paste0(
-    "CAUTION: the p-values for this effect are ANTI-CONSERVATIVE here. The ",
-    "smallest group has ", min_n, " participants and the groups' dispersions ",
-    "differ by a factor of ", sprintf("%.1f", dispersion_ratio), ". A small group ",
-    "whose variance is estimated from few participants gets an over-large Welch ",
-    "weight, and permuting the labels mixes the dispersions, so the observed ",
-    "configuration is systematically more extreme than its own reference set. ",
-    "Simulation at 5 against 30 participants with a 5:1 dispersion ratio rejected ",
-    "14% of the time at a nominal 5%. Read the statistic and the pointwise curves ",
-    "descriptively, and take the inferential claim from the model-based estimator ",
-    "instead -- it fits the dispersion rather than permuting across it. Balancing ",
-    "the groups also removes the problem: at equal group sizes the test was ",
-    "calibrated at every dispersion ratio tested.")
+    return(list(status = "exact", pointwise_status = "exact", message = paste(
+      "Exact, pointwise and globally. Condition labels are permuted INSIDE each",
+      "participant, so the reference distribution is a randomisation",
+      "distribution conditional on that participant. Differences in dispersion",
+      "between the between-participant groups cannot disturb a",
+      "within-participant symmetry.")))
+
+  r <- dispersion_ratio
+  shown <- if (is.finite(r)) sprintf("%.1f", r) else "not estimable"
+  thr <- dance_ratio_null_q95(min_n, effect)
+  # Read off the table: an excess appears only when the dispersions differ, and
+  # it is gone by 40 participants per group even at 5:1. Between those two the
+  # rule is deliberately conservative -- it flags cells measured at .060 to .073
+  # rather than waving them through on a confidence interval that includes .05.
+  # It fires on EVIDENCE of unequal dispersion, not on a point estimate: see
+  # dance_ratio_null_q95() for why a bare "ratio > 2" was wrong.
+  ok <- !is.finite(r) || r <= thr || min_n >= 40
+  if (ok) return(list(
+    status = "calibrated", pointwise_status = "calibrated",
+    message = paste0(
+      "Asymptotically valid under unequal variances (Welch-type studentised ",
+      "permutation; Janssen 1997, Pauly, Brunner & Konietschke 2015), and exact ",
+      "if the groups are exchangeable. This configuration -- smallest group ",
+      min_n, ", observed dispersion ratio ", shown, " -- is inside the range ",
+      "where simulation put the rejection rate at the nominal level.")))
+
+  severity <- if (min_n >= 20)
+    paste("about .06 to .08 for the global test and .06 to .07 pointwise,",
+          "against a nominal .05")
+  else if (min_n >= 10)
+    paste("about .10 for the global test and .07 pointwise, against a",
+          "nominal .05")
+  else
+    paste("about .25 for the global test at 5 participants against 30 with a",
+          "5:1 ratio -- a quarter of null datasets rejected at a nominal .05,",
+          "which is not a usable test at all")
+  list(
+    status = "liberal", pointwise_status = "liberal",
+    message = paste0(
+      "CAUTION: the p-values for this effect are ANTI-CONSERVATIVE here. The ",
+      "smallest group has ", min_n, " participants and the groups' dispersions ",
+      "differ by a factor of ", shown, ". A small group whose variance is ",
+      "estimated from few participants gets an over-large Welch weight, and ",
+      "permuting the labels mixes the dispersions, so the observed ",
+      "configuration is systematically more extreme than its own reference ",
+      "set. At this size and ratio, simulation put the rejection rate at ",
+      severity, "; the global statistic is the worse of the two, because it is ",
+      "dominated by the largest pointwise value. The statistic and the ",
+      "pointwise curve still describe WHERE the effect sits. For the ",
+      "inferential claim, use the model-based estimator, which fits the ",
+      "dispersions rather than permuting across them. The excess also ",
+      "disappears with sample size -- it was gone by 40 participants per group ",
+      "even at a 5:1 ratio.",
+      if (min_n < 10)
+        paste0(" At this group size the global p-value should not be reported ",
+               "as an inferential result at all; take it from the model-based ",
+               "estimator.")
+      else "")
   )
+}
+
+# ------------------------------------------------------------------------------
+# WHEN IS AN OBSERVED DISPERSION RATIO EVIDENCE OF ANYTHING? (P20/R5)
+# ------------------------------------------------------------------------------
+# The grading above needs to know whether the groups' dispersions REALLY differ,
+# and all it has is a ratio of sample variances, which is itself noisy. A first
+# version of this rule flagged any observed ratio above 2, and that was wrong in
+# a way that showed up immediately: on data with genuinely EQUAL dispersions and
+# 15 participants per group, the between-participant effect was graded
+# anti-conservative, because the ratio of two variances each estimated from 15
+# subject means is above 2 about a fifth of the time by chance alone.
+#
+# So the threshold is the 95th percentile of the ratio UNDER EQUAL TRUE
+# DISPERSIONS, measured rather than assumed: 400 simulated datasets per cell, 8
+# time points, 2 conditions, equal group sizes.
+#
+#   n per group      BETWEEN (subject means)      INTERACTION (contrasts)
+#                   median   q90    q95           median   q90    q95
+#   -----------------------------------------------------------------
+#         5          2.07    5.24   6.35           1.25    1.70   1.94
+#         8          1.64    3.36   4.02           1.18    1.53   1.68
+#        10          1.49    2.81   3.43           1.17    1.46   1.65
+#        15          1.37    2.40   2.77           1.14    1.40   1.47
+#        20          1.34    2.10   2.31           1.11    1.33   1.38
+#        30          1.28    1.77   1.94           1.09    1.23   1.26
+#
+# The two effects are on completely different scales of noise, which is the
+# point: the BETWEEN ratio compares variances of one number per participant, so
+# at 5 per group a ratio of 6 is an ordinary null outcome; the INTERACTION ratio
+# compares variances of a curve averaged over 8 time points, so its null spread
+# is much tighter and a ratio of 2 there really is evidence. One threshold for
+# both would have to be either useless for one or wrong for the other.
+#
+# These quantiles are for 8 time points. More time points make the interaction
+# ratio less noisy still, so using this table then errs toward NOT flagging,
+# which is the direction that does not manufacture false alarms.
+dance_ratio_null_q95 <- function(min_n, effect) {
+  n  <- c(5, 8, 10, 15, 20, 30)
+  q  <- if (identical(effect, "between")) c(6.35, 4.02, 3.43, 2.77, 2.31, 1.94)
+        else                              c(1.94, 1.68, 1.65, 1.47, 1.38, 1.26)
+  if (!is.finite(min_n) || min_n <= n[1]) return(q[1])
+  if (min_n >= n[length(n)]) return(q[length(q)])
+  stats::approx(n, q, xout = min_n)$y
 }
 
 # The dispersion ratio the grading above uses: the largest over the smallest
@@ -395,7 +521,16 @@ dance_mixed_permutation <- function(d, n_permutations = 999, alpha = 0.05,
       "At least one participant is missing a condition entirely. Use the",
       "model-based estimator, which handles an unbalanced design, and report it",
       "as approximate.")))
+  # P20/R6: a permutation result is a draw from a random procedure, so the
+  # state it was drawn under is part of the result. Recording it makes the run
+  # reproducible after the fact -- assign the returned rng_state back to
+  # .Random.seed and re-run to get the same p-values -- rather than only
+  # reproducible if the user happened to set a seed first.
   if (!is.null(seed)) set.seed(seed)
+  if (!exists(".Random.seed", envir = globalenv(), inherits = FALSE))
+    set.seed(NULL)
+  rng_state <- get(".Random.seed", envir = globalenv())
+  rng_kind <- RNGkind()
 
   Y <- arr$Y; group <- arr$group
   ns <- dim(Y)[1]; nc <- dim(Y)[2]; nt <- dim(Y)[3]
@@ -480,6 +615,7 @@ dance_mixed_permutation <- function(d, n_permutations = 999, alpha = 0.05,
               # what this procedure does and does not establish.
               calibration = calibration,
               min_group_n = min_n,
+              seed = seed, rng_state = rng_state, rng_kind = rng_kind,
               # P20/R12: what the pointwise correction is applied across.
               multiplicity_family = sprintf(
                 "%s across the %d evaluation points, separately within each effect; the global L2 test is a single test per effect and is not corrected",

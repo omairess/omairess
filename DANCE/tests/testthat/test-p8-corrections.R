@@ -167,10 +167,26 @@ test_that("P8.4: the CV panel names the estimand it actually optimises", {
   expect_true(grepl("Between-subject population-curve prediction CV", src, fixed = TRUE))
   expect_false(grepl("For prediction tasks: lambda", src, fixed = TRUE))
   # the CV really does smooth the TRAINING-GROUP MEAN, which is why
-  expect_true(grepl("train_mean <- colMeans(train_data, na.rm = TRUE)", src, fixed = TRUE))
-  expect_true(grepl("fd_train <- smooth.basis(time_points[valid_train],", src, fixed = TRUE))
-  # ... and it is on the fda scale, so its smoothing factor IS transferable
+  expect_true(grepl("train_mean <- colMeans(values$data[train_idx, , drop = FALSE], na.rm = TRUE)",
+                    src, fixed = TRUE))
+  expect_true(grepl("smooth.basis(time_points[valid_train], train_mean[valid_train],",
+                    src, fixed = TRUE))
+  # ... and it is on the fda scale
   expect_true(grepl("fdParobj <- fdPar(basis, 2, lambda)", src, fixed = TRUE))
+
+  # P20/R11. Being on the same SCALE is not being the same QUESTION, and the
+  # panel used to end by telling the reader to type this lambda into Data
+  # Preprocessing. The per-curve GCV -- generalised cross-validation on each
+  # participant's own curve, which is the criterion production smoothing uses --
+  # is computed alongside and is what the panel now points at.
+  expect_false(grepl("smoothing factor IS on the same scale and can be typed into Data",
+                     src, fixed = TRUE))
+  expect_true(grepl("Per-curve GCV (this is the one to transfer)", src, fixed = TRUE))
+  expect_true(grepl("gcv_lambda", src, fixed = TRUE))
+  expect_true(grepl('target = "template_prediction"', src, fixed = TRUE))
+  # and the fold fits are computed once per fold, not once per subject (P20/W8)
+  expect_true(grepl("fold_fits <- vector(\"list\", k_folds)", src, fixed = TRUE))
+  expect_false(grepl("for(i in 1:n_subjects) {\n            # Get subject's fold", src, fixed = TRUE))
 })
 
 # ============================================ P8.5 the UI stops contradicting =

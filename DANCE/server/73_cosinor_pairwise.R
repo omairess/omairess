@@ -83,6 +83,11 @@
       # Bingham's caution is about the AMPLITUDE comparison, and the two-stage
       # readout already consumes this flag; keep them in step.
       values$hp_acrophase_differs <- res$acrophase_differs
+      # P20/R4: the verdict alone is not enough. Bingham's acrophase F ratio is
+      # half-cycle periodic and has NO POWER past a quarter cycle, so a null
+      # result at a large angular separation does not license the amplitude
+      # comparison. The report needs to know whether the verdict is supported.
+      values$hp_acrophase_supported <- isTRUE(res$acrophase_test_supported)
       showNotification("Population-mean cosinor complete.", type = "message", duration = 4)
       return()
     }
@@ -355,6 +360,9 @@
       values$hp_acrophase_differs <-
         any(is.finite(results$p_adjusted) & results$p_adjusted < 0.05)
       values$hp_acrophase_param <- param
+      # The two-stage route uses Watson-Williams, a genuinely circular test with
+      # no half-cycle blind spot, so its verdict is supported at any separation.
+      values$hp_acrophase_supported <- TRUE
     }
 
     showNotification("Pairwise comparisons completed!", type = "message", duration = 3)

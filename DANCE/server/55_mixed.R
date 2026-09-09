@@ -10,7 +10,8 @@
 #
 # What is left here is the pair of outputs both hosts render, plus the factor
 # picker they share. The statistics are in server/06_helpers_mixed.R (model) and
-# server/07_helpers_mixed_perm.R (exact permutation).
+# server/07_helpers_mixed_perm.R (permutation; see its header for which
+# effects are exact and which are asymptotic).
 # ==============================================================================
 
 dance_mixed_factor_choices <- function(values) {

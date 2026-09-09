@@ -184,8 +184,17 @@ dance_rm_column <- function(values, varname, n_expected = NULL) {
 # finite -- a non-finite permuted statistic is a failure to evaluate the
 # statistic, and dropping it from the denominator silently shrinks the reference
 # set and inflates significance.
+# `B` is normally one number. It is allowed to be a vector of the same length as
+# `exceedances` for the pointwise fANOVA kernels, where a time point at which the
+# statistic was undefined for some permutations has a SMALLER reference set than
+# the number drawn -- the P4.7/P5.7 rule that such a permutation contributes no
+# draw at that point rather than a silent zero. Anything else is a mistake and
+# is caught here rather than recycled into wrong p-values.
 dance_perm_p <- function(exceedances, B) {
-  stopifnot(length(B) == 1L, is.finite(B), B >= 0)
+  stopifnot(length(B) == 1L || length(B) == length(exceedances),
+            all(is.finite(B)), all(B >= 0),
+            all(is.finite(exceedances)), all(exceedances >= 0),
+            all(exceedances <= B))
   (1 + exceedances) / (1 + B)
 }
 
