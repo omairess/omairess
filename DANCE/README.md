@@ -83,7 +83,29 @@ if any of these were missing):
    shift / parametric / landmark alignment, and registration diagnostics (see
    "What the registration methods are, exactly" below — no AIC/BIC, and the
    dispersion numbers are not a variance decomposition).
-6. **Functional ANOVA** — between-subjects and repeated-measures designs,
+6. **Functional ANOVA** — between-subjects, repeated-measures, **and mixed
+   (between × within)** designs. The mixed case is where one factor varies
+   between participants and another within them, and it is the only one of the
+   three that carries an interaction — *does the within-subject effect differ
+   between groups?* It offers two estimators, and inherits this tab's
+   permutation count, alpha and correction:
+
+   - **Exact permutation (default).** All three effects have a valid relabelling
+     scheme, the interaction included, which is the case usually said not to:
+     an interaction is a between-group difference in the within-subject
+     contrast, and under its null those participant-centred profiles are
+     exchangeable across groups whatever the main effects are doing. Calibrated
+     by simulation, not argued — `tests/mixed_permutation_test.R` re-runs it.
+     Needs every participant to have every condition; scattered missing
+     observations are fine, a missing condition is not.
+   - **Mixed model (`mgcv`).** A spline per cell plus a random curve per
+     participant. Handles an unbalanced design and returns fitted curves, but
+     its *p* values are approximate.
+
+   Mixed analyses are fitted to the **raw observations**, not the smoothed
+   curves.
+
+   The one-factor designs:
    pointwise and global permutation tests, effect sizes.
 7. **fANOVA: post-hoc tests** — pairwise curve comparisons with multiple-testing
    correction, difference/p-value plots, heatmap, significance timeline. A
@@ -106,26 +128,28 @@ if any of these were missing):
     Fitted Curves tab (same coefficients, same band), a von Mises kernel density
     of the acrophases (so a distribution straddling midnight reads as one peak,
     not two), or the signal itself averaged over the clock.
-10. **Cosinor: pairwise tests** — pairwise group comparisons of any cosinor
-    parameter, with corrections, effect sizes and confidence intervals.
-11. **Mixed design (between × within)** — for a design with one factor varying
-    *between* participants and another *within* them, which neither the
-    between-subjects nor the repeated-measures fANOVA can represent (both are
-    one-factor and carry no interaction). Two analyses: a penalised spline of
-    time per design cell plus a random curve per participant (`mgcv`), with the
-    interaction judged by an ML-based model comparison; and a mixed cosinor
-    (`lme4`) giving MESOR, amplitude and acrophase per cell, with differences
-    tested by dropping a cosine/sine *pair* — a 2-df question about amplitude or
-    phase. Both are fitted to the **raw observations**, not the smoothed curves.
-    Neither is a permutation test, and the readout says so.
+10. **Cosinor: group comparisons** — three approaches to the same question:
 
+    - **Two-stage** (the original): fit a cosinor per participant, compare the
+      point estimates pairwise, with corrections, effect sizes and intervals.
+    - **Population-mean cosinor** (Bingham et al., 1982): the (cosine, sine)
+      pairs are averaged as *vectors*, their within-group covariance pooled, and
+      MESOR, amplitude and acrophase tested as *F* ratios — amplitude against
+      the variance along the pooled mean phase direction, acrophase against the
+      variance perpendicular to it. All groups at once, so no pairwise family to
+      correct. It carries Bingham's own caution: an amplitude difference cannot
+      be interpreted when the acrophases also differ, and the readout checks the
+      acrophase test and says so.
+    - **Mixed model**: one cosinor over all observations with a random rhythm
+      per participant, for when a factor is repeated within participants and the
+      pairing must be respected.
 **K — clustering**
 
-12. **Functional Clustering** — k-means (`fda.usc::kmeans.fd`), hierarchical and
+11. **Functional Clustering** — k-means (`fda.usc::kmeans.fd`), hierarchical and
     DCF clustering, elbow and silhouette diagnostics, cluster mean curves,
     cluster-by-group composition tests, dendrograms.
 
-13. **Data Export** — every table above as CSV, plot bundles as PDF, the
+12. **Data Export** — every table above as CSV, plot bundles as PDF, the
     smoothed curves in wide and long form, a reproducible R script covering
     every analysis family, and **save/restore of the whole session** as a
     single `.rds` (data, smoothing, every fitted model, and the package
@@ -200,6 +224,8 @@ Rscript tests/periodic_shift_test.R
 Rscript tests/warp_export_roundtrip_test.R
 Rscript tests/diagnostic_axis_test.R
 Rscript tests/mixed_design_test.R
+Rscript tests/mixed_permutation_test.R
+Rscript tests/pop_cosinor_test.R
 Rscript -e 'testthat::test_dir("tests/testthat")'
 ```
 

@@ -174,8 +174,6 @@ ui <- dashboardPage(
       menuItem("Functional PCA Results", tabName = "results",
                icon = icon("chart-line")),
       menuItem("Functional ANOVA", tabName = "fanova", icon = icon("chart-bar")),
-      menuItem("Mixed design (between x within)", tabName = "mixed",
-               icon = icon("layer-group")),
       menuItem("fANOVA: post-hoc tests", tabName = "pairwise",
                icon = icon("exchange-alt")),
 
@@ -204,7 +202,6 @@ ui <- dashboardPage(
       ui_tab_results,
       ui_tab_fanova,
       ui_tab_posthoc,
-      ui_tab_mixed,
       ui_tab_fosr,
       ui_tab_harmonic,
       ui_tab_cosinor_pairwise,

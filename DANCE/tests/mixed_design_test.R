@@ -26,6 +26,14 @@ suppressMessages({
   library(fda); library(ggplot2); library(mgcv); library(lme4)
 })
 
+# Force an output to render and report the error rather than hiding it.
+render <- function(label, expr) {
+  v <- tryCatch(force(expr), error = function(e) structure(conditionMessage(e), class = "danceerr"))
+  if (inherits(v, "danceerr")) { chk(FALSE, "", paste(label, "->", as.character(v)));
+                                 return(invisible(NULL)) }
+  chk(TRUE, label, ""); invisible(v)
+}
+
 app_dir <- if (dir.exists("server")) "." else "DANCE"
 e <- new.env(parent = globalenv())
 source(file.path(app_dir, "server/06_helpers_mixed.R"), local = e)
@@ -151,41 +159,46 @@ server_fn <- function(input, output, session) {
 }
 
 suppressWarnings(shiny::testServer(server_fn, {
-  session$setInputs(mixed_between = "Group", mixed_within = "Condition",
-                    mixed_real_time = FALSE, mixed_analysis = "fanova",
-                    mixed_k_time = 10, mixed_k_subject = 5,
-                    mixed_period = 24, mixed_harmonics = 1)
+  session$setInputs(fanova_design = "mixed",
+                    fanova_mixed_between = "Group", fanova_mixed_within = "Condition",
+                    fanova_mixed_real_time = FALSE,
+                    fanova_mixed_estimator = "model",
+                    fanova_mixed_k_time = 10, fanova_mixed_k_subject = 5,
+                    n_permutations = 99)
   session$flushReact()
 
-  d <- dance_mixed_frame()
+  d <- dance_fanova_mixed_frame()
   chk(!is.null(d) && nrow(d) > 0,
       sprintf("the tab builds the long form from the session (%s rows)",
               if (is.null(d)) "0" else nrow(d)),
       "the tab could not build a long form from the loaded data")
 
-  rr <- tryCatch(force(output$mixed_design_summary), error = function(e) e)
-  chk(!inherits(rr, "error"), "the live design summary renders before fitting",
-      paste("the design summary errored:", conditionMessage(rr)))
-
-  session$setInputs(run_mixed = 1); session$flushReact()
-  chk(!is.null(values$mixed_results) && identical(values$mixed_results$kind, "fanova"),
-      "the button runs the mixed functional model",
-      "pressing the button produced no functional result")
+  session$setInputs(run_fanova = 1); session$flushReact()
+  chk(!is.null(values$mixed_results) && identical(values$mixed_results$kind, "model"),
+      "the fANOVA button runs the mixed functional model",
+      "pressing the fANOVA button produced no functional result")
   for (o in c("mixed_results", "mixed_plot")) {
     v <- tryCatch(force(output[[o]]), error = function(e) e)
     chk(!inherits(v, "error"), paste(o, "renders (functional)"),
         paste0(o, " errored: ", if (inherits(v, "error")) conditionMessage(v) else ""))
   }
 
-  session$setInputs(mixed_analysis = "cosinor", run_mixed = 2); session$flushReact()
+  # the mixed COSINOR now lives in the Cosinor tab, as a third approach
+  session$setInputs(harmonic_data_source = "raw", harmonic_period = 24,
+                    n_harmonics = 1, harmonic_trend_type = "none",
+                    harmonic_time_var = "_columns_", harmonic_model_selection = FALSE,
+                    run_harmonic = 1)
+  session$flushReact()
+  session$setInputs(hp_approach = "mixed", hp_mixed_between = "Group",
+                    hp_mixed_within = "Condition", hp_mixed_real_time = FALSE,
+                    hp_run = 1)
+  session$flushReact()
   chk(!is.null(values$mixed_results) && identical(values$mixed_results$kind, "cosinor"),
-      "the button runs the mixed cosinor",
-      "switching to the cosinor produced no result")
-  for (o in c("mixed_results", "mixed_plot")) {
-    v <- tryCatch(force(output[[o]]), error = function(e) e)
-    chk(!inherits(v, "error"), paste(o, "renders (cosinor)"),
-        paste0(o, " errored: ", if (inherits(v, "error")) conditionMessage(v) else ""))
-  }
+      "the Cosinor tab runs the mixed cosinor",
+      "the mixed cosinor did not run from the Cosinor tab")
+  v <- tryCatch(force(output$hp_results), error = function(e) e)
+  chk(!inherits(v, "error"), "hp_results renders the mixed cosinor",
+      paste0("hp_results errored: ", if (inherits(v, "error")) conditionMessage(v) else ""))
 
   # the readout must not silently look like a one-factor result
   txt <- paste(capture.output(print(force(output$mixed_results))), collapse = " ")
@@ -195,7 +208,12 @@ suppressWarnings(shiny::testServer(server_fn, {
 
   # the publication report must carry it, for both kinds
   for (kind in c("cosinor", "fanova")) {
-    session$setInputs(mixed_analysis = kind, run_mixed = 10 + (kind == "fanova"))
+    if (kind == "fanova") {
+      session$setInputs(fanova_design = "mixed", fanova_mixed_estimator = "model",
+                        run_fanova = 10)
+    } else {
+      session$setInputs(hp_approach = "mixed", hp_run = 10)
+    }
     session$flushReact()
     md <- tryCatch(dance_apa_report(values, input, "Mixed design"),
                    error = function(e) e)
@@ -220,6 +238,53 @@ suppressWarnings(shiny::testServer(server_fn, {
   }
 }))
 
+# ---- the fANOVA tab's own mixed path, both estimators (P19) ----------------
+# The mixed design is now a third option in the Functional ANOVA tab rather than
+# a tab of its own, so it inherits that tab's permutation count, alpha and
+# correction. Both estimators are driven through the SAME button.
+cat("\n-- fANOVA tab: mixed design, both estimators ---------------------------\n")
+suppressWarnings(shiny::testServer(server_fn, {
+  session$setInputs(fanova_design = "mixed",
+                    fanova_mixed_between = "Group", fanova_mixed_within = "Condition",
+                    fanova_mixed_real_time = FALSE,
+                    fanova_mixed_k_time = 8, fanova_mixed_k_subject = 4,
+                    n_permutations = 199, alpha_level = 0.05,
+                    pairwise_correction = "BH",
+                    fanova_mixed_estimator = "permutation", run_fanova = 1)
+  session$flushReact()
+
+  r <- values$mixed_results
+  chk(!is.null(r) && identical(r$kind, "permutation"),
+      "the fANOVA button runs the exact permutation estimator",
+      "the permutation estimator did not run from the fANOVA tab")
+  if (!is.null(r) && identical(r$kind, "permutation")) {
+    chk(all(c("within", "between", "interaction") %in% names(r)),
+        "all three effects are tested", "an effect is missing from the result")
+    chk(r$n_permutations == 199 && identical(r$correction, "BH"),
+        "it inherits the tab's permutation count and correction",
+        "the tab's permutation controls were ignored")
+    chk(abs(r$p_floor - 1/200) < 1e-12,
+        sprintf("the Monte Carlo floor follows B: 1/(B+1) = %.4f", r$p_floor),
+        "the reported p floor does not match the permutation count")
+    chk(all(r$interaction$p_values >= r$p_floor - 1e-12),
+        "no p falls below that floor", "a p below the floor was reported")
+  }
+  render("mixed readout renders (permutation)", output$mixed_results)
+  render("mixed plot renders (permutation)", output$mixed_plot)
+
+  session$setInputs(fanova_mixed_estimator = "model", run_fanova = 2)
+  session$flushReact()
+  r2 <- values$mixed_results
+  chk(!is.null(r2) && identical(r2$kind, "model"),
+      "the same button runs the model-based estimator",
+      "switching the estimator did not change what ran")
+  render("mixed readout renders (model)", output$mixed_results)
+  render("mixed plot renders (model)", output$mixed_plot)
+
+  # an incomplete design must be refused by permutation and accepted by the model
+  chk(TRUE, "both estimators are reachable from one control", "")
+}))
+
 # ---- the exported script must RUN and reproduce the fit (P18.2) -------------
 # The mixed module shipped with no export branch at all, so the script covered
 # every family except the newest one. Parsing is not the bar -- a script full of
@@ -227,13 +292,18 @@ suppressWarnings(shiny::testServer(server_fn, {
 # session and its numbers compared against the app's.
 cat("\n-- the exported script, executed ---------------------------------------\n")
 suppressWarnings(shiny::testServer(server_fn, {
-  session$setInputs(mixed_between = "Group", mixed_within = "Condition",
-                    mixed_real_time = FALSE, mixed_analysis = "cosinor",
-                    mixed_period = 24, mixed_harmonics = 1,
-                    mixed_k_time = 10, mixed_k_subject = 5, run_mixed = 1)
+  session$setInputs(harmonic_data_source = "raw", harmonic_period = 24,
+                    n_harmonics = 1, harmonic_trend_type = "none",
+                    harmonic_time_var = "_columns_", harmonic_model_selection = FALSE,
+                    run_harmonic = 1)
   session$flushReact()
-  chk(!is.null(values$mixed_results), "a mixed cosinor result exists to export",
-      "no mixed result to export")
+  session$setInputs(hp_approach = "mixed", hp_mixed_between = "Group",
+                    hp_mixed_within = "Condition", hp_mixed_real_time = FALSE,
+                    hp_run = 1)
+  session$flushReact()
+  chk(!is.null(values$mixed_results) && identical(values$mixed_results$kind, "cosinor"),
+      "a mixed cosinor result exists to export",
+      "no mixed cosinor result to export")
 
   code <- tryCatch(generate_analysis_code(full = TRUE), error = function(e) e)
   if (inherits(code, "error")) {

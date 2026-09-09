@@ -367,7 +367,21 @@ dance_apa_report <- function(values, input, title = NULL) {
   if (!is.null(mx) && isTRUE(mx$ok)) {
     add("**Mixed design.** ", mx$between_name, " varied between participants and ",
         mx$within_name, " within them. ")
-    if (identical(mx$kind, "fanova"))
+    if (identical(mx$kind, "permutation"))
+      add("The three effects were tested by EXACT permutation. Condition labels ",
+          "were relabelled within each participant for the within-participant ",
+          "effect; whole participants were relabelled across groups for the ",
+          "between-participant effect; and for the interaction, group labels ",
+          "were relabelled on the participant-centred profiles, which is valid ",
+          "because an interaction is a between-group difference in the ",
+          "within-participant contrast and those profiles are exchangeable ",
+          "across groups under its null whatever the main effects do. ",
+          "*p* values were computed as (1 + #{*T*\\* >= *T*}) / (1 + *B*) with ",
+          "*B* = ", mx$n_permutations, ", so none can be exactly zero; the ",
+          "smallest attainable value is ", dance_apa_num(mx$p_floor, 4, bounded = TRUE),
+          ". Pointwise values were adjusted across time points by ", mx$correction,
+          " and evaluated at alpha = ", dance_apa_num(mx$alpha, 2, bounded = TRUE), ".")
+    else if (identical(mx$kind, "fanova") || identical(mx$kind, "model"))
       add("A generalised additive mixed model was fitted over the ",
           "(participant, time) long form with a penalised spline of time in ",
           "each cell of the design and a factor-smooth random curve per ",
@@ -393,9 +407,10 @@ dance_apa_report <- function(values, input, title = NULL) {
         "smoothed curves: the model estimates the temporal structure itself, ",
         "so supplying it with pre-smoothed data would smooth twice and distort ",
         "the residual model.")
-    add(" Neither model is a permutation test: the smoothing parameters and ",
-        "variance components were estimated from these data and the tests ",
-        "condition on those estimates, so the *p* values are approximate.")
+    if (!identical(mx$kind, "permutation"))
+      add(" This model is not a permutation test: the smoothing parameters and ",
+          "variance components were estimated from these data and the tests ",
+          "condition on those estimates, so the *p* values are approximate.")
     blank()
   }
 
@@ -986,7 +1001,9 @@ dance_apa_report <- function(values, input, title = NULL) {
 
   if (!is.null(mx) && isTRUE(mx$ok)) {
     any_result <- TRUE
-    h(3, if (identical(mx$kind, "fanova")) "Mixed functional model" else "Mixed cosinor")
+    h(3, if (identical(mx$kind, "permutation")) "Mixed functional ANOVA (permutation)"
+         else if (identical(mx$kind, "cosinor")) "Mixed cosinor"
+         else "Mixed functional model")
     b <- mx$balance
     add("The design had ", b$n_subjects, " participants",
         if (b$n_partial > 0)
@@ -996,7 +1013,31 @@ dance_apa_report <- function(values, input, title = NULL) {
         ", giving ", mx$n_obs, " observations.")
     blank()
 
-    if (identical(mx$kind, "fanova")) {
+    if (identical(mx$kind, "permutation")) {
+      lab <- c(within = "Within-participant", between = "Between-participant",
+               interaction = "Interaction")
+      rows <- do.call(rbind, lapply(names(lab), function(nm) {
+        r <- mx[[nm]]; if (is.null(r)) return(NULL)
+        data.frame(Effect = lab[[nm]],
+                   `Global p` = dance_apa_pval(r$global_p),
+                   `Points flagged` = sprintf("%d of %d", r$n_significant, length(r$p_values)),
+                   `Smallest pointwise p adj` = dance_apa_pval(min(r$p_adjusted, na.rm = TRUE)),
+                   check.names = FALSE, stringsAsFactors = FALSE)
+      }))
+      L <- c(L, dance_md_table(rows)); blank()
+      if (isTRUE(mx$any_missing))
+        add("Some participants were missing observations at some time points; a ",
+            "participant contributes at a time point only where every condition ",
+            "is observed there, which keeps the relabelling a symmetry.")
+      blank()
+      add("*What these numbers do not establish.* The pointwise procedure ",
+          "answers *where* the effects appear, not whether they are present ",
+          "overall; the global column is the *whether*. The adjustment controls ",
+          "the expected proportion of false positives among the flagged points, ",
+          "not the familywise error. No permutation *p* can fall below ",
+          dance_apa_num(mx$p_floor, 4, bounded = TRUE),
+          ", so identical values are the resolution of this run, not a tie.")
+    } else if (identical(mx$kind, "fanova") || identical(mx$kind, "model")) {
       if (!is.null(mx$s_table)) {
         st <- mx$s_table
         rows <- data.frame(

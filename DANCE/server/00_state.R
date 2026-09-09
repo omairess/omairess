@@ -99,6 +99,7 @@ values <- reactiveValues(
   hp_acrophase_param    = NULL,
   hp_acrophase_differs  = NULL,   # the Bingham amplitude caution's evidence
   mixed_results         = NULL,   # mixed (between x within) model
+  pop_cosinor           = NULL,   # population-mean cosinor (Bingham 1982)
   pca_anova             = NULL,   # component-score ANOVA -- also read by the report
   fanova_selected_groups = NULL,
   gam_reml_fit          = NULL,
@@ -161,5 +162,6 @@ dance_reset_analyses <- function(values, keep_smoothing = FALSE) {
   values$hp_pairwise_correction <- NULL
   values$hp_acrophase_param <- NULL
   values$hp_acrophase_differs <- NULL
+  values$pop_cosinor <- NULL
   invisible(NULL)
 }

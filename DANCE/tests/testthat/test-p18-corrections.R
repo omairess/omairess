@@ -164,14 +164,23 @@ test_that("P18.3: lme4 is in the version stamp, because it fits the cosinor", {
 
 # ================================ P18.4 which data the mixed models use =======
 test_that("P18.4: the raw-observations choice is stated where it is read", {
-  ui <- paste(readLines(file.path(app_dir, "ui/55_mixed.R"), warn = FALSE), collapse = "\n")
+  # P19 moved the mixed analyses into the Functional ANOVA and Cosinor tabs, so
+  # the statement has to appear where those users read it, not in a tab that no
+  # longer exists. A guard that keeps reading the old file goes VACUOUS, which is
+  # the failure mode this suite exists to prevent.
+  ui <- paste(readLines(file.path(app_dir, "ui/50_fanova.R"), warn = FALSE), collapse = "\n")
   rp <- paste(readLines(file.path(app_dir, "server/93_apa_report.R"), warn = FALSE), collapse = "\n")
-  expect_true(grepl("fitted to the raw observations", ui, fixed = TRUE))
+  expect_true(grepl("fitted to the <b>raw observations</b>", ui, fixed = TRUE))
   expect_true(grepl("RAW observations rather than to the", rp, fixed = TRUE))
-  # and the code really does read values$data, not values$smooth_data
-  mx <- paste(readLines(file.path(app_dir, "server/55_mixed.R"), warn = FALSE), collapse = "\n")
-  expect_true(grepl("dance_mixed_long(values$data", mx, fixed = TRUE))
-  expect_false(grepl("dance_mixed_long(values$smooth_data", mx, fixed = TRUE))
+  expect_false(file.exists(file.path(app_dir, "ui/55_mixed.R")))
+
+  # and every entry point really reads values$data, not values$smooth_data
+  for (f in c("server/51b_fanova_mixed_views.R", "server/73_cosinor_pairwise.R")) {
+    src <- paste(readLines(file.path(app_dir, f), warn = FALSE), collapse = "\n")
+    if (!grepl("dance_mixed_long(", src, fixed = TRUE)) next
+    expect_true(grepl("dance_mixed_long(values$data", src, fixed = TRUE), info = f)
+    expect_false(grepl("dance_mixed_long(values$smooth_data", src, fixed = TRUE), info = f)
+  }
 })
 
 # ================================== P18.5 ML for the model comparison =========
@@ -183,8 +192,11 @@ test_that("P18.5: the interaction comparison is refitted by ML", {
   # the reported model keeps its fREML fit: that is the better basis for the
   # smoothing parameters, and hence for the curves that get plotted
   expect_true(grepl('method = "fREML"', src, fixed = TRUE))
-  # and the readout must not dress a continuous weight of evidence as a verdict
-  ro <- paste(readLines(file.path(app_dir, "server/55_mixed.R"), warn = FALSE), collapse = "\n")
+  # and the readout must not dress a continuous weight of evidence as a verdict.
+  # P19 extracted that readout into the shared helper, so both hosts describe a
+  # fit the same way; the guard follows it there.
+  ro <- paste(readLines(file.path(app_dir, "server/06_helpers_mixed.R"), warn = FALSE),
+              collapse = "\n")
   expect_true(grepl("not a test of a null", ro, fixed = TRUE))
   expect_false(grepl("the additive model is worse:", ro, fixed = TRUE))
 })
@@ -212,6 +224,13 @@ test_that("P18.6: the README describes DANCE, not the app it replaced", {
       expect_true(grepl(paste0("\\b", k, "\\. "), head[i - 1]),
                   info = paste("tab", k, "is missing from the list"))
   }
-  expect_true(grepl("Mixed design (between", rd, fixed = TRUE))
+  # P19 folded the mixed analyses into the Functional ANOVA and Cosinor entries
+  # rather than giving them a tab of their own, so that is where the README has
+  # to describe them.
+  expect_true(grepl("mixed\n   (between", rd, fixed = TRUE) ||
+              grepl("mixed (between", rd, fixed = TRUE) ||
+              grepl("**and mixed", rd, fixed = TRUE))
+  expect_true(grepl("Exact permutation (default)", rd, fixed = TRUE))
+  expect_true(grepl("Population-mean cosinor", rd, fixed = TRUE))
   expect_true(grepl("| `lme4` |", rd, fixed = TRUE))
 })

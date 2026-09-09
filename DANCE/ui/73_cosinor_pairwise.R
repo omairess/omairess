@@ -19,6 +19,55 @@ ui_tab_cosinor_pairwise <- tabItem(
           box(
             title = "Settings", status = "info", solidHeader = TRUE, width = 4,
             collapsible = TRUE, collapsed = FALSE,
+
+            radioButtons("hp_approach", "Approach:",
+                         choices = list(
+                           "Two-stage: compare per-participant estimates" = "two_stage",
+                           "Population-mean cosinor (Bingham et al., 1982)" = "population",
+                           "Mixed model (between x within)" = "mixed"),
+                         selected = "two_stage"),
+            helpText(HTML(
+              "<b>Two-stage</b> fits a cosinor per participant and compares the
+               resulting point estimates pairwise. It is what this tab has always
+               done. It treats each estimate as if measured without error, and
+               tests amplitude and acrophase separately although they are two
+               coordinates of one bivariate object.<br>
+               <b>Population-mean cosinor</b> averages the (cosine, sine)
+               coefficient PAIRS as vectors across participants, pools their
+               within-group covariance, and tests MESOR, amplitude and acrophase
+               as <i>F</i> ratios against the part of that covariance each one
+               depends on &mdash; amplitude against the variance along the mean
+               phase direction, acrophase against the variance perpendicular to
+               it. It compares all groups at once rather than pairwise.")),
+
+            conditionalPanel(
+              condition = "input.hp_approach == 'mixed'",
+              helpText(HTML(
+                "One cosinor fitted over ALL observations, with the cosine/sine
+                 pair crossed with a between- and a within-participant factor and
+                 a random rhythm per participant. Use this when a factor is
+                 <b>repeated</b> within participants: the other two approaches
+                 compare independent estimates and cannot respect the pairing.")),
+              uiOutput("hp_mixed_between_ui"),
+              uiOutput("hp_mixed_within_ui"),
+              checkboxInput("hp_mixed_real_time",
+                            "Use real elapsed clock time as the time axis", TRUE)
+            ),
+
+            conditionalPanel(
+              condition = "input.hp_approach == 'population'",
+              numericInput("hp_pop_harmonic", "Harmonic to test:", value = 1,
+                           min = 1, max = 3, step = 1),
+              helpText(HTML(
+                "Bingham et al. note that an amplitude difference cannot be
+                 interpreted when the groups also differ in acrophase: the
+                 amplitudes are then compared about different phases. The readout
+                 checks the acrophase test and says so rather than leaving you to
+                 remember."))
+            ),
+
+            conditionalPanel(
+              condition = "input.hp_approach == 'two_stage'",
             selectInput("hp_param", "Parameter to Compare:",
                        choices = c("Constant term (\u03b2\u2080)" = "mesor",
                                    "MESOR (rhythm-adjusted mean over the window)" = "mesor_adj",
@@ -55,9 +104,10 @@ ui_tab_cosinor_pairwise <- tabItem(
                        selected = "holm"),
             hr(),
             checkboxInput("hp_show_effect_size", "Show Effect Sizes (Cohen's d)", value = TRUE),
-            checkboxInput("hp_show_ci", "Show 95% Confidence Intervals", value = TRUE),
+            checkboxInput("hp_show_ci", "Show 95% Confidence Intervals", value = TRUE)
+            ),   # end of the two-stage panel
             hr(),
-            actionButton("hp_run", "Run Pairwise Comparisons", class = "btn-warning", icon = icon("play"))
+            actionButton("hp_run", "Run comparison", class = "btn-warning", icon = icon("play"))
           ),
           box(
             title = "Pairwise Test Results", status = "success", solidHeader = TRUE, width = 8,

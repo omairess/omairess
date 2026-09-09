@@ -34,16 +34,21 @@ RESTORE_INPUTS <- list(
                "max_bound", "n_components", "n_permutations", "alpha_level",
                "harmonic_period", "n_harmonics", "n_clusters", "n_boot",
                "mixed_k_time", "mixed_k_subject", "mixed_period",
-               "mixed_harmonics"),
+               "mixed_harmonics",
+               # P19: the mixed analyses moved into the fANOVA and Cosinor tabs
+               "fanova_mixed_k_time", "fanova_mixed_k_subject", "hp_pop_harmonic"),
   checkbox = c("is_cyclic", "use_real_time", "constrain_bounds",
                "use_bootstrap", "cv_stratified", "mixed_real_time",
-               "harmonic_model_selection"),
+               "harmonic_model_selection",
+               "fanova_mixed_real_time", "hp_mixed_real_time"),
   select   = c("smooth_method", "pca_type", "fanova_design", "fanova_test_type",
                "fanova_data_source", "fanova_group_var", "harmonic_time_var",
                "harmonic_trend_type", "harmonic_group_var", "reg_method",
                "cluster_method", "pairwise_correction", "hp_param",
                "hp_correction", "data_format",
-               "mixed_between", "mixed_within", "mixed_analysis"),
+               "mixed_between", "mixed_within", "mixed_analysis",
+               "fanova_mixed_between", "fanova_mixed_within", "fanova_mixed_estimator",
+               "hp_approach", "hp_mixed_between", "hp_mixed_within"),
   text     = c("harmonic_manual_times")
 )
 

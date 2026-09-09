@@ -14,6 +14,79 @@
     req(values$harmonic_model)
     mod <- values$harmonic_model
 
+    # ------------------------------------------------------------------------
+    # MIXED COSINOR. One model over all observations, with a random rhythm per
+    # participant. Shares this tab's group selection; the within factor is its
+    # own, because the other two approaches have no notion of one.
+    # ------------------------------------------------------------------------
+    if (identical(input$hp_approach, "mixed")) {
+      bn <- input$hp_mixed_between; wn <- input$hp_mixed_within
+      if (is.null(values$subject_ids) || is.null(bn) || is.null(wn) ||
+          !nzchar(bn) || !nzchar(wn)) {
+        showNotification(paste("A mixed cosinor needs a participant identifier (Data Import tab)",
+                               "and both a between- and a within-participant factor."),
+                         type = "error", duration = 12); return()
+      }
+      axis <- dance_smoothing_axis(
+        list(use_real_time = isTRUE(input$hp_mixed_real_time), is_cyclic = FALSE), values)
+      d <- tryCatch(dance_mixed_long(values$data, axis$t_full,
+                                     subject = values$subject_ids,
+                                     between = values$covariates[[bn]],
+                                     within  = values$covariates[[wn]]),
+                    error = function(e) NULL)
+      if (is.null(d)) { showNotification("Could not build the long form from those columns.",
+                                         type = "error", duration = 10); return() }
+      badm <- dance_mixed_check(d)
+      if (length(badm)) { showNotification(paste(badm, collapse = " "),
+                                           type = "error", duration = 15); return() }
+      withProgress(message = "Fitting the mixed cosinor...", value = 0.4, {
+        res <- dance_mixed_cosinor(d, period = mod$period,
+                                   n_harmonics = mod$n_harmonics)
+      })
+      if (!isTRUE(res$ok)) { showNotification(res$message, type = "error", duration = 15); return() }
+      res$kind <- "cosinor"; res$between_name <- bn; res$within_name <- wn
+      res$time_axis <- if (isTRUE(input$hp_mixed_real_time)) "real elapsed time" else "column index"
+      res$time_values <- axis$t_full
+      values$mixed_results <- res
+      showNotification("Mixed cosinor complete.", type = "message", duration = 4)
+      return()
+    }
+
+    # ------------------------------------------------------------------------
+    # POPULATION-MEAN COSINOR (Bingham et al. 1982). An alternative to the
+    # two-stage route below, not a replacement: it compares ALL groups at once
+    # on the coefficient PAIRS rather than comparing point estimates pairwise.
+    # Handled first, and returns, so the two approaches share this tab's group
+    # selection and nothing else.
+    # ------------------------------------------------------------------------
+    if (identical(input$hp_approach, "population")) {
+      gv <- input$harmonic_group_var
+      if (is.null(gv) || identical(gv, "_none_")) {
+        showNotification("Select a grouping variable on the Harmonic Regression tab first.",
+                         type = "error", duration = 8); return()
+      }
+      h <- max(1L, min(as.integer(input$hp_pop_harmonic %||% 1), mod$n_harmonics))
+      pr <- mod$individual_params
+      bcol <- paste0("beta_cos_", h); scol <- paste0("beta_sin_", h)
+      if (!all(c(bcol, scol) %in% names(pr))) {
+        showNotification(sprintf("Harmonic %d was not fitted, so its coefficients are not available.", h),
+                         type = "error", duration = 8); return()
+      }
+      gvec <- values$covariates[[gv]][pr$subject]
+      res <- dance_pop_cosinor(pr[[bcol]], pr[[scol]], pr$mesor, gvec,
+                               period = mod$period, harmonic = h)
+      if (!isTRUE(res$ok)) {
+        showNotification(res$message, type = "error", duration = 15); return()
+      }
+      res$group_var <- gv
+      values$pop_cosinor <- res
+      # Bingham's caution is about the AMPLITUDE comparison, and the two-stage
+      # readout already consumes this flag; keep them in step.
+      values$hp_acrophase_differs <- res$acrophase_differs
+      showNotification("Population-mean cosinor complete.", type = "message", duration = 4)
+      return()
+    }
+
     # Check if groups are defined
     if(is.null(mod$group_fits) || length(mod$group_fits) < 2) {
       showNotification("Pairwise comparisons require 2 or more groups. Please define groups in Harmonic Regression tab.",
@@ -239,7 +312,75 @@
   })
 
   # Display pairwise results
+  output$hp_mixed_between_ui <- renderUI({
+    ch <- dance_mixed_factor_choices(values)
+    if (!length(ch)) return(helpText("No categorical covariate with 2-12 levels was found."))
+    selectInput("hp_mixed_between", "Between-participant factor:", choices = ch)
+  })
+  output$hp_mixed_within_ui <- renderUI({
+    ch <- dance_mixed_factor_choices(values)
+    if (!length(ch)) return(NULL)
+    selectInput("hp_mixed_within", "Within-participant factor (repeated):", choices = ch,
+                selected = if (length(ch) > 1) ch[2] else ch[1])
+  })
+
   output$hp_results <- renderPrint({
+    if (identical(input$hp_approach, "mixed")) {
+      if (is.null(values$mixed_results) ||
+          !identical(values$mixed_results$kind, "cosinor")) {
+        cat("Run the mixed cosinor to see results.\n"); return(invisible(NULL))
+      }
+      # rendered by the shared mixed readout, so the two entry points cannot
+      # describe the same fit differently
+      dance_mixed_readout(values$mixed_results); return(invisible(NULL))
+    }
+    if (identical(input$hp_approach, "population")) {
+      res <- values$pop_cosinor
+      if (is.null(res)) { cat("Run the population-mean cosinor to see results.\n"); return(invisible(NULL)) }
+      f2 <- function(x) if (is.finite(x)) sprintf("%.2f", x) else "--"
+      pf <- function(p) if (!is.finite(p)) "--" else if (p < .001) "< .001"
+                        else sub("^0", "", sprintf("%.3f", p))
+      cat("=== Population-mean cosinor (Bingham et al., 1982) ===\n\n")
+      cat(sprintf("Grouping variable: %s   harmonic: %d   period: %s\n",
+                  res$group_var, res$harmonic, format(res$period)))
+      cat(sprintf("%d groups, %d participants; F tests on (%d, %d) df\n\n",
+                  res$n_groups, res$n_subjects, res$df1, res$df2))
+      g <- res$groups
+      cat(sprintf("  %-14s %5s %10s %11s %12s\n", "group", "n", "MESOR", "amplitude", "acrophase"))
+      for (i in seq_len(nrow(g)))
+        cat(sprintf("  %-14s %5d %10s %11s %12s\n", g$group[i], g$n[i],
+                    f2(g$mesor[i]), f2(g$amplitude[i]), f2(g$acrophase_time[i])))
+      cat("\n  Acrophase is in time units on this harmonic's effective period.\n\n")
+      t <- res$tests
+      for (i in seq_len(nrow(t)))
+        cat(sprintf("  %-10s F(%d, %d) = %8s   p %s\n", t$parameter[i],
+                    t$df1[i], t$df2[i], f2(t$F[i]), pf(t$p[i])))
+      cat("\nHow these differ from the pairwise tests\n")
+      cat("---------------------------------------\n")
+      cat("  The coefficient PAIRS are averaged as vectors, so amplitude is\n")
+      cat("  tested against the variance along the pooled mean phase direction\n")
+      cat("  and acrophase against the variance perpendicular to it. All groups\n")
+      cat("  are compared at once, so there is no multiplicity correction to\n")
+      cat("  apply and no pairwise family to control.\n")
+      if (isTRUE(res$acrophase_differs)) {
+        cat("\n  WARNING -- the acrophases DIFFER (p ", pf(t$p[3]), ").\n", sep = "")
+        cat("  Bingham et al. note that an amplitude difference cannot be\n")
+        cat("  interpreted in that case: the amplitudes are being compared about\n")
+        cat("  different phases. Do not read the amplitude row above as a\n")
+        cat("  difference in rhythm strength.\n")
+      } else {
+        cat("\n  The acrophases do not differ detectably, so the amplitude\n")
+        cat("  comparison is interpretable on Bingham's own condition.\n")
+      }
+      cat("\nWhat this does not establish\n----------------------------\n")
+      cat("  This is still a two-stage procedure in one respect: it starts from\n")
+      cat("  per-participant coefficients and does not propagate each\n")
+      cat("  participant's own estimation error. What it adds over the pairwise\n")
+      cat("  route is that the pair is treated as one bivariate object and the\n")
+      cat("  within-group covariance is pooled, not that the first stage has\n")
+      cat("  gone away. The period was fixed, so everything is conditional on it.\n")
+      return(invisible(NULL))
+    }
     req(values$hp_pairwise_results)
     results <- values$hp_pairwise_results
     param <- values$hp_pairwise_param

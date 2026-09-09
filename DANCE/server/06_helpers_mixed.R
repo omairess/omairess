@@ -375,3 +375,154 @@ dance_mixed_cosinor <- function(d, period = 24, n_harmonics = 1) {
     singular = tryCatch(lme4::isSingular(m), error = function(e) NA)
   )
 }
+# AUDIT (P19). One description of a fitted mixed model, used by every place that
+# shows one -- the Functional ANOVA tab and the Cosinor tab both reach this
+# module now, and two entry points writing their own readout is how the same fit
+# comes to be described two different ways. This is the sixth time this audit has
+# extracted a duplicated definition; the pattern is always the same.
+dance_mixed_readout <- function(res) {
+
+  if (is.null(res)) {
+  cat("Run a mixed analysis to see results.\n\n")
+  cat("This tab is for a design with one BETWEEN-subject factor and one\n")
+  cat("WITHIN-subject factor. The Functional ANOVA tab handles one or the\n")
+  cat("other, not both, and carries no interaction term.\n")
+  return(invisible(NULL))
+}
+f2 <- function(x) if (is.finite(x)) sprintf("%.2f", x) else "--"
+f3 <- function(x) if (is.finite(x)) sprintf("%.3f", x) else "--"
+pf <- function(p) if (!is.finite(p)) "--" else if (p < .001) "< .001" else sub("^0", "", sprintf("%.3f", p))
+
+b <- res$balance
+cat("Design\n======\n")
+cat(sprintf("  between: %s   within: %s   subjects: %d   observations: %d\n",
+            res$between_name, res$within_name, b$n_subjects, res$n_obs))
+cat(sprintf("  time axis: %s\n", res$time_axis))
+if (b$n_partial > 0)
+  cat(sprintf("  %d participant(s) do not have every level of the within factor.\n",
+              b$n_partial))
+cat("\n")
+
+if (identical(res$kind, "permutation")) {
+  cat("Mixed functional ANOVA, exact permutation\n")
+  cat("=========================================\n")
+  cat(sprintf("  %d participants x %d conditions; groups: %s\n",
+              res$n_subjects, res$n_conditions,
+              paste(sprintf("%s = %d", res$group_names, res$group_sizes), collapse = ", ")))
+  cat(sprintf("  B = %d permutations; smallest attainable p = %.4f\n",
+              res$n_permutations, res$p_floor))
+  cat(sprintf("  pointwise p adjusted by %s at alpha = %s\n\n",
+              res$correction, format(res$alpha)))
+  lab <- c(within = "within-subject effect", between = "between-subject effect",
+           interaction = "interaction")
+  for (nm in c("within", "between", "interaction")) {
+    r <- res[[nm]]
+    if (is.null(r)) next
+    cat(sprintf("  %-22s global p %s   significant at %d of %d points (%.1f%%)\n",
+                lab[[nm]], pf(r$global_p), r$n_significant,
+                length(r$p_values), 100 * r$n_significant / length(r$p_values)))
+  }
+  cat("\nThe permutation schemes\n-----------------------\n")
+  cat("  within       condition labels relabelled INSIDE each participant\n")
+  cat("  between      whole participants relabelled across groups\n")
+  cat("  interaction  group labels relabelled on the subject-centred profiles\n")
+  cat("\nAll three are exact: each relabelling is a symmetry of the data under\n")
+  cat("its own null. The interaction one is the case usually said to have no\n")
+  cat("exact scheme -- it does, because an interaction is a between-group\n")
+  cat("difference in the within-subject contrast, and under that null the\n")
+  cat("centred profiles are exchangeable across groups whatever the main\n")
+  cat("effects do. Calibration is checked in tests/mixed_permutation_test.R.\n")
+  cat("\nWhat this does not establish\n----------------------------\n")
+  cat("  A pointwise procedure answers WHERE the curves differ, not whether\n")
+  cat("  they differ overall; the global statistic is the whether. The\n")
+  cat("  correction controls the expected proportion of false positives among\n")
+  cat("  the flagged points, not the familywise error. And no permutation p\n")
+  cat("  can fall below 1/(B+1), so identical p values in a table are the\n")
+  cat("  resolution limit, not a tie.\n")
+
+} else if (identical(res$kind, "fanova") || identical(res$kind, "model")) {
+  cat("Mixed functional model\n======================\n")
+  cat("  ", res$formula_full, "\n\n", sep = "")
+  if (!is.null(res$s_table)) {
+    cat("Smooth terms (approximate)\n")
+    st <- res$s_table
+    for (i in seq_len(nrow(st)))
+      cat(sprintf("  %-28s edf %7s   F %8s   p %s\n", rownames(st)[i],
+                  f2(st[i, "edf"]), f2(st[i, "F"]), pf(st[i, "p-value"])))
+    cat("\n")
+  }
+  if (!is.null(res$p_table)) {
+    cat("Parametric terms (mean level)\n")
+    pt <- res$p_table
+    for (i in seq_len(nrow(pt)))
+      cat(sprintf("  %-28s est %8s   SE %7s   t %7s   p %s\n", rownames(pt)[i],
+                  f2(pt[i, "Estimate"]), f2(pt[i, "Std. Error"]),
+                  f2(pt[i, "t value"]), pf(pt[i, "Pr(>|t|)"])))
+    cat("\n")
+  }
+  cat(sprintf("Deviance explained: %s%%\n", f2(100 * res$dev_expl)))
+  if (is.finite(res$aic_delta)) {
+    cat(sprintf("Interaction in the SHAPE (%s-based model comparison)\n",
+                res$aic_basis %||% "ML"))
+    cat(sprintf("  AIC %s with the interaction, %s without; delta %+.1f\n",
+                f2(res$aic_full), f2(res$aic_additive), res$aic_delta))
+    # P18.5: reported as model-comparison evidence, not as a hypothesis test.
+    # A delta is a weight of evidence; calling it a decision at 2 units dresses
+    # a continuous quantity as a verdict.
+    cat(sprintf("  %s\n", if (res$aic_delta > 2)
+      "the comparison favours letting each cell have its own temporal shape"
+      else if (res$aic_delta < -2)
+      "the comparison favours the additive model: no support for cell-specific shapes"
+      else "the two models are within 2 AIC: this comparison does not separate them"))
+    cat("  This is evidence for one model over another, not a test of a null\n")
+    cat("  hypothesis, and no p-value should be quoted from it.\n")
+  }
+  cat("\nWhat this does not establish\n----------------------------\n")
+  cat("  The p-values are APPROXIMATE. The smoothing parameters were estimated\n")
+  cat("  from these data and the tests condition on those estimates; this is not\n")
+  cat("  the exact permutation guarantee the one-way fANOVA gives. The subject\n")
+  cat("  term is a random functional effect, so the cell smooths are population\n")
+  cat("  curves and no single participant's curve is claimed. A smooth term's\n")
+  cat("  p-value tests whether that cell's curve is flat, NOT whether two cells\n")
+  cat("  differ -- the interaction comparison above is what addresses that.\n")
+
+} else {
+  cat("Mixed cosinor\n=============\n")
+  cat("  ", res$formula, "\n", sep = "")
+  cat(sprintf("  period %s, %d harmonic(s); random rhythm per subject: %s\n\n",
+              format(res$period), res$n_harmonics,
+              if (isTRUE(res$random_rhythm)) "yes" else
+                "NO -- the full model did not converge, so only a random MESOR was fitted"))
+  cl <- res$cells
+  cat(sprintf("  %-14s %-10s %8s %10s %10s\n", res$within_name, res$between_name,
+              "MESOR", "amplitude", "acrophase"))
+  for (i in seq_len(nrow(cl)))
+    cat(sprintf("  %-14s %-10s %8s %10s %10s\n", cl$within[i], cl$between[i],
+                f2(cl$mesor[i]), f2(cl$amplitude_1[i]), f2(cl$acrophase_1[i])))
+  cat("\n  Acrophase is in time units from the start of the observation window.\n")
+  if (!is.null(res$tests)) {
+    cat("\nLikelihood-ratio tests on the (cosine, sine) pair\n")
+    for (i in seq_len(nrow(res$tests)))
+      cat(sprintf("  %-40s chi2(%d) = %s, p %s\n", res$tests$term[i],
+                  res$tests$df[i], f2(res$tests$chisq[i]), pf(res$tests$p[i])))
+    cat("\n  Each test drops a cosine/sine pair, so it asks whether the rhythm\n")
+    cat("  differs in amplitude OR phase -- a 2-df question per harmonic. A test\n")
+    cat("  of one factor also drops its higher-order terms, so it is the effect\n")
+    cat("  of that factor overall, not conditional on the interaction.\n")
+  }
+  if (isTRUE(res$singular))
+    cat("\n  WARNING: the random-effects fit is SINGULAR. A variance component is\n",
+        "  estimated at zero; the rhythm parameters are still usable but the\n",
+        "  random structure is not supported by this sample.\n", sep = "")
+  cat("\nWhat this does not establish\n----------------------------\n")
+  cat("  No standard errors are quoted for amplitude or acrophase. Amplitude is\n")
+  cat("  a norm and acrophase an angle, both nonlinear in the coefficients, and\n")
+  cat("  a delta-method interval on a phase near the period boundary misleads.\n")
+  cat("  The tests above are on the coefficient pair, which is what the model\n")
+  cat("  can test exactly. The period was FIXED, not estimated, so everything\n")
+  cat("  here is conditional on that choice.\n")
+}
+
+  invisible(NULL)
+}
+

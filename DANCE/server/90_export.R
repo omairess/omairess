@@ -1424,7 +1424,15 @@
       add("stopifnot(length(dance_mixed_check(mixed_long)) == 0)")
       add("")
 
-      if(identical(mx$kind, "fanova")) {
+      if(identical(mx$kind, "permutation")) {
+        emit_kernel("dance_mixed_array")
+        emit_kernel("dance_mixed_stats")
+        emit_kernel("dance_mixed_permutation")
+        add(sprintf("mixed_fit <- dance_mixed_permutation(mixed_long, n_permutations = %d, alpha = %s, correction = '%s')",
+                    mx$n_permutations, format(mx$alpha), mx$correction))
+        add("for (nm in c('within','between','interaction'))")
+        add("  cat(nm, ' global p = ', mixed_fit[[nm]]$global_p, '\\n', sep = '')")
+      } else if(identical(mx$kind, "fanova") || identical(mx$kind, "model")) {
         emit_kernel("dance_mixed_fanova")
         emit_kernel("dance_mixed_fanova_curves")
         add(sprintf("mixed_fit <- dance_mixed_fanova(mixed_long, k_time = %d, k_subject = %d, method = '%s')",

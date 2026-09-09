@@ -17,9 +17,56 @@ ui_tab_fanova <- tabItem(
             h4("Experimental Design"),
             radioButtons("fanova_design", "Design type:",
                          choices = list("Between subjects" = "between",
-                                        "Within subjects (Repeated Measures)" = "within"),
+                                        "Within subjects (Repeated Measures)" = "within",
+                                        "Mixed (between x within)" = "mixed"),
                          selected = "between"),
             hr(),
+
+            # Mixed options
+            conditionalPanel(
+              condition = "input.fanova_design == 'mixed'",
+              h4("Mixed design"),
+              helpText(HTML(
+                "One factor varying <b>between</b> participants and another
+                 <b>within</b> them, with the interaction the other two designs
+                 cannot express: <i>does the within-subject effect differ between
+                 groups?</i> Needs a participant identifier, which is what makes
+                 the design mixed.")),
+              uiOutput("fanova_mixed_subject_ui"),
+              uiOutput("fanova_mixed_between_ui"),
+              uiOutput("fanova_mixed_within_ui"),
+
+              radioButtons("fanova_mixed_estimator", "Estimator:",
+                           choices = list(
+                             "Exact permutation (recommended)" = "permutation",
+                             "Mixed model (mgcv), for unbalanced designs" = "model"),
+                           selected = "permutation"),
+              helpText(HTML(
+                "<b>Permutation</b> is the default because it is <i>exact</i>: all
+                 three effects have a valid relabelling scheme, the interaction
+                 included &mdash; an interaction is a between-group difference in
+                 the within-subject contrast, and under its null those contrasts
+                 are exchangeable across groups whatever the main effects do. It
+                 needs every participant to have every level of the within factor.<br>
+                 <b>Mixed model</b> fits a spline per cell plus a random curve per
+                 participant. It handles an unbalanced design and returns fitted
+                 curves, but its <i>p</i> values are approximate: the smoothing
+                 parameters were estimated from the same data.")),
+              conditionalPanel(
+                condition = "input.fanova_mixed_estimator == 'model'",
+                sliderInput("fanova_mixed_k_time", "Basis size per cell (k):",
+                            min = 4, max = 20, value = 12, step = 1),
+                sliderInput("fanova_mixed_k_subject", "Basis size per participant (k):",
+                            min = 3, max = 12, value = 6, step = 1)
+              ),
+              checkboxInput("fanova_mixed_real_time",
+                            "Use real elapsed clock time as the time axis", TRUE),
+              helpText(HTML(
+                "Mixed analyses are fitted to the <b>raw observations</b>, not the
+                 smoothed curves: the permutation scheme needs the observations
+                 themselves, and the mixed model estimates temporal structure
+                 internally, so pre-smoothing would smooth twice."))
+            ),
             
             # Between-subjects options
             conditionalPanel(
@@ -91,6 +138,21 @@ ui_tab_fanova <- tabItem(
           )
         ),
         fluidRow(
+          # P19: a mixed run writes into values$mixed_results, not
+          # values$fanova_results, because it reports three effects rather than
+          # one. Its results appear here so the tab has one results area.
+          conditionalPanel(
+            condition = "input.fanova_design == 'mixed'",
+            box(
+              title = "Mixed design results", status = "success",
+              solidHeader = TRUE, width = 12, collapsible = TRUE,
+              verbatimTextOutput("mixed_results"),
+              hr(),
+              plotlyOutput("mixed_plot", height = "420px")
+            )
+          ),
+          conditionalPanel(
+            condition = "input.fanova_design != 'mixed'",
           box(
             title = "Global Test Results",
             collapsible = TRUE, collapsed = FALSE,
@@ -100,6 +162,7 @@ ui_tab_fanova <- tabItem(
             verbatimTextOutput("fanova_global_results"),
             hr(),
             DTOutput("fanova_summary_table")
+          )
           )
         ),
         fluidRow(

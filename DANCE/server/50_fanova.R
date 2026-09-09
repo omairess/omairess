@@ -980,7 +980,64 @@
       showNotification("Please load data first!", type = "error", duration = 5)
       return()
     }
-    
+
+    # ==========================================================================
+    # MIXED (between x within). Handled here, before the smoothing machinery,
+    # because both mixed estimators are fitted to the RAW observations: the
+    # permutation scheme relabels the observations themselves, and the mixed
+    # model estimates the temporal structure internally, so pre-smoothing would
+    # smooth twice. It shares this tab's group/permutation/correction controls
+    # and writes into values$fanova_results like the other two designs.
+    # ==========================================================================
+    if(identical(input$fanova_design, "mixed")) {
+      d <- dance_fanova_mixed_frame()
+      if (is.null(d)) {
+        showNotification(paste(
+          "A mixed design needs a participant identifier (set one on the Data Import tab)",
+          "and both a between- and a within-subject factor."), type = "error", duration = 12)
+        return()
+      }
+      badm <- dance_mixed_check(d)
+      if (length(badm)) { showNotification(paste(badm, collapse = " "),
+                                           type = "error", duration = 15); return() }
+
+      est <- input$fanova_mixed_estimator %||% "permutation"
+      withProgress(message = if (identical(est, "permutation"))
+                     "Permuting the mixed design..." else "Fitting the mixed model...",
+                   value = 0.3, {
+        if (identical(est, "permutation")) {
+          res <- dance_mixed_permutation(
+            d, n_permutations = input$n_permutations %||% 999,
+            alpha = input$alpha_level %||% 0.05,
+            correction = input$pairwise_correction %||% "BH")
+          res$kind <- "permutation"
+        } else {
+          res <- dance_mixed_fanova(d,
+                                    k_time = input$fanova_mixed_k_time %||% 12,
+                                    k_subject = input$fanova_mixed_k_subject %||% 6)
+          res$kind <- "model"
+          if (isTRUE(res$ok)) res$curves <- dance_mixed_fanova_curves(res)
+        }
+      })
+      if (!isTRUE(res$ok)) {
+        showNotification(res$message %||% "The mixed analysis failed.",
+                         type = "error", duration = 15)
+        return()
+      }
+      res$between_name <- input$fanova_mixed_between
+      res$within_name  <- input$fanova_mixed_within
+      res$time_axis    <- if (isTRUE(input$fanova_mixed_real_time))
+        "real elapsed time" else "column index"
+      res$time_values  <- attr(d, "time_values")
+      res$design       <- "mixed"
+      values$mixed_results  <- res
+      values$fanova_results <- NULL   # a mixed run is not a one-way result
+      showNotification(sprintf("Mixed %s analysis complete.",
+                               if (identical(est, "permutation")) "permutation" else "model"),
+                       type = "message", duration = 4)
+      return()
+    }
+
     # Validate based on design type
     if(input$fanova_design == "between") {
       # Between-subjects validation - REQUIRES group labels from preprocessing

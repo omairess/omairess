@@ -2976,6 +2976,101 @@ structural stale-slot guard) and an executed-export check in
 After this round: **2,068 testthat assertions (0 failed, 0 skipped) and 17
 standalone suites pass.**
 
+**4.66 P19: the mixed design becomes a first-class member of the modules it
+belongs to, and the population-mean cosinor arrives.** The user's judgement was
+right and worth recording: a separate Mixed tab was destined to stay bare, because
+every option the Functional ANOVA and Cosinor tabs already had would have to be
+built again beside it. The analyses moved inside those tabs; the tab is retired.
+
+*Exact permutation for a mixed design, including the interaction.* Before
+building anything I checked whether the fANOVA's defining property -- exactness
+-- survives a mixed design, expecting the interaction to be the usual case with
+no exact scheme. It is not. An interaction is a between-group difference in the
+WITHIN-subject contrast, and under its null the participant-centred profiles are
+identically distributed across groups whatever the main effects are doing, so
+group labels can be permuted on them exactly. All three effects therefore have a
+scheme:
+
+```
+within        condition labels relabelled INSIDE each participant
+between       whole participants relabelled across groups
+interaction   group labels relabelled on the participant-centred profiles
+```
+
+Calibrated rather than argued. Under a null with STRONG main effects in both
+factors, 400 simulations at B = 299:
+
+```
+interaction, 2 conditions   rejects at .052   (KS p .465)
+interaction, 3 conditions   rejects at .050   (KS p .627)
+within main effect          rejects at .060   (KS p .792)
+between main effect         rejects at .065   (KS p .981)
+```
+
+The three-condition row matters: the two-condition case can be argued from
+difference curves, and that argument does not extend. The measurement does.
+
+*Missing data, and a strictness that would have refused the reporter's own file.*
+The first version required no missing observation anywhere, which is far
+stricter than exactness needs -- and would have refused the dataset this was
+built for (1.2% missing). What exactness requires is that relabelling be a
+symmetry, and it is, per time point, provided a participant contributes there
+only where every condition is observed: relabelling conditions permutes that
+participant's own cells, and relabelling groups moves participants whole, so the
+contributing set at each time point is invariant under both. A missing CELL is
+different -- a missing half of the contrast, which no relabelling can invent --
+and is still refused, naming the model-based estimator as the alternative. With
+3% of observations deleted the interaction still rejects at .035.
+
+Making that NA-aware replaced vectorised operations with a per-time-point loop
+and slowed the kernel enough to time out its own calibration, so a fast path
+handles the complete-data case: 0.50 s against 0.62 s on the same design.
+
+*Both estimators, permutation by default*, as asked. They sit on one radio in the
+fANOVA tab and share its permutation count, alpha and correction; the model-based
+one is offered for unbalanced designs and for fitted curves, with its
+approximation stated.
+
+*The population-mean cosinor.* Bingham, Arbogast, Cornelissen-Guillaume, Lee &
+Halberg (1982) give the multi-group test the app has never had: the
+per-participant (cosine, sine) pairs are averaged as VECTORS, their within-group
+covariance is pooled, and MESOR, amplitude and acrophase are tested as F ratios
+against the part of that covariance each depends on -- amplitude against the
+variance ALONG the pooled mean phase direction, acrophase against the variance
+PERPENDICULAR to it. That geometry is what makes the formulas checkable rather
+than transcribed, and the sign convention self-checking: Bingham writes the cross
+term with the opposite sign because his acrophase is negative by convention.
+
+Calibration settled it, not the transcription. 2000 simulations under each null:
+MESOR, amplitude .044, acrophase .048, with KS tests not rejecting uniformity,
+and each test finding its own planted effect without the others leaking into it.
+Bingham's caution -- an amplitude difference cannot be interpreted when the
+acrophases also differ -- is returned as a VALUE, so the readout checks it rather
+than reciting it.
+
+It joins the Cosinor tab as one of three approaches, beside the original
+two-stage route and the mixed cosinor, with the readout stating plainly what it
+does and does not add: the coefficient pair is treated as one bivariate object
+and the within-group covariance is pooled, but the first stage has not gone away
+and each participant's own estimation error is still not propagated.
+
+*One extraction, for the sixth time.* Two hosts now display a mixed result, and
+two entry points writing their own readout is how one fit comes to be described
+two ways. `dance_mixed_readout()` is the single description. Its absence bit
+immediately: a permutation result had no `balance` field, and `if (NULL > 0)` is
+a length-zero error.
+
+New: `server/07_helpers_mixed_perm.R`, `server/08b_helpers_popcosinor.R`,
+`server/51b_fanova_mixed_views.R`, `tests/mixed_permutation_test.R` (15 checks,
+including the calibrations above) and `tests/pop_cosinor_test.R` (14). Retired:
+`ui/55_mixed.R` and the standalone tab. Two guards in the P18 suite were
+repointed at where their content moved -- a guard reading a file the code has
+left goes vacuous rather than failing, which is the whole reason that suite
+exists.
+
+After this round: **2,081 testthat assertions (0 failed, 0 skipped) and 19
+standalone suites pass.**
+
 ## 5. Rename table
 
 | source | source app | merged app |
