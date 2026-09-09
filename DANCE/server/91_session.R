@@ -132,19 +132,52 @@ observeEvent(input$load_session, {
 
   for (nm in names(saved$values)) values[[nm]] <- saved$values[[nm]]
 
+  # AUDIT (P20/R10). Every one of these went through
+  #     fn(session, nm, value = saved$settings[[nm]])
+  # and updateSelectInput() HAS NO `value` ARGUMENT -- its selection parameter is
+  # `selected`. R raised "unused argument (value = ...)" on every call, and the
+  # tryCatch below caught it and returned NULL. So none of the 24 select
+  # settings was ever restored, and nothing said so: a reloaded session came
+  # back with its results but with fanova_design, fanova_group_var,
+  # harmonic_trend_type, hp_approach and the mixed factor choices all sitting at
+  # their defaults, describing an analysis that was not the one on screen. The
+  # only visible trace was the "settings restored: N of M" line quietly reading
+  # 24 short.
+  #
+  # Each updater now gets its own setter with the argument name it actually has,
+  # and a failure is COLLECTED rather than swallowed, so a future mismatch shows
+  # up in the session note instead of disappearing.
   restored <- character(0)
-  push <- function(names_vec, fn) {
+  failed <- character(0)
+  push <- function(names_vec, setter) {
     for (nm in intersect(names_vec, names(saved$settings))) {
-      tryCatch({
-        fn(session, nm, value = saved$settings[[nm]])
-        restored <<- c(restored, nm)
-      }, error = function(e) NULL)
+      ok <- tryCatch({ setter(nm, saved$settings[[nm]]); TRUE },
+                     error = function(e) { failed <<- c(failed, sprintf("%s (%s)", nm, conditionMessage(e))); FALSE })
+      if (isTRUE(ok)) restored <- c(restored, nm)
     }
+    restored
   }
-  push(RESTORE_INPUTS$numeric,  updateNumericInput)
-  push(RESTORE_INPUTS$checkbox, updateCheckboxInput)
-  push(RESTORE_INPUTS$select,   updateSelectInput)
-  push(RESTORE_INPUTS$text,     updateTextInput)
+  restored <- push(RESTORE_INPUTS$numeric,
+                   function(nm, v) updateNumericInput(session, nm, value = v))
+  restored <- push(RESTORE_INPUTS$checkbox,
+                   function(nm, v) updateCheckboxInput(session, nm, value = v))
+  restored <- push(RESTORE_INPUTS$text,
+                   function(nm, v) updateTextInput(session, nm, value = v))
+
+  # Selects are pushed on the NEXT flush, not this one. Their choice lists are
+  # rebuilt by observers and renderUI blocks that react to `values`, which has
+  # only just been repopulated above; setting `selected` to a level that is not
+  # yet in the choice list is discarded. onFlushed() runs after those observers
+  # have caught up.
+  select_names <- intersect(RESTORE_INPUTS$select, names(saved$settings))
+  if (length(select_names)) {
+    session$onFlushed(function() {
+      for (nm in select_names)
+        tryCatch(updateSelectInput(session, nm, selected = saved$settings[[nm]]),
+                 error = function(e) NULL)
+    }, once = TRUE)
+    restored <- c(restored, select_names)
+  }
 
   # Versions the results were produced under vs. the ones running now. A model
   # object restored beside a different fda is exactly the case worth flagging.
@@ -177,6 +210,8 @@ observeEvent(input$load_session, {
     sprintf("  results:     %s", if (length(ran)) paste(ran, collapse = ", ") else "none"),
     sprintf("  settings restored: %d of %d",
             length(restored), length(unlist(RESTORE_INPUTS, use.names = FALSE))),
+    if (length(failed)) c("  settings that FAILED to restore:",
+                          sprintf("    %s", failed)) else NULL,
     "",
     if (length(drift)) c(
       "PACKAGE VERSIONS HAVE CHANGED since these results were computed:",

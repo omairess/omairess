@@ -81,12 +81,19 @@
         'Testing standard cluster solutions...'
       )
 
+      # AUDIT (P20/W8). The Euclidean distance matrix does not depend on k, and
+      # cluster::silhouette() needs it at every k, so the loop below used to
+      # recompute the SAME O(n^2 p) matrix once per candidate k -- max_k - 1
+      # times for a quantity that cannot change. It is computed once here and
+      # reused; the distances, the silhouettes and every metric downstream are
+      # bit-identical, because it is literally the same object.
+      dist_matrix_all <- dist(data_matrix)
+
       # For hierarchical: compute the dendrogram once before the loop (efficient)
       hc_opt <- NULL
       if(input$opt_kmeans_method == "hierarchical") {
         opt_linkage <- if(!is.null(input$opt_hclust_linkage)) input$opt_hclust_linkage else "ward.D2"
-        dist_matrix_hc_opt <- dist(data_matrix)
-        hc_opt <- hclust(dist_matrix_hc_opt, method = opt_linkage)
+        hc_opt <- hclust(dist_matrix_all, method = opt_linkage)
       }
 
       withProgress(message = progress_msg, value = 0, {
@@ -205,8 +212,7 @@
 
           # Calculate silhouette width (common for all methods)
           if(requireNamespace("cluster", quietly = TRUE)) {
-            dist_matrix <- dist(data_matrix)
-            sil <- cluster::silhouette(cluster_assignments, dist_matrix)
+            sil <- cluster::silhouette(cluster_assignments, dist_matrix_all)
             silhouette_values[i] <- mean(sil[, 3])
           } else {
             silhouette_values[i] <- NA
@@ -602,6 +608,11 @@
       # Get clustering method
       clustering_method <- if(!is.null(input$clustering_method)) input$clustering_method else "standard"
 
+      # P20/W8: the Euclidean distance matrix, computed at most once per run.
+      # The hierarchical branch and the silhouette both need it and each used to
+      # build its own copy of the same O(n^2 p) object.
+      dist_matrix_run <- NULL
+
       # Check for functional k-means requirements
       if(clustering_method == "functional") {
         if(input$cluster_data_type != "smoothed") {
@@ -806,8 +817,9 @@
         # ===== HIERARCHICAL CLUSTERING =====
         linkage <- if(!is.null(input$hclust_linkage)) input$hclust_linkage else "ward.D2"
 
-        dist_matrix_hc <- dist(data_matrix)
-        hc_result <- hclust(dist_matrix_hc, method = linkage)
+        # P20/W8: the same matrix the silhouette needs below, computed once.
+        if (is.null(dist_matrix_run)) dist_matrix_run <- dist(data_matrix)
+        hc_result <- hclust(dist_matrix_run, method = linkage)
         cluster_assignments <- cutree(hc_result, k = k)
 
         # Cluster means
@@ -880,8 +892,8 @@
       sil_width <- NA
       sil_data <- NULL
       if(requireNamespace("cluster", quietly = TRUE) && k > 1) {
-        dist_matrix <- dist(data_matrix)
-        sil <- cluster::silhouette(cluster_assignments, dist_matrix)
+        if (is.null(dist_matrix_run)) dist_matrix_run <- dist(data_matrix)
+        sil <- cluster::silhouette(cluster_assignments, dist_matrix_run)
         sil_width <- mean(sil[, 3])
         # Store full silhouette object for detailed plotting
         sil_data <- sil

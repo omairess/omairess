@@ -539,9 +539,11 @@
           # for a Monte Carlo test of finitely many draws. The observed
           # statistic counts as one of its own null draws.
           # P5.7: an undefined OBSERVED statistic has no test either.
+          # P20/R1: the arithmetic is dance_perm_p(), shared with every other
+          # permutation kernel in the app, so the conventions cannot diverge.
           .np <- sum(is.finite(F_stat_perm[t, ]))
           p_values_pointwise[t] <- if (!is.finite(F_stat[t]) || .np < 1) NA_real_ else
-            (1 + sum(F_stat_perm[t, ] >= F_stat[t], na.rm = TRUE)) / (1 + .np)
+            dance_perm_p(sum(F_stat_perm[t, ] >= F_stat[t], na.rm = TRUE), .np)
         }
         
         # P5.7: NAs are NOT converted to p = 1. A time point with no defined
@@ -863,8 +865,16 @@
     # P1.3: a functional L2 norm, not a grid-density-dependent vector norm
     L2_stat <- dance_l2_norm(SSB / n_curves, time_points)
     
-    # Permutation test for p-values
-    F_stat_perm <- matrix(NA, n_time, n_permutations)
+    # Permutation test for p-values.
+    # P20/W8: the permuted F values are only ever used to COUNT exceedances at
+    # each time point, so the n_time x n_permutations matrix that held them is
+    # not needed -- at the default B = 5,000 over 100 evaluation points that is
+    # half a million doubles allocated to be read once. Two integer accumulators
+    # carry exactly the same information: how many permuted statistics were
+    # finite at t, and how many of those reached the observed one. The counts,
+    # and therefore the p-values, are identical.
+    perm_finite <- integer(n_time)
+    perm_exceed <- integer(n_time)
     L2_stat_perm <- numeric(n_permutations)
     
     # AUDIT (P2.5): this was a four-deep interpreted loop --
@@ -887,25 +897,28 @@
       SSB_perm <- as.vector((perm_means - overall_mean)^2 %*% n_per_group)
       SSW_perm <- rowSums((curves - perm_means[, gidx, drop = FALSE])^2)
 
-      F_stat_perm[, perm] <- ifelse(SSW_perm > ss_floor,
-                                    (SSB_perm / df_between) / (SSW_perm / df_within),
-                                    NA_real_)
+      F_perm <- ifelse(SSW_perm > ss_floor,
+                       (SSB_perm / df_between) / (SSW_perm / df_within),
+                       NA_real_)
+      fin <- is.finite(F_perm)
+      perm_finite <- perm_finite + fin
+      perm_exceed <- perm_exceed + (fin & F_perm >= F_stat)
       L2_stat_perm[perm] <- dance_l2_norm(SSB_perm / n_curves, time_points)
     }
     
     # Calculate p-values
-    p_values_pointwise <- numeric(n_time)
-    for(t in 1:n_time) {
-      # AUDIT (P1.1): (1 + #{T* >= T}) / (1 + B) -- a Monte Carlo p is never 0.
-      # P4.7: a time point whose observed F is undefined has no test, and must
-      # not be handed a p-value of 1 as though it had one.
-      .np <- sum(is.finite(F_stat_perm[t, ]))
-      p_values_pointwise[t] <- if (!is.finite(F_stat[t]) || .np < 1) NA_real_ else
-        (1 + sum(F_stat_perm[t, ] >= F_stat[t], na.rm = TRUE)) / (1 + .np)
-    }
-    
-    p_value_L2 <- (1 + sum(L2_stat_perm >= L2_stat, na.rm = TRUE)) /
-                      (1 + sum(is.finite(L2_stat_perm)))
+    # AUDIT (P1.1): (1 + #{T* >= T}) / (1 + B) -- a Monte Carlo p is never 0.
+    # P4.7: a time point whose observed F is undefined has no test, and must not
+    # be handed a p-value of 1 as though it had one; the reference set there is
+    # the permutations at which the statistic WAS defined, which is what
+    # perm_finite counts. P20/R1: the arithmetic itself is dance_perm_p(), the
+    # one implementation the post-hoc kernels also use.
+    p_values_pointwise <- ifelse(
+      !is.finite(F_stat) | perm_finite < 1L, NA_real_,
+      dance_perm_p(perm_exceed, perm_finite))
+
+    p_value_L2 <- dance_perm_p(sum(L2_stat_perm >= L2_stat, na.rm = TRUE),
+                               sum(is.finite(L2_stat_perm)))
     
     p_values_adjusted <- p.adjust(p_values_pointwise, method = "fdr")
     # P4.7: a time point with no defined test is not significant, and is not
@@ -1724,8 +1737,19 @@
   
   # Pairwise comparison functions - ENHANCED
   # Repeated Measures Pairwise Comparisons (for within-subjects designs)
+  # AUDIT (P20/R6). Like perform_rm_fanova before it, this had Shiny's
+  # withProgress()/incProgress() in its body, so deparse()-ing it into the
+  # exported script produced code that could not run outside a session. That is
+  # why the export wrote its OWN approximation of the post-hoc tests instead --
+  # a chain of independent, UNPAIRED Welch t.test() calls with p.adjust(), on a
+  # variable `n_time_eval` the script never defined. It shared neither the
+  # design, nor the statistic, nor the reference distribution with what the app
+  # computed. The progress sink is now an inert callback, so the real kernel can
+  # be emitted and the approximation is gone.
   perform_pairwise_comparisons_rm <- function(fd_obj, subject_id, rm_factor, n_permutations = 200,
-                                              correction_method = "bonferroni", alpha = 0.05) {
+                                              correction_method = "bonferroni", alpha = 0.05,
+                                              progress = NULL) {
+    if (is.null(progress)) progress <- function(frac, detail = NULL) invisible(NULL)
     
     n_time <- 100
     time_points <- seq(0, 1, length.out = n_time)
@@ -1747,9 +1771,12 @@
     cat("Performing paired comparisons (within-subjects)...\n")
     cat("Number of condition pairs:", n_pairs, "\n")
     
-    withProgress(message = 'Performing pairwise comparisons', value = 0, {
+    # No withProgress() wrapper: it evaluates its expression in the caller's
+    # frame, which happens to work, but it is Shiny-only. A plain loop with a
+    # callback needs nothing but base R.
+    {
       for(pair_idx in 1:n_pairs) {
-        incProgress(1/n_pairs, detail = paste("Comparing", pair_names[pair_idx]))
+        progress(1/n_pairs, detail = paste("Comparing", pair_names[pair_idx]))
         
         pair <- pairs[[pair_idx]]
         
@@ -1794,10 +1821,11 @@
         
         # Calculate paired t-statistics
         se_diff <- apply(paired_diffs, 1, sd) / sqrt(n_pairs_subj)
-        t_stat <- mean_diff / se_diff
-        
-        # Handle NaN/Inf (when se_diff is 0)
-        t_stat[!is.finite(t_stat)] <- 0
+        # AUDIT (P20/R7). This used to be `t[!is.finite(t)] <- 0`, which turned
+        # unanimous separation (zero dispersion, non-zero mean difference) into
+        # t = 0 and hence p = 1. dance_studentise() keeps the infinite value and
+        # zeroes only the genuinely undefined 0/0 case. See 06_helpers_posthoc.R.
+        t_stat <- dance_studentise(mean_diff, se_diff)
         
         # L2 norm statistic
         L2_stat <- dance_l2_norm(mean_diff, time_points)
@@ -1815,20 +1843,26 @@
           perm_mean_diff <- rowMeans(perm_diffs)
           perm_se_diff <- apply(perm_diffs, 1, sd) / sqrt(n_pairs_subj)
           
-          t_stat_perm[, perm] <- perm_mean_diff / perm_se_diff
-          t_stat_perm[!is.finite(t_stat_perm[, perm]), perm] <- 0
+          t_stat_perm[, perm] <- dance_studentise(perm_mean_diff, perm_se_diff)
           
           L2_stat_perm[perm] <- dance_l2_norm(perm_mean_diff, time_points)
         }
         
-        # Calculate p-values
+        # AUDIT (P20/R1). The pointwise p was the plain proportion #{T* >= T}/B
+        # while the global p used the add-one estimator, so the same result
+        # object carried two different conventions and the pointwise one could
+        # report an impossible p = 0. Both now go through dance_perm_p(), whose
+        # denominator is the number of permutations DRAWN -- dropping non-finite
+        # permuted statistics from it shrinks the reference set and inflates
+        # significance.
         p_values_pointwise <- numeric(n_time)
         for(t in 1:n_time) {
-          p_values_pointwise[t] <- mean(abs(t_stat_perm[t, ]) >= abs(t_stat[t]), na.rm = TRUE)
+          exceed <- sum(abs(t_stat_perm[t, ]) >= abs(t_stat[t]), na.rm = TRUE)
+          p_values_pointwise[t] <- dance_perm_p(exceed, n_permutations)
         }
         
-        p_value_L2 <- (1 + sum(L2_stat_perm >= L2_stat, na.rm = TRUE)) /
-                      (1 + sum(is.finite(L2_stat_perm)))
+        p_value_L2 <- dance_perm_p(sum(L2_stat_perm >= L2_stat, na.rm = TRUE),
+                                   n_permutations)
         
         # Bootstrap confidence intervals for paired differences
         # AUDIT (P1.2): 100 replicates gives a 2.5% quantile estimated from the
@@ -1847,8 +1881,9 @@
         
         # Cohen's d for paired samples (using SD of differences)
         sd_diff <- apply(paired_diffs, 1, sd)
-        cohens_d <- mean_diff / sd_diff
-        cohens_d[!is.finite(cohens_d)] <- 0
+        # same argument as for t_stat: zero dispersion with a non-zero mean is an
+        # unbounded effect, not a null one.
+        cohens_d <- dance_studentise(mean_diff, sd_diff)
         
         # Calculate means for each condition (for plotting)
         mean1 <- rowMeans(matched_curves1)
@@ -1874,7 +1909,7 @@
           se_diff = se_diff
         )
       }
-    })
+    }
     
     # Apply multiple comparison correction
     all_p_values_L2 <- sapply(pairwise_results, function(x) x$p_value_L2)
@@ -1898,13 +1933,17 @@
       groups = conditions,
       n_groups = n_conditions,
       pair_names = pair_names,
+      p_floor = dance_perm_p_floor(n_permutations),
       design = "within"
     ))
   }
   
   # Between-Subjects Pairwise Comparisons (original function)
+  # Same change as the paired kernel above, for the same reason (P20/R6).
   perform_pairwise_comparisons <- function(fd_obj, group_labels, n_permutations = 200,
-                                           correction_method = "bonferroni", alpha = 0.05) {
+                                           correction_method = "bonferroni", alpha = 0.05,
+                                           progress = NULL) {
+    if (is.null(progress)) progress <- function(frac, detail = NULL) invisible(NULL)
     
     n_curves <- ncol(fd_obj$coefs)
     n_time <- 100
@@ -1922,9 +1961,12 @@
     
     pairwise_results <- list()
     
-    withProgress(message = 'Performing pairwise comparisons', value = 0, {
+    # No withProgress() wrapper: it evaluates its expression in the caller's
+    # frame, which happens to work, but it is Shiny-only. A plain loop with a
+    # callback needs nothing but base R.
+    {
       for(pair_idx in 1:n_pairs) {
-        incProgress(1/n_pairs, detail = paste("Comparing", pair_names[pair_idx]))
+        progress(1/n_pairs, detail = paste("Comparing", pair_names[pair_idx]))
         
         pair <- pairs[[pair_idx]]
         idx1 <- which(group_labels == pair[1])
@@ -1944,7 +1986,7 @@
         pooled_var <- ((n1 - 1) * apply(curves1, 1, var) + 
                          (n2 - 1) * apply(curves2, 1, var)) / (n1 + n2 - 2)
         se_diff <- sqrt(pooled_var * (1/n1 + 1/n2))
-        t_stat <- mean_diff / se_diff
+        t_stat <- dance_studentise(mean_diff, se_diff)
         
         # L2 norm statistic
         L2_stat <- dance_l2_norm(mean_diff, time_points)
@@ -1970,18 +2012,25 @@
                                 (n2 - 1) * apply(perm_curves2, 1, var)) / (n1 + n2 - 2)
           perm_se_diff <- sqrt(perm_pooled_var * (1/n1 + 1/n2))
           
-          t_stat_perm[, perm] <- perm_diff / perm_se_diff
+          t_stat_perm[, perm] <- dance_studentise(perm_diff, perm_se_diff)
           L2_stat_perm[perm] <- dance_l2_norm(perm_diff, time_points)
         }
         
-        # Calculate p-values
+        # AUDIT (P20/R1). The pointwise p was the plain proportion #{T* >= T}/B
+        # while the global p used the add-one estimator, so the same result
+        # object carried two different conventions and the pointwise one could
+        # report an impossible p = 0. Both now go through dance_perm_p(), whose
+        # denominator is the number of permutations DRAWN -- dropping non-finite
+        # permuted statistics from it shrinks the reference set and inflates
+        # significance.
         p_values_pointwise <- numeric(n_time)
         for(t in 1:n_time) {
-          p_values_pointwise[t] <- mean(abs(t_stat_perm[t, ]) >= abs(t_stat[t]), na.rm = TRUE)
+          exceed <- sum(abs(t_stat_perm[t, ]) >= abs(t_stat[t]), na.rm = TRUE)
+          p_values_pointwise[t] <- dance_perm_p(exceed, n_permutations)
         }
         
-        p_value_L2 <- (1 + sum(L2_stat_perm >= L2_stat, na.rm = TRUE)) /
-                      (1 + sum(is.finite(L2_stat_perm)))
+        p_value_L2 <- dance_perm_p(sum(L2_stat_perm >= L2_stat, na.rm = TRUE),
+                                   n_permutations)
         
         # Bootstrap confidence intervals
         # AUDIT (P1.2): 100 replicates gives a 2.5% quantile estimated from the
@@ -2003,7 +2052,7 @@
         ci_upper <- apply(diff_boot, 1, quantile, probs = 0.975)
         
         # Cohen's d effect size
-        cohens_d <- mean_diff / sqrt(pooled_var)
+        cohens_d <- dance_studentise(mean_diff, sqrt(pooled_var))
         
         pairwise_results[[pair_names[pair_idx]]] <- list(
           group1 = pair[1],
@@ -2022,7 +2071,7 @@
           se_diff = se_diff
         )
       }
-    })
+    }
     
     # Apply multiple comparison correction
     all_p_values_L2 <- sapply(pairwise_results, function(x) x$p_value_L2)
@@ -2046,6 +2095,7 @@
       groups = groups,
       n_groups = n_groups,
       pair_names = pair_names,
+      p_floor = dance_perm_p_floor(n_permutations),
       design = "between"
     ))
   }
@@ -2170,24 +2220,30 @@
       if(spec$design == "within") {
         cat("Performing PAIRED comparisons for within-subjects design\n")
 
-        values$pairwise_results <- perform_pairwise_comparisons_rm(
-          fd_obj = fd_for_pairs,
-          subject_id = spec$subject_id,
-          rm_factor = spec$rm_factor,
-          n_permutations = n_perm_to_use,
-          correction_method = input$pairwise_correction,
-          alpha = input$pairwise_alpha
-        )
+        values$pairwise_results <- withProgress(
+          message = 'Performing pairwise comparisons', value = 0,
+          perform_pairwise_comparisons_rm(
+            fd_obj = fd_for_pairs,
+            subject_id = spec$subject_id,
+            rm_factor = spec$rm_factor,
+            n_permutations = n_perm_to_use,
+            correction_method = input$pairwise_correction,
+            alpha = input$pairwise_alpha,
+            progress = function(frac, detail = NULL) incProgress(frac, detail = detail)
+          ))
       } else {
         cat("Performing INDEPENDENT comparisons for between-subjects design\n")
 
-        values$pairwise_results <- perform_pairwise_comparisons(
-          fd_obj = fd_for_pairs,
-          group_labels = spec$group_labels,
-          n_permutations = n_perm_to_use,
-          correction_method = input$pairwise_correction,
-          alpha = input$pairwise_alpha
-        )
+        values$pairwise_results <- withProgress(
+          message = 'Performing pairwise comparisons', value = 0,
+          perform_pairwise_comparisons(
+            fd_obj = fd_for_pairs,
+            group_labels = spec$group_labels,
+            n_permutations = n_perm_to_use,
+            correction_method = input$pairwise_correction,
+            alpha = input$pairwise_alpha,
+            progress = function(frac, detail = NULL) incProgress(frac, detail = detail)
+          ))
       }
 
       # Travels with the result, so the summary and the export can say what was
@@ -2197,6 +2253,35 @@
       values$pairwise_results$omnibus_permutations <- omnibus_perm
       values$pairwise_results$posthoc_source <- spec$description
       values$pairwise_results$matches_omnibus <- isTRUE(spec$matches_omnibus)
+
+      # P20/R6: the IMMUTABLE specification of what was compared, stored with
+      # the result rather than reconstructed later from live inputs. The export
+      # needs the actual label vectors to emit a runnable call -- previously it
+      # had none, which is part of why it wrote its own approximation instead of
+      # the kernel. `family` names what the correction was applied over, so a
+      # reader can see the multiplicity family instead of inferring it (R12).
+      values$pairwise_results$spec <- list(
+        design = spec$design,
+        source = if (isTRUE(spec$matches_omnibus)) "fanova" else "custom",
+        description = spec$description,
+        group_labels = if (identical(spec$design, "between"))
+                         as.character(spec$group_labels) else NULL,
+        subject_id = if (identical(spec$design, "within"))
+                       as.character(spec$subject_id) else NULL,
+        rm_factor = if (identical(spec$design, "within"))
+                      as.character(spec$rm_factor) else NULL,
+        used_warped_curves = !is.null(values$warping_results) &&
+                             identical(fd_for_pairs, values$warping_results$reg_fd),
+        n_permutations = n_perm_to_use,
+        correction = input$pairwise_correction,
+        alpha = input$pairwise_alpha,
+        p_floor = dance_perm_p_floor(n_perm_to_use),
+        family = sprintf(
+          "%d pairwise comparisons; the pointwise correction is applied across the %d evaluation points WITHIN each comparison, and the global L2 correction across the %d comparisons",
+          length(values$pairwise_results$pair_names),
+          length(values$pairwise_results$time_points),
+          length(values$pairwise_results$pair_names)),
+        run_at = Sys.time())
       
       showNotification("Pairwise comparisons completed!", type = "message", duration = 3)
       
@@ -2237,6 +2322,17 @@
     cat("Number of groups/conditions:", res$n_groups, "\n")
     cat("Number of comparisons:", length(res$pair_names), "\n")
     cat("Correction method:", res$correction_method, "\n")
+    # P20/R12. "Correction method: bonferroni" does not say WHAT it was applied
+    # across, and here it is applied across two different things at once: the
+    # pointwise p-values are adjusted over the evaluation points within a
+    # comparison, and the global L2 p-values over the comparisons. A reader
+    # cannot tell from an adjusted number which family it belongs to, so the
+    # families are named.
+    if (!is.null(res$spec$family)) cat("Multiplicity family:", res$spec$family, "\n")
+    else cat(sprintf(paste0("Multiplicity families: pointwise p adjusted across the %d evaluation\n",
+                            "  points WITHIN each comparison; global L2 p adjusted across the %d\n",
+                            "  comparisons. The two are separate families.\n"),
+                     length(res$time_points), length(res$pair_names)))
     cat("Significance level:", res$alpha, "\n")
     cat("Permutations:", res$n_permutations)
     if (!is.null(res$omnibus_permutations) &&

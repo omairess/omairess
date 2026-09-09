@@ -21,6 +21,11 @@ chk <- function(cond, good, bad_msg) {
 }
 app_dir <- if (dir.exists("server")) "." else "DANCE"
 e <- new.env(parent = globalenv())
+# P20/R9: dance_l2_norm is the global statistic these kernels integrate with.
+# It used to be reached through an exists() branch that silently substituted a
+# DIFFERENT statistic when the file was absent; the branch is gone, so the file
+# has to be sourced.
+source(file.path(app_dir, "server/01c_helpers_norm.R"), local = e)
 source(file.path(app_dir, "server/06_helpers_mixed.R"), local = e)
 source(file.path(app_dir, "server/07_helpers_mixed_perm.R"), local = e)
 

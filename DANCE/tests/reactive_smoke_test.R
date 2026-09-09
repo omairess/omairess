@@ -493,9 +493,20 @@ server <- function(input, output, session) {
       else if (grepl("| ---:", h1, fixed = TRUE)) fail("a Markdown table separator leaked into the HTML")
       else ok(sprintf("HTML rendering produced %d lines with tables intact", length(hh)))
     }
-    writeLines(md, "/tmp/claude-0/dance_apa_report.md")
-    writeLines(hh, "/tmp/claude-0/dance_apa_report.html")
-    cat("   (written to /tmp/claude-0/dance_apa_report.md)\n")
+    # The dump is a convenience for a human reading the rendered report, not an
+    # assertion. It used to write to a hard-coded scratch directory that exists
+    # only on the machine the test was written on, so on any other machine the
+    # whole APA block died at this line and the checks BELOW it never ran.
+    # tempdir() exists everywhere, and the path is printed so it can be found.
+    dump_dir <- Sys.getenv("DANCE_TEST_DUMP_DIR", unset = tempdir())
+    dumped <- tryCatch({
+      dir.create(dump_dir, recursive = TRUE, showWarnings = FALSE)
+      writeLines(md, file.path(dump_dir, "dance_apa_report.md"))
+      writeLines(hh, file.path(dump_dir, "dance_apa_report.html"))
+      TRUE
+    }, error = function(e) FALSE)
+    if (dumped) cat(sprintf("   (written to %s)\n", file.path(dump_dir, "dance_apa_report.md")))
+    else cat("   (report dump skipped: no writable directory)\n")
   }
   render("apa_report_preview renders", output$apa_report_preview)
 

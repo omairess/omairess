@@ -281,9 +281,19 @@
       
       # CV error matrix: subjects x lambdas
       cv_errors <- matrix(NA, nrow = n_subjects, ncol = length(lambda_seq))
-      
+      # P20/R11: the properly targeted criterion, see the note below.
+      gcv_by_lambda <- rep(NA_real_, length(lambda_seq))
+      gcv_n_curves  <- rep(0L, length(lambda_seq))
+
+      # P20/W8: subjects sharing a missingness pattern can be smoothed in ONE
+      # smooth.basis() call, because fda accepts a matrix of curves on a common
+      # argvals and returns one GCV per column. Grouping them here is what makes
+      # the per-curve criterion affordable.
+      na_pattern <- apply(is.na(values$data), 1, function(v) paste(as.integer(v), collapse = ""))
+      pattern_groups <- split(seq_len(n_subjects), na_pattern)
+
       withProgress(message = "Running cross-validation...", value = 0, {
-        total_iter <- n_subjects * length(lambda_seq)
+        total_iter <- length(lambda_seq) * (k_folds + length(pattern_groups))
         iter_count <- 0
         
         for(lambda_idx in seq_along(lambda_seq)) {
@@ -308,40 +318,73 @@
           basis <- dance_smoothing_basis(cv_axis, nb, input$smooth_method %||% "manual")
           fdParobj <- fdPar(basis, 2, lambda)
           
-          for(i in 1:n_subjects) {
-            # Get subject's fold
-            test_fold <- fold_assignments[i]
-            train_idx <- which(fold_assignments != test_fold)
-            
-            # Train on other subjects
-            train_data <- values$data[train_idx, , drop = FALSE]
-            
-            # Get mean of training data (or could use all training curves)
-            train_mean <- colMeans(train_data, na.rm = TRUE)
-            
-            # Smooth training mean
+          # AUDIT (P20/W8). The held-out template depends ONLY on which fold is
+          # held out, not on which subject in it is being predicted, so this
+          # loop used to refit the same curve once per subject: n_subjects
+          # smooth.basis() calls per lambda where k_folds distinct fits exist.
+          # On 40 subjects and 30 lambdas that is 1,200 fits instead of 50.
+          # Fitting each fold once and reusing it changes no number -- the same
+          # training mean, the same basis, the same lambda, the same fd -- and
+          # the errors below are identical to machine precision.
+          fold_fits <- vector("list", k_folds)
+          for (f in seq_len(k_folds)) {
+            train_idx <- which(fold_assignments != f)
+            if (!length(train_idx)) next
+            train_mean <- colMeans(values$data[train_idx, , drop = FALSE], na.rm = TRUE)
             valid_train <- !is.na(train_mean)
-            if(sum(valid_train) >= 4) {
-              fd_train <- smooth.basis(time_points[valid_train], 
-                                       train_mean[valid_train], 
-                                       fdParobj)$fd
-              
-              # Predict on test subject
-              y_test <- values$data[i, ]
-              valid_test <- !is.na(y_test)
-              
-              if(sum(valid_test) >= 1) {
-                pred_test <- eval.fd(time_points[valid_test], fd_train)
-                
-                # Compute prediction error
-                cv_errors[i, lambda_idx] <- sqrt(mean((y_test[valid_test] - pred_test)^2))
-              }
-            }
-            
+            if (sum(valid_train) >= 4)
+              fold_fits[[f]] <- tryCatch(
+                smooth.basis(time_points[valid_train], train_mean[valid_train],
+                             fdParobj)$fd,
+                error = function(e) NULL)
             iter_count <- iter_count + 1
-            if(iter_count %% 50 == 0) {
-              incProgress(50 / total_iter)
+          }
+          incProgress(k_folds / total_iter)
+
+          for(i in 1:n_subjects) {
+            fd_train <- fold_fits[[fold_assignments[i]]]
+            if (is.null(fd_train)) next
+            y_test <- values$data[i, ]
+            valid_test <- !is.na(y_test)
+            if(sum(valid_test) >= 1) {
+              pred_test <- eval.fd(time_points[valid_test], fd_train)
+              cv_errors[i, lambda_idx] <- sqrt(mean((y_test[valid_test] - pred_test)^2))
             }
+          }
+
+          # ------------------------------------------------------------------
+          # P20/R11: the criterion that actually answers "which lambda should I
+          # smooth MY CURVES with?".
+          #
+          # The loop above is not that. It smooths the training GROUP MEAN and
+          # scores it against a held-out INDIVIDUAL's raw observations, so its
+          # error is dominated by between-subject scatter -- a quantity no
+          # smoothing parameter can reduce -- and the lambda it selects is the
+          # one that best fits the mean's shape, on a curve estimated from n-n/k
+          # subjects rather than from one. It is a real quantity (how well does
+          # a smoothed group template predict an unseen participant?) but it is
+          # NOT the per-curve smoothing criterion, and the report used to hand
+          # its lambda to the user to type into Data Preprocessing.
+          #
+          # The per-curve criterion is generalised cross-validation on each
+          # subject's OWN curve, which is what smooth.basis() already returns
+          # (one GCV per column) and what production smoothing is selected by.
+          # Both are reported; the recommendation is taken from this one.
+          gcvs <- numeric(0)
+          for (grp in pattern_groups) {
+            keep <- !is.na(values$data[grp[1], ])
+            if (sum(keep) < 4) next
+            Ymat <- t(values$data[grp, keep, drop = FALSE])
+            g <- tryCatch(smooth.basis(time_points[keep], Ymat, fdParobj)$gcv,
+                          error = function(e) NULL)
+            if (!is.null(g)) gcvs <- c(gcvs, as.numeric(g))
+            iter_count <- iter_count + 1
+          }
+          incProgress(length(pattern_groups) / total_iter)
+          gcvs <- gcvs[is.finite(gcvs)]
+          if (length(gcvs)) {
+            gcv_by_lambda[lambda_idx] <- mean(gcvs)
+            gcv_n_curves[lambda_idx]  <- length(gcvs)
           }
         }
       })
@@ -358,6 +401,11 @@
       within_1se <- which(mean_cv_error <= se_threshold)
       lambda_1se <- lambda_seq[max(within_1se)]  # Highest lambda (most smooth) within 1 SE
       
+      # P20/R11: the per-curve criterion and the lambda it selects, kept
+      # separate from the template-prediction one so the two are never confused.
+      gcv_idx <- if (any(is.finite(gcv_by_lambda))) which.min(gcv_by_lambda) else NA_integer_
+      gcv_lambda <- if (is.na(gcv_idx)) NA_real_ else lambda_seq[gcv_idx]
+
       # Store results
       values$cv_results <- list(
         lambda = lambda_seq,
@@ -367,6 +415,23 @@
         optimal_lambda = optimal_lambda,
         lambda_1se = lambda_1se,
         k_folds = k_folds,
+        # P20/R11: what each criterion targets, in the object itself, so the
+        # readout and the report cannot re-describe them differently.
+        target = "template_prediction",
+        target_label = paste(
+          "K-fold prediction error of the SMOOTHED TRAINING-GROUP MEAN against a",
+          "held-out participant's raw observations. This measures how well a group",
+          "template predicts an unseen participant; it is not the criterion for",
+          "smoothing an individual curve, and its lambda should not be transferred",
+          "to Data Preprocessing."),
+        gcv_mean = gcv_by_lambda,
+        gcv_n_curves = gcv_n_curves,
+        gcv_idx = gcv_idx,
+        gcv_lambda = gcv_lambda,
+        gcv_label = paste(
+          "Mean generalised cross-validation score over the participants' OWN",
+          "curves, from smooth.basis(). This is the per-curve smoothing criterion",
+          "and is the one to read when choosing lambda for Data Preprocessing."),
         # P9.3: which model this lambda belongs to, so the report can say it
         # rather than leave the reader to assume.
         # P10.2: the same count rule again, not a third copy of it.
@@ -514,12 +579,36 @@
       cat(sprintf("    1-SE rule       = %.2e   (smoothing factor %.2f)\n",
                   values$cv_results$lambda_1se, -log10(values$cv_results$lambda_1se)))
       cat("    This is the smoothing that best predicts a HELD-OUT SUBJECT from\n")
-      cat("    the mean of the others. It is fitted on exactly the\n")
-      cat("    basis and time axis the production smoother uses, so the\n")
-      cat("    smoothing factor IS on the same scale and can be typed into Data\n")
-      cat("    Preprocessing. It still answers a different question from the\n")
-      cat("    production smoother, which asks how much to smooth one person's\n")
-      cat("    OWN trajectory, not how to predict a new person from the others.\n\n")
+      cat("    the mean of the others. It is fitted on exactly the basis and time\n")
+      cat("    axis the production smoother uses, so the smoothing factor is on\n")
+      cat("    the same SCALE -- but it answers a different QUESTION, and P20/R11\n")
+      cat("    is that the answer to a different question was being offered as\n")
+      cat("    the production setting. Its error is dominated by between-subject\n")
+      cat("    scatter, which no lambda can reduce, and the curve it smooths is a\n")
+      cat("    group mean estimated from many participants, which is far smoother\n")
+      cat("    than any one of them. Read it as a template-prediction diagnostic.\n")
+      cat("    For the production setting, read the per-curve panel below.\n\n")
+
+      # P20/R11: the criterion that matches what production smoothing does.
+      if (!is.null(values$cv_results$gcv_lambda) && is.finite(values$cv_results$gcv_lambda)) {
+        cat("  Per-curve GCV (this is the one to transfer)\n")
+        cat(sprintf("    optimal lambda  = %.2e   (smoothing factor %.2f)\n",
+                    values$cv_results$gcv_lambda, -log10(values$cv_results$gcv_lambda)))
+        cat(sprintf("    averaged over %d participant curve(s) at that lambda\n",
+                    values$cv_results$gcv_n_curves[values$cv_results$gcv_idx]))
+        cat("    Generalised cross-validation on each participant's OWN curve, from\n")
+        cat("    smooth.basis() -- the same criterion automatic mode uses. This is\n")
+        cat("    the number to type into Data Preprocessing.\n")
+        if (is.finite(values$cv_results$optimal_lambda)) {
+          fac <- values$cv_results$optimal_lambda / values$cv_results$gcv_lambda
+          if (is.finite(fac) && (fac > 3 || fac < 1/3))
+            cat(sprintf(paste0("    NOTE: the template-prediction lambda above is %.0fx %s than\n",
+                               "    this one. They target different things; that is expected, and it\n",
+                               "    is why the template lambda is not the production setting.\n"),
+                        max(fac, 1/fac), if (fac > 1) "larger" else "smaller"))
+        }
+        cat("\n")
+      }
     }
     if(!is.null(values$reml_profile)) {
       cat("  mgcv REML diagnostic (advisory)\n")

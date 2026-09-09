@@ -82,8 +82,13 @@ cat("\n-- Bingham's caution, carried as a value ------------------------------\n
 # draw, and the RATE, which must sit at the nominal level.
 set.seed(3); d0 <- sim()
 r0 <- e$dance_pop_cosinor(d0$beta, d0$gamma, d0$mesor, d0$group)
-chk(identical(r0$amplitude_interpretable, !r0$acrophase_differs),
-    "the amplitude caution is exactly the negation of the acrophase verdict",
+# P20/R4: the flag is no longer just the negation of the acrophase verdict -- a
+# null result from a test that CANNOT SEE the difference does not license the
+# amplitude comparison either. Under a clustered null both conditions hold, so
+# the negation still applies here; the antipodal case below is where they part.
+chk(identical(r0$amplitude_interpretable, !r0$acrophase_differs) &&
+      isTRUE(r0$acrophase_test_supported),
+    "under a clustered null the amplitude caution is the negation of the acrophase verdict",
     "the amplitude flag and the acrophase verdict disagree")
 
 set.seed(21); dA <- sim(acro = c(1.2, 2.2, 3.2))
@@ -100,6 +105,49 @@ chk(fires < .10,
     sprintf("under the null the caution fires %.1f%% of the time, near its nominal 5%%",
             100 * fires),
     sprintf("the caution fires %.1f%% of the time under the null", 100 * fires))
+
+cat("\n-- P20/R4: the antipodal blind spot of the linearised acrophase test --\n")
+# Bingham's acrophase F ratio is the squared displacement PERPENDICULAR to the
+# pooled mean direction, and that is pi-periodic: two groups exactly half a cycle
+# apart lie on the same line through the origin, so every displacement is zero.
+# Before this fix the module reported F = 0.011, p = .918 for acrophases at 0 h
+# and 12 h, concluded that they did not differ, and declared the amplitude
+# comparison interpretable -- on two rhythms in perfect antiphase.
+set.seed(77); n_ant <- 20
+mk_ant <- function(phi, n, A = 2) {
+  a <- A + rnorm(n, 0, 0.15); ph <- phi + rnorm(n, 0, 0.06)
+  cbind(a * cos(ph), a * sin(ph))
+}
+G1 <- mk_ant(0, n_ant); G2 <- mk_ant(pi, n_ant)
+r_ant <- e$dance_pop_cosinor(c(G1[, 1], G2[, 1]), c(G1[, 2], G2[, 2]),
+                             rnorm(2 * n_ant), factor(rep(c("A", "B"), each = n_ant)),
+                             period = 24, harmonic = 1)
+chk(isFALSE(r_ant$acrophase_test_supported),
+    sprintf("acrophases %.1f h apart are flagged as outside the test's range",
+            r_ant$max_angular_sep_time),
+    "a half-cycle acrophase separation was not flagged")
+chk(isFALSE(r_ant$amplitude_interpretable),
+    "the amplitude comparison is NOT declared interpretable in antiphase",
+    "antiphase groups were declared safe for an amplitude comparison")
+chk(isTRUE(r_ant$joint$ok) && is.finite(r_ant$joint$p) && r_ant$joint$p < 1e-6,
+    sprintf("the joint vector test sees what the marginals cannot (p = %.3g)",
+            r_ant$joint$p),
+    "the joint vector test missed a half-cycle difference")
+chk(is.character(r_ant$acrophase_test_note) && nzchar(r_ant$acrophase_test_note),
+    "an actionable explanation travels with the flag",
+    "the flag carries no explanation")
+# and the flag must NOT fire when the groups really are clustered
+G3 <- mk_ant(0.30, n_ant); G4 <- mk_ant(0.55, n_ant, A = 3.4)
+r_cl <- e$dance_pop_cosinor(c(G3[, 1], G4[, 1]), c(G3[, 2], G4[, 2]),
+                            rnorm(2 * n_ant), factor(rep(c("A", "B"), each = n_ant)))
+chk(isTRUE(r_cl$acrophase_test_supported),
+    sprintf("a %.2f h separation stays inside the supported range",
+            r_cl$max_angular_sep_time),
+    "a small acrophase separation was wrongly flagged as unsupported")
+chk(isTRUE(r_cl$joint$ok) && r_cl$joint$df1 == 2 && r_cl$joint$df2 == 2 * n_ant - 3,
+    sprintf("the joint test is the two-sample Hotelling T-squared, df = (%d, %d)",
+            r_cl$joint$df1, r_cl$joint$df2),
+    "the joint test has the wrong degrees of freedom for two groups")
 
 cat("\n-- refusals and bookkeeping ------------------------------------------\n")
 one_g <- e$dance_pop_cosinor(rnorm(10), rnorm(10), rnorm(10), factor(rep("a", 10)))

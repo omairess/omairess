@@ -11,6 +11,7 @@
 .libPaths(c("~/Rlib", .libPaths()))
 `%||%` <- function(a, b) if (is.null(a)) b else a
 app_dir <- if (dir.exists("server")) "." else if (dir.exists("../../server")) "../.." else "DANCE"
+source(file.path(app_dir, "server/01c_helpers_norm.R"))   # P20/R9: dance_l2_norm moved ahead of its callers
 source(file.path(app_dir, "server/09_helpers_pcanova.R"))
 
 # Strip comments so the guards read CODE, not prose -- the fixes deliberately

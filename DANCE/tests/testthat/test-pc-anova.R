@@ -20,6 +20,7 @@
 `%||%` <- function(a, b) if (is.null(a)) b else a
 app_dir <- if (dir.exists("server")) "." else if (dir.exists("../../server")) "../.." else "DANCE"
 source(file.path(app_dir, "server/08_helpers_cosinor.R"))
+source(file.path(app_dir, "server/01c_helpers_norm.R"))   # P20/R9: dance_l2_norm moved ahead of its callers
 source(file.path(app_dir, "server/09_helpers_pcanova.R"))
 
 mk <- function(n = c(60, 60, 60), shift = c(0, 0, 0), sd = c(1, 1, 1), seed = 1) {

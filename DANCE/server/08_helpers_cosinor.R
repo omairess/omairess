@@ -1075,3 +1075,23 @@ dance_cosinor_model_set <- function(n_harmonics) {
                                     label = dance_model_label(tt, k))
   out
 }
+
+# ------------------------------------------------------------------------------
+# WHICH HARMONIC DOES A PARAMETER NAME BELONG TO? (P20/R3)
+# ------------------------------------------------------------------------------
+# The per-participant parameter table names its columns by harmonic --
+# amplitude_2, acrophase_time_3 -- and acrophase_time_h is stored on that
+# harmonic's EFFECTIVE period T/h, because phi_to_hours() divides by h. Any code
+# that converts such a column back to an angle must divide by the same h, and
+# the places that forgot got the whole circular analysis wrong on a factor of h.
+# Reading the harmonic off the name in one function means the two conversions
+# cannot disagree.
+dance_param_harmonic <- function(param) {
+  if (length(param) != 1L || is.na(param)) return(1L)
+  h <- suppressWarnings(as.integer(sub("^.*_([0-9]+)$", "\\1", param)))
+  if (is.na(h) || h < 1L) 1L else h
+}
+
+# The effective period a parameter lives on: T for a non-harmonic quantity,
+# T / h for harmonic h.
+dance_effective_period <- function(period, param) period / dance_param_harmonic(param)

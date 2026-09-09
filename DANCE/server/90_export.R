@@ -1135,44 +1135,97 @@
       add("# 8. PAIRWISE COMPARISONS")
       add("# -----------------------------------------------------------------------------")
 
-      correction <- values$pairwise_results$correction_method
+      pw   <- values$pairwise_results
+      pspec <- pw$spec
+      correction <- pw$correction_method
+
+      # AUDIT (P20/R6). This section used to write its OWN version of the
+      # post-hoc tests: a loop of independent, unpaired stats::t.test() calls
+      # with p.adjust(), over a variable `n_time_eval` that no part of the
+      # emitted script ever defined. Three separate failures in one block --
+      #
+      #   it did not run, because n_time_eval, curves_eval and eval_points were
+      #   undefined in the generated file;
+      #
+      #   it was the wrong test even in principle: the app's post-hoc is a
+      #   permutation test with an L2 global statistic, bootstrap pointwise
+      #   intervals and Cohen's d, and none of that appeared here; and
+      #
+      #   it ignored the design entirely, so a WITHIN-subject comparison the app
+      #   had run as a paired sign-flip test was exported as an unpaired Welch
+      #   test on the same curves.
+      #
+      # A reader running the script would have got different numbers from the
+      # ones on screen with nothing to say why. The kernels are emitted now, as
+      # sections 7, 10 and 11 already do, so the exported code IS the app's
+      # implementation. Their Shiny progress calls were replaced by an inert
+      # callback for exactly this purpose (server/50_fanova.R).
+      design <- pspec$design %||% pw$design %||% "between"
       add("# Multiple testing correction: ", correction)
+      if (!is.null(pspec$family)) add("# Multiplicity family: ", pspec$family)
+      if (!is.null(pspec$description)) add("# What was compared: ", pspec$description)
+      if (!is.null(pspec$p_floor))
+        add(sprintf("# Smallest attainable permutation p at B = %d: %.4g",
+                    pspec$n_permutations %||% pw$n_permutations, pspec$p_floor))
       add("")
 
-      add("# Perform pairwise functional t-tests")
-      add("groups <- levels(group_labels)")
-      add("n_groups <- length(groups)")
-      add("pairs <- combn(groups, 2, simplify = FALSE)")
+      # The post-hoc may have been run on a different variable from the omnibus
+      # (the 'custom' source), so the label vectors are written from the stored
+      # specification rather than assumed to be the omnibus's.
+      add(if (isTRUE(pspec$used_warped_curves)) "fd_for_pairs <- reg_fd"
+          else "fd_for_pairs <- fd_obj")
       add("")
-      add("pairwise_results <- list()")
-      add("for(pair in pairs) {")
-      add("  g1 <- pair[1]; g2 <- pair[2]")
-      add("  idx1 <- which(group_labels == g1)")
-      add("  idx2 <- which(group_labels == g2)")
+
+      if (identical(design, "within")) {
+        emit_kernel("perform_pairwise_comparisons_rm")
+        if (!is.null(pspec$subject_id)) {
+          add("posthoc_subject_id <- ", dance_export_vec(pspec$subject_id))
+          add("posthoc_rm_factor  <- factor(", dance_export_vec(pspec$rm_factor), ")")
+        } else {
+          add("# The stored result predates the specification record; supply these yourself.")
+          add("posthoc_subject_id <- subject_id")
+          add("posthoc_rm_factor  <- rm_factor")
+        }
+        add("")
+        add(sprintf(paste0("pairwise_results <- perform_pairwise_comparisons_rm(\n",
+                           "  fd_obj = fd_for_pairs, subject_id = posthoc_subject_id,\n",
+                           "  rm_factor = posthoc_rm_factor, n_permutations = %d,\n",
+                           "  correction_method = '%s', alpha = %s)"),
+                    pspec$n_permutations %||% pw$n_permutations %||% 200,
+                    tolower(correction), format(pspec$alpha %||% pw$alpha %||% 0.05)))
+      } else {
+        emit_kernel("perform_pairwise_comparisons")
+        if (!is.null(pspec$group_labels))
+          add("posthoc_group_labels <- factor(", dance_export_vec(pspec$group_labels), ")")
+        else
+          add("posthoc_group_labels <- group_labels")
+        add("")
+        add(sprintf(paste0("pairwise_results <- perform_pairwise_comparisons(\n",
+                           "  fd_obj = fd_for_pairs, group_labels = posthoc_group_labels,\n",
+                           "  n_permutations = %d, correction_method = '%s', alpha = %s)"),
+                    pspec$n_permutations %||% pw$n_permutations %||% 200,
+                    tolower(correction), format(pspec$alpha %||% pw$alpha %||% 0.05)))
+      }
       add("")
-      add("  # Pointwise t-tests")
-      add("  p_values <- numeric(n_time_eval)")
-      add("  for(t in 1:n_time_eval) {")
-      add("    tt <- t.test(curves_eval[idx1, t], curves_eval[idx2, t])")
-      add("    p_values[t] <- tt$p.value")
-      add("  }")
-      add("")
-      add("  # Apply correction")
-      add("  p_adjusted <- p.adjust(p_values, method = '", tolower(correction), "')")
-      add("")
-      add("  pairwise_results[[paste(g1, 'vs', g2)]] <- list(")
-      add("    p_values = p_values,")
-      add("    p_adjusted = p_adjusted,")
-      add("    sig_times = eval_points[p_adjusted < 0.05]")
-      add("  )")
+      add("for (nm in names(pairwise_results$results)) {")
+      add("  r <- pairwise_results$results[[nm]]")
+      add("  cat(sprintf('%s: global L2 = %.4f, p = %.4f (adjusted %.4f); %d of %d points significant\\n',")
+      add("              nm, r$L2_stat, r$p_value_L2, r$p_value_L2_adjusted,")
+      add("              sum(r$sig_regions, na.rm = TRUE), length(r$sig_regions)))")
       add("}")
       add("")
 
-      # Summary of significant comparisons
-      if(!is.null(values$pairwise_results$results)) {
-        n_sig <- sum(sapply(values$pairwise_results$results, function(x)
-          length(x$sig_times) > 0))
-        add("# Number of significant pairwise comparisons: ", n_sig, "/", length(values$pairwise_results$results))
+      # For reference, the values this script should reproduce.
+      if(!is.null(pw$results)) {
+        add("# Values from the app run this script was exported from:")
+        for (nm in names(pw$results)) {
+          r <- pw$results[[nm]]
+          add(sprintf("#   %-24s global L2 = %.4f, adjusted p = %.4f, %d of %d points significant",
+                      nm, r$L2_stat %||% NA_real_, r$p_value_L2_adjusted %||% NA_real_,
+                      sum(r$sig_regions, na.rm = TRUE), length(r$sig_regions)))
+        }
+        add("# Permutation and bootstrap draws are random: expect agreement to Monte Carlo")
+        add("# error, not to the last digit, unless you set the same seed.")
       }
       add("")
     }

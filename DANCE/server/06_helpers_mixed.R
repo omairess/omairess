@@ -107,6 +107,31 @@ dance_mixed_check <- function(d) {
   tabc <- table(d$within, d$between)
   if (any(tabc == 0))
     msg <- c(msg, "At least one cell of the design is empty, so the interaction is not identified.")
+
+  # AUDIT (P20/R8). The array builder writes Y[subject, condition, time] <- y by
+  # index assignment, and index assignment keeps the LAST value written. So a
+  # frame carrying two rows for the same (subject, condition, time) -- a
+  # duplicated import, a repeated trial that was meant to be averaged, a file
+  # concatenated with itself -- silently used whichever row happened to come
+  # last, and REORDERING THE ROWS could then change every p-value in the result
+  # while nothing anywhere said the data were ambiguous. The permutation schemes
+  # assume one observation per design cell; that assumption is checked here
+  # rather than assumed, and a violation names the offending keys instead of
+  # reporting a count.
+  key <- paste(as.character(d$subject), as.character(d$within), d$t, sep = "\r")
+  dup <- unique(key[duplicated(key)])
+  if (length(dup)) {
+    show <- utils::head(dup, 5)
+    parts <- vapply(strsplit(show, "\r", fixed = TRUE), function(p)
+      sprintf("%s / %s / t = %s", p[1], p[2], p[3]), character(1))
+    msg <- c(msg, sprintf(paste0(
+      "%d participant-by-condition-by-time cell(s) appear more than once, so the ",
+      "design has no single value per cell and the result would depend on the row ",
+      "order of the file: %s%s. Aggregate the repeats (or drop the duplicate rows) ",
+      "before running this."),
+      length(dup), paste(parts, collapse = "; "),
+      if (length(dup) > 5) sprintf(", and %d more", length(dup) - 5) else ""))
+  }
   msg
 }
 
@@ -404,34 +429,59 @@ if (b$n_partial > 0)
 cat("\n")
 
 if (identical(res$kind, "permutation")) {
-  cat("Mixed functional ANOVA, exact permutation\n")
-  cat("=========================================\n")
+  # AUDIT (P20/R5). This heading used to read "exact permutation" and the note
+  # below it asserted that ALL THREE effects were exact. That was wrong for two
+  # of them and the error was not small: with 5 against 30 participants and a
+  # 5:1 dispersion ratio in the within-subject contrast, the interaction test
+  # rejected 75% of the time at a nominal 5%. Exchangeability requires the group
+  # distributions to be IDENTICAL, not merely to have equal means, and unequal
+  # group sizes with unequal dispersion is the classic Behrens-Fisher situation
+  # in which relabelling is not a symmetry. The statistic is studentised now,
+  # which fixes most of it, and each effect states its own status rather than
+  # borrowing the within effect's.
+  cat("Mixed functional ANOVA, permutation\n")
+  cat("===================================\n")
   cat(sprintf("  %d participants x %d conditions; groups: %s\n",
               res$n_subjects, res$n_conditions,
               paste(sprintf("%s = %d", res$group_names, res$group_sizes), collapse = ", ")))
   cat(sprintf("  B = %d permutations; smallest attainable p = %.4f\n",
               res$n_permutations, res$p_floor))
-  cat(sprintf("  pointwise p adjusted by %s at alpha = %s\n\n",
+  cat(sprintf("  pointwise p adjusted by %s at alpha = %s\n",
               res$correction, format(res$alpha)))
+  if (!is.null(res$multiplicity_family))
+    cat(sprintf("  multiplicity family: %s\n", res$multiplicity_family))
+  cat("\n")
   lab <- c(within = "within-subject effect", between = "between-subject effect",
            interaction = "interaction")
+  status_lab <- c(exact = "exact", calibrated = "asymptotic", liberal = "ANTI-CONSERVATIVE")
   for (nm in c("within", "between", "interaction")) {
     r <- res[[nm]]
     if (is.null(r)) next
-    cat(sprintf("  %-22s global p %s   significant at %d of %d points (%.1f%%)\n",
+    st <- r$calibration$status %||% "unknown"
+    cat(sprintf("  %-22s global p %s   significant at %d of %d points (%.1f%%)   [%s]\n",
                 lab[[nm]], pf(r$global_p), r$n_significant,
-                length(r$p_values), 100 * r$n_significant / length(r$p_values)))
+                length(r$p_values), 100 * r$n_significant / length(r$p_values),
+                status_lab[[st]] %||% st))
   }
   cat("\nThe permutation schemes\n-----------------------\n")
   cat("  within       condition labels relabelled INSIDE each participant\n")
   cat("  between      whole participants relabelled across groups\n")
   cat("  interaction  group labels relabelled on the subject-centred profiles\n")
-  cat("\nAll three are exact: each relabelling is a symmetry of the data under\n")
-  cat("its own null. The interaction one is the case usually said to have no\n")
-  cat("exact scheme -- it does, because an interaction is a between-group\n")
-  cat("difference in the within-subject contrast, and under that null the\n")
-  cat("centred profiles are exchangeable across groups whatever the main\n")
-  cat("effects do. Calibration is checked in tests/mixed_permutation_test.R.\n")
+  cat("\nWhat each one establishes\n-------------------------\n")
+  for (nm in c("within", "between", "interaction")) {
+    r <- res[[nm]]
+    if (is.null(r) || is.null(r$calibration)) next
+    cat(sprintf("  %s:\n", lab[[nm]]))
+    cat(strwrap(r$calibration$message, width = 72, prefix = "    "), sep = "\n")
+    cat("\n")
+  }
+  cat("The interaction scheme itself is the one usually said not to exist: an\n")
+  cat("interaction is a between-group difference in the within-subject contrast,\n")
+  cat("and under that null the subject-centred profiles are exchangeable across\n")
+  cat("groups whatever the two main effects do. What the studentisation adds is\n")
+  cat("validity when those profiles have DIFFERENT DISPERSIONS in the two groups,\n")
+  cat("which exchangeability alone does not cover. Calibration is measured in\n")
+  cat("tests/mixed_calibration_test.R.\n")
   cat("\nWhat this does not establish\n----------------------------\n")
   cat("  A pointwise procedure answers WHERE the curves differ, not whether\n")
   cat("  they differ overall; the global statistic is the whether. The\n")

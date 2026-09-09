@@ -90,6 +90,11 @@ values <- reactiveValues(
   hp_pairwise_results   = NULL,   # pairwise tests on cosinor parameters
   hp_pairwise_param     = NULL,
   hp_pairwise_correction = NULL,
+  # P20/R6: the immutable specification the stored pairwise result was computed
+  # under -- parameter, harmonic, effective period, groups, correction, family.
+  # Readouts and exports read this instead of the live inputs, which may have
+  # moved since the run.
+  hp_pairwise_spec      = NULL,
   # AUDIT (P18.1). These were created dynamically by their modules and never
   # declared here, which is how they came to be missed by the reset below.
   # hp_pairwise_all and hp_acrophase_differs are the worse pair: the publication
@@ -160,6 +165,7 @@ dance_reset_analyses <- function(values, keep_smoothing = FALSE) {
   values$hp_pairwise_all <- NULL
   values$hp_pairwise_param <- NULL
   values$hp_pairwise_correction <- NULL
+  values$hp_pairwise_spec <- NULL
   values$hp_acrophase_param <- NULL
   values$hp_acrophase_differs <- NULL
   values$pop_cosinor <- NULL

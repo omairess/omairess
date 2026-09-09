@@ -536,40 +536,50 @@
 
     means <- lapply(mats, colMeans)
 
-    if(k == 2) {
-      # Two-sample Hotelling's T²
-      S1 <- cov(mats[[1]]); S2 <- cov(mats[[2]])
-      Sp <- ((ns[1]-1)*S1 + (ns[2]-1)*S2) / (N - 2)
-      if(det(Sp) < .Machine$double.eps)
-        return(list(F = NA, df1 = NA, df2 = NA, p = NA,
-                    message = "Singular pooled covariance - check data"))
-      d  <- means[[1]] - means[[2]]
-      T2 <- (ns[1]*ns[2]) / N * t(d) %*% solve(Sp) %*% d
-      F_stat <- (N - p - 1) / ((N - 2) * p) * as.numeric(T2)
-      df1 <- p; df2 <- N - p - 1
-    } else {
-      # k-group one-way MANOVA (Wilks' lambda → F approximation)
-      grand_mean <- colMeans(do.call(rbind, mats))
-      # Between-group sum-of-squares-and-products (H)
-      H <- Reduce("+", lapply(seq_len(k), function(i)
-        ns[i] * outer(means[[i]] - grand_mean, means[[i]] - grand_mean)))
-      # Within-group (E)
-      E <- Reduce("+", lapply(mats, function(m) {
-        cm <- colMeans(m)
-        t(sweep(m, 2, cm)) %*% sweep(m, 2, cm)
-      }))
-      if(det(E) < .Machine$double.eps)
-        return(list(F = NA, df1 = NA, df2 = NA, p = NA,
-                    message = "Singular within-group covariance - check data"))
-      lambda <- det(E) / det(H + E)
-      # Rao's F approximation for p=2
-      df1 <- p * (k - 1)
-      df2 <- N - k - p + 1
-      F_stat <- ((1 - sqrt(lambda)) / sqrt(lambda)) * (df2 / df1)
-    }
+    # ------------------------------------------------------------------------
+    # AUDIT (P20/R2). The k > 2 branch used to roll its own Wilks-to-F step and
+    # got BOTH the statistic and its second degrees of freedom wrong, each by a
+    # factor of two:
+    #
+    #     F   <- ((1 - sqrt(lambda))/sqrt(lambda)) * (df2 / df1)   with
+    #     df1 <- p * (k - 1)          -- correct
+    #     df2 <- N - k - p + 1        -- HALF the correct value
+    #
+    # For p = 2 response variables Rao's transformation is EXACT, not an
+    # approximation, and its constant is s = sqrt((p^2 q^2 - 4)/(p^2 + q^2 - 5))
+    # = 2 for every k >= 3, giving
+    #
+    #     df1 = 2(k - 1),  df2 = 2(N - k - 1),
+    #     F   = ((1 - sqrt(lambda))/sqrt(lambda)) * (N - k - 1)/(k - 1).
+    #
+    # Halving df2 halves the multiplier as well, so the reported F was exactly
+    # half the true F and was then referred to a distribution with half the
+    # denominator degrees of freedom. Both errors push the same way: on a
+    # three-group, twenty-per-group fixture the correct answer is F = 3.644338
+    # on (4, 112) df, p = .0079, and the old code reported F = 1.822169 on
+    # (4, 56) df, p = .1387 -- a real group difference reported as null.
+    #
+    # Rather than fix the algebra and leave a second implementation of a
+    # standard test in the codebase to drift again, the whole thing now goes
+    # through stats::manova() + summary(test = "Wilks"), which is R's own
+    # reference implementation. It reduces to the exact two-sample Hotelling
+    # T-squared when k = 2 (there q = 1, s = 1, df1 = 2, df2 = N - 3), so the
+    # special case is no longer needed either.
+    # ------------------------------------------------------------------------
+    # The arithmetic is dance_bivariate_manova() in
+    # server/08b_helpers_popcosinor.R, called rather than copied: the population
+    # cosinor needs the identical test as the joint leg of Bingham's procedure,
+    # and two implementations of one standard test is how they drift apart.
+    Y <- do.call(rbind, mats)
+    grp <- factor(rep(seq_len(k), times = ns))
+    res <- dance_bivariate_manova(Y[, 1], Y[, 2], grp)
+    if (!isTRUE(res$ok))
+      return(list(F = NA, df1 = NA, df2 = NA, p = NA, lambda = NA,
+                  message = res$message %||% "The joint vector test could not be fitted."))
 
-    p_value <- pf(F_stat, df1, df2, lower.tail = FALSE)
-    list(F = as.numeric(F_stat), df1 = df1, df2 = df2, p = as.numeric(p_value), message = NULL)
+    list(F = as.numeric(res$F), df1 = res$df1, df2 = res$df2,
+         p = as.numeric(res$p), lambda = as.numeric(res$lambda),
+         n_groups = k, n_total = N, message = NULL)
   }
 
   # ==============================================================================
@@ -5827,6 +5837,13 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       if(!is.null(ht$message)) {
         cat(sprintf("  %s\n", ht$message))
       } else {
+        # With more than two groups this is no longer a T-squared: it is the
+        # one-way MANOVA on the same vector, and Wilks' lambda is the statistic
+        # the F is derived from. Saying so keeps the label honest and lets a
+        # reader reproduce the F from the reported lambda.
+        if (isTRUE(ht$n_groups > 2))
+          cat(sprintf("    %d groups: one-way MANOVA on the rhythmic vector, Wilks' Lambda = %.4f\n",
+                      ht$n_groups, ht$lambda))
         cat(sprintf("    F(%d, %d) = %.3f, p = %.4f\n", ht$df1, ht$df2, ht$F, ht$p))
       }
 

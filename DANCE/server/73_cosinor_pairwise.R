@@ -152,6 +152,34 @@
     # Detect if parameter is acrophase (circular data)
     is_circular <- grepl("acrophase_time", param, ignore.case = TRUE)
 
+    # AUDIT (P20/R3). Harmonic h completes h cycles per period, so its acrophase
+    # lives on the EFFECTIVE period T/h -- and acrophase_time_h is already stored
+    # on that scale (phi_to_hours() divides by h; server/72_harmonic.R:746).
+    # This block converted back to radians with 2*pi/period regardless, so an H2
+    # acrophase spanning 0-12 h was mapped onto 0-pi instead of a full turn, and
+    # H3 onto a third of one. Everything downstream inherited the compression --
+    # the circular mean, the circular SD, the shortest-arc difference, the
+    # resultant lengths, and the Watson-Williams test run on them -- and the
+    # damage goes BOTH ways depending on where the cluster sits, which is why it
+    # is not a rescaling that cancels in a contrast:
+    #
+    #   A cluster that does not straddle the wrap is squeezed into half the
+    #   circle, so it looks more concentrated than it is. Measured: two H2 groups
+    #   near 3 h, r-bar 0.930 / 0.885 under the old conversion against the true
+    #   0.769 / 0.590, Watson-Williams p .115 against .208.
+    #
+    #   A cluster that DOES straddle the wrap is torn in half, because 11.9 h and
+    #   0.1 h -- 0.2 h apart on a 12 h circle -- land at opposite ends of the
+    #   mapped half-circle. Measured: r-bar collapsed from 0.991 to 0.084, the
+    #   circular mean moved from 0.03 h to 2.54 h, the angular difference was
+    #   reported as 2.21 h instead of 0.23 h, and Watson-Williams went from
+    #   p = .017 to p = .574. A real 0.2 h difference was reported as null on
+    #   angles the procedure had itself scrambled.
+    #
+    # The divisor is read off the parameter name, which already carries the
+    # harmonic, through the one helper both conversions now share.
+    effective_period_param <- dance_effective_period(mod$period, param)
+
     idx <- 1
     for(i in 1:(n_groups-1)) {
       for(j in (i+1):n_groups) {
@@ -172,7 +200,9 @@
         if(is_circular) {
           # CIRCULAR STATISTICS for acrophase parameters
           # Convert hours to radians (assuming 24-hour period)
-          period <- mod$period
+          # Hours to radians on THIS harmonic's effective period T/h (see above):
+          # a full turn is T/h hours, not T.
+          period <- effective_period_param
           rad1 <- vals1 * 2 * pi / period
           rad2 <- vals2 * 2 * pi / period
 
@@ -276,10 +306,29 @@
       results$p_adjusted <- results$p_value
     }
 
-    # Store results
+    # Store results, WITH the specification they were computed under (P20/R6).
+    # A result that carries only its numbers has to be re-described by whatever
+    # reads it, from inputs that may since have changed -- and the readout, the
+    # plot and the export each did that separately, from `input$...` rather than
+    # from the run. The spec below is written once, at the moment of the run,
+    # and everything downstream reads it instead of the live controls.
     values$hp_pairwise_results <- results
     values$hp_pairwise_param <- param
     values$hp_pairwise_correction <- correction
+    values$hp_pairwise_spec <- list(
+      approach = "two_stage",
+      parameter = param,
+      circular = is_circular,
+      period = mod$period,
+      harmonic = if (is_circular) dance_param_harmonic(param) else NA_integer_,
+      effective_period = if (is_circular) effective_period_param else NA_real_,
+      group_var = input$harmonic_group_var,
+      groups = groups,
+      correction = correction,
+      n_comparisons = nrow(results),
+      family = sprintf("%d pairwise comparisons of %s across %d groups",
+                       nrow(results), param, length(groups)),
+      run_at = Sys.time())
 
     # AUDIT (P12.2): these three slots hold only the MOST RECENT comparison, so
     # a user who compares MESOR, then amplitude, then acrophase -- which is what
@@ -362,15 +411,37 @@
       cat("  and acrophase against the variance perpendicular to it. All groups\n")
       cat("  are compared at once, so there is no multiplicity correction to\n")
       cat("  apply and no pairwise family to control.\n")
-      if (isTRUE(res$acrophase_differs)) {
+      # The joint test on the (cosine, sine) vector. Amplitude and acrophase are
+      # its marginals, and it is the only one of the three with no blind spot --
+      # see the note in server/08b_helpers_popcosinor.R.
+      jt <- res$joint
+      if (isTRUE(jt$ok)) {
+        cat(sprintf("\n  Joint test on the rhythmic vector (cosine, sine):\n"))
+        cat(sprintf("    Wilks' Lambda = %s, F(%d, %d) = %s, p %s\n",
+                    f2(jt$lambda), jt$df1, jt$df2, f2(jt$F), pf(jt$p)))
+        cat("    This is the omnibus the amplitude and acrophase rows decompose;\n")
+        cat("    it is the row to read when the two marginals disagree with it.\n")
+      }
+
+      if (!isTRUE(res$acrophase_test_supported)) {
+        cat("\n  CAUTION -- the acrophase test is out of the range where it has power.\n")
+        cat(strwrap(res$acrophase_test_note, width = 74, prefix = "  "), sep = "\n")
+        cat("\n  The amplitude row is therefore NOT declared interpretable: Bingham's\n")
+        cat("  condition is that the groups share a phase, and that has not been\n")
+        cat("  established here -- it has only failed to be rejected by a test that\n")
+        cat("  cannot see this difference.\n")
+      } else if (isTRUE(res$acrophase_differs)) {
         cat("\n  WARNING -- the acrophases DIFFER (p ", pf(t$p[3]), ").\n", sep = "")
         cat("  Bingham et al. note that an amplitude difference cannot be\n")
         cat("  interpreted in that case: the amplitudes are being compared about\n")
         cat("  different phases. Do not read the amplitude row above as a\n")
         cat("  difference in rhythm strength.\n")
       } else {
-        cat("\n  The acrophases do not differ detectably, so the amplitude\n")
-        cat("  comparison is interpretable on Bingham's own condition.\n")
+        cat(sprintf("\n  The group acrophases span %s h on a %s h effective period, which is\n",
+                    f2(res$max_angular_sep_time), f2(res$period / res$harmonic)))
+        cat("  inside the quarter cycle where the perpendicular-displacement test is\n")
+        cat("  monotone, and they do not differ detectably. The amplitude comparison\n")
+        cat("  is interpretable on Bingham's own condition.\n")
       }
       cat("\nWhat this does not establish\n----------------------------\n")
       cat("  This is still a two-stage procedure in one respect: it starts from\n")
@@ -386,18 +457,28 @@
     param <- values$hp_pairwise_param
     correction <- values$hp_pairwise_correction
 
-    # Detect if parameter is acrophase (circular data)
-    is_circular <- grepl("acrophase_time", param, ignore.case = TRUE)
+    # Read the design off the stored specification, not off the live controls:
+    # the controls can have moved since the run.
+    spec <- values$hp_pairwise_spec
+    is_circular <- if (is.null(spec)) grepl("acrophase_time", param, ignore.case = TRUE)
+                   else isTRUE(spec$circular)
 
     cat("=== Pairwise Group Comparisons ===\n\n")
     cat("Parameter:", param, "\n")
     if(is_circular) {
       cat("Data type: Circular (using Watson-Williams test)\n")
+      if (!is.null(spec) && is.finite(spec$effective_period))
+        cat(sprintf("Angles are on harmonic %d's effective period, %.4g h (= %g / %d).\n",
+                    spec$harmonic, spec$effective_period, spec$period, spec$harmonic))
     } else {
       cat("Data type: Linear (using Welch's t-test)\n")
     }
     cat("Correction method:", correction, "\n")
-    cat("Number of comparisons:", nrow(results), "\n\n")
+    # P20/R12: name the family the correction is applied over, so a reader knows
+    # what "adjusted" was adjusted across.
+    cat("Number of comparisons:", nrow(results), "\n")
+    if (!is.null(spec)) cat("Multiplicity family:", spec$family, "\n")
+    cat("\n")
 
     for(i in 1:nrow(results)) {
       r <- results[i, ]

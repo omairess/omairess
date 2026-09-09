@@ -161,3 +161,70 @@ dance_rm_column <- function(values, varname, n_expected = NULL) {
   }
   stop(sprintf("Variable '%s' not found.", varname))
 }
+
+# ==============================================================================
+# SHARED PERMUTATION ARITHMETIC (R1, R7)
+# ==============================================================================
+# AUDIT (P20). The two pairwise-comparison kernels in server/50_fanova.R used
+# TWO DIFFERENT p-value conventions in the same result object:
+#
+#   global  (1 + #{T* >= T}) / (1 + B)      -- the add-one Monte Carlo estimator
+#   pointwise      #{T* >= T}  / B          -- the plain proportion
+#
+# The plain proportion is not an estimator of a p-value under a randomisation
+# null: it can be exactly zero, which asserts an impossible event, and with the
+# app's default B it is badly anti-conservative in the tail. With B = 49 it can
+# report p = 0 at a point where the observed statistic was simply the largest of
+# 50 exchangeable values -- the correct answer there is 1/50 = .02. So NO valid
+# raw pointwise p can be below 1/(B+1), and any value under it is an artefact.
+#
+# Both kernels now call this, so the two conventions cannot drift apart again.
+# `exceedances` counts permuted statistics at least as extreme as the observed
+# one; `B` is the number of permutations DRAWN, not the number that came back
+# finite -- a non-finite permuted statistic is a failure to evaluate the
+# statistic, and dropping it from the denominator silently shrinks the reference
+# set and inflates significance.
+dance_perm_p <- function(exceedances, B) {
+  stopifnot(length(B) == 1L, is.finite(B), B >= 0)
+  (1 + exceedances) / (1 + B)
+}
+
+# The smallest p either kernel can return, for labelling the resolution floor.
+dance_perm_p_floor <- function(B) 1 / (1 + B)
+
+# ------------------------------------------------------------------------------
+# STUDENTISING WITHOUT DESTROYING THE EXTREME CASE (R7)
+# ------------------------------------------------------------------------------
+# Both kernels formed t = mean / se and then wrote
+#
+#     t_stat[!is.finite(t_stat)] <- 0
+#
+# which silently converts the MOST extreme possible result into the least. Twelve
+# participants whose paired difference is identical and non-zero have zero
+# dispersion, so se = 0 and t = +Inf: perfect, unanimous separation. Coerced to
+# zero it is reported as t = 0, d = 0, and -- because every permuted statistic is
+# then also compared against zero -- p = 1. The one dataset where the answer is
+# unambiguous is the one dataset the test cannot see.
+#
+# The two zero-denominator cases are not the same thing and must not be treated
+# the same way:
+#
+#   0 / 0   no difference AND no dispersion. There is nothing to detect and the
+#           statistic is genuinely undefined; 0 is the right value, and it
+#           agrees with every permutation, so p -> 1 honestly.
+#
+#   c / 0   a non-zero difference with no dispersion. The statistic is +/-Inf.
+#           This is a real value, it compares correctly against finite permuted
+#           statistics (abs(Inf) >= abs(finite) is TRUE), and under sign-flipping
+#           only the all-same-sign flips reproduce it -- so the p-value comes out
+#           at the resolution floor, which is correct.
+#
+# NA in either argument is missing data rather than a degenerate denominator, and
+# stays NA so the caller can see it.
+dance_studentise <- function(numerator, denominator) {
+  out <- numerator / denominator
+  # NaN arises only from 0/0 (and from Inf/Inf, which cannot occur here because
+  # a variance is finite); NA propagates from missing input and is left alone.
+  out[is.nan(out)] <- 0
+  out
+}

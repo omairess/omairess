@@ -60,6 +60,33 @@ server <- function(input, output, session) {
                         use_bootstrap = TRUE, n_boot = 200,
                         using_smoothed = TRUE, n_subjects = n_sub, n_time = n_t))
 
+  # P20/R6: Section 8 was never exercised by this test, and it was writing its
+  # own approximation of the post-hoc tests -- unpaired Welch t.test() calls
+  # over an undefined `n_time_eval`, regardless of the design. A section no test
+  # drives is a section that can be wrong for as long as nobody reads it.
+  stub_pairwise <- function(design) {
+    one <- list(group1 = "A", group2 = "B", n1 = 3, n2 = 3, design = design,
+                mean_diff = rep(0, 10), t_stat = rep(0, 10),
+                p_values_pointwise = rep(0.5, 10), L2_stat = 1.23,
+                p_value_L2 = 0.4, p_value_L2_adjusted = 0.4,
+                ci_lower = rep(-1, 10), ci_upper = rep(1, 10),
+                cohens_d = rep(0, 10), se_diff = rep(1, 10),
+                p_values_adjusted = rep(0.5, 10), sig_regions = rep(FALSE, 10),
+                sig_global = FALSE)
+    list(results = list(`A vs B` = one), time_points = seq(0, 1, length.out = 10),
+         correction_method = "bonferroni", alpha = 0.05, n_permutations = 200,
+         groups = c("A", "B"), n_groups = 2, pair_names = "A vs B",
+         p_floor = 1 / 201, design = design,
+         spec = list(
+           design = design, source = "fanova", description = "stub",
+           group_labels = if (design == "between") rep(c("A", "B"), each = 3) else NULL,
+           subject_id = if (design == "within") sprintf("s%d", rep(1:3, 2)) else NULL,
+           rm_factor = if (design == "within") rep(c("A", "B"), each = 3) else NULL,
+           used_warped_curves = FALSE, n_permutations = 200,
+           correction = "bonferroni", alpha = 0.05, p_floor = 1 / 201,
+           family = "1 pairwise comparison", run_at = Sys.time()))
+  }
+
 fail <- function(...) { cat("FAIL:", ..., "\n"); quit(status = 1) }
 
   code <- tryCatch(generate_analysis_code(full = TRUE),
@@ -83,6 +110,29 @@ fail <- function(...) { cat("FAIL:", ..., "\n"); quit(status = 1) }
   if (!grepl("fit_cosinor <- function", code, fixed = TRUE))
     fail("the cosinor section does not carry the app's own fit_cosinor()")
   cat("ok  : the app's own fit_cosinor() is emitted verbatim\n")
+
+  # --- P20/R6: the post-hoc section emits the app's own kernels -------------
+  for (dsn in c("between", "within")) {
+    values$pairwise_results <- stub_pairwise(dsn)
+    ph <- tryCatch(generate_analysis_code(full = TRUE),
+                   error = function(e) structure(conditionMessage(e), class = "err"))
+    if (inherits(ph, "err")) fail("generator errored with", dsn, "post-hoc:", ph)
+    okp <- tryCatch({ parse(text = ph); TRUE }, error = function(e) conditionMessage(e))
+    if (!isTRUE(okp)) fail("the", dsn, "post-hoc export is not valid R:", okp)
+    want <- if (dsn == "within") "perform_pairwise_comparisons_rm <- function"
+            else "perform_pairwise_comparisons <- function"
+    if (!grepl(want, ph, fixed = TRUE))
+      fail("the", dsn, "post-hoc section does not carry the app's own kernel")
+    # the approximation that used to stand in for it must be gone
+    if (grepl("n_time_eval", ph, fixed = TRUE))
+      fail("the export still references the undefined n_time_eval")
+    if (grepl("tt <- t.test(curves_eval[idx1, t], curves_eval[idx2, t])", ph, fixed = TRUE))
+      fail("the export still writes its own unpaired t-test loop")
+    if (!grepl("Multiplicity family:", ph, fixed = TRUE))
+      fail("the", dsn, "post-hoc section does not name its multiplicity family")
+    cat(sprintf("ok  : %s post-hoc section emits the real kernel, not an approximation\n", dsn))
+  }
+  values$pairwise_results <- NULL
 
   # ... and with no results at all, it must still produce valid R
   for (nm in c("harmonic_model", "reg_model", "smooth_fit_metrics",
