@@ -212,8 +212,8 @@
           rad2 <- vals2 * 2 * pi / period
 
           # Circular means (in radians)
-          cmean1_rad <- circular_mean(rad1)
-          cmean2_rad <- circular_mean(rad2)
+          cmean1_rad <- dance_circular_mean(rad1)
+          cmean2_rad <- dance_circular_mean(rad2)
 
           # Convert back to hours for display
           cmean1 <- cmean1_rad * period / (2 * pi)
@@ -224,8 +224,8 @@
           if(cmean2 < 0) cmean2 <- cmean2 + period
 
           # Circular standard deviations (in radians, then convert to hours)
-          csd1_rad <- circular_sd(rad1)
-          csd2_rad <- circular_sd(rad2)
+          csd1_rad <- dance_circular_sd(rad1)
+          csd2_rad <- dance_circular_sd(rad2)
           csd1 <- csd1_rad * period / (2 * pi)
           csd2 <- csd2_rad * period / (2 * pi)
 
@@ -236,11 +236,11 @@
           ang_diff <- ang_diff_rad * period / (2 * pi)
 
           # Mean resultant lengths (measure of concentration)
-          r1 <- mean_resultant_length(rad1)
-          r2 <- mean_resultant_length(rad2)
+          r1 <- dance_mean_resultant_length(rad1)
+          r2 <- dance_mean_resultant_length(rad2)
 
           # Watson-Williams test for two groups
-          ww <- watson_williams_test(list(rad1, rad2))
+          ww <- dance_watson_williams_test(list(rad1, rad2))
 
           # Effect size for circular data: difference in mean resultant lengths
           # (alternative: use V statistic, but difference in r is more interpretable)

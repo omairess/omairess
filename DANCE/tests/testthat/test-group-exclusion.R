@@ -21,21 +21,27 @@ app_dir <- if (dir.exists("server")) "." else if (dir.exists("../../server")) ".
 source(file.path(app_dir, "server/07_helpers_circular.R"))
 source(file.path(app_dir, "server/08_helpers_cosinor.R"))
 
-# circular_mean() is defined inside the server body of 72_harmonic.R, which
-# cannot be sourced outside a session. Reproduced here verbatim -- the point of
-# the first tests is precisely what it returns for an empty vector.
-circular_mean <- function(angles_rad) {
-  x <- mean(cos(angles_rad), na.rm = TRUE)
-  y <- mean(sin(angles_rad), na.rm = TRUE)
-  atan2(y, x)
-}
+# P21 phase 0: this file used to carry its OWN COPY of circular_mean(), because
+# the shipped one was defined inside the server body of 72_harmonic.R and could
+# not be sourced outside a session -- and then a second test compared the copy
+# with the original by grepping for three lines of its body. A copy plus a
+# text-match guard is the arrangement that drifts. The function is now a pure
+# helper and is simply sourced.
+source(file.path(app_dir, "server/08c_helpers_circstat.R"))
+circular_mean <- dance_circular_mean
 
-test_that("the local circular_mean matches the shipped one", {
-  src <- paste(readLines(file.path(app_dir, "server/72_harmonic.R"), warn = FALSE),
+test_that("the circular helpers are pure, not trapped in a reactive", {
+  h72 <- paste(readLines(file.path(app_dir, "server/72_harmonic.R"), warn = FALSE),
                collapse = "\n")
-  expect_true(grepl("x <- mean(cos(angles_rad), na.rm = TRUE)", src, fixed = TRUE))
-  expect_true(grepl("y <- mean(sin(angles_rad), na.rm = TRUE)", src, fixed = TRUE))
-  expect_true(grepl("atan2(y, x)", src, fixed = TRUE))
+  # they must no longer be DEFINED inside the observer file ...
+  for (fn in c("circular_mean", "circular_sd", "circular_se",
+               "mean_resultant_length", "watson_williams_test", "hotelling_t2"))
+    expect_false(grepl(sprintf("\n  %s <- function", fn), h72, fixed = TRUE), info = fn)
+  # ... and the pure file must define every one of them
+  for (fn in c("dance_circular_mean", "dance_circular_sd", "dance_circular_se",
+               "dance_mean_resultant_length", "dance_watson_williams_test",
+               "dance_hotelling_t2"))
+    expect_true(is.function(get0(fn, mode = "function")), info = fn)
 })
 
 # ------------------------------------------------------- the failure itself

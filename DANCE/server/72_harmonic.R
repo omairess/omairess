@@ -413,174 +413,6 @@
     }
   })
   
-  # ==============================================================================
-  # CIRCULAR STATISTICS HELPER FUNCTIONS
-  # ==============================================================================
-  # Custom implementations for acrophase analysis (no external package required)
-  # Based on Mardia & Jupp (2000) "Directional Statistics"
-  
-  # Circular mean (returns radians)
-  circular_mean <- function(angles_rad) {
-    x <- mean(cos(angles_rad), na.rm = TRUE)
-    y <- mean(sin(angles_rad), na.rm = TRUE)
-    atan2(y, x)
-  }
-  
-  # Mean resultant length (measure of concentration, 0-1)
-  mean_resultant_length <- function(angles_rad) {
-    x <- mean(cos(angles_rad), na.rm = TRUE)
-    y <- mean(sin(angles_rad), na.rm = TRUE)
-    sqrt(x^2 + y^2)
-  }
-  
-  # Circular standard deviation (in same units as input)
-  circular_sd <- function(angles_rad) {
-    r_bar <- mean_resultant_length(angles_rad)
-    if(is.na(r_bar)) {
-      return(NA)
-    }
-    if(r_bar > 0 && r_bar < 1) {
-      sqrt(-2 * log(r_bar))
-    } else if(r_bar >= 1) {
-      0  # All points identical
-    } else {
-      NA  # Undefined
-    }
-  }
-  
-  # Circular standard error (approximate, based on von Mises)
-  circular_se <- function(angles_rad) {
-    n <- sum(!is.na(angles_rad))
-    r_bar <- mean_resultant_length(angles_rad)
-    if(is.na(r_bar)) {
-      return(NA)
-    }
-    if(r_bar > 0 && n > 1) {
-      # Approximate SE for circular mean (Mardia & Jupp, 2000)
-      1 / sqrt(n * r_bar^2)
-    } else {
-      NA
-    }
-  }
-  
-  # Watson-Williams test for comparing two or more groups of circular data
-  watson_williams_test <- function(angles_list) {
-    # angles_list: list of vectors, each containing angles in radians for one group
-    k <- length(angles_list)
-    if(k < 2) return(list(F = NA, df1 = NA, df2 = NA, p = NA, message = "Need at least 2 groups"))
-    
-    n <- sapply(angles_list, function(x) sum(!is.na(x)))
-    N <- sum(n)
-    
-    if(any(n < 2)) return(list(F = NA, df1 = NA, df2 = NA, p = NA, message = "Each group needs at least 2 observations"))
-    
-    # Resultant lengths for each group
-    R <- sapply(angles_list, function(x) {
-      x <- x[!is.na(x)]
-      sqrt(sum(cos(x))^2 + sum(sin(x))^2)
-    })
-    
-    # Total resultant length (pooled)
-    all_angles <- unlist(angles_list)
-    all_angles <- all_angles[!is.na(all_angles)]
-    R_total <- sqrt(sum(cos(all_angles))^2 + sum(sin(all_angles))^2)
-    
-    r_bar_total <- R_total / N
-    
-    if(r_bar_total < 0.45) {
-      return(list(F = NA, df1 = k - 1, df2 = N - k, p = NA, r_bar = r_bar_total,
-                  message = "Warning: Data too dispersed (r̄ < 0.45). Consider non-parametric test."))
-    }
-    
-    # Concentration parameter estimate
-    kappa <- if(r_bar_total < 0.53) {
-      2 * r_bar_total + r_bar_total^3 + 5 * r_bar_total^5 / 6
-    } else if(r_bar_total < 0.85) {
-      -0.4 + 1.39 * r_bar_total + 0.43 / (1 - r_bar_total)
-    } else {
-      1 / (r_bar_total^3 - 4 * r_bar_total^2 + 3 * r_bar_total)
-    }
-    
-    g <- 1 - 1 / (3 * 8 * kappa^2)
-    sum_R <- sum(R)
-    F_stat <- g * (N - k) * (sum_R - R_total) / ((k - 1) * (N - sum_R))
-    
-    df1 <- k - 1
-    df2 <- N - k
-    p_value <- pf(F_stat, df1, df2, lower.tail = FALSE)
-    
-    list(F = F_stat, df1 = df1, df2 = df2, p = p_value, kappa = kappa, r_bar = r_bar_total, message = NULL)
-  }
-
-  # Hotelling's T² test on (beta_cos, beta_sin) pairs - amplitude-weighted acrophase comparison
-  # Tests whether the bivariate rhythmic vector (beta_cos, beta_sin) differs between groups.
-  # Because amplitude = sqrt(beta_cos² + beta_sin²), subjects with stronger rhythms carry
-  # more weight. For k>2 groups, a one-way MANOVA F approximation is used.
-  hotelling_t2 <- function(beta_cos_list, beta_sin_list) {
-    k <- length(beta_cos_list)
-    if(k < 2) return(list(F = NA, df1 = NA, df2 = NA, p = NA, message = "Need at least 2 groups"))
-
-    # Build per-group matrices
-    mats <- lapply(seq_len(k), function(i) {
-      x <- beta_cos_list[[i]]
-      y <- beta_sin_list[[i]]
-      ok <- complete.cases(x, y)
-      cbind(x[ok], y[ok])
-    })
-
-    ns <- sapply(mats, nrow)
-    if(any(ns < 3)) return(list(F = NA, df1 = NA, df2 = NA, p = NA,
-                                message = "Each group needs at least 3 observations"))
-    N <- sum(ns)
-    p <- 2  # two variables: beta_cos and beta_sin
-
-    means <- lapply(mats, colMeans)
-
-    # ------------------------------------------------------------------------
-    # AUDIT (P20/R2). The k > 2 branch used to roll its own Wilks-to-F step and
-    # got BOTH the statistic and its second degrees of freedom wrong, each by a
-    # factor of two:
-    #
-    #     F   <- ((1 - sqrt(lambda))/sqrt(lambda)) * (df2 / df1)   with
-    #     df1 <- p * (k - 1)          -- correct
-    #     df2 <- N - k - p + 1        -- HALF the correct value
-    #
-    # For p = 2 response variables Rao's transformation is EXACT, not an
-    # approximation, and its constant is s = sqrt((p^2 q^2 - 4)/(p^2 + q^2 - 5))
-    # = 2 for every k >= 3, giving
-    #
-    #     df1 = 2(k - 1),  df2 = 2(N - k - 1),
-    #     F   = ((1 - sqrt(lambda))/sqrt(lambda)) * (N - k - 1)/(k - 1).
-    #
-    # Halving df2 halves the multiplier as well, so the reported F was exactly
-    # half the true F and was then referred to a distribution with half the
-    # denominator degrees of freedom. Both errors push the same way: on a
-    # three-group, twenty-per-group fixture the correct answer is F = 3.644338
-    # on (4, 112) df, p = .0079, and the old code reported F = 1.822169 on
-    # (4, 56) df, p = .1387 -- a real group difference reported as null.
-    #
-    # Rather than fix the algebra and leave a second implementation of a
-    # standard test in the codebase to drift again, the whole thing now goes
-    # through stats::manova() + summary(test = "Wilks"), which is R's own
-    # reference implementation. It reduces to the exact two-sample Hotelling
-    # T-squared when k = 2 (there q = 1, s = 1, df1 = 2, df2 = N - 3), so the
-    # special case is no longer needed either.
-    # ------------------------------------------------------------------------
-    # The arithmetic is dance_bivariate_manova() in
-    # server/08b_helpers_popcosinor.R, called rather than copied: the population
-    # cosinor needs the identical test as the joint leg of Bingham's procedure,
-    # and two implementations of one standard test is how they drift apart.
-    Y <- do.call(rbind, mats)
-    grp <- factor(rep(seq_len(k), times = ns))
-    res <- dance_bivariate_manova(Y[, 1], Y[, 2], grp)
-    if (!isTRUE(res$ok))
-      return(list(F = NA, df1 = NA, df2 = NA, p = NA, lambda = NA,
-                  message = res$message %||% "The joint vector test could not be fitted."))
-
-    list(F = as.numeric(res$F), df1 = res$df1, df2 = res$df2,
-         p = as.numeric(res$p), lambda = as.numeric(res$lambda),
-         n_groups = k, n_total = N, message = NULL)
-  }
 
   # ==============================================================================
   # CORE COSINOR FITTING FUNCTIONS
@@ -633,12 +465,62 @@
                                     A_sat_min, A_sat_max, tau_min, tau_max))
     }
 
-    # For linear/log models with bounds, use nonlinear least squares
+    # ========================================================================
+    # AUDIT (P21, finding A4)
+    #
+    # This used to read
+    #
+    #     if (use_bounds && trend_type %in% c("linear", "log", "none"))
+    #       return(fit_cosinor_nonlinear(...))
+    #
+    # -- i.e. ticking a bound sent a model that is LINEAR IN EVERY PARAMETER to
+    # nlsLM, inheriting its convergence failures, iteration-limit returns and
+    # boundary pinning for no gain at all. §3 of the redesign brief names this
+    # case directly: do not run a fixed-basis model through a nonlinear
+    # optimiser.
+    #
+    # The bounds are inequality CONSTRAINTS, and the constrained and
+    # unconstrained least-squares solutions coincide exactly whenever no
+    # constraint is active. So: fit the closed form first, and fall back to the
+    # constrained optimiser only when the unconstrained solution actually
+    # violates a bound. In the common case the user gets the exact lm fit --
+    # with exact standard errors -- instead of an optimiser's approximation of
+    # it; in the rare case nothing is lost, because that is the branch that was
+    # running before.
+    #
+    # `bounds_active` records which it was, so the readout can distinguish "no
+    # bound was binding" from "a bound was applied".
+    # ========================================================================
+    .bounds_violated <- function(fit) {
+      if (!isTRUE(fit$success)) return(TRUE)
+      v <- character(0)
+      chk <- function(val, lo, hi, nm) {
+        if (is.null(val) || !is.finite(val)) return(invisible(NULL))
+        if (is.finite(lo) && val < lo) v <<- c(v, nm)
+        if (is.finite(hi) && val > hi) v <<- c(v, nm)
+      }
+      chk(fit$mesor, mesor_min, mesor_max, "mesor")
+      for (a in fit$amplitudes) chk(a, amplitude_min, amplitude_max, "amplitude")
+      length(v) > 0
+    }
+
     if(use_bounds && trend_type %in% c("linear", "log", "none")) {
-      return(fit_cosinor_nonlinear(time, y, period, n_harmonics, trend_type,
+      .free <- fit_cosinor(time, y, period, n_harmonics, trend_type,
+                           use_bounds = FALSE)
+      if(!.bounds_violated(.free)) {
+        .free$bounds_active <- FALSE
+        .free$bounds_requested <- TRUE
+        .free$fit_route <- "closed-form least squares (no bound was binding)"
+        return(.free)
+      }
+      .con <- fit_cosinor_nonlinear(time, y, period, n_harmonics, trend_type,
                                     FALSE, NULL, 0.32, 0.66,
                                     use_bounds, mesor_min, mesor_max, amplitude_min, amplitude_max,
-                                    A_sat_min, A_sat_max, tau_min, tau_max))
+                                    A_sat_min, A_sat_max, tau_min, tau_max)
+      .con$bounds_active <- TRUE
+      .con$bounds_requested <- TRUE
+      .con$fit_route <- "constrained optimiser (the unconstrained fit violated a bound)"
+      return(.con)
     }
     
     # Build design matrix with multiple harmonics (linear models)
@@ -2962,30 +2844,68 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
         
         showNotification(paste("Running", B, "bootstrap iterations..."), type = "message")
         
+        # ====================================================================
+        # AUDIT (P21, findings A2 and A3)
+        #
+        # A2. This loop used to draw indices with replacement and then SELECT
+        # rows with `individual_params$subject %in% boot_idx`. `%in%` is a set
+        # test, so a participant drawn three times contributed one row: the
+        # procedure was a subsample WITHOUT replacement of the ~63% of
+        # participants drawn at least once, and the finite-population
+        # correction that comes with it made the interval 21% too SHORT on a
+        # 60-participant fixture. Resampling is now by INDEX, so a participant
+        # drawn three times appears three times, which is the whole point.
+        #
+        # The resampling unit is the PARTICIPANT, which is what §11 of the
+        # redesign brief requires and what the repeated-measures structure
+        # demands: a participant's whole row travels together.
+        #
+        # A3. The acrophase interval was `quantile()` on hours -- a linear
+        # quantile on a circular quantity. It is now the circular percentile
+        # interval (quantiles of the signed deviation from the bootstrap mean
+        # direction), computed by dance_boot_circ_ci_time(). The linear one is
+        # kept alongside ONLY so the readout can show what it would have said
+        # when the two disagree, which they do violently near midnight.
+        # ====================================================================
+        rows_by_subject <- split(seq_len(nrow(individual_params)),
+                                 individual_params$subject)
+        subj_ids <- names(rows_by_subject)
+        n_boot_subj <- length(subj_ids)
+
         withProgress(message = 'Bootstrap...', value = 0, {
           for(b in 1:B) {
-            boot_idx <- sample(1:n_subjects, n_subjects, replace = TRUE)
-            boot_params <- individual_params[individual_params$subject %in% boot_idx, ]
-            
+            take <- dance_boot_index(n_boot_subj)
+            boot_rows <- unlist(rows_by_subject[subj_ids[take]], use.names = FALSE)
+            boot_params <- individual_params[boot_rows, , drop = FALSE]
+
             boot_mesor[b] <- mean(boot_params$mesor, na.rm = TRUE)
-            
+
             # Use first harmonic for bootstrap CIs
             x_b <- boot_params$amplitude_1 * cos(boot_params$acrophase_rad_1)
             y_b <- boot_params$amplitude_1 * sin(boot_params$acrophase_rad_1)
             boot_amplitude[b] <- sqrt(mean(x_b, na.rm = TRUE)^2 + mean(y_b, na.rm = TRUE)^2)
-            
+
             acro_b <- atan2(mean(y_b, na.rm = TRUE), mean(x_b, na.rm = TRUE))
-            if(acro_b < 0) acro_b <- acro_b + 2 * pi
+            if(is.finite(acro_b) && acro_b < 0) acro_b <- acro_b + 2 * pi
             boot_acrophase[b] <- acro_b
-            
+
             if(b %% 50 == 0) incProgress(50 / B)
           }
         })
-        
+
+        .acro_ci <- dance_boot_circ_ci_time(boot_acrophase, period, 1)
         boot_results <- list(
-          mesor_ci = quantile(boot_mesor, c(0.025, 0.975)),
-          amplitude_ci = quantile(boot_amplitude, c(0.025, 0.975)),
-          acrophase_ci = quantile(phi_to_hours(boot_acrophase, period, 1), c(0.025, 0.975)),
+          mesor_ci = quantile(boot_mesor, c(0.025, 0.975), na.rm = TRUE),
+          amplitude_ci = quantile(boot_amplitude, c(0.025, 0.975), na.rm = TRUE),
+          # circular, and carrying its own width because lo > hi when it wraps
+          acrophase_ci = c(`2.5%` = .acro_ci$lo, `97.5%` = .acro_ci$hi),
+          acrophase_ci_circular = .acro_ci,
+          # what a linear quantile would have reported, for the readout to
+          # contrast when the interval wraps
+          acrophase_ci_linear = quantile(phi_to_hours(boot_acrophase, period, 1),
+                                         c(0.025, 0.975), na.rm = TRUE),
+          resample_unit = "participant",
+          n_resampled = n_boot_subj,
           boot_mesor = boot_mesor,
           boot_amplitude = boot_amplitude,
           boot_acrophase = boot_acrophase,
@@ -3704,6 +3624,10 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
                   fmt3(mod$boot_results$mesor_ci[1]), fmt3(mod$boot_results$mesor_ci[2])))
       cat(sprintf("  Amplitude: [%s, %s]\n",
                   fmt3(mod$boot_results$amplitude_ci[1]), fmt3(mod$boot_results$amplitude_ci[2])))
+      # P21/A3: a CIRCULAR percentile interval. Its endpoints can run lo > hi,
+      # which is not a bug but a rhythm peaking near the origin, so the width is
+      # printed separately rather than left to be read off the endpoints.
+      .cc <- mod$boot_results$acrophase_ci_circular
       cat(sprintf("  Acrophase: [%s, %s]   (H1, clock time)\n",
                   dance_acrophase_label(hours = mod$boot_results$acrophase_ci[1],
                                       period = period, harmonic = 1,
@@ -3711,6 +3635,20 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
                   dance_acrophase_label(hours = mod$boot_results$acrophase_ci[2],
                                       period = period, harmonic = 1,
                                       clock_origin = clock_o, all = FALSE)))
+      if(!is.null(.cc)) {
+        cat(sprintf("             circular interval, width %s h (+/- %s h about the mean direction)\n",
+                    fmt2(.cc$width), fmt2(.cc$half_width)))
+        if(isTRUE(.cc$wraps)) {
+          .lin <- mod$boot_results$acrophase_ci_linear
+          cat("             this interval WRAPS past the origin, so its endpoints run high to low.\n")
+          if(!is.null(.lin))
+            cat(sprintf("             a linear quantile would have reported [%s, %s] h, width %s h --\n             nearly the whole cycle, which is the artefact this replaces.\n",
+                        fmt2(.lin[1]), fmt2(.lin[2]), fmt2(as.numeric(.lin[2] - .lin[1]))))
+        }
+      }
+      cat(sprintf("  Resampling unit: %s (%d resampled per replicate, repeats kept).\n",
+                  mod$boot_results$resample_unit %||% "participant",
+                  mod$boot_results$n_resampled %||% NA_integer_))
     }
     if(!is.null(mod$bingham_summary)) {
       hdr("Bingham joint confidence regions (Bingham et al. 1982)")
@@ -5356,20 +5294,20 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       grp_amp <- params[[amp_col]][params$group == g_name]
       grp_acro_rad <- params[[acro_rad_col]][params$group == g_name]
       
-      # A group with no usable angles has no circular mean: circular_mean() of
+      # A group with no usable angles has no circular mean: dance_circular_mean() of
       # an empty vector is atan2(NaN, NaN) = NaN, and `if (NaN < 0)` is the
       # error that crashed this plot. Unlabelled subjects no longer reach here,
       # but a group can still be emptied by a filter upstream, so the guard
       # stays and the group is skipped rather than poisoning the frame.
       grp_acro_rad <- grp_acro_rad[is.finite(grp_acro_rad)]
       if(length(grp_acro_rad) < 1) next
-      circ_mean_rad <- circular_mean(grp_acro_rad)
+      circ_mean_rad <- dance_circular_mean(grp_acro_rad)
       if(!is.finite(circ_mean_rad)) next
       if(circ_mean_rad < 0) circ_mean_rad <- circ_mean_rad + 2 * pi
       # reported in CLOCK time, like every other acrophase in the app
       circ_mean_time <- (phi_to_hours(circ_mean_rad, mod$period, h) +
                            dance_clock_origin(mod)) %% effective_period
-      circ_se_rad <- circular_se(grp_acro_rad)
+      circ_se_rad <- dance_circular_se(grp_acro_rad)
       circ_se_time <- if(!is.na(circ_se_rad)) phi_to_hours(circ_se_rad, mod$period, h) else NA
       
       group_df <- rbind(group_df, 
@@ -5782,7 +5720,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
 
       # (1) Watson-Williams test
       cat("(1) Watson-Williams test (unweighted circular mean):\n")
-      ww <- watson_williams_test(angles_list)
+      ww <- dance_watson_williams_test(angles_list)
 
       if(!is.null(ww$message)) {
         cat(sprintf("  %s\n", ww$message))
@@ -5805,12 +5743,12 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       cat("\n  Group circular statistics (unweighted):\n")
       for(g in groups) {
         g_angles <- params[[acro_rad_col]][params$group == g]
-        g_mean <- circular_mean(g_angles)
+        g_mean <- dance_circular_mean(g_angles)
         if(g_mean < 0) g_mean <- g_mean + 2 * pi
         g_mean_time <- g_mean * effective_period / (2 * pi)
-        g_sd <- circular_sd(g_angles)
+        g_sd <- dance_circular_sd(g_angles)
         g_sd_time <- if(!is.na(g_sd)) g_sd * effective_period / (2 * pi) else NA
-        g_r <- mean_resultant_length(g_angles)
+        g_r <- dance_mean_resultant_length(g_angles)
         # AUDIT 1.2: label which resultant this is. Both are shown.
         g_rw <- dance_resultants(g_angles, params[[amp_col]][params$group == g])
         # AUDIT: circular MEAN is a direction and moves with the origin; circular
@@ -5832,7 +5770,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       cat("    (Bingham, Arbogast, Cornelissen Guillaume, Lee & Halberg 1982).\n")
       bc_list <- lapply(groups, function(g) params[[beta_cos_col]][params$group == g])
       bs_list <- lapply(groups, function(g) params[[beta_sin_col]][params$group == g])
-      ht <- hotelling_t2(bc_list, bs_list)
+      ht <- dance_hotelling_t2(bc_list, bs_list)
 
       if(!is.null(ht$message)) {
         cat(sprintf("  %s\n", ht$message))

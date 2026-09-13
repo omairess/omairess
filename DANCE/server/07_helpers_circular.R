@@ -69,7 +69,7 @@ dance_bw_to_kappa <- function(bw_hours, period = 24) {
 #   kappa_bw = ( 3 n kappa^2 I2(2 kappa) / (4 sqrt(pi) I1(kappa)^2) ) ^ (2/5)
 #
 # with kappa the MLE-ish concentration of the sample (Best & Fisher's piecewise
-# approximation, the same one watson_williams_test() uses). Returned in HOURS so
+# approximation, the same one dance_watson_williams_test() uses). Returned in HOURS so
 # it can seed the slider. Falls back to a wide-but-usable value when the sample
 # is tiny or so dispersed that no scale is identified.
 dance_default_bandwidth <- function(hours, period = 24, weights = NULL) {
