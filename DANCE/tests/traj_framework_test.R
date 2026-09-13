@@ -150,19 +150,27 @@ chk(inherits(try(e$dance_traj_basis(d, 24, 1, "exp_sat"), silent = TRUE), "try-e
 
 cat("\n-- layer A: the random-effects ladder -------------------------------\n")
 lad <- e$dance_traj_re_ladder(c("trend_lin", "c1", "s1"), c("c1", "s1"), "Condition")
-chk(length(lad) == 7 && identical(lad[[length(lad)]]$formula, "(1 | subject)"),
+chk(length(lad) == 8 && identical(lad[[length(lad)]]$formula, "(1 | subject)"),
     sprintf("%d rungs, most complex first, ending at (1 | subject)", length(lad)),
     sprintf("the ladder is wrong: %d rungs", length(lad)))
 # The top rung must give each CURVE its own rhythm, not merely each participant
 # an offset between conditions -- that distinction is the whole type-I fix.
-chk(grepl("(1 + trend_lin + c1 + s1 | subject:Condition)", lad[[1]]$formula, fixed = TRUE) &&
-      grepl("(1 + trend_lin + c1 + s1 | subject)", lad[[1]]$formula, fixed = TRUE),
-    "the ladder starts at a curve-specific rhythm, not a within-factor offset",
+chk(grepl("| curve)", lad[[1]]$formula, fixed = TRUE) &&
+      grepl("(1 + trend_lin + c1 + s1 | subject)", lad[[1]]$formula, fixed = TRUE) &&
+      !grepl("subject:", lad[[1]]$formula, fixed = TRUE),
+    "the ladder starts at a curve-specific rhythm, grouped by a general `curve` column",
     sprintf("the top rung is %s", lad[[1]]$formula))
 lad_nw <- e$dance_traj_re_ladder(c("c1", "s1"), c("c1", "s1"))
-chk(!any(grepl(":", vapply(lad_nw, function(x) x$formula, character(1)), fixed = TRUE)),
+chk(!any(grepl("curve", vapply(lad_nw, function(x) x$formula, character(1)), fixed = TRUE)),
     "with no within-participant factor there is no curve level, and no such rung",
     "a curve-level rung appeared in a purely between-participant design")
+# THE GENERALISATION: three within factors, one curve column, same code
+lad3 <- e$dance_traj_re_ladder(c("c1", "s1"), c("c1", "s1"),
+                               c("Drug", "Visit", "Session"), curve_group = "curve")
+chk(grepl("(1 + c1 + s1 | curve)", lad3[[1]]$formula, fixed = TRUE) &&
+      !grepl("Drug", lad3[[1]]$formula, fixed = TRUE),
+    "three within factors still give ONE curve grouping, not a spelled-out interaction",
+    sprintf("the 3-factor top rung is %s", lad3[[1]]$formula))
 lad0 <- e$dance_traj_re_ladder(c("c1", "s1"), c("c1", "s1"))
 chk(!any(duplicated(vapply(lad0, function(x) x$formula, character(1)))),
     "structurally identical rungs are de-duplicated when there is no trend",
@@ -229,14 +237,50 @@ chk(isTRUE(o$ok) && length(o$terms) == 6 &&
 chk(grepl("Kenward-Roger", o$method),
     sprintf("%d participants (24 curves) -> %s", sp$n_participants, o$method),
     sprintf("the wrong df method was chosen: %s", o$method))
-ot <- e$dance_traj_omnibus(fit, "trajectory")
-chk(isTRUE(ot$ok) && all(o$terms %in% ot$terms) && length(ot$terms) > length(o$terms),
-    "the trajectory block strictly contains the circadian block",
+ot <- e$dance_traj_omnibus(fit, "shape")
+chk(isTRUE(ot$ok) && all(o$terms %in% ot$terms) && length(ot$terms) >= length(o$terms),
+    "the shape block strictly contains the circadian block",
     "the two blocks are not nested as they must be")
 ol <- e$dance_traj_omnibus(fit, "level")
 chk(isTRUE(ol$ok) && !any(grepl("c1|s1|trend", ol$terms)),
     "the level block holds no basis term -- it is the value at t = 0, not a MESOR",
     "the level block is contaminated with basis terms")
+
+# THE THREE QUESTIONS, and the nesting that makes them three questions rather
+# than three attempts at one. FULL must strictly contain SHAPE, because a pure
+# vertical separation lives only in the level block and is the case a
+# shape-only test would miss.
+of <- e$dance_traj_omnibus(fit, "full")
+chk(isTRUE(of$ok) && all(ot$terms %in% of$terms) && length(of$terms) > length(ot$terms) &&
+      all(ol$terms %in% of$terms),
+    sprintf("full (%d terms) strictly contains shape (%d) which contains circadian (%d)",
+            length(of$terms), length(ot$terms), length(o$terms)),
+    "the three omnibus blocks are not nested as their definitions require")
+set3 <- e$dance_traj_omnibus_set(fit)
+chk(isTRUE(set3$ok) && nrow(set3$table) == 3 &&
+      identical(set3$table$block, c("full", "shape", "circadian")) &&
+      identical(set3$primary, "full"),
+    "the set runs all three and puts the FULL trajectory difference first",
+    "the omnibus set is not ordered with the primary question first")
+chk(all(nzchar(vapply(set3$results, function(r) r$hypothesis %||% "", character(1)))) &&
+      grepl("NOT the MESOR", e$DANCE_TRAJ_BLOCK_H0[["level"]], fixed = TRUE),
+    "each block states its own H0, and the level block says it is not a MESOR",
+    "a block came back without its null hypothesis spelled out")
+
+# A PURE VERTICAL SHIFT: the case that motivated adding the full block at all.
+# One group simply higher all day, with an identical rhythm. SHAPE excludes the
+# level term by construction and CIRCADIAN narrows further, so both must miss
+# it -- and a module offering only those two would answer "do these groups
+# differ in their trajectories?" with "no".
+g_vs <- make(29, n_per_group = 8, level = 6, level_group = "a")
+fit_vs <- e$dance_traj_fit(e$dance_traj_spec(build(g_vs), 24, 1, "none"))
+s_vs <- e$dance_traj_omnibus_set(fit_vs, which = c("full", "shape", "circadian"))
+chk(s_vs$results$full$p < .01 && s_vs$results$shape$p > .05 &&
+      s_vs$results$circadian$p > .05,
+    sprintf("a pure vertical shift is FOUND by full (p = %.2g) and missed by BOTH shape (p = %.2f) and circadian (p = %.2f) -- which is why there are three",
+            s_vs$results$full$p, s_vs$results$shape$p, s_vs$results$circadian$p),
+    sprintf("the three-way split did not behave as designed (full %.3g, shape %.3g, circadian %.3g)",
+            s_vs$results$full$p, s_vs$results$shape$p, s_vs$results$circadian$p))
 
 cat("\n-- layer C: it finds what was planted, and not what was not ---------\n")
 g_ph <- make(21, n_per_group = 8, shift = 1.2, shift_cell = "b q")
@@ -303,17 +347,29 @@ chk(pow >= .60,
 # borrow that warrant outside it.
 ff_one <- e$dance_traj_fit(e$dance_traj_spec(build(make(3001, n_per_group = 8)), 24, 1, "none"))
 o_one <- e$dance_traj_omnibus(ff_one, "circadian")
-chk(isTRUE(o_one$validated) && grepl("CALIBRATED", o_one$calibration %||% "", fixed = TRUE) &&
-      grepl("0.040", o_one$calibration, fixed = TRUE),
-    "a one-harmonic Kenward-Roger fit declares itself calibrated and names the measured rates",
-    "the omnibus does not report its calibration grid")
+chk(isTRUE(o_one$validated) && isTRUE(o_one$provisional) &&
+      grepl("PROVISIONALLY CALIBRATED", o_one$calibration %||% "", fixed = TRUE) &&
+      grepl("0.040", o_one$calibration, fixed = TRUE) &&
+      grepl("[0.011, 0.099]", o_one$calibration, fixed = TRUE),
+    "a one-harmonic Kenward-Roger circadian test calls itself PROVISIONAL and quotes exact binomial intervals",
+    "the omnibus does not report its calibration grid with its uncertainty")
+chk(grepl("does NOT establish", o_one$calibration, fixed = TRUE) ||
+      grepl("does NOT\n", o_one$calibration) ||
+      grepl("not yet as certified", o_one$calibration, fixed = TRUE),
+    "and says what n = 100 does not settle, rather than reading as a clean bill of health",
+    "the provisional statement does not say what it fails to establish")
 ff_h2 <- e$dance_traj_fit(e$dance_traj_spec(build(make(3001, n_per_group = 8)), 24, 2, "none"))
 o_h2 <- e$dance_traj_omnibus(ff_h2, "circadian")
 chk(isFALSE(o_h2$validated) &&
-      grepl("OUTSIDE THE CALIBRATED GRID", o_h2$calibration %||% "", fixed = TRUE) &&
+      grepl("OUTSIDE THE SIMULATED GRID", o_h2$calibration %||% "", fixed = TRUE) &&
       grepl("2 harmonics", o_h2$calibration, fixed = TRUE),
     "and a two-harmonic fit does NOT borrow it -- it says which way it left the grid",
     "a fit outside the simulated grid claimed the grid's calibration")
+o_fullblk <- e$dance_traj_omnibus(ff_one, "full")
+chk(isFALSE(o_fullblk$validated) &&
+      grepl("only the circadian block", o_fullblk$calibration %||% "", fixed = TRUE),
+    "nor does the FULL block, which was never simulated at all",
+    "an unsimulated block borrowed the circadian block's evidence")
 
 cat("\n-- layer D: parameters come from the SAME fit -----------------------\n")
 co <- e$dance_traj_cell_coefs(fit, 1)

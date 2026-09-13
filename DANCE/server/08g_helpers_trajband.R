@@ -540,3 +540,182 @@ dance_traj_group_fits_gaps <- function() {
       "marginal and conditional R^2 on the whole fit -- a different decomposition,",
       "over different variance components -- and it is not substituted silently."))
 }
+
+# ------------------------------------------------------------------------------
+# SIMPLE EFFECTS AND INTERACTION CONTRASTS
+# ------------------------------------------------------------------------------
+# All pairs is the blunt instrument. In a factorial design the questions people
+# actually ask are narrower and more powerful:
+#
+#   SIMPLE EFFECT     the effect of factor A at ONE level of factor B
+#                     ("does caffeine shift the rhythm, in the young group?")
+#   INTERACTION       whether that simple effect is the SAME at every level of B
+#                     ("does caffeine shift it MORE in the young than the old?")
+#
+# Both come from the one fitted model, never from refitting a subset: refitting
+# within a level throws away the pooled residual and the random structure, and
+# the resulting standard error is not comparable with anything else on the page.
+#
+# The interaction contrast is a difference of differences, which is why it is
+# formed as a single linear combination rather than by comparing two p-values.
+# "Significant in one group and not the other" is not an interaction, and a
+# module that offers simple effects without offering the interaction invites
+# exactly that mistake.
+dance_traj_simple_effects <- function(fit, effect, at, what = c("level", "amplitude", "phase"),
+                                      harmonic = 1, conf = 0.95, at_time = NULL,
+                                      adjust = c("holm", "bonferroni", "none")) {
+  what <- match.arg(what); adjust <- match.arg(adjust)
+  if (!isTRUE(fit$ok)) return(list(ok = FALSE, message = fit$message))
+  spec <- fit$spec
+  dt <- spec$design_terms
+  if (!effect %in% dt)
+    return(list(ok = FALSE, message = sprintf(
+      "'%s' is not a design factor. This model has: %s.", effect, paste(dt, collapse = ", "))))
+  hold <- setdiff(dt, effect)
+  if (!all(names(at) %in% hold) || !setequal(names(at), hold))
+    return(list(ok = FALSE, message = sprintf(
+      "`at` must name every other design factor exactly once: %s.",
+      paste(hold, collapse = ", "))))
+
+  grid <- dance_traj_cell_grid(spec)
+  keep <- rep(TRUE, nrow(grid))
+  for (f in hold) keep <- keep & as.character(grid[[f]]) == as.character(at[[f]])
+  if (sum(keep) < 2)
+    return(list(ok = FALSE, message = "That slice of the design holds fewer than two cells."))
+
+  all_ct <- dance_traj_contrasts(fit, what, harmonic, conf, at_time, adjust = "none")
+  if (!isTRUE(all_ct$ok)) return(all_ct)
+  cells <- grid$.cell[keep]
+  tab <- all_ct$table[all_ct$table$cell1 %in% cells & all_ct$table$cell2 %in% cells, ,
+                      drop = FALSE]
+  if (!nrow(tab)) return(list(ok = FALSE, message = "No contrast lies inside that slice."))
+  # The family is the SLICE, not the whole design: that is the point of asking
+  # for a simple effect, and it is stated so nobody reads these p-values as
+  # though they had been adjusted across everything.
+  tab$p_adj <- tab$p_raw
+  if (!identical(adjust, "none"))
+    tab$p_adj[tab$defined] <- stats::p.adjust(tab$p_raw[tab$defined], method = adjust)
+  rownames(tab) <- NULL
+  list(ok = TRUE, what = what, effect = effect, at = at, unit = all_ct$unit,
+       table = tab, conf = conf, adjust = adjust, cells = cells,
+       note = paste(
+         sprintf("The simple effect of %s at %s.", effect,
+                 paste(sprintf("%s = %s", names(at), unlist(at)), collapse = ", ")),
+         "Estimated from the ONE fitted model, not by refitting this slice: a",
+         "within-slice refit would discard the pooled residual and the random",
+         "structure, and its standard error would not be comparable with anything",
+         "else reported.",
+         sprintf("Multiplicity is adjusted across the %d contrast(s) in this slice only,",
+                 nrow(tab)),
+         "not across the whole design.",
+         "A simple effect that is significant in one slice and not another is NOT an",
+         "interaction -- use dance_traj_interaction_contrast() for that question."))
+}
+
+# The difference of differences: (cell_a1 - cell_a2) - (cell_b1 - cell_b2).
+# Level only, because it is the one of the three that is exactly linear; an
+# interaction in amplitude or phase is a difference of two nonlinear maps and
+# needs the joint draws, which dance_traj_interaction_contrast() refuses to fake.
+dance_traj_interaction_contrast <- function(fit, cell_a1, cell_a2, cell_b1, cell_b2,
+                                            conf = 0.95, at_time = NULL) {
+  if (!isTRUE(fit$ok)) return(list(ok = FALSE, message = fit$message))
+  spec <- fit$spec
+  grid <- dance_traj_cell_grid(spec)
+  idx <- match(c(cell_a1, cell_a2, cell_b1, cell_b2), grid$.cell)
+  if (anyNA(idx))
+    return(list(ok = FALSE, message = sprintf(
+      "Unknown cell (%s). This design has: %s.",
+      paste(c(cell_a1, cell_a2, cell_b1, cell_b2)[is.na(idx)], collapse = ", "),
+      paste(grid$.cell, collapse = ", "))))
+  tt <- at_time %||% spec$t0
+  bv <- dance_traj_beta(fit)
+  X <- lapply(idx, function(i) dance_traj_design_rows(fit, grid[i, , drop = FALSE], tt))
+  keep <- intersect(colnames(X[[1]]), names(bv$beta))
+  d <- (X[[1]][, keep, drop = FALSE] - X[[2]][, keep, drop = FALSE]) -
+       (X[[3]][, keep, drop = FALSE] - X[[4]][, keep, drop = FALSE])
+  est <- as.numeric(d %*% bv$beta[keep])
+  se <- sqrt(max(0, as.numeric(d %*% bv$V[keep, keep] %*% t(d))))
+  z <- stats::qnorm(1 - (1 - conf) / 2)
+  list(ok = TRUE, estimate = est, se = se, lo = est - z * se, hi = est + z * se,
+       statistic = est / se, p = 2 * stats::pnorm(-abs(est / se)),
+       at_time = tt, conf = conf,
+       contrast = sprintf("(%s - %s) - (%s - %s)", cell_a1, cell_a2, cell_b1, cell_b2),
+       note = paste(
+         "A difference of differences, formed as ONE linear combination, so its",
+         "standard error carries every covariance among the four cells. This is the",
+         "interaction question. It is NOT answered by observing that one difference",
+         "is significant and the other is not: two tests either side of a threshold",
+         "say nothing about whether they differ from each other.",
+         sprintf("Evaluated at t = %.4g %s.", tt, spec$time_units %||% "")))
+}
+
+# ------------------------------------------------------------------------------
+# PARTICIPANT-LEVEL TRAJECTORIES: CONDITIONAL MODES, AND THEY ARE SHRUNKEN
+# ------------------------------------------------------------------------------
+# BLUPs are enormously useful to look at and routinely over-read. A conditional
+# mode is not an estimate of that participant's parameter in the sense an
+# independent per-participant fit would give: it is pulled toward the population
+# mean by an amount that depends on how much data that participant contributed
+# and how large the random-effect variance is. So:
+#
+#   - a histogram of BLUP amplitudes is NARROWER than the true spread of
+#     participant amplitudes, and its SD is not an estimate of that spread --
+#     the random-effect SD is;
+#   - a participant with fewer or noisier observations is pulled further, so the
+#     ORDER can differ from the order of independent fits;
+#   - the shrinkage is a feature, not a defect: these are better predictions of
+#     the individual than the unshrunk estimates. They are just not the same
+#     quantity, and a plot that does not say so invites the wrong reading.
+#
+# Every return here carries `shrunken = TRUE` and that warning, and the
+# population spread is reported alongside so the two can be compared.
+dance_traj_participant_curves <- function(fit, harmonic = 1, conf = 0.95) {
+  if (!isTRUE(fit$ok)) return(list(ok = FALSE, message = fit$message))
+  spec <- fit$spec
+  re <- tryCatch(lme4::ranef(fit$model, condVar = FALSE), error = function(e) NULL)
+  if (is.null(re)) return(list(ok = FALSE, message = "Conditional modes are unavailable for this fit."))
+  grp <- spec$subject %||% "subject"
+  if (!grp %in% names(re))
+    return(list(ok = FALSE, message = sprintf("The fitted model has no '%s' random effect.", grp)))
+  R <- as.data.frame(re[[grp]])
+  ck <- paste0("c", harmonic); sk <- paste0("s", harmonic)
+  if (!all(c(ck, sk) %in% names(R)))
+    return(list(ok = FALSE, message = paste(
+      "The fitted random structure carries no participant-specific harmonic terms,",
+      sprintf("so there are no per-participant rhythms to report (rung used: %s).",
+              fit$re_label %||% "unknown"))))
+  # the population (fixed-effect) rhythm each participant deviates from
+  co <- dance_traj_cell_coefs(fit, harmonic)
+  pop_a <- if (isTRUE(co$ok)) mean(co$a) else NA_real_
+  pop_b <- if (isTRUE(co$ok)) mean(co$b) else NA_real_
+  a <- pop_a + R[[ck]]; b <- pop_b + R[[sk]]
+  k <- (spec$period / harmonic) / (2 * pi)
+  vc <- tryCatch(as.matrix(lme4::VarCorr(fit$model)[[grp]]), error = function(e) NULL)
+  tab <- data.frame(subject = rownames(R), beta_cos = a, beta_sin = b,
+                    amplitude = sqrt(a^2 + b^2),
+                    acrophase_rad = atan2(b, a) %% (2 * pi),
+                    acrophase_time = (atan2(b, a) %% (2 * pi)) * k,
+                    stringsAsFactors = FALSE)
+  rownames(tab) <- NULL
+  list(ok = TRUE, table = tab, harmonic = harmonic, shrunken = TRUE,
+       effective_period = spec$period / harmonic,
+       re_label = fit$re_label,
+       sd_blup_amplitude = stats::sd(tab$amplitude),
+       sd_population_amplitude = if (!is.null(vc) && all(c(ck, sk) %in% rownames(vc))) {
+         A <- sqrt(pop_a^2 + pop_b^2)
+         if (A > 0) { g <- c(pop_a / A, pop_b / A)
+           sqrt(max(0, as.numeric(t(g) %*% vc[c(ck, sk), c(ck, sk)] %*% g))) } else NA_real_
+       } else NA_real_,
+       label = "model-based shrunken participant estimates (conditional modes / BLUPs)",
+       note = paste(
+         "THESE ARE SHRUNKEN. A conditional mode is pulled toward the population",
+         "mean by an amount that depends on how much data that participant",
+         "contributed and how large the random-effect variance is. They are better",
+         "PREDICTIONS of each individual than independent per-participant fits, but",
+         "they are not the same quantity.",
+         "In particular the spread of these values UNDERSTATES the spread of true",
+         "participant parameters: compare sd_blup_amplitude with",
+         "sd_population_amplitude, which is the model's estimate of the real",
+         "between-participant SD. A histogram or boxplot of this column must say",
+         "so on its face, or it will be read as the population distribution."))
+}

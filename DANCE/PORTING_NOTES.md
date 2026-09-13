@@ -3426,6 +3426,101 @@ promotes it.
 
 New: `server/08g_helpers_trajband.R`, `tests/traj_band_test.R`.
 
+### 4.23 P21 phase 3, amended — the statistical corrections applied during the phase
+
+Fifteen amendments arrived while phase 3 was in flight, with an explicit
+instruction not to restart and to land two of them *before* more code came to
+depend on the wrong hierarchy. Both landed first.
+
+**The curve is a general concept now, not `subject:Condition`.** The phase-2 fix
+wrote the curve grouping as that literal string, which is right for exactly one
+design. `dance_traj_curve_id()` builds a `curve` COLUMN from the participant
+identifier and *every* within-participant factor, so participant × drug × visit,
+a five-level within factor, and no within factor at all are the same code path.
+It is a column rather than a formula term because three other things need it:
+the residual correlation has to reset at the curve, the cluster bootstrap has to
+resample whole curves, and the fit report has to say how many there were.
+
+| design | curve | top rung |
+|---|---|---|
+| 2 groups between | the participant | `(1 + c1 + s1 \| subject)` |
+| 3 conditions within | participant × Condition | `(1 + c1 + s1 \| subject) + (1 + c1 + s1 \| curve)` |
+| 2 × 3 mixed | participant × Condition | same |
+| 2 between × 2 × 2 within, K = 2, linear | participant × Drug × Visit | `(1 + trend_lin + c1 + s1 + c2 + s2 \| subject) + (… \| curve)` |
+
+**Three omnibus questions, nested, primary first.** The old circadian/trajectory
+split could not answer "do these groups differ in their trajectories?", because
+a pure vertical separation — one group simply sleepier all day — lives entirely
+in the level block. `full` = level + trend + harmonics; `shape` = trend +
+harmonics, vertical shift excluded; `circadian` = harmonics alone. The test
+asserts both the nesting and the consequence: a planted vertical shift is found
+by `full` (p < .01) and missed by **both** `shape` and `circadian`.
+
+The other amendments, in brief:
+
+- **No N ≈ 50 cutoff.** The old method string read "(12 participants <= 50)" as
+  though 50 were a theorem. Kenward–Roger is preferred whenever the engine
+  supports it; Satterthwaite is the cheaper alternative; `kr_max_subjects` still
+  exists but is labelled a **computational policy** and is off by default.
+- **The calibration no longer propagates.** `dance_traj_calibration()` now keys
+  on the *block* and the *df method* as well as the model, so the `full` block
+  and any Satterthwaite result are `validated = FALSE` by construction. The
+  statement is downgraded to PROVISIONAL and quotes exact binomial intervals:
+  4/100 is [0.011, 0.099], which rules out 0.275 and does **not** distinguish
+  .05 from .09.
+- **Five statuses, not one.** `converged`, `singular`, `boundary`,
+  `rank_deficient`, `optimizer_failure` are separate fields; `rePCA()` names
+  which random-effect dimensions collapsed. A retained singular fit says so
+  *without* claiming the maximal structure is scientifically preferable.
+- **AR(1) vs CAR(1)/OU.** A discrete AR(1) indexes by position, so on an uneven
+  grid it asserts that a long gap and a short one carry the same correlation.
+  The spec detects the spacing; `residual_cor = "ar1"` on an irregular grid is
+  **refused**, naming `ou`. Both reset at the curve, not the participant.
+- **Joint-distribution amplitude/phase.** The default draws from
+  (a, b) ~ N(β̂, V), transforms per draw, and summarises amplitude by quantile
+  and phase *circularly*. Identifiability is a Hotelling test of whether the
+  joint region excludes the origin — the first draft asked whether the lower
+  amplitude quantile exceeded zero, which never fires, because a norm is
+  non-negative. The delta method remains as the fast option. The seed is fixed
+  and returned, so the same fit gives the same interval twice.
+- **One acrophase convention, asserted end to end.** `tests/cosinor_convention_test.R`
+  plants a known peak and drives it through `fit_cosinor` (sliced out of
+  `72_harmonic.R`, since it is still trapped in the server body), the trajectory
+  model, both inference methods, the second harmonic on its 12 h period, the
+  wrapped contrast, and the circular helpers — 22 checks that all return the
+  same number. DANCE has had a units discrepancy before, and reading the code
+  cannot settle it.
+- **Simple effects and interaction contrasts**, both from the one fitted model.
+  The interaction is a difference of differences formed as a single linear
+  combination, and says plainly that "significant in one group, not the other"
+  is not an interaction.
+- **Bootstrap cluster identity.** `dance_boot_clusters()` gives each drawn copy
+  a new id, so a participant drawn three times is three clusters rather than one
+  with tripled observations; each copy keeps their complete set of conditions.
+  The existing bootstrap in `72_harmonic.R` averages rows and is unaffected — a
+  note says why, so the next person does not copy it into a refit.
+- **BLUPs are labelled shrunken**, with the model's between-participant SD
+  reported beside the BLUP SD so the understatement is visible.
+- **τ uncertainty does not vanish.** A flat profile now *suppresses* the fit
+  rather than returning a point on the ridge; a fit at the selected τ carries a
+  warning that its inference is conditional on that choice, and `exp_sat` is
+  outside the validated grid by name.
+- **Selection is separated from confirmation.** `dance_traj_selection_state()`
+  labels a model pre-specified or data-selected and says the p-values are
+  conditional, with no correction invented.
+- **The classification is shown and overridable.** `dance_traj_describe()` lists
+  every factor's role and whether it was read from the data or set by the user.
+
+**What is NOT claimed.** `tests/traj_validation_grid.R` is the pre-phase-4 gate:
+16 cells covering K = 1 and 2, no trend and linear trend, between / within /
+mixed designs, 8 to 64 participants, balanced and 10% / 25% unbalanced, all
+three omnibus blocks, and two power cells — at 1,000 simulations each, reporting
+exact binomial intervals. It is deliberately outside the fast suites. **The
+framework is not promoted to the default analysis until it clears.**
+
+New: `tests/traj_amendments_test.R`, `tests/cosinor_convention_test.R`,
+`tests/traj_validation_grid.R`.
+
 ## 5. Rename table
 
 | source | source app | merged app |

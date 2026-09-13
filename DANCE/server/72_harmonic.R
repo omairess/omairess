@@ -2867,6 +2867,15 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
         # kept alongside ONLY so the readout can show what it would have said
         # when the two disagree, which they do violently near midnight.
         # ====================================================================
+        # NOTE ON CLUSTER IDENTITY. Every statistic in this loop is a MEAN OVER
+        # ROWS, so a participant drawn three times correctly contributes three
+        # times and their id never enters the arithmetic. That is why plain row
+        # indices are enough here. Any bootstrap that REFITS a model with the
+        # participant as a grouping factor must instead use
+        # dance_boot_clusters(), which gives each drawn copy a new id -- three
+        # copies sharing one id would be read as one participant with tripled
+        # observations, i.e. one random effect where the bootstrap intended
+        # three.
         rows_by_subject <- split(seq_len(nrow(individual_params)),
                                  individual_params$subject)
         subj_ids <- names(rows_by_subject)

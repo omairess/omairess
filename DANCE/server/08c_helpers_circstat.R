@@ -268,3 +268,53 @@ dance_boot_circ_ci_time <- function(angles_rad, period = 24, harmonic = 1,
        wraps = is.finite(ci$lo) && is.finite(ci$hi) && ci$lo > ci$hi,
        effective_period = period / harmonic, n = ci$n)
 }
+
+# ------------------------------------------------------------------------------
+# CLUSTER RESAMPLING WITH NEW CLUSTER IDENTITIES
+# ------------------------------------------------------------------------------
+# dance_boot_index() gives indices with replacement, which is right for a
+# statistic computed by AVERAGING ROWS: a participant drawn three times
+# contributes three times, and that is the resampling weight doing its job.
+#
+# It is NOT enough when the resampled data is REFITTED with the participant as a
+# grouping factor. If participant 17 is drawn three times and all three copies
+# keep the id "17", the model sees ONE participant with tripled observations --
+# a cluster with three times the data and one random effect, instead of three
+# independent clusters each with one. The random-effect variance is then
+# estimated from fewer effective clusters than the bootstrap intended and the
+# resulting intervals are wrong, usually too narrow.
+#
+# So every drawn copy gets a NEW id: 17 drawn three times becomes 17#1, 17#2,
+# 17#3. Each copy carries that participant's COMPLETE set of rows -- all their
+# conditions, sessions and time points -- because the unit being resampled is
+# the participant, not the curve: breaking a participant apart would destroy the
+# within-participant pairing the design is built on.
+#
+# Returns the row indices to take, the new participant ids for those rows, and
+# the new curve ids (rebuilt from the new participant id) so a refit groups by
+# something that actually distinguishes the copies.
+dance_boot_clusters <- function(subject, curve = NULL, index = NULL) {
+  subject <- as.character(subject)
+  by_subj <- split(seq_along(subject), subject)
+  ids <- names(by_subj)
+  take <- if (is.null(index)) dance_boot_index(length(ids)) else index
+  rows <- new_subj <- new_curve <- vector("list", length(take))
+  for (k in seq_along(take)) {
+    r <- by_subj[[ids[take[k]]]]
+    rows[[k]] <- r
+    tag <- sprintf("%s#%d", ids[take[k]], k)
+    new_subj[[k]] <- rep(tag, length(r))
+    new_curve[[k]] <- if (is.null(curve)) rep(tag, length(r)) else
+      paste(tag, as.character(curve)[r], sep = " | ")
+  }
+  list(rows = unlist(rows, use.names = FALSE),
+       subject = factor(unlist(new_subj, use.names = FALSE)),
+       curve = factor(unlist(new_curve, use.names = FALSE)),
+       n_clusters = length(take),
+       n_distinct_drawn = length(unique(take)),
+       note = paste(
+         "Each drawn copy of a participant carries a NEW cluster id, so a",
+         "participant drawn three times behaves as three independent clusters",
+         "rather than as one participant with tripled observations. Every copy",
+         "keeps that participant's complete set of conditions and sessions."))
+}

@@ -55,7 +55,25 @@
 
 if (!exists("%||%", mode = "function")) `%||%` <- function(a, b) if (is.null(a)) b else a
 
-# Is the fitted model singular (a variance component at the boundary)?
+# ------------------------------------------------------------------------------
+# FIVE STATUSES, NOT ONE
+# ------------------------------------------------------------------------------
+# "It didn't work" covers five different things, and collapsing them is how the
+# type-I error of layer C got to 0.275: a singularity notice was read as a
+# convergence failure and silently descended the ladder. They are kept apart:
+#
+#   optimizer_failure  the fit threw, or the optimiser returned a non-zero code
+#   converged          the optimiser reached a stationary point
+#   boundary/singular  it converged, ON a boundary: a variance at zero or a
+#                      correlation at +/-1. A successfully optimised model.
+#   rank_deficient     the FIXED-effect design matrix lost columns; the model
+#                      fitted is not the model requested
+#
+# A singular fit is not descended past automatically -- see the note below --
+# but nor is it asserted to be the right model. What it is, is RECORDED: which
+# dimensions collapsed, what was fitted, whether anything was simplified and
+# why. The final choice is design logic plus simulation evidence, which is what
+# the validation gate is for; it is not a blanket rule in either direction.
 dance_traj_is_singular <- function(m) {
   if (inherits(m, "merMod"))
     return(isTRUE(tryCatch(lme4::isSingular(m, tol = 1e-4), error = function(e) FALSE)))
@@ -65,6 +83,40 @@ dance_traj_is_singular <- function(m) {
     return(length(v) > 0 && any(v < 1e-8))
   }
   FALSE
+}
+
+# WHICH random-effect dimensions collapsed. rePCA gives the eigen-decomposition
+# of each grouping factor's relative covariance; a zero eigenvalue is a
+# dimension the data cannot support, and the count of them is far more useful
+# than the yes/no of isSingular. Reported so a reader can see that (say) the
+# correlation between the participant intercept and the participant cos term
+# went to 1, rather than being told only that "the fit is singular".
+dance_traj_re_collapse <- function(m) {
+  if (!inherits(m, "merMod")) return(NULL)
+  pc <- tryCatch(lme4::rePCA(m), error = function(e) NULL)
+  if (is.null(pc)) return(NULL)
+  out <- lapply(names(pc), function(g) {
+    sd <- pc[[g]]$sdev
+    tol <- 1e-4 * max(sd, 1)
+    list(group = g, n_dim = length(sd), sdev = sd,
+         n_collapsed = sum(sd < tol),
+         variance_explained = if (sum(sd^2) > 0) cumsum(sd^2) / sum(sd^2) else NA_real_)
+  })
+  names(out) <- names(pc)
+  out
+}
+
+# Did the FIXED-effect design matrix lose columns? A rank-deficient fit is not a
+# singular fit: the model that was estimated is missing terms the formula asked
+# for, so a block test over those terms is testing something else.
+dance_traj_rank_deficient <- function(m) {
+  b <- tryCatch(if (inherits(m, "glmmTMB")) lme4::fixef(m)$cond else lme4::fixef(m),
+                error = function(e) NULL)
+  if (is.null(b)) return(list(deficient = FALSE, dropped = character(0)))
+  X <- tryCatch(stats::model.matrix(m), error = function(e) NULL)
+  dropped <- if (is.null(X)) character(0) else setdiff(colnames(X), names(b))
+  dropped <- c(dropped, names(b)[!is.finite(b)])
+  list(deficient = length(dropped) > 0, dropped = unique(dropped))
 }
 
 # Did the optimiser actually converge? lme4 reports this as a message list --
@@ -92,21 +144,63 @@ dance_traj_converged <- function(m) {
   TRUE
 }
 
+# The whole status of one fitted model, as five separate facts.
+dance_traj_status <- function(m) {
+  if (is.null(m)) return(list(fitted = FALSE, converged = FALSE, singular = NA,
+                              boundary_dims = 0L, rank_deficient = NA,
+                              dropped_terms = character(0), collapse = NULL,
+                              optimizer_failure = TRUE,
+                              summary = "the optimiser failed or threw"))
+  conv <- dance_traj_converged(m)
+  sing <- dance_traj_is_singular(m)
+  coll <- dance_traj_re_collapse(m)
+  rk <- dance_traj_rank_deficient(m)
+  nb <- if (is.null(coll)) 0L else sum(vapply(coll, function(x) x$n_collapsed, integer(1)))
+  list(fitted = TRUE, converged = conv, singular = sing,
+       boundary_dims = nb,
+       rank_deficient = rk$deficient, dropped_terms = rk$dropped,
+       collapse = coll, optimizer_failure = !conv,
+       summary = paste(c(
+         if (conv) "converged" else "the optimiser did NOT converge",
+         if (sing) sprintf("on a boundary (%d random-effect dimension%s collapsed)",
+                           nb, if (nb == 1L) "" else "s"),
+         if (rk$deficient) sprintf("with a RANK-DEFICIENT fixed-effect matrix (dropped: %s)",
+                                   paste(rk$dropped, collapse = ", "))),
+         collapse = ", "))
+}
+
 # ------------------------------------------------------------------------------
 # ONE FIT at a given rung
 # ------------------------------------------------------------------------------
 dance_traj_fit_one <- function(spec, re_formula, engine = "lmer", REML = TRUE,
-                               ar1 = FALSE) {
+                               cor_struct = NULL) {
   f <- stats::as.formula(paste(spec$fixed_formula, "+", re_formula))
   d <- spec$data
   if (identical(engine, "glmmTMB")) {
     if (!requireNamespace("glmmTMB", quietly = TRUE)) return(NULL)
-    if (ar1) {
-      # glmmTMB's ar1() needs an explicit, evenly-indexed time FACTOR
-      d$.tf <- factor(match(d$t, sort(unique(d$t))),
-                      levels = seq_along(sort(unique(d$t))))
-      f <- stats::as.formula(paste(spec$fixed_formula, "+", re_formula,
-                                   "+ ar1(0 + .tf | subject)"))
+    if (!is.null(cor_struct)) {
+      # THE CORRELATION RESETS AT THE CURVE, NOT THE PARTICIPANT. Two
+      # measurements in different sessions of the same person are not
+      # consecutive points of one autocorrelated series, and grouping the
+      # structure by subject would say they were -- borrowing a lag-1
+      # correlation across a gap of weeks.
+      grp <- spec$curve_var %||% "subject"
+      if (identical(cor_struct, "ar1")) {
+        # glmmTMB's ar1() needs an explicit, evenly-indexed time FACTOR, which
+        # is exactly why it is only offered on an even grid: the index is the
+        # lag, so an uneven grid would silently call unequal gaps equal.
+        d$.tf <- factor(match(d$t, sort(unique(d$t))),
+                        levels = seq_along(sort(unique(d$t))))
+        f <- stats::as.formula(paste(spec$fixed_formula, "+", re_formula,
+                                     sprintf("+ ar1(0 + .tf | %s)", grp)))
+      } else {
+        # ou() is the continuous-time (Ornstein-Uhlenbeck) analogue: the
+        # correlation decays in ACTUAL elapsed time, so an uneven grid is
+        # handled as an uneven grid.
+        d$.tn <- glmmTMB::numFactor(d$t)
+        f <- stats::as.formula(paste(spec$fixed_formula, "+", re_formula,
+                                     sprintf("+ ou(0 + .tn | %s)", grp)))
+      }
     }
     return(tryCatch(glmmTMB::glmmTMB(f, data = d, REML = REML),
                     error = function(e) NULL, warning = function(w) NULL))
@@ -124,45 +218,91 @@ dance_traj_fit_one <- function(spec, re_formula, engine = "lmer", REML = TRUE,
 # Returns the fit plus the log. `rung` is 1-based into spec$re_ladder, and
 # `simplified` says whether the requested structure survived -- because a reader
 # cannot tell rung 2 from rung 4 by looking at the fixed-effect coefficients.
+# RESIDUAL CORRELATION: DISCRETE AND CONTINUOUS ARE NOT THE SAME MODEL
+# --------------------------------------------------------------------
+# A discrete AR(1) indexes observations by POSITION: rows 1 and 2 are one lag
+# apart whether that is 20 minutes or six hours. On an even grid position and
+# elapsed time are the same thing and AR(1) is the natural choice. On an uneven
+# one they are not, and fitting AR(1) anyway asserts that a long gap and a short
+# gap carry the same correlation -- a claim about the data that nothing in the
+# data supports.
+#
+# So `residual_cor` takes "ar1", "ou" (the continuous-time Ornstein-Uhlenbeck /
+# CAR(1) analogue, where correlation decays in actual elapsed time) or "auto",
+# which reads spec$time_regular and picks. Asking for "ar1" on an irregular grid
+# is REFUSED rather than quietly honoured. Both are grouped by the CURVE, so the
+# series resets at each session rather than running across a participant's
+# separate visits.
 dance_traj_fit <- function(spec, engine = c("lmer", "glmmTMB"), REML = TRUE,
+                           residual_cor = c("none", "auto", "ar1", "ou"),
                            ar1 = FALSE, max_rung = NULL) {
   engine <- match.arg(engine)
+  residual_cor <- match.arg(residual_cor)
+  if (isTRUE(ar1) && identical(residual_cor, "none")) residual_cor <- "ar1"
   if (!isTRUE(spec$ok)) return(list(ok = FALSE, message = spec$message))
-  if (ar1 && identical(engine, "lmer"))
-    return(list(ok = FALSE, message = paste(
-      "A residual AR(1) structure was requested, but lme4 cannot express one.",
+
+  regular <- isTRUE(spec$time_regular %||% TRUE)
+  if (identical(residual_cor, "auto"))
+    residual_cor <- if (regular) "ar1" else "ou"
+  if (identical(residual_cor, "ar1") && !regular)
+    return(list(ok = FALSE, message = sprintf(paste(
+      "A discrete AR(1) was requested, but these observations are NOT evenly",
+      "spaced (gaps run from %.4g to %.4g %s). A discrete AR(1) indexes by",
+      "position, so it would treat the longest gap and the shortest as one lag",
+      "apart. Use residual_cor = 'ou' for the continuous-time structure, whose",
+      "correlation decays in actual elapsed time, or 'auto' to let the spec",
+      "choose."), spec$time_gaps[1], spec$time_gaps[2], spec$time_units %||% "units")))
+  cor_struct <- if (identical(residual_cor, "none")) NULL else residual_cor
+  if (!is.null(cor_struct) && identical(engine, "lmer"))
+    return(list(ok = FALSE, message = sprintf(paste(
+      "A residual %s structure was requested, but lme4 cannot express one.",
       "Use engine = 'glmmTMB', and note that Kenward-Roger is then unavailable",
-      "so the block tests become asymptotic Wald tests.")))
+      "so the block tests become asymptotic Wald tests."), toupper(cor_struct))))
 
   ladder <- spec$re_ladder
   if (!is.null(max_rung)) ladder <- ladder[seq_len(min(max_rung, length(ladder)))]
   attempts <- list()
   for (i in seq_along(ladder)) {
-    m <- dance_traj_fit_one(spec, ladder[[i]]$formula, engine, REML, ar1)
-    ok_fit <- !is.null(m)
-    conv <- ok_fit && dance_traj_converged(m)
-    sing <- ok_fit && dance_traj_is_singular(m)
-    attempts[[i]] <- list(rung = i, label = ladder[[i]]$label,
-                          formula = ladder[[i]]$formula,
-                          fitted = ok_fit, converged = conv, singular = sing)
-    if (ok_fit && conv) {
+    m <- dance_traj_fit_one(spec, ladder[[i]]$formula, engine, REML, cor_struct)
+    st <- dance_traj_status(m)
+    attempts[[i]] <- c(list(rung = i, label = ladder[[i]]$label,
+                            formula = ladder[[i]]$formula), st)
+    if (st$fitted && st$converged) {
       notes <- character(0)
       if (i > 1L) notes <- c(notes, sprintf(paste(
         "The requested random structure (%s) did not converge; the fit reported here",
         "uses %s. This is a DIFFERENT model from the one requested."),
         ladder[[1]]$label, ladder[[i]]$label))
-      if (sing) notes <- c(notes, paste(
-        "At least one variance component is estimated at the boundary (a variance of",
-        "zero, or a correlation of +/-1). The term is KEPT: dropping a",
+      if (isTRUE(st$singular)) notes <- c(notes, sprintf(paste(
+        "%d random-effect dimension%s estimated at the boundary (a variance of zero,",
+        "or a correlation of +/-1). The term is KEPT here, because dropping a",
         "design-justified random effect because its estimate sits on the boundary is",
-        "what makes the fixed-effect tests anticonservative, and the boundary estimate",
-        "is still the REML estimate. Read it as 'these data do not separate that",
-        "component from zero', not as a failed fit."))
+        "what makes the fixed-effect tests anticonservative, and a boundary estimate",
+        "is still the REML estimate of a variance that is genuinely near zero. That",
+        "is NOT a claim that the maximal structure is the scientifically right one --",
+        "read $re_collapse for which dimensions went, and see the validation gate for",
+        "the evidence behind the rule."),
+        st$boundary_dims, if (st$boundary_dims == 1L) " is" else "s are"))
+      if (isTRUE(st$rank_deficient)) notes <- c(notes, sprintf(paste(
+        "The FIXED-effect design matrix is rank deficient: %s could not be estimated",
+        "and were dropped. This is not a singularity -- the model that was fitted is",
+        "missing terms the formula asked for, so a block test over those terms is",
+        "testing something other than what it names."),
+        paste(st$dropped_terms, collapse = ", ")))
       return(list(
-        ok = TRUE, model = m, engine = engine, REML = REML, ar1 = ar1,
+        ok = TRUE, model = m, engine = engine, REML = REML,
+        ar1 = identical(cor_struct, "ar1"), residual_cor = cor_struct,
+        residual_cor_group = if (is.null(cor_struct)) NULL else (spec$curve_var %||% "subject"),
         spec = spec,
         re_rung = i, re_label = ladder[[i]]$label, re_formula = ladder[[i]]$formula,
-        simplified = i > 1L, singular = sing,
+        simplified = i > 1L,
+        # the five statuses, kept apart
+        converged = st$converged, singular = st$singular,
+        boundary_dims = st$boundary_dims, re_collapse = st$collapse,
+        rank_deficient = st$rank_deficient, dropped_terms = st$dropped_terms,
+        status = st$summary,
+        simplified_reason = if (i > 1L)
+          vapply(attempts[seq_len(i - 1L)], function(a) a$summary, character(1)) else NULL,
         n_rungs = length(ladder), attempts = attempts,
         formula = paste(spec$fixed_formula, "+", ladder[[i]]$formula),
         note = if (length(notes)) paste(notes, collapse = " ") else NULL))
@@ -217,13 +357,57 @@ dance_traj_profile_tau <- function(d, period, n_harmonics, design_terms,
   at_edge <- best <= min(tau_grid) * 1.001 || best >= max(tau_grid) * 0.999
 
   final <- NULL
-  sp <- dance_traj_spec(d, period, n_harmonics, "exp_sat", design_terms,
-                        covariates, t0, best, interaction = interaction)
-  if (isTRUE(sp$ok)) final <- dance_traj_fit(sp, engine = engine, REML = REML)
+  # A FLAT PROFILE SUPPRESSES THE FIT, it does not merely annotate it. If the
+  # likelihood cannot tell one tau from another, then "the fit at the best tau"
+  # is the fit at an arbitrary point of a ridge, and handing it back as a
+  # fitted model invites exactly the substantive inference the flatness rules
+  # out. The profile itself is still returned, so the flatness is visible.
+  if (!flat) {
+    sp <- dance_traj_spec(d, period, n_harmonics, "exp_sat", design_terms,
+                          covariates, t0, best, interaction = interaction)
+    if (isTRUE(sp$ok)) final <- dance_traj_fit(sp, engine = engine, REML = REML)
+  }
+
+  # TAU WAS ESTIMATED, AND THE FIT BELOW DOES NOT KNOW THAT.
+  # ------------------------------------------------------------------
+  # `final` is an ordinary linear mixed fit at tau = best. Conditional on tau it
+  # is exactly right, and Kenward-Roger on it is exactly the KR of a model with
+  # a known basis column. But tau was not known -- it was read off this same
+  # data, and every downstream degree of freedom is computed as though it had
+  # been handed down from outside. The effect is one-directional: intervals are
+  # too narrow and p-values too small, by an amount this function does not
+  # quantify.
+  #
+  # The profile interval below IS a proper interval for tau (a likelihood-ratio
+  # interval, not a delta-method one), so the uncertainty is measured -- it is
+  # simply not propagated into the fixed-effect inference. Propagating it needs
+  # the profiling repeated inside a participant-level bootstrap, which is the
+  # honest fix and is not in this phase. Until then dance_traj_calibration()
+  # puts any exp_sat fit OUTSIDE the validated grid by name, and this object
+  # carries the warning so a caller cannot pick up `fit` without it.
+  if (!is.null(final) && isTRUE(final$ok)) {
+    final$tau_estimated <- TRUE
+    final$tau_profile_ci <- if (length(inside)) range(inside) else c(NA_real_, NA_real_)
+    final$tau_warning <- paste(
+      "tau was ESTIMATED from these data by profiling, and the inference in this",
+      "fit is CONDITIONAL ON THE SELECTED VALUE. The reported degrees of freedom,",
+      "standard errors and p-values do not account for having chosen tau, so they",
+      "are optimistic: intervals too narrow, p-values too small, by an amount not",
+      "quantified here.",
+      if (length(inside)) sprintf(
+        "The profile-likelihood interval for tau is [%.3g, %.3g] -- read that as the",
+        min(inside), max(inside)) else NULL,
+      if (length(inside)) "uncertainty the fixed-effect inference is NOT carrying." else NULL,
+      "Propagating it requires repeating the profile inside a participant-level",
+      "bootstrap.")
+  }
 
   list(ok = TRUE, profile = prof, tau = best,
        ci = if (length(inside)) range(inside) else c(NA_real_, NA_real_),
        logLik_range = drop, flat = flat, at_edge = at_edge, fit = final,
+       tau_estimated = TRUE,
+       conditional_inference_warning = if (!is.null(final) && isTRUE(final$ok))
+         final$tau_warning else NULL,
        message = if (flat) sprintf(paste(
          "tau is NOT identified by these data: the log-likelihood varies by only",
          "%.2f across the whole grid (%.3g to %.3g), against the %.2f that would",

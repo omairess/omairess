@@ -113,9 +113,15 @@ dance_traj_long <- function(curves, time_points, subject, factors = list()) {
 # neither, and is reported as "partial" rather than guessed at -- it is usually
 # a data error (an inconsistent identifier) and silently treating it as within
 # would put unpaired observations into a paired term.
-dance_traj_classify <- function(d, factors = NULL) {
+# `roles` lets the user OVERRIDE what the data appear to say -- a named vector
+# such as c(Visit = "within"). Automatic classification is kept because it is
+# what makes the module usable, but a classification the user cannot see and
+# cannot correct is a guess with a confident face on it. An override is recorded
+# as an override, so the readout never claims the data said something they did
+# not: `source` is "data" or "user" on every row.
+dance_traj_classify <- function(d, factors = NULL, roles = NULL) {
   if (is.null(factors))
-    factors <- setdiff(names(d), c(".row", "subject", "t", "y"))
+    factors <- setdiff(names(d), c(".row", "subject", "t", "y", "curve"))
   labels <- attr(d, "labels") %||% stats::setNames(factors, factors)
   out <- do.call(rbind, lapply(factors, function(f) {
     v <- d[[f]]
@@ -128,11 +134,23 @@ dance_traj_classify <- function(d, factors = NULL) {
     per <- per[is.finite(per) & per > 0]
     mn <- if (length(per)) min(per) else NA_integer_
     mx <- if (length(per)) max(per) else NA_integer_
+    n_lv <- nlevels(droplevels(as.factor(v)))
     role <- if (!is.finite(mx)) "unusable"
+            # A FACTOR WITH ONE LEVEL IS NOT A FACTOR. It satisfies "every
+            # participant sees exactly one level" and so read as
+            # between-participant on the old rule -- and then every one of its
+            # columns, and every interaction it appears in, is aliased with the
+            # intercept. The fit comes back rank deficient, the block test has
+            # nothing estimable to test, and the whole analysis returns empty.
+            # This happens in practice whenever a filter leaves one group
+            # standing, so it is named rather than left to surface downstream.
+            else if (n_lv < 2) "constant"
             else if (mx == 1) "between"
             else if (mn > 1) "within"
             else "partial"
     note <- switch(role,
+      constant = sprintf("only one level ('%s') -- carries no information and cannot be a design factor",
+                         levels(droplevels(as.factor(v)))[1]),
       between = "one level per participant",
       within  = sprintf("every participant contributes %s levels",
                         if (mn == mx) as.character(mn) else sprintf("%d-%d", mn, mx)),
@@ -140,13 +158,63 @@ dance_traj_classify <- function(d, factors = NULL) {
                         sum(per == 1), sum(per > 1)),
       "no usable values")
     data.frame(factor = f, label = labels[[f]] %||% f,
-               n_levels = nlevels(droplevels(as.factor(v))),
+               n_levels = n_lv,
                role = role, min_within = mn, max_within = mx, note = note,
                stringsAsFactors = FALSE)
   }))
   rownames(out) <- NULL
+  out$role_from_data <- out$role
+  out$source <- "data"
+  if (length(roles)) {
+    for (f in intersect(names(roles), out$factor)) {
+      i <- match(f, out$factor)
+      r <- as.character(roles[[f]])
+      if (!r %in% c("between", "within", "covariate"))
+        stop(sprintf("dance_traj_classify(): role '%s' for '%s' is not one of between/within/covariate.", r, f))
+      if (!identical(r, out$role[i])) {
+        out$note[i] <- sprintf("%s; SET BY THE USER to '%s' (the data look like '%s')",
+                               out$note[i], r, out$role_from_data[i])
+        out$source[i] <- "user"
+      }
+      out$role[i] <- r
+    }
+  }
   out
 }
+
+# ------------------------------------------------------------------------------
+# THE CURVE (SESSION) IDENTIFIER
+# ------------------------------------------------------------------------------
+# A participant does not contribute one trajectory. They contribute one per
+# combination of the within-participant factors: placebo and caffeine, three
+# visits, condition x session. Each of those is a CURVE, and the random-effects
+# architecture has to be able to put variance there -- a participant can be
+# strongly rhythmic on one occasion and flat on the next.
+#
+# The first version of the ladder wrote that grouping as the literal string
+# "subject:Condition", which is correct for exactly one design: a 2 x 2 with a
+# factor called Condition. Everything below builds an explicit `curve` factor
+# instead, from the participant identifier and EVERY within-participant factor,
+# so the same code covers participant x drug x visit, a 5-level within factor,
+# or no within factor at all (where the curve is the participant and the level
+# collapses away by construction).
+#
+# It is a column in the data, not a term in a formula, because three other
+# things need it: the residual correlation structure has to reset at the curve
+# (measurements in different sessions are not one autocorrelated series), the
+# cluster bootstrap has to resample whole curves, and the fit report has to say
+# how many curves there were.
+dance_traj_curve_id <- function(d, within_terms = character(0), subject = "subject") {
+  if (!length(within_terms)) return(factor(as.character(d[[subject]])))
+  parts <- c(list(as.character(d[[subject]])),
+             lapply(within_terms, function(f) as.character(d[[f]])))
+  factor(do.call(paste, c(parts, list(sep = " | "))))
+}
+
+# Is the curve level distinguishable from the participant level at all? With no
+# within factor every curve IS a participant, and a model carrying both would be
+# asking the data to split one variance into two indistinguishable halves.
+dance_traj_has_curve_level <- function(within_terms) length(within_terms) > 0
 
 # The one-word description of the whole design, for the readout and the report.
 dance_traj_design_kind <- function(cls) {
@@ -258,18 +326,25 @@ dance_traj_formula <- function(basis_terms, design_terms = character(0),
 # 0.180, while adding the rung moved it to 0.080.
 #
 # So the ladder now STARTS at the curve level whenever a within-participant
-# factor exists, and the grouping factor is subject x (all within factors)
-# jointly -- one level per observed curve. The order then drops, in turn: the
-# curve-specific rhythm, the curve-specific level, the participant-specific
-# trend, the correlations among the participant rhythm terms, the rhythm itself,
-# and finally everything but the level.
+# factor exists. The grouping factor is the `curve` COLUMN the spec builds from
+# the participant identifier and every within-participant factor -- not a
+# hard-coded "subject:Condition", which would be right for exactly one design.
+# The order then drops, in turn: the curve-specific trend, the curve-specific
+# rhythm, the curve-specific level, the participant-specific trend, the
+# correlations among the participant rhythm terms, the rhythm itself, and
+# finally everything but the level.
 dance_traj_re_ladder <- function(basis_terms, harm_terms, within_terms = character(0),
-                                 group = "subject") {
+                                 group = "subject", curve_group = NULL) {
   term <- function(terms, grp, corr = TRUE) {
     inner <- if (!length(terms)) "1" else paste(c("1", terms), collapse = " + ")
     sprintf("(%s %s %s)", inner, if (corr) "|" else "||", grp)
   }
-  curve <- if (length(within_terms)) paste(c(group, within_terms), collapse = ":") else NA_character_
+  # The curve level exists only when a within-participant factor does. The
+  # grouping factor is a COLUMN the spec built (dance_traj_curve_id), not a
+  # formula interaction spelled out here: a design with three within factors and
+  # a 5-level one both reduce to the same single column, and the residual
+  # correlation structure in layer B needs that column to exist anyway.
+  curve <- if (dance_traj_has_curve_level(within_terms)) (curve_group %||% "curve") else NA_character_
 
   out <- list()
   add <- function(formula, label, terms, corr = TRUE, curve_level = FALSE)
@@ -279,6 +354,9 @@ dance_traj_re_ladder <- function(basis_terms, harm_terms, within_terms = charact
   if (!is.na(curve)) {
     add(paste(term(basis_terms, group), "+", term(basis_terms, curve)),
         "participant trend and rhythm, plus a curve-specific trend and rhythm",
+        basis_terms, curve_level = TRUE)
+    add(paste(term(basis_terms, group), "+", term(harm_terms, curve)),
+        "participant trend and rhythm, plus a curve-specific rhythm",
         basis_terms, curve_level = TRUE)
     add(paste(term(basis_terms, group), "+", term(character(0), curve)),
         "participant trend and rhythm, plus a curve-specific level",
@@ -329,7 +407,7 @@ dance_traj_spec <- function(d, period = 24, n_harmonics = 1, trend = "none",
                             design_terms = NULL, covariates = character(0),
                             t0 = NULL, tau = NULL, response = "y",
                             interaction = c("full", "additive"),
-                            time_units = "hours") {
+                            time_units = "hours", roles = NULL) {
   interaction <- match.arg(interaction)
   bad <- function(msg) list(ok = FALSE, message = msg)
 
@@ -337,7 +415,9 @@ dance_traj_spec <- function(d, period = 24, n_harmonics = 1, trend = "none",
     return(bad("The long frame needs subject, t and y columns; build it with dance_traj_long()."))
   if (!nrow(d)) return(bad("No usable observations."))
 
-  cls <- dance_traj_classify(d)
+  cls <- tryCatch(dance_traj_classify(d, roles = roles),
+                  error = function(e) conditionMessage(e))
+  if (is.character(cls)) return(bad(cls))
   # When the caller does not name the design terms, every classifiable factor in
   # the frame is one. A "partial" factor is therefore NOT quietly left out of
   # that list: it was put in the frame to be modelled, and dropping it silently
@@ -347,6 +427,19 @@ dance_traj_spec <- function(d, period = 24, n_harmonics = 1, trend = "none",
     design_terms <- cls$factor[cls$role %in% c("between", "within", "partial")]
   covariates <- union(covariates, cls$factor[cls$role == "covariate"])
   covariates <- setdiff(covariates, design_terms)
+
+  # Single-level factors are dropped, and the drop is REPORTED. Keeping one
+  # would alias every column it appears in against the intercept; dropping it
+  # silently would leave a reader believing a factor was modelled when it was
+  # not. The analysis that remains is the correct one for the data actually
+  # present, which is the honest answer when a filter has left one group.
+  # Read off the CLASSIFICATION, not off design_terms: when the caller did not
+  # name the design terms, a constant factor never entered that list in the
+  # first place, so intersecting with it reported nothing and the drop was
+  # silent -- which is the failure mode this block exists to prevent.
+  constant <- cls$factor[cls$role == "constant"]
+  design_terms <- setdiff(design_terms, constant)
+  covariates <- setdiff(covariates, constant)
 
   partial <- cls$factor[cls$role == "partial"]
   if (length(intersect(partial, design_terms)))
@@ -397,9 +490,22 @@ dance_traj_spec <- function(d, period = 24, n_harmonics = 1, trend = "none",
       max(0L, (n_times - 1L - length(bas$trend_terms)) %/% 2L))))
 
   within_terms <- intersect(cls$factor[cls$role == "within"], design_terms)
-  ladder <- dance_traj_re_ladder(bas$basis_terms, bas$harm_terms, within_terms)
+  # The curve column, built once here so the ladder, the residual correlation
+  # structure and the cluster bootstrap all agree on what a curve is.
+  bas$data$curve <- dance_traj_curve_id(bas$data, within_terms)
+  n_curves <- nlevels(droplevels(bas$data$curve))
+  ladder <- dance_traj_re_ladder(bas$basis_terms, bas$harm_terms, within_terms,
+                                 curve_group = "curve")
   fixed <- dance_traj_formula(bas$basis_terms, design_terms, covariates,
                               response, interaction)
+
+  # Regular or irregular sampling, decided here rather than guessed at in layer
+  # B: a discrete AR(1) treats consecutive rows as one lag apart, which is only
+  # the same thing as "one time unit apart" when the grid is even.
+  ut <- sort(unique(bas$data$t))
+  gaps <- diff(ut)
+  regular <- length(gaps) < 2 ||
+             (max(gaps) - min(gaps)) <= 1e-6 * max(abs(c(1, gaps)))
 
   structure(list(
     ok = TRUE,
@@ -414,7 +520,20 @@ dance_traj_spec <- function(d, period = 24, n_harmonics = 1, trend = "none",
     basis_terms = bas$basis_terms, harm_terms = bas$harm_terms,
     trend_terms = bas$trend_terms,
     design_terms = design_terms, covariates = covariates,
+    constant_terms = constant,
+    constant_note = if (length(constant)) sprintf(paste(
+      "%s dropped: %s only one level in these data, so every column it would",
+      "contribute is aliased with the intercept. The model below does not include",
+      "it."), paste(sprintf("'%s'", constant), collapse = ", "),
+      if (length(constant) == 1L) "it has" else "they have") else NULL,
     within_terms = within_terms,
+    curve_var = "curve", n_curves = n_curves,
+    has_curve_level = dance_traj_has_curve_level(within_terms),
+    curve_definition = if (length(within_terms))
+      sprintf("participant x %s", paste(within_terms, collapse = " x "))
+      else "the participant (no within-participant factor, so a curve IS a participant)",
+    time_regular = regular,
+    time_gaps = if (length(gaps)) range(gaps) else c(NA_real_, NA_real_),
     between_terms = intersect(cls$factor[cls$role == "between"], design_terms),
     interaction = interaction,
     classification = cls,
@@ -436,6 +555,25 @@ dance_traj_describe <- function(spec) {
   l <- character(0)
   a <- function(...) l <<- c(l, sprintf(...))
   a("Design:            %s", spec$design_kind)
+  # THE CLASSIFICATION IS SHOWN, NOT JUST USED. Automatic between/within
+  # detection is what makes the module usable, but a classification the user
+  # cannot see is a guess with a confident face on it -- and it decides the
+  # random structure, so getting it wrong is not cosmetic. Every factor is
+  # listed with its role and where that role came from.
+  for (i in seq_len(nrow(spec$classification))) {
+    r <- spec$classification[i, ]
+    a("  %-16s %s (%s)%s", r$factor, r$role,
+      if (identical(r$source, "user")) "SET BY YOU" else "read from the data",
+      if (identical(r$source, "user"))
+        sprintf(" -- the data look like '%s'", r$role_from_data) else "")
+  }
+  if (length(spec$constant_terms)) a("Dropped:           %s", spec$constant_note)
+  a("Curve (session):   %s; %d curve(s) over %d participant(s)",
+    spec$curve_definition, spec$n_curves, spec$n_participants)
+  a("Time sampling:     %s",
+    if (isTRUE(spec$time_regular)) "evenly spaced"
+    else sprintf("UNEVEN (gaps %.4g to %.4g) -- a discrete AR(1) is refused here",
+                 spec$time_gaps[1], spec$time_gaps[2]))
   a("Response:          %s", spec$response)
   a("Participants:      %d, contributing %d observations", spec$n_participants, spec$n_obs)
   a("Time variable:     %s (%s); reference time t = 0 at %s",
