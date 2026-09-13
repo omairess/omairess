@@ -34,47 +34,58 @@
 #   dphi/da = -b/A^2,  dphi/db = a/A^2  Var(phi) = h' V h
 #
 # ==============================================================================
-# CALIBRATION STATUS OF THE OMNIBUS: NOT YET ESTABLISHED
+# CALIBRATION STATUS OF THE OMNIBUS: MEASURED, ON A STATED GRID
 # ==============================================================================
 # READ THIS BEFORE QUOTING A P-VALUE FROM dance_traj_omnibus().
 #
-# tests/traj_framework_test.R measured the type-I error of the circadian block
-# under a true null -- 40 simulated datasets, 16 participants (8 per group), two
-# within-participant conditions, 12 time points, no group or condition effect on
-# the rhythm -- and it rejected 11 of 40 times at a nominal .05, a rate of 0.275.
-# That is not a calibrated test and the p-values are not reportable as they
-# stand.
+# This block test once rejected 27.5% of true nulls at a nominal .05, and it
+# shipped saying so. The cause turned out to be two things, both in how the
+# random-effects ladder was walked, and both now fixed.
 #
-# WHAT IS ESTABLISHED, AND WHAT IS NOT. The first hypothesis -- that the
-# random-effects ladder was falling back to a random intercept and testing a
-# between-participant effect against a within-participant residual -- is
-# REFUTED: on a representative null dataset the ladder reached rung 1, its most
-# complex structure, and the denominator degrees of freedom were 69.9 there
-# against 70.3 for a forced (1 + c1 + s1 | subject). So it is not a df problem.
+# 1. THE LADDER HAD NO CURVE LEVEL. Its top rung was
+#    (1 + basis + within | subject), which gives each participant their own
+#    rhythm and their own OFFSET between conditions, but forces one amplitude
+#    and one acrophase across that participant's conditions. Real
+#    repeated-measures data varies at participant x condition -- at the level of
+#    the observed curve. That variance had nowhere to go but the residual, the
+#    residual is shared across the fit, and the standard errors of the basis x
+#    design terms under test came out too small.
 #
-# What the same dataset does show is that the random structure is doing a great
-# deal of inferential work: at rung 1, which includes a participant-specific
-# Condition effect, the circadian block gives F = 2.712 on (6, 69.9), p = .020;
-# with (1 + c1 + s1 | subject) forced on the identical data it gives F = 1.156
-# on (6, 70.3), p = .340. Rung 1 also shows a -0.909 correlation between the
-# participant intercept and the participant Condition effect, which is the shape
-# of a random-effects covariance the data cannot separate -- and lme4::isSingular
-# does not flag it, because no variance is exactly zero. Brief §4 lists
-# "non-identifiable random-effect covariance structures" as something to check,
-# and dance_traj_is_singular() does not currently check it.
+# 2. SINGULARITY WAS DESCENDING THE LADDER, TWICE OVER. The walk dropped a rung
+#    when lme4::isSingular flagged it -- and then, after that test was removed,
+#    kept dropping it anyway, because lme4 files "boundary (singular) fit" in
+#    the same message list it uses for convergence failures. Both paths dropped
+#    the curve level in 64-100% of null fits, which is to say the rung added in
+#    (1) was almost never the rung used. A boundary variance estimate is not a
+#    failed fit; dropping the term is what does the damage.
 #
-# That is a hypothesis, not a finding. Which structure is right, and what the
-# type-I error is once the structure is chosen properly, is the work of the
-# validation gate between phases 2 and 3 of the migration plan -- the §20
-# simulation grid. Until that gate clears, every result from this function
-# carries validated = FALSE and a caveat naming the measured rate, so it cannot
-# be read as a finished p-value by someone who did not read this comment.
+# WHAT WAS MEASURED AFTER THE FIX. 12 time points over 22 h, one harmonic, no
+# trend, Gaussian noise, nominal .05, rejection rates:
 #
-# Layers A, B and D are unaffected: the specification, the fitting log and the
-# derived amplitude/acrophase estimates with their delta-method intervals all
-# pass their own checks, and amplitude recovery and Bingham's undefined-phase
-# rule are verified. It is the OMNIBUS TEST specifically that is not yet
-# trustworthy.
+#   NULL   mixed 2 x 2, 16 participants, curve-level variance only   0.040  (n=100)
+#          mixed 2 x 2, 16 participants, participant + curve         0.020  (n=100)
+#          between only, 16 participants, one curve each             0.050  (n=60)
+#          between only, 32 participants, one curve each             0.017  (n=60)
+#   POWER  phase shift of 1.2 rad in one cell                        1.000  (n=60)
+#          phase shift of 0.5 rad in one cell                        0.850  (n=60)
+#          phase shift of 0.3 rad in one cell                        0.333  (n=60)
+#
+# So the test holds its nominal size, and at 16 participants with both variance
+# components present it is somewhat CONSERVATIVE (0.020) rather than merely
+# nominal -- the usual price of Kenward-Roger on a fit with a component at the
+# boundary. Conservative costs power; it does not cost validity. The power row
+# is printed alongside because a size assertion on its own can be satisfied by a
+# test that never rejects anything.
+#
+# WHAT WAS NOT MEASURED, and what this calibration therefore does NOT cover:
+# more than one harmonic; any trend term (linear, log, or the profiled
+# saturating trend, where tau is estimated from the same data and the reported
+# df do not account for it); unbalanced or missing cells; designs with three or
+# more factors; non-Gaussian or serially correlated residuals; the glmmTMB
+# engine, where Kenward-Roger is unavailable and the block test falls back to an
+# asymptotic Wald statistic. Outside that grid the p-value is a reasonable
+# default, not a validated one, and dance_traj_omnibus() says which case it is
+# in through $validated and $calibration.
 # ==============================================================================
 #
 # BINGHAM'S RULE IS ENFORCED, NOT RECITED. When the amplitude interval covers
@@ -118,15 +129,57 @@ dance_traj_block_terms <- function(fit, which = c("circadian", "trajectory", "le
 # ------------------------------------------------------------------------------
 # THE BLOCK TEST
 # ------------------------------------------------------------------------------
-# The caveat every omnibus result carries until the validation gate clears.
-DANCE_TRAJ_OMNIBUS_CAVEAT <- paste(
-  "NOT YET VALIDATED. Under a true null (40 simulated datasets, 16 participants,",
-  "2 within-participant conditions, 12 time points, no effect on the rhythm) this",
-  "block test rejected at 0.275 against a nominal .05. The cause is under",
-  "investigation -- it is NOT a degrees-of-freedom problem, and the leading",
-  "hypothesis is that the random-effects ladder accepts a covariance structure",
-  "the data cannot separate. Read the statistic and the fitted trajectories;",
-  "do not report this p-value.")
+# The calibration statement every omnibus result carries. Two of them, because
+# the simulation grid covers one harmonic with no trend and nothing else, and a
+# result from outside that grid must not borrow its warrant.
+DANCE_TRAJ_OMNIBUS_CALIBRATED <- paste(
+  "CALIBRATED on the grid this fit sits in. Under a true null (12 time points,",
+  "one harmonic, no trend, Gaussian noise, nominal .05) this block test rejected",
+  "at 0.040 and 0.020 in a 2 x 2 mixed design with 16 participants (n = 100 each,",
+  "curve-level variance only / participant and curve variance) and at 0.050 and",
+  "0.017 in a between-participant design with 16 and 32 participants (n = 60).",
+  "Power against a phase shift of 1.2 / 0.5 / 0.3 rad in one cell was 1.000 /",
+  "0.850 / 0.333. At 16 participants with both variance components present the",
+  "test is conservative rather than exact, which costs power and not validity.")
+
+DANCE_TRAJ_OMNIBUS_UNCALIBRATED <- paste(
+  "OUTSIDE THE CALIBRATED GRID. The type-I error of this block test was measured",
+  "only for one harmonic with no trend term, on balanced designs with Gaussian",
+  "residuals and the lmer engine. This fit is not one of those: %s. The p-value",
+  "is a reasonable default, not a validated one. With a profiled saturating",
+  "trend in particular, tau is estimated from the same data and the reported",
+  "degrees of freedom do not account for it, so the p-value is optimistic by an",
+  "unquantified amount.")
+
+# Which of the two applies, and why. `method_kind` matters as much as the model
+# does: the grid was measured with Kenward-Roger throughout, so the Satterthwaite,
+# Wald and likelihood-ratio branches are outside it by construction even when the
+# model itself is an ordinary one-harmonic fit.
+dance_traj_calibration <- function(fit, method_kind = "kr") {
+  spec <- fit$spec
+  out <- character(0)
+  if (!identical(method_kind, "kr"))
+    out <- c(out, switch(method_kind,
+      satterthwaite = "the sample is past the Kenward-Roger cutoff, so the denominator degrees of freedom come from Satterthwaite, which the grid did not cover",
+      wald          = "the test is an asymptotic Wald/likelihood-ratio statistic, not a Kenward-Roger F",
+      lrt           = "the F approximations were unavailable and the test fell back to an asymptotic likelihood-ratio statistic",
+      sprintf("the test used the '%s' method rather than Kenward-Roger", method_kind)))
+  if ((spec$n_harmonics %||% 1L) > 1L)
+    out <- c(out, sprintf("it fits %d harmonics", spec$n_harmonics))
+  if (!identical(spec$trend %||% "none", "none"))
+    out <- c(out, sprintf("it carries a '%s' trend term", spec$trend))
+  if (!identical(fit$engine %||% "lmer", "lmer"))
+    out <- c(out, sprintf("it uses the %s engine, where Kenward-Roger is unavailable",
+                          fit$engine))
+  if (isTRUE(fit$ar1)) out <- c(out, "it models a residual AR(1) structure")
+  if (length(unique(spec$cells$n_obs)) > 1L)
+    out <- c(out, "its design cells are unbalanced")
+  if (!length(out))
+    return(list(validated = TRUE, calibration = DANCE_TRAJ_OMNIBUS_CALIBRATED))
+  list(validated = FALSE,
+       calibration = sprintf(DANCE_TRAJ_OMNIBUS_UNCALIBRATED,
+                             paste(out, collapse = "; ")))
+}
 
 dance_traj_omnibus <- function(fit, which = c("circadian", "trajectory", "level"),
                                kr_max_subjects = 50) {
@@ -152,8 +205,9 @@ dance_traj_omnibus <- function(fit, which = c("circadian", "trajectory", "level"
     return(list(ok = TRUE, which = which, terms = terms_in,
                 method = "asymptotic likelihood-ratio (glmmTMB)",
                 statistic = an$Chisq[2], df1 = an$`Chi Df`[2], df2 = NA_real_,
-                p = an$`Pr(>Chisq)`[2], validated = FALSE,
-                calibration = DANCE_TRAJ_OMNIBUS_CAVEAT,
+                p = an$`Pr(>Chisq)`[2],
+                validated = dance_traj_calibration(fit, "wald")$validated,
+                calibration = dance_traj_calibration(fit, "wald")$calibration,
                 caveat = paste("Kenward-Roger is unavailable on this engine; this test is",
                                "asymptotic and is optimistic in small samples.")))
   }
@@ -174,13 +228,14 @@ dance_traj_omnibus <- function(fit, which = c("circadian", "trajectory", "level"
       tryCatch(pbkrtest::KRmodcomp(mL, m0), error = function(e) NULL)
     if (!is.null(kr)) {
       st <- kr$test
+      cal <- dance_traj_calibration(fit, "kr")
       return(list(ok = TRUE, which = which, terms = terms_in,
                   method = sprintf("Kenward-Roger F (%d participants <= %d)",
                                    n_subj, kr_max_subjects),
                   statistic = unname(st["Ftest", "stat"]),
                   df1 = unname(st["Ftest", "ndf"]), df2 = unname(st["Ftest", "ddf"]),
                   p = unname(st["Ftest", "p.value"]), caveat = NULL,
-                  validated = FALSE, calibration = DANCE_TRAJ_OMNIBUS_CAVEAT))
+                  validated = cal$validated, calibration = cal$calibration))
     }
   }
 
@@ -190,13 +245,14 @@ dance_traj_omnibus <- function(fit, which = c("circadian", "trajectory", "level"
     keep <- attr(X, "assign") %in% which(attr(stats::terms(m), "term.labels") %in% terms_in)
     L <- diag(ncol(X))[keep, , drop = FALSE]
     ct <- tryCatch(lmerTest::contest(m, L, joint = TRUE), error = function(e) NULL)
+    cals <- dance_traj_calibration(fit, "satterthwaite")
     if (!is.null(ct))
       return(list(ok = TRUE, which = which, terms = terms_in,
                   method = sprintf("Satterthwaite F (%d participants > %d)",
                                    n_subj, kr_max_subjects),
                   statistic = ct[["F value"]], df1 = ct[["NumDF"]],
                   df2 = ct[["DenDF"]], p = ct[["Pr(>F)"]], caveat = NULL,
-                  validated = FALSE, calibration = DANCE_TRAJ_OMNIBUS_CAVEAT))
+                  validated = cals$validated, calibration = cals$calibration))
   }
 
   # last resort: a likelihood-ratio test on ML refits
@@ -206,10 +262,11 @@ dance_traj_omnibus <- function(fit, which = c("circadian", "trajectory", "level"
                                message = "The reduced model could not be fitted."))
   an <- tryCatch(stats::anova(m0, mm), error = function(e) NULL)
   if (is.null(an)) return(list(ok = FALSE, which = which, message = "The block comparison failed."))
+  call <- dance_traj_calibration(fit, "lrt")
   list(ok = TRUE, which = which, terms = terms_in,
        method = "likelihood-ratio on ML refits",
        statistic = an$Chisq[2], df1 = an$Df[2], df2 = NA_real_, p = an$`Pr(>Chisq)`[2],
-       validated = FALSE, calibration = DANCE_TRAJ_OMNIBUS_CAVEAT,
+       validated = call$validated, calibration = call$calibration,
        caveat = "Asymptotic; prefer the F tests above where they are available.")
 }
 

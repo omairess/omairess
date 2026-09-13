@@ -3269,6 +3269,91 @@ New: `server/01c_helpers_norm.R`, `tests/mixed_calibration_test.R`,
 hard-coded scratch directory that exists on one machine, which had been killing
 every check after it everywhere else.
 
+### 4.21 P21 — the trajectory framework, and the type-I error that had to be fixed before it could ship
+
+The Harmonic Regression and Cosinor tabs asked their group questions in two
+stages: fit one `lm` per participant, then run a `t.test` or an `aov` on the
+point estimates. That throws away the precision of each participant's fit,
+cannot express a repeated-measures design, and asks about amplitude and
+acrophase separately when they are two coordinates of one bivariate object.
+Phase 2 replaced it with a single mixed-effects trajectory model,
+
+    y ~ (trend + c1 + s1 + ...) * f1 * f2 * ... + (basis | subject)
+
+in four layers: `08d` builds the specification and reads the design off the data,
+`08e` fits it and logs how, `08f` tests coefficient BLOCKS and derives amplitude
+and acrophase from the same fit.
+
+**It shipped unvalidated, on purpose, and this is the part worth recording.** The
+omnibus rejected **27.5%** of true nulls at a nominal .05. Rather than tune the
+number until it looked right, every result carried `validated = FALSE` and a
+caveat naming the measured rate. Two hypotheses were raised and both were
+refuted by measurement — it was not a degrees-of-freedom problem (Satterthwaite
+0.200 vs Kenward-Roger 0.180 on the same nulls), and it was not the ladder
+falling back to a random intercept (it was already reaching its top rung). The
+actual causes were two, and the second hid the first:
+
+1. **The ladder had no curve level.** Its top rung, `(1 + basis + within | subject)`,
+   gives each participant their own rhythm and their own *offset* between
+   conditions, but forces one amplitude and one acrophase across that
+   participant's conditions. Repeated-measures data varies at
+   participant × condition. That variance went into the residual, the residual is
+   shared across the fit, and the standard errors of the very terms under test
+   came out too small. Adding `(1 + basis | subject:Condition)` moved the
+   measured rate from 0.200 to 0.080 (Satterthwaite) and 0.180 to 0.060 (KR),
+   while the df method moved it only from 0.200 to 0.180.
+
+2. **Singularity was descending the ladder, twice over.** The walk dropped a rung
+   when `lme4::isSingular` flagged it. Removing that test did not help, because
+   lme4 files `"boundary (singular) fit"` in `optinfo$conv$lme4$messages` — the
+   same list it uses for genuine convergence failures — so the convergence gate
+   kept dropping it. Between them the new rung was used in 0–36% of null fits.
+   A boundary variance estimate is not a failed fit: it is the REML estimate of
+   a variance that is near zero, the fixed-effect covariance is still estimated,
+   and Kenward-Roger still corrects it. **Dropping the term is what does the
+   damage.** The walk now descends only on genuine non-convergence, and reports
+   singularity through `fit$singular` and a note.
+
+Measured after the fix (12 time points over 22 h, one harmonic, no trend,
+Gaussian noise, nominal .05):
+
+| cell | rejection rate |
+|---|---|
+| null, mixed 2 × 2, 16 participants, curve-level variance only | 0.040 (n = 100) |
+| null, mixed 2 × 2, 16 participants, participant + curve variance | 0.020 (n = 100) |
+| null, between only, 16 participants | 0.050 (n = 60) |
+| null, between only, 32 participants | 0.017 (n = 60) |
+| power, 1.2 rad phase shift in one cell | 1.000 (n = 60) |
+| power, 0.5 rad phase shift in one cell | 0.850 (n = 60) |
+| power, 0.3 rad phase shift in one cell | 0.333 (n = 60) |
+
+At 16 participants with both variance components present the test is
+**conservative** (0.020) rather than exact — the usual price of Kenward-Roger on
+a fit with a component at the boundary. Conservative costs power, not validity,
+and the power row is measured on every test run precisely because a size
+assertion on its own is satisfied by a test that never rejects anything.
+
+The calibration does **not** extend past the grid that was simulated, and the
+code does not pretend otherwise: `dance_traj_calibration()` inspects each fit and
+returns `validated = FALSE` with the specific reason whenever the model carries
+more than one harmonic, any trend term, an unbalanced design, the `glmmTMB`
+engine, an AR(1) residual, or a test that is not Kenward-Roger. The saturating
+trend is called out by name: τ is profiled from the same data and the reported
+degrees of freedom do not account for it, so that p-value is optimistic by an
+unquantified amount.
+
+The test generator was also changed, in the harder direction. It drew `base`,
+`a` and `ph` once per *curve* and nothing at participant level, which makes two
+curves from one person no more alike than two from different people — a null the
+app will never meet. It now draws a participant offset shared across that
+participant's conditions *and* a curve offset, which is the case whose type-I
+error measured 0.283 before the curve-level rung existed.
+
+New: `server/08c_helpers_circstat.R`, `server/08d_helpers_traj.R`,
+`server/08e_helpers_trajfit.R`, `server/08f_helpers_trajinf.R`,
+`tests/circular_inference_test.R`, `tests/bootstrap_bounds_test.R`,
+`tests/traj_framework_test.R`.
+
 ## 5. Rename table
 
 | source | source app | merged app |

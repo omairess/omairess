@@ -44,18 +44,33 @@ make <- function(seed, n_per_group = 6, groups = c("a", "b"),
   sg <- rep(groups, each = n_per_group)
   rows <- list(); k <- 1L
   meta <- list(subject = character(0), Group = character(0), Condition = character(0))
-  for (i in seq_along(subj)) for (cc in conds) {
-    base <- 10 + rnorm(1, 0, 2)
-    a <- amp + rnorm(1, 0, .4)
-    ph <- 2 + rnorm(1, 0, .2)
-    if (!is.null(shift_cell) && paste(sg[i], cc) == shift_cell) ph <- ph + shift
-    lv <- if (!is.null(level_group) && sg[i] == level_group) level else 0
-    rows[[k]] <- base + lv + a * cos(2 * pi * tp / 24 - ph) + slope * tp +
-                 rnorm(nt, 0, noise)
-    meta$subject <- c(meta$subject, subj[i])
-    meta$Group <- c(meta$Group, sg[i])
-    meta$Condition <- c(meta$Condition, cc)
-    k <- k + 1L
+  # TWO LEVELS OF RANDOM VARIATION, and the first draft had only the second.
+  #
+  # A participant offset (sb, sa, sp) is shared by both of that participant's
+  # curves; a curve offset is drawn afresh for each condition. That is what
+  # repeated-measures data looks like: the same person is rhythmic in a way that
+  # persists across conditions AND differs between them. The first draft drew
+  # base/a/ph once per CURVE and nothing at participant level, which makes two
+  # curves from one person no more alike than two from different people -- a
+  # null the app will never meet, and one that happens to be easier on the model
+  # than the real thing. Adding the participant level makes this generator
+  # strictly harder, not kinder: it is the case whose type-I error measured
+  # 0.283 before the curve-level rung existed.
+  for (i in seq_along(subj)) {
+    sb <- rnorm(1, 0, 2); sa <- rnorm(1, 0, .4); sp <- rnorm(1, 0, .2)
+    for (cc in conds) {
+      base <- 10 + sb + rnorm(1, 0, 2)
+      a <- amp + sa + rnorm(1, 0, .4)
+      ph <- 2 + sp + rnorm(1, 0, .2)
+      if (!is.null(shift_cell) && paste(sg[i], cc) == shift_cell) ph <- ph + shift
+      lv <- if (!is.null(level_group) && sg[i] == level_group) level else 0
+      rows[[k]] <- base + lv + a * cos(2 * pi * tp / 24 - ph) + slope * tp +
+                   rnorm(nt, 0, noise)
+      meta$subject <- c(meta$subject, subj[i])
+      meta$Group <- c(meta$Group, sg[i])
+      meta$Condition <- c(meta$Condition, cc)
+      k <- k + 1L
+    }
   }
   list(Y = do.call(rbind, rows), t = tp, meta = meta)
 }
@@ -135,10 +150,19 @@ chk(inherits(try(e$dance_traj_basis(d, 24, 1, "exp_sat"), silent = TRUE), "try-e
 
 cat("\n-- layer A: the random-effects ladder -------------------------------\n")
 lad <- e$dance_traj_re_ladder(c("trend_lin", "c1", "s1"), c("c1", "s1"), "Condition")
-chk(length(lad) == 5 && grepl("Condition", lad[[1]]$formula) &&
-      identical(lad[[length(lad)]]$formula, "(1 | subject)"),
-    sprintf("5 rungs, most complex first, ending at (1 | subject)"),
+chk(length(lad) == 7 && identical(lad[[length(lad)]]$formula, "(1 | subject)"),
+    sprintf("%d rungs, most complex first, ending at (1 | subject)", length(lad)),
     sprintf("the ladder is wrong: %d rungs", length(lad)))
+# The top rung must give each CURVE its own rhythm, not merely each participant
+# an offset between conditions -- that distinction is the whole type-I fix.
+chk(grepl("(1 + trend_lin + c1 + s1 | subject:Condition)", lad[[1]]$formula, fixed = TRUE) &&
+      grepl("(1 + trend_lin + c1 + s1 | subject)", lad[[1]]$formula, fixed = TRUE),
+    "the ladder starts at a curve-specific rhythm, not a within-factor offset",
+    sprintf("the top rung is %s", lad[[1]]$formula))
+lad_nw <- e$dance_traj_re_ladder(c("c1", "s1"), c("c1", "s1"))
+chk(!any(grepl(":", vapply(lad_nw, function(x) x$formula, character(1)), fixed = TRUE)),
+    "with no within-participant factor there is no curve level, and no such rung",
+    "a curve-level rung appeared in a purely between-participant design")
 lad0 <- e$dance_traj_re_ladder(c("c1", "s1"), c("c1", "s1"))
 chk(!any(duplicated(vapply(lad0, function(x) x$formula, character(1)))),
     "structurally identical rungs are de-duplicated when there is no trend",
@@ -173,9 +197,25 @@ chk(identical(fit$simplified, fit$re_rung > 1L) &&
     "a simplification is reported as a different model, never silently",
     "a simplified fit did not say so")
 chk(length(fit$attempts) == fit$re_rung &&
-      all(vapply(fit$attempts[-fit$re_rung], function(a) !a$fitted || !a$converged || a$singular, logical(1))),
-    "every rung that was tried and rejected is logged with its reason",
+      all(vapply(fit$attempts[-fit$re_rung], function(a) !a$fitted || !a$converged, logical(1))),
+    "every rung that was tried and rejected is logged, and only non-convergence rejects one",
     "the attempt log does not account for the rungs tried")
+# Singularity must NOT descend the ladder: on the null data used to calibrate
+# layer C the top rung was singular about half the time, and dropping it there
+# is exactly what inflated the type-I error to 0.200.
+# Data with NO participant-level variance at all: the participant terms sit on
+# the boundary by construction, so the top rung is singular and must be kept.
+gs <- make(77, n_per_group = 6)
+gs$Y <- gs$Y - rowMeans(gs$Y) + 10        # every curve the same mean, no level spread
+fit_s <- e$dance_traj_fit(e$dance_traj_spec(build(gs), 24, 1, "none"))
+chk(isTRUE(fit_s$ok) && isTRUE(fit_s$singular) && fit_s$re_rung == 1L,
+    "a singular top rung is KEPT, not descended past",
+    sprintf("singular handling wrong: ok=%s rung=%s singular=%s",
+            fit_s$ok, fit_s$re_rung %||% NA, fit_s$singular %||% NA))
+chk(grepl("boundary", fit_s$note %||% "", fixed = TRUE) &&
+      grepl("KEPT", fit_s$note %||% "", fixed = TRUE),
+    "and the boundary is reported in the note rather than left for the reader to infer",
+    "a singular fit came back without saying so")
 chk(isFALSE(e$dance_traj_fit(sp, engine = "lmer", ar1 = TRUE)$ok),
     "a residual AR(1) request on lme4 is refused, naming glmmTMB",
     "lme4 silently accepted a residual correlation structure")
@@ -212,39 +252,68 @@ chk(e$dance_traj_omnibus(f_lv, "level")$p < .01 &&
     "a pure level difference shows in the level block and NOT in the circadian one",
     "a level difference leaked into the circadian block")
 
-cat(sprintf("\n-- layer C: type-I error under a true null (%d simulations) ---------\n", NSIM))
-# THIS IS THE CELL THAT FAILED, AND IT IS WHY LAYER C SHIPS UNVALIDATED.
+cat(sprintf("\n-- layer C: size AND power under a true null (%d simulations each) ---\n", NSIM))
+# THIS CELL ONCE FAILED, AT 0.275 AGAINST A NOMINAL .05, AND LAYER C SHIPPED
+# UNVALIDATED BECAUSE OF IT. Two things were wrong with the random-effects
+# ladder, both in server/08d and server/08e and both documented there:
 #
-# Measured at NSIM = 40: the circadian block rejected 11 of 40 null datasets at
-# a nominal .05, a rate of 0.275. Asserting that rate is inside a band around
-# .05 would assert something false, so what is asserted instead is the thing
-# that IS true and that protects a reader: the kernel declares itself
-# unvalidated and carries the measured rate with every result. That is the same
-# posture the mixed permutation kernel takes for its own liberal regime.
+#   1. the ladder had no curve (participant x condition) level at all, so the
+#      variance a repeated-measures design puts there went into the residual and
+#      shrank the standard errors of the terms under test;
+#   2. singularity descended the ladder anyway -- first through an explicit
+#      isSingular test, then, once that was removed, through lme4 filing
+#      "boundary (singular) fit" in the same message list it uses for genuine
+#      convergence failures. Between them the curve-level rung was dropped in
+#      64-100% of null fits, i.e. almost always.
 #
-# The rate is still measured and printed on every run, so the number moves when
-# the fix lands rather than staying frozen in a comment.
-p_null <- vapply(seq_len(NSIM), function(i) {
+# SIZE IS ASSERTED WITH POWER BESIDE IT, on purpose. A size assertion alone is
+# satisfied by a test that never rejects anything, and the fix here deliberately
+# keeps a random structure whose components often sit on the boundary -- exactly
+# the change that could buy calibration with power. Both numbers are measured on
+# every run, so neither can rot into a comment.
+null_p <- vapply(seq_len(NSIM), function(i) {
   ff <- e$dance_traj_fit(e$dance_traj_spec(build(make(3000 + i, n_per_group = 8)), 24, 1, "none"))
   if (!isTRUE(ff$ok)) return(NA_real_)
   e$dance_traj_omnibus(ff, "circadian")$p %||% NA_real_
 }, numeric(1))
-p_null <- p_null[is.finite(p_null)]
-rate <- mean(p_null <= .05)
-band <- 3 * sqrt(.05 * .95 / length(p_null))
-cat(sprintf("     measured rejection rate: %.3f (n = %d; a calibrated test would sit below %.3f)\n",
-            rate, length(p_null), .05 + band))
+null_p <- null_p[is.finite(null_p)]
+rate <- mean(null_p <= .05)
+band <- 3 * sqrt(.05 * .95 / length(null_p))
+chk(rate <= .05 + band,
+    sprintf("the circadian block holds its size: %.3f at a nominal .05 (n = %d, 3-SE band <= %.3f)",
+            rate, length(null_p), .05 + band),
+    sprintf("the circadian block rejects %.3f of true nulls at a nominal .05 (n = %d), above the %.3f band",
+            rate, length(null_p), .05 + band))
+
+pow_p <- vapply(seq_len(NSIM), function(i) {
+  g <- make(5000 + i, n_per_group = 8, shift = 0.5, shift_cell = "a q")
+  ff <- e$dance_traj_fit(e$dance_traj_spec(build(g), 24, 1, "none"))
+  if (!isTRUE(ff$ok)) return(NA_real_)
+  e$dance_traj_omnibus(ff, "circadian")$p %||% NA_real_
+}, numeric(1))
+pow_p <- pow_p[is.finite(pow_p)]
+pow <- mean(pow_p <= .05)
+chk(pow >= .60,
+    sprintf("and it was not bought with power: %.3f against a 0.5 rad phase shift in one cell (n = %d)",
+            pow, length(pow_p)),
+    sprintf("power against a 0.5 rad shift has fallen to %.3f (n = %d) -- the size result may be a dead test",
+            pow, length(pow_p)))
+
+# The result must still SAY which grid it was calibrated on, and must refuse to
+# borrow that warrant outside it.
 ff_one <- e$dance_traj_fit(e$dance_traj_spec(build(make(3001, n_per_group = 8)), 24, 1, "none"))
 o_one <- e$dance_traj_omnibus(ff_one, "circadian")
-chk(isFALSE(o_one$validated) && grepl("NOT YET VALIDATED", o_one$calibration %||% ""),
-    "every omnibus result declares itself NOT YET VALIDATED and carries the measured rate",
-    "an omnibus result was returned without its calibration status")
-chk(grepl("0.275", o_one$calibration, fixed = TRUE),
-    "the caveat quotes the measured 0.275, not an adjective",
-    "the caveat does not name the measured rejection rate")
-chk(rate > .05 + band,
-    sprintf("the miscalibration is reproduced (%.3f), so the caveat is not stale", rate),
-    sprintf("the block now rejects at %.3f, inside the band -- if the fix has landed, remove the caveat and restore the calibration assertion", rate))
+chk(isTRUE(o_one$validated) && grepl("CALIBRATED", o_one$calibration %||% "", fixed = TRUE) &&
+      grepl("0.040", o_one$calibration, fixed = TRUE),
+    "a one-harmonic Kenward-Roger fit declares itself calibrated and names the measured rates",
+    "the omnibus does not report its calibration grid")
+ff_h2 <- e$dance_traj_fit(e$dance_traj_spec(build(make(3001, n_per_group = 8)), 24, 2, "none"))
+o_h2 <- e$dance_traj_omnibus(ff_h2, "circadian")
+chk(isFALSE(o_h2$validated) &&
+      grepl("OUTSIDE THE CALIBRATED GRID", o_h2$calibration %||% "", fixed = TRUE) &&
+      grepl("2 harmonics", o_h2$calibration, fixed = TRUE),
+    "and a two-harmonic fit does NOT borrow it -- it says which way it left the grid",
+    "a fit outside the simulated grid claimed the grid's calibration")
 
 cat("\n-- layer D: parameters come from the SAME fit -----------------------\n")
 co <- e$dance_traj_cell_coefs(fit, 1)

@@ -228,31 +228,72 @@ dance_traj_formula <- function(basis_terms, design_terms = character(0),
 # ------------------------------------------------------------------------------
 # RANDOM-EFFECTS LADDER (brief §4)
 # ------------------------------------------------------------------------------
-# Tried top-down; layer B stops at the first rung that converges AND is not
-# singular, and reports which rung that was. Brief §4: "Do not automatically fit
-# an unnecessarily maximal random-effects structure" and "Never silently change
-# the requested statistical model" -- so the ladder is short, principled and
-# reported, rather than an automatic search.
+# Tried top-down; layer B stops at the first rung that CONVERGES, and reports
+# which rung that was. Brief §4: "Do not automatically fit an unnecessarily
+# maximal random-effects structure" and "Never silently change the requested
+# statistical model" -- so the ladder is short, principled and reported, rather
+# than an automatic search.
 #
-# The order drops, in turn: the participant-specific trend, the correlations
-# among the participant-specific rhythm terms, the rhythm itself, and finally
-# everything but the level.
+# THE CURVE-LEVEL RUNGS, AND WHY THE TOP OF THE LADDER MOVED
+# ----------------------------------------------------------
+# The first version of this ladder began at (1 + basis + within | subject). That
+# lets each participant have their own trend and rhythm, and their own OFFSET
+# between the within-participant conditions -- but it forces every participant's
+# two conditions to share ONE amplitude and ONE acrophase. A repeated-measures
+# design does not work that way: the same person can be strongly rhythmic on one
+# day and flat on the next, and that variation lives at participant x condition
+# -- at the level of the observed CURVE, not the participant.
+#
+# When a design has that variance and the model cannot express it, the surplus
+# is pushed into the residual, the residual is shared across the whole fit, and
+# the standard errors of the very terms under test (basis x design) come out too
+# small. It is not a small effect. Measured on 50 null datasets with participant
+# AND curve-level variance, 16 participants, two within-participant conditions:
+#
+#   (1 + c1 + s1 | subject)                              Satterthwaite 0.200  KR 0.180
+#   + (1 + c1 + s1 | subject:Condition)                  Satterthwaite 0.080  KR 0.060
+#
+# against a nominal .05. The missing rung, not the denominator-df approximation,
+# was the dominant term: swapping Satterthwaite for Kenward-Roger moved 0.200 to
+# 0.180, while adding the rung moved it to 0.080.
+#
+# So the ladder now STARTS at the curve level whenever a within-participant
+# factor exists, and the grouping factor is subject x (all within factors)
+# jointly -- one level per observed curve. The order then drops, in turn: the
+# curve-specific rhythm, the curve-specific level, the participant-specific
+# trend, the correlations among the participant rhythm terms, the rhythm itself,
+# and finally everything but the level.
 dance_traj_re_ladder <- function(basis_terms, harm_terms, within_terms = character(0),
                                  group = "subject") {
-  rung <- function(terms, label, corr = TRUE) {
+  term <- function(terms, grp, corr = TRUE) {
     inner <- if (!length(terms)) "1" else paste(c("1", terms), collapse = " + ")
-    list(formula = sprintf("(%s %s %s)", inner, if (corr) "|" else "||", group),
-         terms = terms, label = label, correlated = corr)
+    sprintf("(%s %s %s)", inner, if (corr) "|" else "||", grp)
   }
+  curve <- if (length(within_terms)) paste(c(group, within_terms), collapse = ":") else NA_character_
+
   out <- list()
-  if (length(within_terms))
-    out[[length(out) + 1L]] <- rung(c(basis_terms, within_terms),
-                                    "participant trend, rhythm and within-factor effect")
-  out[[length(out) + 1L]] <- rung(basis_terms, "participant trend and rhythm")
+  add <- function(formula, label, terms, corr = TRUE, curve_level = FALSE)
+    out[[length(out) + 1L]] <<- list(formula = formula, label = label, terms = terms,
+                                     correlated = corr, curve_level = curve_level)
+
+  if (!is.na(curve)) {
+    add(paste(term(basis_terms, group), "+", term(basis_terms, curve)),
+        "participant trend and rhythm, plus a curve-specific trend and rhythm",
+        basis_terms, curve_level = TRUE)
+    add(paste(term(basis_terms, group), "+", term(character(0), curve)),
+        "participant trend and rhythm, plus a curve-specific level",
+        basis_terms, curve_level = TRUE)
+    add(term(c(basis_terms, within_terms), group),
+        "participant trend, rhythm and within-factor effect",
+        c(basis_terms, within_terms))
+  }
+  add(term(basis_terms, group), "participant trend and rhythm", basis_terms)
   if (!identical(basis_terms, harm_terms))
-    out[[length(out) + 1L]] <- rung(harm_terms, "participant rhythm")
-  out[[length(out) + 1L]] <- rung(harm_terms, "participant rhythm, uncorrelated", corr = FALSE)
-  out[[length(out) + 1L]] <- rung(character(0), "participant level only")
+    add(term(harm_terms, group), "participant rhythm", harm_terms)
+  add(term(harm_terms, group, corr = FALSE), "participant rhythm, uncorrelated",
+      harm_terms, corr = FALSE)
+  add(term(character(0), group), "participant level only", character(0))
+
   # de-duplicate structurally identical rungs (e.g. trend = "none")
   seen <- character(0); keep <- logical(length(out))
   for (i in seq_along(out)) {

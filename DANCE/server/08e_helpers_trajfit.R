@@ -13,9 +13,27 @@
 #
 # §4  Do not fit a maximal random structure automatically, and never simplify
 #     silently. The ladder comes from the spec; this file walks it top-down,
-#     stops at the first rung that converges AND is non-singular, and records
-#     which rung that was. A caller that does not print re_rung is misreporting
-#     its own model.
+#     stops at the first rung that CONVERGES, and records which rung that was. A
+#     caller that does not print re_rung is misreporting its own model.
+#
+# SINGULARITY IS REPORTED, NOT ACTED ON
+# -------------------------------------
+# The first version of this walk descended the ladder on singularity as well as
+# on non-convergence. That is the common recipe and it is wrong here, for a
+# measurable reason. On the null datasets used to calibrate layer C, the
+# curve-level rung was singular in 48% of fits -- so under that rule the ladder
+# would have dropped to the participant-only rung in half of all analyses, which
+# is precisely the structure whose type-I error measured 0.200 against a nominal
+# .05. Forcing the curve-level rung, singular fits included, gave 0.060.
+#
+# A boundary estimate is not a failed fit. The REML estimate of a variance that
+# genuinely is near zero belongs at zero; the fixed-effect covariance is still
+# estimated, Kenward-Roger still corrects it, and the test stays calibrated. It
+# is the DROPPING that does the damage, because it moves variance the design
+# implies into a residual shared across the whole fit and shrinks exactly the
+# standard errors under test. So the walk descends only when the optimiser fails
+# or does not converge, and a singular fit is returned with `singular = TRUE`
+# and a note saying what the boundary means.
 #
 # §14 Residual correlation where the engine allows it. lme4 cannot express one
 #     at all, so engine = "glmmTMB" exists for that case and is labelled: the
@@ -49,11 +67,24 @@ dance_traj_is_singular <- function(m) {
   FALSE
 }
 
-# Did the optimiser actually converge? lme4 reports this as a message list.
+# Did the optimiser actually converge? lme4 reports this as a message list --
+# but that list is not purely about convergence. A fit whose optimiser code is 0
+# and whose only message is
+#
+#     "boundary (singular) fit: see help('isSingular')"
+#
+# converged perfectly well; lme4 is telling you WHERE it converged, namely to a
+# variance of zero or a correlation of one. Treating that notice as a
+# convergence failure is how the first version of this walk kept descending the
+# ladder past its top rung even after the explicit singularity test above was
+# no longer allowed to: every one of the null fits it dropped had optcode 0 and
+# that message and nothing else. The notice is filtered out here; singularity is
+# detected by dance_traj_is_singular() and REPORTED, never acted on.
 dance_traj_converged <- function(m) {
   if (inherits(m, "merMod")) {
     oc <- tryCatch(m@optinfo$conv$opt, error = function(e) 0L)
     msg <- tryCatch(m@optinfo$conv$lme4$messages, error = function(e) NULL)
+    msg <- msg[!grepl("boundary (singular) fit", msg, fixed = TRUE)]
     return(identical(as.integer(oc), 0L) && length(msg) == 0)
   }
   if (inherits(m, "glmmTMB"))
@@ -114,23 +145,33 @@ dance_traj_fit <- function(spec, engine = c("lmer", "glmmTMB"), REML = TRUE,
     attempts[[i]] <- list(rung = i, label = ladder[[i]]$label,
                           formula = ladder[[i]]$formula,
                           fitted = ok_fit, converged = conv, singular = sing)
-    if (ok_fit && conv && !sing)
+    if (ok_fit && conv) {
+      notes <- character(0)
+      if (i > 1L) notes <- c(notes, sprintf(paste(
+        "The requested random structure (%s) did not converge; the fit reported here",
+        "uses %s. This is a DIFFERENT model from the one requested."),
+        ladder[[1]]$label, ladder[[i]]$label))
+      if (sing) notes <- c(notes, paste(
+        "At least one variance component is estimated at the boundary (a variance of",
+        "zero, or a correlation of +/-1). The term is KEPT: dropping a",
+        "design-justified random effect because its estimate sits on the boundary is",
+        "what makes the fixed-effect tests anticonservative, and the boundary estimate",
+        "is still the REML estimate. Read it as 'these data do not separate that",
+        "component from zero', not as a failed fit."))
       return(list(
         ok = TRUE, model = m, engine = engine, REML = REML, ar1 = ar1,
         spec = spec,
         re_rung = i, re_label = ladder[[i]]$label, re_formula = ladder[[i]]$formula,
-        simplified = i > 1L,
+        simplified = i > 1L, singular = sing,
         n_rungs = length(ladder), attempts = attempts,
         formula = paste(spec$fixed_formula, "+", ladder[[i]]$formula),
-        note = if (i > 1L) sprintf(paste(
-          "The requested random structure (%s) did not hold; the fit reported here",
-          "uses %s. This is a DIFFERENT model from the one requested."),
-          ladder[[1]]$label, ladder[[i]]$label) else NULL))
+        note = if (length(notes)) paste(notes, collapse = " ") else NULL))
+    }
   }
   list(ok = FALSE, attempts = attempts,
-       message = paste("No rung of the random-effects ladder produced a converged,",
-                       "non-singular fit. The participant-level structure is not",
-                       "estimable from these data; see attempts for what was tried."))
+       message = paste("No rung of the random-effects ladder produced a converged fit.",
+                       "The participant-level structure is not estimable from these",
+                       "data; see attempts for what was tried."))
 }
 
 # ------------------------------------------------------------------------------

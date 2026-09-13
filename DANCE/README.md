@@ -246,6 +246,7 @@ Rscript tests/mixed_permutation_test.R
 Rscript tests/circular_inference_test.R   # the extracted circular inference helpers
 Rscript tests/bootstrap_bounds_test.R     # the P21 phase-1 defect fixes
 Rscript tests/traj_framework_test.R       # the trajectory framework; slow
+                                         # measures the omnibus's size AND power on every run
 Rscript tests/mixed_calibration_test.R   # the wider level/power grid; slow
 Rscript tests/pairwise_perm_test.R
 Rscript tests/pop_cosinor_test.R
