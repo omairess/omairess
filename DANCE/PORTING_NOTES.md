@@ -3354,6 +3354,78 @@ New: `server/08c_helpers_circstat.R`, `server/08d_helpers_traj.R`,
 `tests/circular_inference_test.R`, `tests/bootstrap_bounds_test.R`,
 `tests/traj_framework_test.R`.
 
+### 4.22 P21 phase 3 — bands, difference curves, contrasts, and the cell-keyed adapter
+
+Everything in `server/08g_helpers_trajband.R` is a linear function of the fixed
+effects of the layer-B fit, so all of it has an exact covariance and none of it
+needs a bootstrap.
+
+**Pointwise vs simultaneous is labelled, not left to the reader.** A pointwise
+95% interval is correct at each *t* separately; read across a whole curve — "the
+two trajectories differ, the bands come apart around 14:00" — it is not a 95%
+statement, because the reader made an inference about the curve after looking at
+every point of it. `dance_traj_predict()` says which band it returned and what
+that band does not license. The simultaneous band is Scheffé's, widened from
+*z* to √(qF(q, ddf)); it covers the whole *q*-parameter linear family at once and
+is therefore conservative for the single curve drawn. That conservatism is
+stated rather than tuned away — the alternative is a simulation-based band,
+which is tighter but needs a random draw and is not reproducible without storing
+a seed.
+
+**A difference curve is one contrast, not two curves subtracted.** Cell
+trajectories share coefficients, so their errors are correlated.
+`dance_traj_diff_curve()` forms (x_i − x_j)′β and takes that contrast's own
+quadratic form. Measured on the test fixture, its SE differs from the
+independent-errors formula √(se₁² + se₂²) by up to 0.544 — and a difference band
+routinely excludes zero where the two individual bands overlap. Its Scheffé
+multiplier uses the *rank of the contrast*, not the width of β.
+
+**The cross-cell covariance was wrong, and the comment claiming it was safe was
+wrong too.** `dance_traj_phase_contrast()` built a block-diagonal 4×4 and said
+dropping the off-diagonal "widens the interval rather than narrowing it". Since
+Var(t₂ − t₁) = V₁₁ + V₂₂ − 2C₁₂, that holds only when C₁₂ > 0. The fix keeps the
+emmeans linear maps so every contrast uses the exact block. The test asserts the
+design's own structure, which is a stronger check than "nonzero": cells
+separated by the **between** factor come back *exactly* independent (disjoint
+participants), while cells separated by the **within** factor covary — and on
+the fixture, dropping that covariance moved the contrast variance from 0.153 to
+0.295.
+
+Bingham's rule now reaches the contrast as well: a phase contrast whose *either*
+endpoint has an amplitude interval covering zero reports the wrapped point
+difference and `NA` for the interval, and is excluded from the multiplicity
+adjustment rather than counted as a test.
+
+**Multiplicity.** `dance_traj_contrasts()` does all m(m−1)/2 pairs over an
+arbitrary factorial, for level, amplitude or phase. Holm by default: uniformly
+more powerful than Bonferroni, no assumption about dependence, and — unlike
+Tukey — it does not require the contrasts to be a balanced set of pairwise mean
+differences, which amplitude and phase contrasts are not. `adjust = "none"` is
+available and says plainly that the family is then wrong.
+
+**The adapter refuses to fake what a one-stage fit cannot supply.**
+`dance_traj_group_fits()` produces the legacy `group_fits` shape keyed by design
+cell, so the existing plot code works over a 2 × 3 × 2 without knowing it. Four
+fields have no honest one-stage counterpart and are **not** filled with the
+nearest-looking number:
+
+| field | why not |
+|---|---|
+| `sd_amplitudes` | was the SD of per-participant amplitudes, a **dispersion**. The model's SE of the cell amplitude is a **precision**. Both are supplied under their own names; the dispersion comes from the random-effects covariance, not from the SE. |
+| `amp_arithmetic` | the arithmetic mean of per-participant amplitudes — no sample to average, and upward-biased relative to the vector mean since \|E[v]\| ≤ E[\|v\|]. |
+| `resultants` | a mean resultant length is a statistic *of a sample* of angles. The model gives a distribution, not a sample. |
+| `variance_decomp` | averaged per-participant R² shares. The one-stage analogue is a marginal/conditional R² over different variance components, and is not substituted silently. |
+
+Each absence carries its reason in `attr(, "unavailable")`, so a caller gets an
+empty panel and an explanation rather than a plausible wrong number. The
+adapter's `mean_coefs` is checked against the model's own fitted curve to 1e-8,
+with and without a trend.
+
+The app's default path is unchanged: phase 3 adds the machinery, phase 4 is what
+promotes it.
+
+New: `server/08g_helpers_trajband.R`, `tests/traj_band_test.R`.
+
 ## 5. Rename table
 
 | source | source app | merged app |

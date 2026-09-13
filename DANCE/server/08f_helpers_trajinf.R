@@ -302,36 +302,66 @@ dance_traj_cell_coefs <- function(fit, harmonic = 1) {
     return(list(ok = FALSE, message = "emmeans could not extract the harmonic coefficients."))
 
   cells <- do.call(paste, c(A$grid, list(sep = " x ")))
+  jc <- dance_traj_joint_cov(fit, ck, sk, specs)
   list(ok = TRUE, harmonic = h, period = spec$period,
        effective_period = spec$period / h,
        cells = cells, grid = A$grid,
        a = A$est, b = B$est, Va = A$V, Vb = B$V,
        # cov(a_i, b_i) is not returned by emmeans across two emtrends calls;
-       # it is recovered from the joint contrast below
-       joint = dance_traj_joint_cov(fit, ck, sk, specs, spec$design_terms))
+       # it is recovered from the linear maps below
+       joint = jc$blocks, linfct = jc$linfct, vcov_beta = jc$vcov_beta)
 }
 
-# The 2x2 covariance of (a_k, b_k) WITHIN each cell, which the delta method
-# needs and which two separate emtrends calls cannot supply.
-dance_traj_joint_cov <- function(fit, ck, sk, specs, design_terms) {
-  Vb <- as.matrix(stats::vcov(fit$model))
-  bn <- rownames(Vb)
-  # the linear map from fixed effects to each cell's coefficient
+# The covariance of the cell coefficients, WITHIN and BETWEEN cells.
+# ------------------------------------------------------------------------------
+# Every cell coefficient is a linear function of the fixed effects: a_i = l_i' b
+# for a row l_i of the emmeans linear map. So the covariance of ANY set of them
+# is L V L' exactly, for the corresponding rows -- within a cell and across
+# cells alike. The first version of this function returned only the within-cell
+# 2 x 2 blocks and left every contrast to assume the cross-cell block was zero.
+# That is not a conservative simplification. For a difference,
+#
+#     Var(t2 - t1) = V11 + V22 - 2 C12
+#
+# so dropping C12 overstates the variance when C12 > 0 and UNDERSTATES it when
+# C12 < 0 -- and C12 is routinely negative between cells of a factorial design,
+# because they are built from the same interaction coefficients with opposite
+# signs. An interval that is too narrow is the one failure mode a contrast must
+# not have, so the full map is kept and every contrast uses the exact block.
+dance_traj_joint_cov <- function(fit, ck, sk, specs) {
+  Vb <- tryCatch(as.matrix(stats::vcov(fit$model)), error = function(e) NULL)
+  if (is.null(Vb)) return(list(blocks = NULL, linfct = NULL, vcov_beta = NULL))
   L <- function(term) {
     e <- tryCatch(emmeans::emtrends(fit$model, specs = specs, var = term),
                   error = function(e) NULL)
     if (is.null(e)) return(NULL)
-    lin <- e@linfct
-    colnames(lin) <- bn[seq_len(ncol(lin))]
-    lin
+    e@linfct
   }
   La <- L(ck); Lb <- L(sk)
-  if (is.null(La) || is.null(Lb)) return(NULL)
+  if (is.null(La) || is.null(Lb) || ncol(La) != ncol(Vb))
+    return(list(blocks = NULL, linfct = NULL, vcov_beta = NULL))
   n <- nrow(La)
-  lapply(seq_len(n), function(i) {
+  blocks <- lapply(seq_len(n), function(i) {
     M <- rbind(La[i, ], Lb[i, ])
     M %*% Vb %*% t(M)
   })
+  list(blocks = blocks, linfct = list(a = La, b = Lb), vcov_beta = Vb)
+}
+
+# The exact 4 x 4 covariance of (a_i, b_i, a_j, b_j), cross-cell block included.
+# Falls back to the block-diagonal form, and SAYS it has, only when the linear
+# maps are unavailable.
+dance_traj_pair_cov <- function(coefs, i, j) {
+  lf <- coefs$linfct; Vb <- coefs$vcov_beta
+  if (!is.null(lf) && !is.null(Vb)) {
+    M <- rbind(lf$a[i, ], lf$b[i, ], lf$a[j, ], lf$b[j, ])
+    return(list(V = M %*% Vb %*% t(M), exact = TRUE))
+  }
+  if (is.null(coefs$joint)) return(NULL)
+  V <- matrix(0, 4, 4)
+  V[1:2, 1:2] <- coefs$joint[[i]]
+  V[3:4, 3:4] <- coefs$joint[[j]]
+  list(V = V, exact = FALSE)
 }
 
 # ------------------------------------------------------------------------------
@@ -392,7 +422,9 @@ dance_traj_amp_phase <- function(coefs, conf = 0.95) {
 # both amplitudes are bounded away from zero -- so the guard is on both
 # amplitudes, not on the contrast.
 dance_traj_phase_contrast <- function(coefs, i, j, conf = 0.95) {
-  if (!isTRUE(coefs$ok) || is.null(coefs$joint)) return(NULL)
+  if (!isTRUE(coefs$ok)) return(NULL)
+  pc <- dance_traj_pair_cov(coefs, i, j)
+  if (is.null(pc)) return(NULL)
   z <- stats::qnorm(1 - (1 - conf) / 2)
   k <- coefs$effective_period / (2 * pi)
   a1 <- coefs$a[i]; b1 <- coefs$b[i]; a2 <- coefs$a[j]; b2 <- coefs$b[j]
@@ -401,18 +433,35 @@ dance_traj_phase_contrast <- function(coefs, i, j, conf = 0.95) {
   d <- ((d + pi) %% (2 * pi)) - pi                 # wrap to (-pi, pi]
   g1 <- c(b1 / A1^2, -a1 / A1^2)                   # d(-phi1)
   g2 <- c(-b2 / A2^2, a2 / A2^2)                   # d(phi2)
-  V <- matrix(0, 4, 4)
-  V[1:2, 1:2] <- coefs$joint[[i]]
-  V[3:4, 3:4] <- coefs$joint[[j]]
   g <- c(g1, g2)
-  se <- sqrt(max(0, as.numeric(t(g) %*% V %*% g)))
+  se <- sqrt(max(0, as.numeric(t(g) %*% pc$V %*% g)))
+  # A contrast can be well determined when neither phase alone is, but not when
+  # either amplitude may be zero: the map to an angle is undefined there, so the
+  # delta-method SE is meaningless rather than merely wide. Bingham's rule
+  # applies to the contrast through its two endpoints.
+  sA <- function(a, b, V2) {
+    A <- sqrt(a^2 + b^2); if (!(A > 0)) return(NA_real_)
+    gA <- c(a / A, b / A); sqrt(max(0, as.numeric(t(gA) %*% V2 %*% gA)))
+  }
+  seA1 <- sA(a1, b1, pc$V[1:2, 1:2]); seA2 <- sA(a2, b2, pc$V[3:4, 3:4])
+  defined <- is.finite(seA1) && is.finite(seA2) &&
+             (A1 - z * seA1) > 0 && (A2 - z * seA2) > 0
   list(cell1 = coefs$cells[i], cell2 = coefs$cells[j],
-       diff_time = d * k, se_time = se * k,
-       lo = (d - z * se) * k, hi = (d + z * se) * k,
+       diff_time = d * k, se_time = if (defined) se * k else NA_real_,
+       lo = if (defined) (d - z * se) * k else NA_real_,
+       hi = if (defined) (d + z * se) * k else NA_real_,
        effective_period = coefs$effective_period,
-       amp1 = A1, amp2 = A2,
-       # the cross-cell covariance is dropped here (block-diagonal V), which is
-       # CONSERVATIVE when the two cells share fixed effects: it cannot make the
-       # interval too narrow. Said rather than assumed.
-       note = "cross-cell covariance treated as zero, which widens the interval rather than narrowing it")
+       amp1 = A1, amp2 = A2, defined = defined,
+       exact_cov = isTRUE(pc$exact),
+       note = if (!defined)
+         paste("At least one cell's amplitude interval covers zero, so its acrophase",
+               "is undefined and so is this contrast (Bingham et al., 1982). The",
+               "wrapped point difference is reported without an interval.")
+       else if (!isTRUE(pc$exact))
+         paste("The emmeans linear map was unavailable, so the cross-cell covariance",
+               "was treated as zero. That is NOT conservative in general -- it",
+               "understates the variance whenever the two cells covary negatively,",
+               "which is common in a factorial design. Treat this interval as",
+               "indicative only.")
+       else NULL)
 }

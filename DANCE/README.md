@@ -247,6 +247,7 @@ Rscript tests/circular_inference_test.R   # the extracted circular inference hel
 Rscript tests/bootstrap_bounds_test.R     # the P21 phase-1 defect fixes
 Rscript tests/traj_framework_test.R       # the trajectory framework; slow
                                          # measures the omnibus's size AND power on every run
+Rscript tests/traj_band_test.R            # trajectory bands, difference curves, contrasts
 Rscript tests/mixed_calibration_test.R   # the wider level/power grid; slow
 Rscript tests/pairwise_perm_test.R
 Rscript tests/pop_cosinor_test.R
@@ -255,7 +256,7 @@ Rscript -e 'testthat::test_dir("tests/testthat")'
 
 `smoke_test.R` parses every file, builds and renders the whole UI, checks that
 every sidebar entry reaches a uniquely-named tab, checks that no output id is
-assigned twice, and registers all 35 server files under a mock session. It
+assigned twice, and registers every server file under a mock session. It
 needs only the UI packages, so it runs without `fda` or `fda.usc` installed.
 
 `reactive_smoke_test.R` is the layer the others were missing. It builds a
