@@ -297,8 +297,13 @@ dance_traj_spec <- function(d, period = 24, n_harmonics = 1, trend = "none",
   if (!nrow(d)) return(bad("No usable observations."))
 
   cls <- dance_traj_classify(d)
+  # When the caller does not name the design terms, every classifiable factor in
+  # the frame is one. A "partial" factor is therefore NOT quietly left out of
+  # that list: it was put in the frame to be modelled, and dropping it silently
+  # would answer a different question from the one asked. It is carried into
+  # design_terms precisely so the refusal below fires.
   if (is.null(design_terms))
-    design_terms <- cls$factor[cls$role %in% c("between", "within")]
+    design_terms <- cls$factor[cls$role %in% c("between", "within", "partial")]
   covariates <- union(covariates, cls$factor[cls$role == "covariate"])
   covariates <- setdiff(covariates, design_terms)
 
@@ -315,8 +320,20 @@ dance_traj_spec <- function(d, period = 24, n_harmonics = 1, trend = "none",
                   error = function(e) conditionMessage(e))
   if (is.character(bas)) return(bad(bas))
 
-  # identifiability: the fixed effects must not outnumber the observations in
-  # any cell, or a cell's own trajectory is not estimable
+  # ---- identifiability -------------------------------------------------------
+  # TWO separate counts, and the second is the one that is easy to get wrong.
+  #
+  # Observations per cell must exceed the parameters a cell-specific trajectory
+  # needs -- obvious, and necessary.
+  #
+  # DISTINCT TIME POINTS must ALSO exceed them, and that is the binding
+  # constraint in this app's data. Every basis column is a function of t alone,
+  # so a cell measured at 4 distinct times spans a 4-dimensional space no matter
+  # how many participants contribute: asking for 3 harmonics plus a trend there
+  # is asking for 8 columns of a rank-4 space. The first draft of this check
+  # counted only observations and accepted exactly that model, because 4 time
+  # points x 3 participants is 12 observations and 12 > 8. The rank is what
+  # matters, and the rank is set by the distinct times.
   cells <- dance_traj_cells(bas$data, design_terms)
   per_cell_par <- 1L + length(bas$basis_terms)
   thin <- cells[cells$n_obs < per_cell_par + 1L, , drop = FALSE]
@@ -326,6 +343,17 @@ dance_traj_spec <- function(d, period = 24, n_harmonics = 1, trend = "none",
       "trajectory needs (%s). Reduce the harmonics, simplify the trend, or drop the cell."),
       nrow(thin), per_cell_par,
       paste(sprintf("%s: %d obs", thin$cell, thin$n_obs), collapse = "; "))))
+
+  n_times <- length(unique(bas$data$t))
+  if (n_times < per_cell_par)
+    return(bad(sprintf(paste(
+      "The basis has %d columns (intercept + %d trend + %d harmonic) but the data",
+      "carry only %d distinct time points. Every basis column is a function of",
+      "time alone, so the design matrix is rank deficient however many",
+      "participants contribute. Fit at most %d harmonic(s) on this time grid, or",
+      "simplify the trend."),
+      per_cell_par, length(bas$trend_terms), length(bas$harm_terms), n_times,
+      max(0L, (n_times - 1L - length(bas$trend_terms)) %/% 2L))))
 
   within_terms <- intersect(cls$factor[cls$role == "within"], design_terms)
   ladder <- dance_traj_re_ladder(bas$basis_terms, bas$harm_terms, within_terms)
