@@ -81,7 +81,7 @@ ui_tab_harmonic <- tabItem(
             sliderInput("n_harmonics", "Number of Harmonics:", min = 1, max = 8, value = 1, step = 1),
             helpText("1 = fundamental (τ), 2 = adds τ/2, 3 = adds τ/3, etc."),
             uiOutput("harmonic_warning_ui"),
-            selectInput("harmonic_trend_type", "Homeostatic Trend Model:",
+            selectInput("harmonic_trend_type", "Non-periodic Trend Model:",
                         choices = c("None (circadian only)" = "none",
                                     "Linear" = "linear",
                                     "Logarithmic" = "log",
@@ -89,7 +89,18 @@ ui_tab_harmonic <- tabItem(
                         selected = "none"),
             conditionalPanel(
               condition = "input.harmonic_trend_type != 'none'",
-              helpText(HTML("<b>Two-Process Model:</b> Separates homeostatic sleep pressure (trend) from circadian modulation (sinusoidal)."))
+              # The control used to be called "Homeostatic Trend Model" and this
+              # note called the result a "Two-Process Model". A cosinor plus a
+              # trend separates a PERIODIC component from a NON-PERIODIC one.
+              # That may be informative about circadian modulation and
+              # homeostatic accumulation, but it is not the mechanistic Borbely
+              # two-process model, and naming it so asserts a mechanism the fit
+              # does not contain.
+              helpText(HTML("Separates a <b>periodic</b> component (the harmonics) from a
+                             <b>non-periodic</b> change over time (the trend). The trend may
+                             be informative about homeostatic processes, but this is a
+                             descriptive decomposition, not a mechanistic
+                             two-process model."))
             ),
             conditionalPanel(
               condition = "input.harmonic_trend_type == 'linear'",
@@ -102,92 +113,140 @@ ui_tab_harmonic <- tabItem(
             conditionalPanel(
               condition = "input.harmonic_trend_type == 'exp_sat'",
               helpText(HTML("Y(t) = M + A·(1-e<sup>-t/τ</sup>) + harmonics<br>
-                            <small>Asymptotic saturation (classic Process S)</small><br>
+                            <small>Asymptotic saturation \u2014 the shape a homeostatic process is
+                            often assumed to take, fitted descriptively</small><br>
                             <small><em>⚠️ Uses nonlinear least squares. If fit is poor, try Log trend instead.</em></small>"))
             ),
+            # ================================================================
+            # STUDY DESIGN (P21 phase 4)
+            # ================================================================
+            # This replaces a single optional "Group Variable". That control
+            # could express exactly one design -- one between-participant factor
+            # -- and a repeated-measures study had nowhere to say so, which is
+            # how the same participant's conditions ended up treated as
+            # independent. The design is now named explicitly, because it
+            # decides the random-effects structure and therefore the standard
+            # errors of every comparison.
             hr(),
-            h4("Group Analysis"),
-            uiOutput("harmonic_group_var_ui"),
-            helpText("Optional: Select a group variable to compare rhythms between groups."),
+            h4("Study Design"),
+            radioButtons("harmonic_design", NULL,
+                         choices = c("Between-subject (independent groups)" = "between",
+                                     "Within-subject (repeated conditions)" = "within",
+                                     "Mixed (between x within)" = "mixed"),
+                         selected = "between"),
+            conditionalPanel(
+              condition = "input.harmonic_design == 'between'",
+              uiOutput("harmonic_between_var_ui"),
+              helpText("Each participant contributes one curve, in one group. Any number of levels.")
+            ),
+            conditionalPanel(
+              condition = "input.harmonic_design == 'within'",
+              uiOutput("harmonic_within_var_ui"),
+              helpText("Every participant is measured in every condition. Any number of levels.")
+            ),
+            conditionalPanel(
+              condition = "input.harmonic_design == 'mixed'",
+              uiOutput("harmonic_between_var_ui2"),
+              uiOutput("harmonic_within_var_ui2"),
+              helpText("Any size: 2 x 2, 2 x 3, 3 x 4 \u2014 nothing is hard-coded.")
+            ),
+            uiOutput("harmonic_design_readout"),
             hr(),
-            h4("Which fits enter the summaries"),
-            checkboxInput("harmonic_include_boundary",
-                          "Include fits that hit a parameter bound", TRUE),
-            helpText(HTML("A fit pinned to a constraint converged to the <b>edge of
-                           the feasible region</b>, not to an interior optimum: the
-                           value is where the optimiser was stopped and its standard
-                           error is meaningless there. Including them keeps the whole
-                           sample and lets the bound show through the mean; excluding
-                           them gives a cleaner summary of a smaller, possibly biased
-                           set. Either way the report tables <b>which</b> bound each
-                           fit hit and <b>which fits hit more than one</b> \u2014 two
-                           pinned parameters usually means a ridge.<br><br>
-                           Non-converged fits are always excluded: there is no
-                           solution to average.")),
-
-            hr(),
-            h4("Diagnostics"),
-            # AUDIT (P15.2). These are TWO INDEPENDENT diagnostics that sat under
-            # one heading with nothing separating them, so the tau field read as
-            # if it fed the nested table. It does not: the nested set estimates
-            # tau FREELY in its saturating-exponential cells. They are now
-            # labelled as separate checks.
-            tags$p(tags$b("1. Which specification?"), style = "margin-bottom:4px"),
-            checkboxInput("harmonic_model_selection",
-                          "Compare nested models (\u0394AICc table)", FALSE),
-            # P15.2: rendered from the current setting rather than written out by
-            # hand. The old text said "{none, linear, saturating} x {1,2,3} ...
-            # 9 fits per subject", which stopped being true when the set began
-            # following the harmonic count and gained the logarithmic trend.
-            uiOutput("harmonic_model_selection_help"),
-
-            tags$p(tags$b("2. Is \u03c4 identified?"), style = "margin-top:12px; margin-bottom:4px"),
-            numericInput("harmonic_tau_fixed",
-                         "\u03c4 held at (h), for the free-vs-fixed \u0394AIC:", value = 18,
-                         min = 1, max = 72, step = 0.5),
-            helpText(HTML("A <b>separate</b> check, and not part of the \u0394AICc table
-                           above: that table estimates \u03c4 freely in every
-                           saturating-exponential cell. Here the same model is refitted
-                           with \u03c4 <i>held</i> at the value above and the two are
-                           compared on AIC. Daan, Beersma &amp; Borb\u00e9ly (1984) give
-                           \u03c4_rise \u2248 18 h under extended wakefulness. If free
-                           \u03c4 does not beat fixed \u03c4, \u03c4 is not identified by
-                           these data and a between-group comparison of it is a
-                           comparison of where the optimiser stopped on a ridge.
-                           <b>Clear the field to skip this check</b> \u2014 the readout
-                           then says it was not run, rather than omitting it silently.")),
-
-            hr(),
-            h4("Bootstrap Options"),
+            h4("Uncertainty"),
             checkboxInput("harmonic_bootstrap", "Compute Bootstrap CIs", FALSE),
             conditionalPanel(
               condition = "input.harmonic_bootstrap == true",
               numericInput("harmonic_n_boot", "Bootstrap Iterations (B):", value = 500, min = 100, max = 2000)
             ),
             hr(),
-            h4("Parameter Constraints"),
-            checkboxInput("harmonic_use_bounds", "Enable Parameter Bounding", FALSE),
-            conditionalPanel(
-              condition = "input.harmonic_use_bounds == true",
-              helpText("Constrain parameters to stay within plausible ranges based on your data scale."),
-              uiOutput("harmonic_bounds_hints"),
+            # ================================================================
+            # ADVANCED (P21 phase 4, brief SS13 and SS17)
+            # ================================================================
+            # Model comparison, bounding and the boundary-fits rule all stay --
+            # they are genuinely useful and nothing about them changed. They
+            # move BEHIND a collapsed panel because they were sitting in the
+            # main column ahead of the Run button, which made model selection
+            # look like a step you had to complete before you could fit
+            # anything. It is not, and a first-time user should reach Run
+            # without reading nine paragraphs.
+            tags$details(
+              tags$summary(tags$b("Advanced"),
+                           style = "cursor:pointer; padding:6px 0; color:#555"),
+              div(style = "border-left:2px solid #e3e3e3; padding-left:10px; margin-top:6px",
               hr(),
-              h5("Common Parameters"),
-              numericInput("harmonic_mesor_min", "Intercept (\u03b2\u2080) Min:", value = NA, step = 0.1),
-              numericInput("harmonic_mesor_max", "Intercept (\u03b2\u2080) Max:", value = NA, step = 0.1),
-              numericInput("harmonic_amplitude_min", "Amplitude Min:", value = 0, step = 0.1),
-              numericInput("harmonic_amplitude_max", "Amplitude Max:", value = NA, step = 0.1),
+              h5("Which fits enter the summaries"),
+              checkboxInput("harmonic_include_boundary",
+                            "Include fits that hit a parameter bound", TRUE),
+              helpText(HTML("A fit pinned to a constraint converged to the <b>edge of
+                             the feasible region</b>, not to an interior optimum: the
+                             value is where the optimiser was stopped and its standard
+                             error is meaningless there. Including them keeps the whole
+                             sample and lets the bound show through the mean; excluding
+                             them gives a cleaner summary of a smaller, possibly biased
+                             set. Either way the report tables <b>which</b> bound each
+                             fit hit and <b>which fits hit more than one</b> \u2014 two
+                             pinned parameters usually means a ridge.<br><br>
+                             Non-converged fits are always excluded: there is no
+                             solution to average.")),
+
+              hr(),
+              h5("Model comparison and diagnostics"),
+              # AUDIT (P15.2). These are TWO INDEPENDENT diagnostics that sat under
+              # one heading with nothing separating them, so the tau field read as
+              # if it fed the nested table. It does not: the nested set estimates
+              # tau FREELY in its saturating-exponential cells. They are now
+              # labelled as separate checks.
+              tags$p(tags$b("1. Which specification?"), style = "margin-bottom:4px"),
+              checkboxInput("harmonic_model_selection",
+                            "Compare nested models (\u0394AICc table)", FALSE),
+              # P15.2: rendered from the current setting rather than written out by
+              # hand. The old text said "{none, linear, saturating} x {1,2,3} ...
+              # 9 fits per subject", which stopped being true when the set began
+              # following the harmonic count and gained the logarithmic trend.
+              uiOutput("harmonic_model_selection_help"),
+
+              tags$p(tags$b("2. Is \u03c4 identified?"), style = "margin-top:12px; margin-bottom:4px"),
+              numericInput("harmonic_tau_fixed",
+                           "\u03c4 held at (h), for the free-vs-fixed \u0394AIC:", value = 18,
+                           min = 1, max = 72, step = 0.5),
+              helpText(HTML("A <b>separate</b> check, and not part of the \u0394AICc table
+                             above: that table estimates \u03c4 freely in every
+                             saturating-exponential cell. Here the same model is refitted
+                             with \u03c4 <i>held</i> at the value above and the two are
+                             compared on AIC. Daan, Beersma &amp; Borb\u00e9ly (1984) give
+                             \u03c4_rise \u2248 18 h under extended wakefulness. If free
+                             \u03c4 does not beat fixed \u03c4, \u03c4 is not identified by
+                             these data and a between-group comparison of it is a
+                             comparison of where the optimiser stopped on a ridge.
+                             <b>Clear the field to skip this check</b> \u2014 the readout
+                             then says it was not run, rather than omitting it silently.")),
+
+              hr(),
+              h5("Parameter constraints"),
+              checkboxInput("harmonic_use_bounds", "Enable Parameter Bounding", FALSE),
               conditionalPanel(
-                condition = "input.harmonic_trend_type == 'exp_sat'",
+                condition = "input.harmonic_use_bounds == true",
+                helpText("Constrain parameters to stay within plausible ranges based on your data scale."),
+                uiOutput("harmonic_bounds_hints"),
                 hr(),
-                h5("Exponential Saturation Parameters"),
-                numericInput("harmonic_A_sat_min", "A_sat (Asymptote) Min:", value = NA, step = 0.1),
-                numericInput("harmonic_A_sat_max", "A_sat (Asymptote) Max:", value = NA, step = 0.1),
-                numericInput("harmonic_tau_min", "τ (Time Constant) Min:", value = 0.5, step = 0.1),
-                numericInput("harmonic_tau_max", "τ (Time Constant) Max:", value = NA, step = 1),
-                helpText(HTML("<small>τ controls how fast saturation is reached. Smaller τ = faster saturation.</small>"))
+                h5("Common Parameters"),
+                numericInput("harmonic_mesor_min", "Intercept (\u03b2\u2080) Min:", value = NA, step = 0.1),
+                numericInput("harmonic_mesor_max", "Intercept (\u03b2\u2080) Max:", value = NA, step = 0.1),
+                numericInput("harmonic_amplitude_min", "Amplitude Min:", value = 0, step = 0.1),
+                numericInput("harmonic_amplitude_max", "Amplitude Max:", value = NA, step = 0.1),
+                conditionalPanel(
+                  condition = "input.harmonic_trend_type == 'exp_sat'",
+                  hr(),
+                  h5("Exponential Saturation Parameters"),
+                  numericInput("harmonic_A_sat_min", "A_sat (Asymptote) Min:", value = NA, step = 0.1),
+                  numericInput("harmonic_A_sat_max", "A_sat (Asymptote) Max:", value = NA, step = 0.1),
+                  numericInput("harmonic_tau_min", "τ (Time Constant) Min:", value = 0.5, step = 0.1),
+                  numericInput("harmonic_tau_max", "τ (Time Constant) Max:", value = NA, step = 1),
+                  helpText(HTML("<small>τ controls how fast saturation is reached. Smaller τ = faster saturation.</small>"))
+                ),
+                helpText(HTML("<small>Leave blank (NA) for no bound. Defaults based on data range shown in hints above.</small>"))
               ),
-              helpText(HTML("<small>Leave blank (NA) for no bound. Defaults based on data range shown in hints above.</small>"))
+              )
             ),
             hr(),
             actionButton("run_harmonic", "Run Harmonic Regression", class = "btn-success", icon = icon("play"))
@@ -313,7 +372,7 @@ ui_tab_harmonic <- tabItem(
                        column(12, verbatimTextOutput("harmonic_gof_stats"))
                      )
             ),
-            tabPanel("6. Group Comparison", icon = icon("users"),
+            tabPanel("6. Group / Condition Comparison", icon = icon("users"),
                      fluidRow(
                        column(12, 
                               uiOutput("harmonic_selector_group"),

@@ -243,6 +243,84 @@
                 choices = c("None" = "_none_", cat_vars))
   })
 
+  # ==========================================================================
+  # STUDY DESIGN (P21 phase 4)
+  # ==========================================================================
+  # One helper renders every factor selector, so the between picker in the
+  # "between" panel and the between picker in the "mixed" panel cannot drift
+  # apart. Shiny needs distinct input ids per panel, hence the pairs.
+  .harmonic_cat_vars <- reactive({
+    req(values$covariates)
+    nm <- names(values$covariates)[vapply(values$covariates, function(x)
+      is.factor(x) || is.character(x) || length(unique(x[!is.na(x)])) <= 12, logical(1))]
+    nm
+  })
+  .harmonic_factor_picker <- function(id, label, allow_none = TRUE) {
+    v <- .harmonic_cat_vars()
+    ch <- if (allow_none) c("None" = "_none_", v) else v
+    selectInput(id, label, choices = ch)
+  }
+  output$harmonic_between_var_ui  <- renderUI(.harmonic_factor_picker(
+    "harmonic_between_var",  "Group variable (between-subject):"))
+  output$harmonic_between_var_ui2 <- renderUI(.harmonic_factor_picker(
+    "harmonic_between_var2", "Between-subject factor:"))
+  output$harmonic_within_var_ui   <- renderUI(.harmonic_factor_picker(
+    "harmonic_within_var",   "Condition variable (within-subject):"))
+  output$harmonic_within_var_ui2  <- renderUI(.harmonic_factor_picker(
+    "harmonic_within_var2",  "Within-subject factor:"))
+
+  # Which factors the current design actually selects, in one place, so the
+  # readout below and the fitter cannot disagree about what was chosen.
+  harmonic_design_terms <- reactive({
+    d <- input$harmonic_design %||% "between"
+    pick <- function(x) if (!is.null(x) && nzchar(x) && x != "_none_") x else NULL
+    switch(d,
+      between = list(design = d, between = pick(input$harmonic_between_var),  within = NULL),
+      within  = list(design = d, between = NULL, within = pick(input$harmonic_within_var)),
+      mixed   = list(design = d, between = pick(input$harmonic_between_var2),
+                     within  = pick(input$harmonic_within_var2)))
+  })
+
+  # THE CLASSIFICATION IS SHOWN BEFORE THE FIT, NOT AFTER IT.
+  # The app can read between/within off the data by counting levels per
+  # participant, and it does -- but a classification the user cannot see is a
+  # guess wearing a confident face, and it decides the random-effects structure.
+  # This panel states what the data say, whether it matches what was selected,
+  # and how many curves that implies.
+  output$harmonic_design_readout <- renderUI({
+    dt <- harmonic_design_terms()
+    chosen <- c(dt$between, dt$within)
+    if (!length(chosen)) return(helpText(HTML(
+      "<i>No design factor selected \u2014 one trajectory will be fitted for the whole sample.</i>")))
+    req(values$covariates, values$data)
+    subj <- rownames(values$data) %||% as.character(seq_len(nrow(values$data)))
+    rows <- lapply(chosen, function(f) {
+      v <- values$covariates[[f]]
+      if (is.null(v)) return(sprintf("<li><b>%s</b> \u2014 not found in the data</li>", f))
+      per <- tapply(as.character(v), subj, function(x) length(unique(x[!is.na(x)])))
+      per <- per[is.finite(per) & per > 0]
+      nlv <- length(unique(v[!is.na(v)]))
+      role <- if (nlv < 2) "constant" else if (max(per) == 1) "between"
+              else if (min(per) > 1) "within" else "partial"
+      want <- if (identical(f, dt$between)) "between" else "within"
+      ok <- identical(role, want)
+      sprintf("<li><b>%s</b>: %d level(s), the data look <b>%s</b> %s</li>",
+              f, nlv, role,
+              if (ok) "\u2713"
+              else sprintf("\u2014 <span style='color:#b8860b'>you selected it as %s</span>", want))
+    })
+    n_sub <- length(unique(subj))
+    n_cells <- prod(vapply(chosen, function(f)
+      max(1L, length(unique(values$covariates[[f]][!is.na(values$covariates[[f]])]))), integer(1)))
+    helpText(HTML(sprintf(
+      "<b>Read from your data:</b><ul style='margin:4px 0 4px 16px;padding:0'>%s</ul>%d participants, %d design cell(s).%s",
+      paste(unlist(rows), collapse = ""), n_sub, n_cells,
+      if (!is.null(dt$within))
+        sprintf(" Each participant contributes up to %d curve(s).",
+                max(1L, length(unique(values$covariates[[dt$within]][!is.na(values$covariates[[dt$within]])]))))
+      else " One curve per participant.")))
+  })
+
   # Parameter bounds hints based on data
   output$harmonic_bounds_hints <- renderUI({
     req(values$data)
