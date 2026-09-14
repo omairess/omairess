@@ -482,6 +482,7 @@ ui_tab_harmonic <- tabItem(
                                       it is no longer the primary result \u2014 but it is kept
                                       so the two can be compared on real data.")),
                        uiOutput("harmonic_selector_group"),
+                       helpText("Uses the factor chosen in Study Design above."),
                        plotlyOutput("harmonic_group_comparison_plot", height = "500px"),
                        hr(),
                        verbatimTextOutput("harmonic_group_test_results")

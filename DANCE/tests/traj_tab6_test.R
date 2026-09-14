@@ -33,6 +33,8 @@ ui  <- paste(readLines(file.path(app, "ui/72_harmonic.R"), warn = FALSE), collap
 srv <- paste(unlist(lapply(
   list.files(file.path(app, "server"), pattern = "[.]R$", full.names = TRUE),
   readLines, warn = FALSE)), collapse = "\n")
+srv_harm <- paste(readLines(file.path(app, "server/72_harmonic.R"), warn = FALSE),
+                  collapse = "\n")
 ids <- unique(unlist(regmatches(ui, gregexpr(
   '(uiOutput|plotlyOutput|verbatimTextOutput|plotOutput|tableOutput|DTOutput)\\("[A-Za-z0-9_.]+"', ui))))
 ids <- sub('^.*\\("', "", sub('"$', "", ids))
@@ -41,6 +43,59 @@ missing <- ids[!vapply(ids, function(i)
 chk(length(missing) == 0,
     sprintf("all %d output ids in the harmonic UI are rendered by the server", length(ids)),
     sprintf("no server output for: %s", paste(missing, collapse = ", ")))
+
+# THE OTHER DIRECTION, and the one that actually bit.
+# The check above finds a uiOutput with no renderer. The reverse -- a server
+# that reads input$X where X is placed by no UI element -- is worse, because
+# Shiny returns NULL for a missing input and any `if (!is.null(...))` guard
+# quietly takes the "no" branch. Replacing the Group Variable control with the
+# Study Design panel orphaned input$harmonic_group_var, and eleven outputs
+# (the fitted-curve plot, the polar plot, four parameter histograms, the
+# individual table, the export, the legacy comparison) silently drew ungrouped
+# results with no error anywhere.
+# EVERY server file, not just the harmonic one. Scoping this to 72_harmonic.R
+# let the identical bug survive in 73_cosinor_pairwise.R, which reads the same
+# inputs -- the third time in this file that a check was written against too
+# narrow a slice of the app. All server files share one environment; the check
+# should share its scope.
+srv_inputs <- unique(unlist(regmatches(srv, gregexpr('input\\$[A-Za-z0-9_.]+', srv))))
+srv_inputs <- sub("^input\\$", "", srv_inputs)
+ui_all <- paste(unlist(lapply(
+  list.files(file.path(app, "ui"), pattern = "[.]R$", full.names = TRUE),
+  readLines, warn = FALSE)), collapse = "\n")
+# An input counts as placed only if some file CREATES it -- i.e. its name is the
+# first argument of an input constructor. A first draft accepted the name
+# appearing in any quoted string, which a comment or a list element satisfies,
+# and the check passed against a deliberately re-broken copy. A test that cannot
+# fail on the bug it was written for is worse than no test.
+# An input counts as placed only if its name is the FIRST ARGUMENT OF A CALL --
+# either a shiny constructor directly, or a helper that builds one, since the
+# design pickers are rendered by .harmonic_factor_picker(id, label). Two earlier
+# drafts got this wrong in opposite directions and were caught by re-breaking a
+# scratch copy on purpose: accepting the name in any quoted string passed the
+# broken copy (a comment satisfied it), and listing only shiny constructors
+# flagged the four dynamically-built pickers as orphans. A check that cannot
+# fail on the bug it was written for is worse than no check.
+placed <- vapply(srv_inputs, function(i) {
+  pat <- sprintf('[A-Za-z0-9_.]+\\(\\s*(inputId\\s*=\\s*)?"%s"', i)
+  grepl(pat, ui_all) || grepl(pat, srv)
+}, logical(1))
+# FOUR PRE-EXISTING ORPHANS, verified benign and recorded rather than hidden.
+# These predate P21 and live in other modules. Each read is guarded -- the code
+# checks is.null() and takes a defined branch -- so they degrade to a documented
+# default rather than silently changing a result, which is what made the
+# harmonic_group_var case different. They are listed here so the check can fail
+# on a NEW one; removing a name from this list must mean the input was created,
+# never that the check became inconvenient.
+known_benign <- c(
+  min_observed_points = "10_import.R: guarded by is.null/is.finite; no row filter applied when absent",
+  selected_subject    = "40_fpca.R: guarded; falls back to the mean landmark target",
+  landmark_target     = "40_fpca.R: guarded; same fallback",
+  density_avg_days    = "74_polar_density.R: legacy fallback, only read when density_profile_mode is absent")
+orphans <- setdiff(srv_inputs[!placed], names(known_benign))
+chk(length(orphans) == 0,
+    sprintf("all %d inputs the server reads are placed by some UI", length(srv_inputs)),
+    sprintf("the server reads inputs nothing creates: %s", paste(orphans, collapse = ", ")))
 
 traj_ids <- grep("^harmonic_traj", ids, value = TRUE)
 chk(length(traj_ids) >= 8,

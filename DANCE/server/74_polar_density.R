@@ -48,7 +48,7 @@ dance_density_data <- function(input, values) {
   amps  <- if (amp_col %in% names(params)) as.numeric(params[[amp_col]]) else rep(1, length(hours))
 
   grp <- NULL
-  gv <- input$harmonic_group_var
+  gv <- dance_group_var_from_design(input)
   if (!is.null(gv) && nzchar(gv) && !identical(gv, "_none_") &&
       !is.null(values$covariates) && gv %in% names(values$covariates) &&
       nrow(values$covariates) == length(hours)) {
@@ -394,7 +394,7 @@ dance_profile_rings <- function(input, values) {
   if (is.null(clock) || length(clock) != ncol(Y)) return(NULL)
   w <- list(clock = clock, day = dance_wrap_to_clock(cum, 24)$day)
 
-  gv <- input$harmonic_group_var
+  gv <- dance_group_var_from_design(input)
   grp <- if (!is.null(gv) && nzchar(gv) && !identical(gv, "_none_") &&
              !is.null(values$covariates) && gv %in% names(values$covariates) &&
              nrow(values$covariates) == nrow(Y)) {

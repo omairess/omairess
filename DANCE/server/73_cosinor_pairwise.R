@@ -60,7 +60,7 @@
     # selection and nothing else.
     # ------------------------------------------------------------------------
     if (identical(input$hp_approach, "population")) {
-      gv <- input$harmonic_group_var
+      gv <- harmonic_group_var_eff()
       if (is.null(gv) || identical(gv, "_none_")) {
         showNotification("Select a grouping variable on the Harmonic Regression tab first.",
                          type = "error", duration = 8); return()
@@ -104,8 +104,8 @@
     correction <- input$hp_correction
 
     # Get individual parameters with group information
-    if(!is.null(input$harmonic_group_var) && input$harmonic_group_var != "_none_") {
-      group_var <- values$covariates[[input$harmonic_group_var]]
+    if(!is.null(harmonic_group_var_eff()) && harmonic_group_var_eff() != "_none_") {
+      group_var <- values$covariates[[harmonic_group_var_eff()]]
       params <- mod$individual_params
       params$group <- as.factor(group_var[params$subject])
       params <- params[!is.na(params$group), ]
@@ -327,7 +327,7 @@
       period = mod$period,
       harmonic = if (is_circular) dance_param_harmonic(param) else NA_integer_,
       effective_period = if (is_circular) effective_period_param else NA_real_,
-      group_var = input$harmonic_group_var,
+      group_var = harmonic_group_var_eff(),
       groups = groups,
       correction = correction,
       n_comparisons = nrow(results),
@@ -576,8 +576,8 @@
     mod <- values$harmonic_model
 
     # Get individual parameters with group information
-    if(!is.null(input$harmonic_group_var) && input$harmonic_group_var != "_none_") {
-      group_var <- values$covariates[[input$harmonic_group_var]]
+    if(!is.null(harmonic_group_var_eff()) && harmonic_group_var_eff() != "_none_") {
+      group_var <- values$covariates[[harmonic_group_var_eff()]]
       params <- mod$individual_params
       params$group <- as.factor(group_var[params$subject])
       params <- params[!is.na(params$group), ]
@@ -788,8 +788,8 @@
       param <- values$hp_pairwise_param
       mod <- values$harmonic_model
 
-      if(!is.null(input$harmonic_group_var) && input$harmonic_group_var != "_none_") {
-        group_var <- values$covariates[[input$harmonic_group_var]]
+      if(!is.null(harmonic_group_var_eff()) && harmonic_group_var_eff() != "_none_") {
+        group_var <- values$covariates[[harmonic_group_var_eff()]]
         params <- mod$individual_params
         params$group <- as.factor(group_var[params$subject])
         params <- params[!is.na(params$group), ]

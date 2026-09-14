@@ -20,6 +20,7 @@
 
 `%||%` <- function(a, b) if (is.null(a)) b else a
 app_dir <- if (dir.exists("server")) "." else if (dir.exists("../../server")) "../.." else "DANCE"
+source(file.path(app_dir, "server/02c_helpers_design.R"))
 source(file.path(app_dir, "server/08_helpers_cosinor.R"))
 source(file.path(app_dir, "server/03_helpers_clock.R"))
 source(file.path(app_dir, "server/07_helpers_circular.R"))

@@ -234,15 +234,6 @@
   })
   
   # Group variable UI
-  output$harmonic_group_var_ui <- renderUI({
-    req(values$covariates)
-    cat_vars <- names(values$covariates)[sapply(values$covariates, function(x) {
-      is.factor(x) || is.character(x) || length(unique(x)) <= 10
-    })]
-    selectInput("harmonic_group_var", "Group Variable (optional):",
-                choices = c("None" = "_none_", cat_vars))
-  })
-
   # ==========================================================================
   # STUDY DESIGN (P21 phase 4)
   # ==========================================================================
@@ -279,6 +270,26 @@
       within  = list(design = d, between = NULL, within = pick(input$harmonic_within_var)),
       mixed   = list(design = d, between = pick(input$harmonic_between_var2),
                      within  = pick(input$harmonic_within_var2)))
+  })
+
+  # THE ONE GROUPING VARIABLE THE REST OF THE MODULE ALREADY UNDERSTOOD.
+  # ------------------------------------------------------------------------
+  # Eleven outputs -- the fitted-curve plot, the polar plot, all four parameter
+  # histograms, the individual table, the export and the legacy comparison --
+  # were written against a single `harmonic_group_var` input. Replacing that
+  # control with the Study Design panel left every one of them reading an input
+  # that no longer existed, so they silently fell back to "no group" and drew a
+  # pooled curve with no error anywhere. That is the failure this derivation
+  # prevents: the design panel is now the single source, and the legacy
+  # consumers read it through here rather than through an input that is gone.
+  #
+  # A between-participant factor is the grouping variable when there is one;
+  # otherwise the within-participant factor, since those displays split on
+  # whatever single factor the design offers. A mixed design shows the between
+  # factor, which is what a two-stage display can represent -- the crossing
+  # itself is tab 6's job.
+  harmonic_group_var_eff <- reactive({
+    dance_group_var_from_design(input)
   })
 
   # THE CLASSIFICATION IS SHOWN BEFORE THE FIT, NOT AFTER IT.
@@ -2693,8 +2704,8 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       }
       
       # Group comparison - calculate group-specific statistics
-      if(!is.null(input$harmonic_group_var) && input$harmonic_group_var != "_none_") {
-        group_var <- values$covariates[[input$harmonic_group_var]]
+      if(!is.null(harmonic_group_var_eff()) && harmonic_group_var_eff() != "_none_") {
+        group_var <- values$covariates[[harmonic_group_var_eff()]]
 
         # ====================================================================
         # AUDIT 1.5: 654 + 410 + 181 + 59 = 1304, not 1305
@@ -2718,7 +2729,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
             sprintf("%d of %d fitted subject%s no usable '%s' label. They are pooled but not grouped, and appear as UNASSIGNED in the report.",
                     group_audit$n_unassigned, group_audit$n_total,
                     if(group_audit$n_unassigned == 1) " has" else "s have",
-                    input$harmonic_group_var),
+                    harmonic_group_var_eff()),
             type = "warning", duration = 15)
         }
         if(length(group_audit$dropped_small) > 0) {
@@ -2900,7 +2911,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
           showNotification(
             sprintf("%d fitted subject%s excluded from the group analyses: %d with no usable '%s' label%s. They remain in every pooled statistic.",
                     .excluded, if(.excluded == 1) " is" else "s are",
-                    group_audit$n_unassigned, input$harmonic_group_var,
+                    group_audit$n_unassigned, harmonic_group_var_eff(),
                     if(length(group_audit$dropped_small))
                       sprintf(", and %d in group(s) with fewer than 3 fits (%s)",
                               group_audit$n_dropped_small,
@@ -3210,8 +3221,8 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
         time_origin = time_origin,
         origin_shift = origin_shift,
         time_vec_clock = time_vec,           # display axis, always clock-linearised
-        group_var_name = if(!is.null(input$harmonic_group_var) &&
-                            input$harmonic_group_var != "_none_") input$harmonic_group_var else NULL,
+        group_var_name = if(!is.null(harmonic_group_var_eff()) &&
+                            harmonic_group_var_eff() != "_none_") harmonic_group_var_eff() else NULL,
         pop_mean_fit = pop_mean_fit,
         group_fits = group_fits,
         boot_results = boot_results,
@@ -4095,9 +4106,9 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       .glv <- names(mod$group_fits)
       group_colors_hex <- dance_group_colors(.glv)
       if(!is.null(mod$group_fits) && length(mod$group_fits) >= 1 && 
-         !is.null(input$harmonic_group_var) && input$harmonic_group_var != "_none_") {
+         !is.null(harmonic_group_var_eff()) && harmonic_group_var_eff() != "_none_") {
         
-        group_var <- values$covariates[[input$harmonic_group_var]]
+        group_var <- values$covariates[[harmonic_group_var_eff()]]
         groups <- names(mod$group_fits)
         
         for(i in seq_along(mod$individual_fits)) {
@@ -4347,7 +4358,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
           g_fit <- mod$group_fits[[g_name]]
           if(mod$trend_type == "two_process") {
             params <- mod$individual_params
-            group_var <- values$covariates[[input$harmonic_group_var]]
+            group_var <- values$covariates[[harmonic_group_var_eff()]]
             params$group <- group_var[params$subject]
             grp_params <- params[params$group == g_name & !is.na(params$group), ]
             group_idx <- which(group_var == g_name)
@@ -4393,7 +4404,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
         # Show harmonic components for grouped data
         if(isTRUE(input$harmonic_show_components) && mod$n_harmonics >= 1) {
           params <- mod$individual_params
-          group_var <- values$covariates[[input$harmonic_group_var]]
+          group_var <- values$covariates[[harmonic_group_var_eff()]]
           params$group <- group_var[params$subject]
           
           # Lighter versions of group colors for components
@@ -4494,7 +4505,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
         
         # Also add individual data points colored by group if requested
         if(isTRUE(input$harmonic_show_data)) {
-          group_var <- values$covariates[[input$harmonic_group_var]]
+          group_var <- values$covariates[[harmonic_group_var_eff()]]
           for(i in seq_along(mod$individual_fits)) {
             fit_i <- mod$individual_fits[[i]]
             if(!is.null(fit_i) && fit_i$success) {
@@ -4770,9 +4781,9 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     
     # Check if we have group fits - color points by group
     if(!is.null(mod$group_fits) && length(mod$group_fits) >= 1 &&
-       !is.null(input$harmonic_group_var) && input$harmonic_group_var != "_none_") {
+       !is.null(harmonic_group_var_eff()) && harmonic_group_var_eff() != "_none_") {
 
-      group_var <- values$covariates[[input$harmonic_group_var]]
+      group_var <- values$covariates[[harmonic_group_var_eff()]]
       group_colors <- dance_group_colors(names(mod$group_fits))
 
       groups <- names(mod$group_fits)
@@ -4994,9 +5005,9 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     
     # Check if we have groups
     if(!is.null(mod$group_fits) && length(mod$group_fits) >= 1 && 
-       !is.null(input$harmonic_group_var) && input$harmonic_group_var != "_none_") {
+       !is.null(harmonic_group_var_eff()) && harmonic_group_var_eff() != "_none_") {
       
-      group_var <- values$covariates[[input$harmonic_group_var]]
+      group_var <- values$covariates[[harmonic_group_var_eff()]]
       params$group <- group_var[params$subject]
       params <- params[!is.na(params$group), ]  # Remove NAs
       
@@ -5042,9 +5053,9 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     else "Acrophase (clock h)"
 
     if(!is.null(mod$group_fits) && length(mod$group_fits) >= 1 &&
-       !is.null(input$harmonic_group_var) && input$harmonic_group_var != "_none_") {
+       !is.null(harmonic_group_var_eff()) && harmonic_group_var_eff() != "_none_") {
 
-      group_var <- values$covariates[[input$harmonic_group_var]]
+      group_var <- values$covariates[[harmonic_group_var_eff()]]
       params$group <- group_var[params$subject]
       params <- params[!is.na(params$group), ]  # Remove NAs
 
@@ -5074,9 +5085,9 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     
     # Check if we have groups
     if(!is.null(mod$group_fits) && length(mod$group_fits) >= 1 && 
-       !is.null(input$harmonic_group_var) && input$harmonic_group_var != "_none_") {
+       !is.null(harmonic_group_var_eff()) && harmonic_group_var_eff() != "_none_") {
       
-      group_var <- values$covariates[[input$harmonic_group_var]]
+      group_var <- values$covariates[[harmonic_group_var_eff()]]
       params$group <- as.factor(group_var[params$subject])
       params <- params[!is.na(params$group), ]  # Remove NAs
       
@@ -5137,9 +5148,9 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       } else {
         # Check if groups exist
         if(!is.null(mod$group_fits) && length(mod$group_fits) >= 1 && 
-           !is.null(input$harmonic_group_var) && input$harmonic_group_var != "_none_") {
+           !is.null(harmonic_group_var_eff()) && harmonic_group_var_eff() != "_none_") {
           
-          group_var <- values$covariates[[input$harmonic_group_var]]
+          group_var <- values$covariates[[harmonic_group_var_eff()]]
           params$group <- as.factor(group_var[params$subject])
           params$trend_val <- trend_vals
           params <- params[!is.na(params$group) & !is.na(params$trend_val), ]
@@ -5213,8 +5224,8 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     }
     
     # Add group if available
-    if(!is.null(input$harmonic_group_var) && input$harmonic_group_var != "_none_") {
-      group_var <- values$covariates[[input$harmonic_group_var]]
+    if(!is.null(harmonic_group_var_eff()) && harmonic_group_var_eff() != "_none_") {
+      group_var <- values$covariates[[harmonic_group_var_eff()]]
       display_df$Group <- group_var[params$subject]
       # Move Group to second column
       display_df <- display_df[, c("Subject", "Group", setdiff(names(display_df), c("Subject", "Group")))]
@@ -5236,8 +5247,8 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       params <- mod$individual_params
       
       # Add group variable if available
-      if(!is.null(input$harmonic_group_var) && input$harmonic_group_var != "_none_") {
-        group_var <- values$covariates[[input$harmonic_group_var]]
+      if(!is.null(harmonic_group_var_eff()) && harmonic_group_var_eff() != "_none_") {
+        group_var <- values$covariates[[harmonic_group_var_eff()]]
         params$group <- group_var[params$subject]
       }
       
@@ -5763,8 +5774,8 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     effective_period <- mod$period / h
     
     # Get individual params with group info for R-squared
-    if(!is.null(input$harmonic_group_var) && input$harmonic_group_var != "_none_") {
-      group_var <- values$covariates[[input$harmonic_group_var]]
+    if(!is.null(harmonic_group_var_eff()) && harmonic_group_var_eff() != "_none_") {
+      group_var <- values$covariates[[harmonic_group_var_eff()]]
       params <- mod$individual_params
       params$group <- group_var[params$subject]
       params <- params[!is.na(params$group), ]  # Remove missings
@@ -5943,8 +5954,8 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
                 else ""))
     
     # Get group variable and params
-    if(!is.null(input$harmonic_group_var) && input$harmonic_group_var != "_none_") {
-      group_var <- values$covariates[[input$harmonic_group_var]]
+    if(!is.null(harmonic_group_var_eff()) && harmonic_group_var_eff() != "_none_") {
+      group_var <- values$covariates[[harmonic_group_var_eff()]]
       params <- mod$individual_params
       params$group <- group_var[params$subject]
       

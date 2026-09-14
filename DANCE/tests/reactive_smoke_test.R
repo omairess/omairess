@@ -338,7 +338,15 @@ server <- function(input, output, session) {
                     harmonic_model_selection = FALSE,
                     harmonic_time_var = "_columns_",
                     harmonic_dv_name = "Activity", harmonic_dv_units = "counts/min",
-                    harmonic_group_var = "AGEcategory",
+                    # P21 phase 4: the single "Group Variable" control became the
+                    # Study Design panel. The grouping variable is now DERIVED
+                    # from that choice (harmonic_group_var_eff), so the mock
+                    # session sets the design inputs the app actually has. When
+                    # this test still set harmonic_group_var it went on passing
+                    # -- Shiny returns NULL for an input nothing creates, and a
+                    # mock list happily carries a name the app never reads.
+                    harmonic_design = "between",
+                    harmonic_between_var = "AGEcategory",
                     run_harmonic = 1)
   session$flushReact()
   hm <- values$harmonic_model
