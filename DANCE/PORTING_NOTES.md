@@ -3521,6 +3521,62 @@ framework is not promoted to the default analysis until it clears.**
 New: `tests/traj_amendments_test.R`, `tests/cosinor_convention_test.R`,
 `tests/traj_validation_grid.R`.
 
+### 4.24 An independent implementation, used as an oracle
+
+Asked why a validation gate was needed when the work rests on `lme4`,
+`pbkrtest` and `emmeans`, I gave a poor first answer — that the assembled
+procedure was "new". It is not: every component is textbook. The real reason is
+narrower and better. The 0.275 type-I error came from an **ordinary
+misspecification** — `(1 + c1 + s1 | subject)` where the data needed a
+participant × condition level. No package flags that, and review did not either,
+because my expectation was wrong in the same direction as my code.
+
+Pressed further on whether a package already did this, it emerged that **I never
+surveyed the cosinor ecosystem before building.** That was a genuine process
+gap. The survey found [GLMMcosinor](https://docs.ropensci.org/GLMMcosinor/)
+(rOpenSci, peer-reviewed), which fits the same model on `glmmTMB`, supports
+multiple components, and takes lme4-style formulas including random cosinor
+slopes.
+
+CRAN is blocked by egress policy here, and so are r-universe and the GitHub
+tarball endpoints — but **git reads are served**, so the package installs from a
+clone. (It re-exports `glmmTMB::bell`, absent from `glmmTMB` 1.1.8; removing
+those two lines is enough, as it is a count family the cosinor path never
+touches.)
+
+**The estimation layer agrees to 1e-6.** Per-cell amplitude and acrophase, the
+amplitude contrast, the magnitude of the phase contrast — two implementations
+from different primitives, different parameterisations, same numbers. That is
+evidence of a kind DANCE's own suite cannot produce, because the failure modes
+are uncorrelated.
+
+**The inference layers differ, and the differences are the point.** Pinned in
+the test so a change in either is noticed:
+
+| | DANCE | GLMMcosinor |
+|---|---|---|
+| rhythm test | joint, df = 2 | marginal, df = 1 — its "global" test equals its amplitude test |
+| small samples | Kenward–Roger | asymptotic Wald (no `pbkrtest`/`lmerTest` in Imports) |
+| phase contrast | signed | through `abs()` — direction not recoverable |
+| multiplicity | Holm | none (`p.adjust` absent) |
+
+Measured at 16 participants, 60 null datasets, nominal .05: DANCE's joint KR
+test rejected at **0.050** [0.010, 0.139]; GLMMcosinor's amplitude test at 0.100
+[0.038, 0.205], its acrophase test at 0.067 [0.018, 0.162], and **either
+marginal test — how a reader of both tables would decide — at 0.167** [0.083,
+0.285]. Suggestive and directionally exactly as theory predicts, but the
+intervals still overlap at n = 60, so it is not stated as settled.
+
+Two corrections to my own earlier claims, both found by checking rather than
+reasoning: GLMMcosinor uses the **same** acrophase sign convention as DANCE (I
+had assumed a negation and written one into the first draft), and the first
+cross-check gave it a random *intercept* while DANCE fitted random *slopes* —
+making a model difference look like an inference difference until the structures
+were matched.
+
+New: `tests/glmmcosinor_crosscheck_test.R`, which skips itself when the package
+is absent.
+
 ## 5. Rename table
 
 | source | source app | merged app |

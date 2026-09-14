@@ -250,11 +250,31 @@ Rscript tests/traj_framework_test.R       # the trajectory framework; slow
 Rscript tests/traj_band_test.R            # trajectory bands, difference curves, contrasts
 Rscript tests/traj_amendments_test.R      # the phase-3 statistical amendments
 Rscript tests/cosinor_convention_test.R   # one acrophase convention, end to end
+Rscript tests/glmmcosinor_crosscheck_test.R  # vs an independent implementation; skips if absent
 Rscript tests/mixed_calibration_test.R   # the wider level/power grid; slow
 Rscript tests/pairwise_perm_test.R
 Rscript tests/pop_cosinor_test.R
 Rscript -e 'testthat::test_dir("tests/testthat")'
 ```
+
+`glmmcosinor_crosscheck_test.R` checks the trajectory layer against
+[GLMMcosinor](https://docs.ropensci.org/GLMMcosinor/) — an independent,
+peer-reviewed implementation of the same statistical model built on `glmmTMB`
+rather than `lme4`, and parameterised in (amplitude, acrophase) rather than in
+(cos, sin) coefficients. Where the two overlap they agree to 1e-6; where they
+diverge, the divergence is pinned so a change in either is noticed. It **skips
+itself** when the package is absent, so it never blocks the suite:
+
+```bash
+git clone --depth 1 https://github.com/ropensci/glmmcosinor /tmp/glmmc
+R CMD INSTALL --library=$HOME/Rlib /tmp/glmmc
+R_LIBS=$HOME/Rlib Rscript tests/glmmcosinor_crosscheck_test.R
+```
+
+Note: GLMMcosinor ≥ 0.2.1 re-exports `glmmTMB::bell`, which needs a newer
+`glmmTMB` than 1.1.8. On an older `glmmTMB`, delete the two `bell` lines from
+`R/GLMMcosinor-package.R` and `NAMESPACE` — it is a count-distribution family
+the cosinor path never touches.
 
 The pre-phase-4 validation gate is deliberately NOT in that list: it is a
 simulation study, measured in hours rather than minutes, and it has to clear
