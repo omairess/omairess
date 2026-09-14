@@ -5421,6 +5421,24 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
                          if (isTRUE(ff$singular))
                            sprintf(" %d variance dimension(s) at the boundary, kept.", ff$boundary_dims)
                          else "")),
+        # A COST WARNING, not a hidden threshold. Kenward-Roger refits the
+        # reduced model for every block, so on a large fit the tests cost
+        # several times the fit itself: measured on 1052 participants with a
+        # linear trend, 30 s to fit and 129 s to test. Nobody should discover
+        # that by waiting. The number is an estimate from the fit's own size,
+        # stated as one, and the remedy is named -- the choice stays the
+        # user's, and Kenward-Roger remains the default and the recommendation.
+        if (identical(input$harmonic_df_method %||% "kr", "kr") &&
+            (ff$spec$n_obs %||% 0) > 4000) {
+          est <- max(10, round((ff$spec$n_obs / 16000) *
+                               (1 + 6 * (!identical(ff$spec$trend, "none"))) * 25))
+          tags$div(style = "font-size:11px;color:#8a5a12;margin-top:6px",
+                   sprintf(paste("Large fit (%s observations). Kenward-Roger refits the model",
+                                 "for each block, so the tests below may take on the order of",
+                                 "%d s. Satterthwaite, under Advanced, is near-instant and is",
+                                 "the right choice while exploring; switch back before you report."),
+                           format(ff$spec$n_obs, big.mark = ","), est))
+        },
         if (!isTRUE(cal$validated))
           tags$div(style = "font-size:11px;color:#8a5a12;margin-top:6px", cal$calibration)
         else tags$div(style = "font-size:11px;color:#8a5a12;margin-top:6px",
@@ -5453,24 +5471,48 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       c("full", "circadian", "level") else
       c("full", "shape", "circadian", "trend", "level")
 
-    n_tests <- length(effects) + length(want)
-    withProgress(message = sprintf("Testing %d coefficient blocks...", n_tests), value = 0, {
-      by_effect <- lapply(effects, function(ef) {
-        parts <- strsplit(ef, ":", fixed = TRUE)[[1]]
-        keep <- tl[vapply(tl, function(term) setequal(
-          intersect(strsplit(term, ":", fixed = TRUE)[[1]], dts), parts), logical(1))]
-        incProgress(1 / n_tests)
-        if (!length(keep)) NULL else dance_traj_block_test(ff, keep, df_method = dfm)
+    # WHAT IS TESTED IS A SET OF TERMS, AND TWO NAMES CAN NAME THE SAME SET.
+    # In a design with ONE factor, "the full trajectory effect of Group" and the
+    # "full" block are the same terms -- so the first version of this reactive
+    # ran the identical Kenward-Roger test twice under two names, at about 20 s
+    # each. Requests are collected first, keyed by their sorted term vector, and
+    # each DISTINCT set is computed once; the named views then read from that.
+    terms_for_effect <- function(ef) {
+      parts <- strsplit(ef, ":", fixed = TRUE)[[1]]
+      tl[vapply(tl, function(term) setequal(
+        intersect(strsplit(term, ":", fixed = TRUE)[[1]], dts), parts), logical(1))]
+    }
+    req_terms <- c(stats::setNames(lapply(effects, terms_for_effect), effects),
+                   stats::setNames(lapply(want, function(w) dance_traj_block_terms(ff, w)), want))
+    keys <- vapply(req_terms, function(x) paste(sort(x), collapse = "|"), character(1))
+    uniq <- keys[!duplicated(keys) & nzchar(keys)]
+
+    withProgress(message = sprintf("Testing %d coefficient block%s...",
+                                   length(uniq), if (length(uniq) == 1L) "" else "s"),
+                 value = 0, {
+      computed <- lapply(uniq, function(k) {
+        incProgress(1 / length(uniq))
+        dance_traj_block_test(ff, req_terms[[match(k, keys)]], df_method = dfm)
       })
-      names(by_effect) <- effects
-      blocks <- lapply(want, function(w) {
-        incProgress(1 / n_tests)
-        dance_traj_omnibus(ff, w, df_method = dfm)
-      })
-      names(blocks) <- want
-      list(effects = by_effect, blocks = blocks,
-           method = (Filter(function(r) isTRUE(r$ok), blocks)[[1]]$method) %||% "F test")
+      names(computed) <- uniq
     })
+    get1 <- function(nm) if (nzchar(keys[[nm]])) computed[[keys[[nm]]]] else NULL
+
+    list(effects = stats::setNames(lapply(effects, get1), effects),
+         blocks  = stats::setNames(lapply(want, get1), want),
+         n_computed = length(uniq), n_requested = length(keys),
+         method = (Filter(function(r) isTRUE(r$ok), computed)[[1]]$method) %||% "F test")
+  })
+
+  # The cell coefficients, cached per harmonic. dance_traj_cell_coefs() runs
+  # emmeans twice internally, and the component table and every pairwise panel
+  # each asked for them again -- cheap next to Kenward-Roger, but repeated on
+  # every selector change, which is what makes a panel feel unresponsive.
+  harmonic_traj_coefs <- reactive({
+    ff <- harmonic_traj(); if (!isTRUE(ff$ok)) return(NULL)
+    stats::setNames(lapply(seq_len(ff$spec$n_harmonics),
+                           function(h) dance_traj_cell_coefs(ff, h)),
+                    paste0("H", seq_len(ff$spec$n_harmonics)))
   })
 
   # ---- 1. PRIMARY: the full trajectory difference, per factorial effect ------
@@ -5523,9 +5565,10 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     })
     # derived per-harmonic quantities, from the SAME fit
     drows <- list()
+    cf <- harmonic_traj_coefs()
     for (h in seq_len(ff$spec$n_harmonics)) {
-      co <- dance_traj_cell_coefs(ff, h)
-      if (!isTRUE(co$ok)) next
+      co <- cf[[paste0("H", h)]]
+      if (is.null(co) || !isTRUE(co$ok)) next
       ap <- dance_traj_amp_phase_ci(co, method = "joint", n_draw = 6000)
       if (!isTRUE(ap$ok)) next
       for (i in seq_len(nrow(ap$table))) {
