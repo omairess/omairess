@@ -57,7 +57,18 @@ optional_packages <- c(
   # The mixed-design tab. mgcv is already required (the FoSR GAM branch needs
   # it), so only lme4 is added here -- and it is optional for the same reason
   # as the rest: a missing lme4 must cost you the mixed cosinor, not the app.
-  lme4         = "mixed (between x within) cosinor"
+  lme4         = "mixed (between x within) cosinor",
+  # P21 phase 4. The trajectory framework in tab 6 rests on these, and none of
+  # them was declared when it was built -- so the app started cleanly, the
+  # fitted curves drew, and the first sign of a missing emmeans was a terse
+  # refusal inside a panel the user had already waited for. Each is optional for
+  # the same reason as the rest (a missing one must cost you a feature, not the
+  # app), but it has to be REPORTED at startup, which is what declaring it here
+  # does. What each one actually costs when absent:
+  emmeans      = "per-cell amplitude and acrophase, and every contrast built on them",
+  pbkrtest     = "Kenward-Roger degrees of freedom (inference falls back to Satterthwaite)",
+  lmerTest     = "Satterthwaite degrees of freedom (inference falls back to a likelihood-ratio test)",
+  glmmTMB      = "residual correlation structures (AR(1) and continuous-time OU)"
 )
 
 # AUDIT (P2.2): this block used to call install.packages() at startup -- for the

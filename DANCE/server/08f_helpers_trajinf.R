@@ -415,7 +415,12 @@ dance_traj_block_test <- function(fit, terms_in,
 dance_traj_cell_coefs <- function(fit, harmonic = 1) {
   if (!isTRUE(fit$ok)) return(list(ok = FALSE, message = fit$message))
   if (!requireNamespace("emmeans", quietly = TRUE))
-    return(list(ok = FALSE, message = "emmeans is required for cell-level estimates."))
+    return(list(ok = FALSE, message = paste(
+      "The emmeans package is not installed, and every per-cell quantity needs it:",
+      "amplitude, acrophase, and the amplitude and phase contrasts built on them.",
+      "Install it with  install.packages(\"emmeans\")  and re-run.",
+      "The fitted curves, the omnibus tests and the LEVEL contrasts do not need",
+      "emmeans and are unaffected.")))
   spec <- fit$spec
   h <- max(1L, as.integer(harmonic))
   ck <- paste0("c", h); sk <- paste0("s", h)
