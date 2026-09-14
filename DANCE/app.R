@@ -87,7 +87,29 @@ optional_packages <- c(
 #      you are told which one; discovering it through a half-installed
 #      dependency tree is not.
 #
-# The app now checks and stops with the exact command to run.
+# The app now checks and OFFERS TO INSTALL, with consent, and stops with the
+# exact command when it cannot.
+#
+# AMENDED (P21 phase 4). "Stop with the command" was right about the three
+# hazards and wrong about the remedy: being told to install four packages, one
+# refusal at a time, as you discover each feature that needs one, is not a
+# five-second fix -- it is four restarts. What the reasons above actually argue
+# against is installing SILENTLY and AUTOMATICALLY, not installing at all. So
+# the app now asks:
+#
+#   interactive session   names the packages, says what each one costs you if
+#                         absent, asks once, and installs only on a yes. The
+#                         installed versions are printed, so what changed is on
+#                         the record rather than inferred later.
+#   anything else         deployed app, Rscript, CI, or DANCE_NO_INSTALL=1:
+#                         behaves exactly as before -- no install, stop with
+#                         the command. Reason 2 above is untouched: a machine
+#                         that cannot install still fails immediately and says
+#                         why, instead of pausing to try.
+#
+# That keeps all three properties -- nothing silent, nothing attempted where it
+# cannot work, the missing package named before anything happens -- while
+# costing one keystroke instead of a hunt.
 #
 # AUDIT (P4.9): this note used to point the reader at a lockfile in the project
 # root. THERE IS NO SUCH FILE, and a reviewer was right to say so. (The old
@@ -107,8 +129,38 @@ optional_packages <- c(
 #   renv::restore()                     # later, or elsewhere
 #
 # -- and until you have done that, this project is NOT environment-pinned.
+# Ask, install on a yes, and report what landed. Returns the packages still
+# missing afterwards. Never installs without an answer, and never asks where an
+# answer cannot be given.
+dance_offer_install <- function(pkgs, why = NULL) {
+  if (!length(pkgs)) return(character(0))
+  can_ask <- interactive() && !identical(Sys.getenv("DANCE_NO_INSTALL"), "1")
+  if (!can_ask) return(pkgs)
+  message("\nDANCE needs ", length(pkgs), " package(s) that are not installed:")
+  for (p in pkgs)
+    message("  ", p, if (!is.null(why[[p]])) paste0("  -- ", why[[p]]) else "")
+  message("\nThey will be installed into: ", .libPaths()[1])
+  ans <- tolower(trimws(readline("Install them now? [y/N] ")))
+  if (!ans %in% c("y", "yes")) {
+    message("Not installing. Re-run when you are ready, or:  install.packages(c(",
+            paste(sprintf('"%s"', pkgs), collapse = ", "), "))")
+    return(pkgs)
+  }
+  utils::install.packages(pkgs)
+  still <- pkgs[!vapply(pkgs, requireNamespace, logical(1), quietly = TRUE)]
+  got <- setdiff(pkgs, still)
+  if (length(got))
+    message("Installed: ", paste(sprintf("%s %s", got,
+            vapply(got, function(p) as.character(utils::packageVersion(p)), character(1))),
+            collapse = ", "))
+  if (length(still)) message("Still missing: ", paste(still, collapse = ", "))
+  still
+}
+
 missing_required <- required_packages[
   !vapply(required_packages, requireNamespace, logical(1), quietly = TRUE)]
+if (length(missing_required))
+  missing_required <- dance_offer_install(missing_required)
 if (length(missing_required)) {
   stop("DANCE cannot start: required packages are missing.\n",
        "  ", paste(missing_required, collapse = ", "), "\n\n",
@@ -123,6 +175,12 @@ invisible(lapply(required_packages, function(p)
 
 missing_optional <- names(optional_packages)[
   !vapply(names(optional_packages), requireNamespace, logical(1), quietly = TRUE)]
+# THE SAME OFFER, ALL AT ONCE. Discovering four optional packages one refusal at
+# a time -- each inside a panel you had already waited for -- is the failure
+# that prompted this. They are offered together, here, each named with the
+# feature it costs, before any analysis starts.
+if (length(missing_optional))
+  missing_optional <- dance_offer_install(missing_optional, optional_packages)
 invisible(lapply(setdiff(names(optional_packages), missing_optional), function(p)
   suppressPackageStartupMessages(
     suppressWarnings(require(p, character.only = TRUE, quietly = TRUE)))))

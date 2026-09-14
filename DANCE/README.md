@@ -34,6 +34,24 @@ what was found wrong and how each thing was measured before and after.
 shiny::runApp("DANCE")          # from the repository root
 ```
 
+On a fresh machine, install everything first — or just start the app, which
+names what is missing and offers to install it:
+
+```bash
+Rscript DANCE/tools/install_dependencies.R             # required + optional
+Rscript DANCE/tools/install_dependencies.R --required  # the hard minimum only
+```
+
+**The app asks before it installs, and only in an interactive session.** A
+deployed app, `Rscript`, CI, or `DANCE_NO_INSTALL=1` behaves as it always has:
+no install, stop with the exact command. That split is deliberate — installing
+silently at startup means whatever CRAN holds on the day you press run becomes
+your estimator, and a machine that cannot install should fail immediately rather
+than pause trying. Asking costs one keystroke and keeps both properties.
+
+`tools/install_dependencies.R` reads its package list *out of* `app.R` rather
+than repeating it, so the two cannot drift.
+
 Required: `shiny`, `shinydashboard`, `shinyWidgets`, `fda`, `mgcv`, `plotly`,
 `DT`, `dplyr`, `tidyr`, `ggplot2`, `cluster`, `readxl`.
 
@@ -48,6 +66,10 @@ if any of these were missing):
 | `reticulate` | DCF (density-core-finding) clustering via Python |
 | `minpack.lm` | robust exponential-saturation cosinor fits |
 | `lme4` | mixed (between × within) cosinor |
+| `emmeans` | per-cell amplitude and acrophase, and every contrast built on them |
+| `pbkrtest` | Kenward–Roger degrees of freedom (falls back to Satterthwaite) |
+| `lmerTest` | Satterthwaite degrees of freedom (falls back to a likelihood-ratio test) |
+| `glmmTMB` | residual correlation structures — AR(1) and continuous-time OU |
 | `gridExtra`, `viridis` | plot export, continuous colour scales |
 
 ## The tabs

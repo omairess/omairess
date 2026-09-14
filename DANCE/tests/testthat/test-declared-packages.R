@@ -74,3 +74,64 @@ test_that("the emmeans refusal tells the user what to do and what still works", 
   expect_true(grepl('install.packages(\\"emmeans\\")', inf, fixed = TRUE))
   expect_true(grepl("are unaffected", inf, fixed = TRUE))
 })
+
+# ==============================================================================
+# The install offer (P21 phase 4)
+# ==============================================================================
+# An earlier audit removed automatic installation for three reasons, all sound:
+# it silently changes the analysis, it cannot work where it is most needed, and
+# it hides the real problem. Those argue against installing SILENTLY, not
+# against installing at all. The offer must therefore keep every one of the
+# three properties, and these checks are what stop a later convenience from
+# quietly dropping one.
+
+test_that("nothing is ever installed without an answer", {
+  expect_true(grepl("dance_offer_install <- function", app, fixed = TRUE))
+  fn <- regmatches(app, regexpr("dance_offer_install <- function(?s).*?\\n\\}", app, perl = TRUE))
+  expect_length(fn, 1)
+  # it must ASK, and must only install after a yes
+  expect_true(grepl("readline(", fn, fixed = TRUE))
+  expect_true(grepl('ans %in% c("y", "yes")', fn, fixed = TRUE))
+  # the install call must come after that test, never before it
+  expect_gt(regexpr("install.packages", fn, fixed = TRUE),
+            regexpr('ans %in% c("y", "yes")', fn, fixed = TRUE))
+})
+
+test_that("it never even asks where an answer cannot be given", {
+  fn <- regmatches(app, regexpr("dance_offer_install <- function(?s).*?\\n\\}", app, perl = TRUE))
+  # reason 2 of the original audit: a deployed app, Rscript, CI or a locked-down
+  # machine must fail immediately with the command, not pause trying to install
+  expect_true(grepl("interactive()", fn, fixed = TRUE))
+  expect_true(grepl("DANCE_NO_INSTALL", fn, fixed = TRUE))
+  expect_true(grepl("if (!can_ask) return(pkgs)", fn, fixed = TRUE))
+})
+
+test_that("the packages are named before anything happens, and the versions after", {
+  fn <- regmatches(app, regexpr("dance_offer_install <- function(?s).*?\\n\\}", app, perl = TRUE))
+  # reason 3: name the missing package before acting on it
+  expect_lt(regexpr('for \\(p in pkgs\\)', fn), regexpr("readline\\(", fn))
+  # reason 1: what changed goes on the record
+  expect_true(grepl("packageVersion", fn, fixed = TRUE))
+  expect_true(grepl("Installed: ", fn, fixed = TRUE))
+})
+
+test_that("the required check still stops when the offer did not resolve it", {
+  # the offer narrows the list; the stop must act on what is left, not on the
+  # original -- otherwise a declined install starts the app anyway
+  expect_true(grepl("missing_required <- dance_offer_install(missing_required)", app, fixed = TRUE))
+  i_offer <- regexpr("missing_required <- dance_offer_install", app, fixed = TRUE)
+  i_stop  <- regexpr("DANCE cannot start", app, fixed = TRUE)
+  expect_gt(i_stop, i_offer)
+})
+
+test_that("the one-command installer reads its list from app.R", {
+  inst <- paste(readLines(file.path(app_dir, "tools/install_dependencies.R"), warn = FALSE),
+                collapse = "\n")
+  # it must not repeat the package names -- a second copy is a second thing to
+  # forget, which is the omission that started this
+  expect_true(grepl("parse(file.path(root, \"app.R\"))", inst, fixed = TRUE))
+  expect_false(grepl('"emmeans"', inst, fixed = TRUE))
+  expect_false(grepl('"shinyWidgets"', inst, fixed = TRUE))
+  # a missing REQUIRED package is a non-zero exit; a missing optional one is not
+  expect_true(grepl("quit(status = 1)", inst, fixed = TRUE))
+})
