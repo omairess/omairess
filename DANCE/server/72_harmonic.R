@@ -5416,24 +5416,62 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
                       "Provisional calibration — see the validation notes."))
   })
 
+  # EVERY BLOCK TEST TAB 6 NEEDS, COMPUTED ONCE.
+  # ------------------------------------------------------------------------
+  # Kenward-Roger refits the reduced model AND computes an adjusted covariance,
+  # so one KR test costs about as much as the original fit: measured on 1052
+  # participants with two harmonics, the fit took 21.2 s and each KR test 18.6 s.
+  # The first version of this tab ran about five of them per render -- one per
+  # factorial effect, three for the decomposition, and one more purely to read a
+  # method name out of the result for a caption. That is why fitting "seemed to
+  # take a long time": it was not the model, it was the same expensive test
+  # being computed several times over.
+  #
+  # All of them now come from one reactive, so each distinct block is computed
+  # once per fit and the panels read from the cache.
+  harmonic_traj_tests <- reactive({
+    ff <- harmonic_traj()
+    if (!isTRUE(ff$ok)) return(NULL)
+    dfm <- input$harmonic_df_method %||% "kr"
+    dts <- ff$spec$design_terms
+    tl <- attr(stats::terms(stats::as.formula(ff$spec$fixed_formula)), "term.labels")
+
+    effects <- unlist(lapply(seq_along(dts), function(k)
+      utils::combn(dts, k, paste, collapse = ":")), use.names = FALSE)
+    want <- if (identical(ff$spec$trend, "none"))
+      c("full", "circadian", "level") else
+      c("full", "shape", "circadian", "trend", "level")
+
+    n_tests <- length(effects) + length(want)
+    withProgress(message = sprintf("Testing %d coefficient blocks...", n_tests), value = 0, {
+      by_effect <- lapply(effects, function(ef) {
+        parts <- strsplit(ef, ":", fixed = TRUE)[[1]]
+        keep <- tl[vapply(tl, function(term) setequal(
+          intersect(strsplit(term, ":", fixed = TRUE)[[1]], dts), parts), logical(1))]
+        incProgress(1 / n_tests)
+        if (!length(keep)) NULL else dance_traj_block_test(ff, keep, df_method = dfm)
+      })
+      names(by_effect) <- effects
+      blocks <- lapply(want, function(w) {
+        incProgress(1 / n_tests)
+        dance_traj_omnibus(ff, w, df_method = dfm)
+      })
+      names(blocks) <- want
+      list(effects = by_effect, blocks = blocks,
+           method = (Filter(function(r) isTRUE(r$ok), blocks)[[1]]$method) %||% "F test")
+    })
+  })
+
   # ---- 1. PRIMARY: the full trajectory difference, per factorial effect ------
   output$harmonic_traj_primary <- renderUI({
     ff <- harmonic_traj(); req(isTRUE(ff$ok))
     dts <- ff$spec$design_terms
     # each factorial effect gets its own full-trajectory test: the main effects
     # and, when there is more than one factor, their interaction
-    effects <- unlist(lapply(seq_along(dts), function(k) utils::combn(dts, k, paste, collapse = ":")),
-                      use.names = FALSE)
-    tl <- attr(stats::terms(stats::as.formula(ff$spec$fixed_formula)), "term.labels")
-    rows <- lapply(effects, function(ef) {
-      parts <- strsplit(ef, ":", fixed = TRUE)[[1]]
-      keep <- tl[vapply(tl, function(term) {
-        p <- strsplit(term, ":", fixed = TRUE)[[1]]
-        setequal(intersect(p, dts), parts)
-      }, logical(1))]
-      if (!length(keep)) return(NULL)
-      r <- dance_traj_block_test(ff, keep)
-      if (!isTRUE(r$ok)) return(NULL)
+    tt <- harmonic_traj_tests(); req(!is.null(tt))
+    rows <- lapply(names(tt$effects), function(ef) {
+      r <- tt$effects[[ef]]
+      if (is.null(r) || !isTRUE(r$ok)) return(NULL)
       tags$tr(
         tags$td(style = "padding:4px 12px 4px 0;font-weight:600", gsub(":", " × ", ef)),
         tags$td(style = "padding:4px 12px 4px 0;font-family:monospace",
@@ -5446,7 +5484,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     tagList(tags$table(style = "margin:4px 0 6px 0", tags$tbody(rows)),
             tags$div(style = "font-size:11px;color:#777",
                      sprintf("%s. Each row tests level, trend and all harmonics jointly.",
-                             dance_traj_omnibus(ff, "full")$method %||% "Kenward-Roger F")))
+                             tt$method)))
   })
 
   # ---- 2. SECONDARY: the component decomposition ----------------------------
@@ -5455,12 +5493,11 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     # Without a trend, the SHAPE block and the CIRCADIAN block contain exactly
     # the same terms, and printing both prints one test twice under two names --
     # which reads as corroboration. Real data made this obvious: both rows came
-    # back F(12, 1823.5) = 2.028. Only the blocks that differ are shown.
-    want <- if (identical(ff$spec$trend, "none"))
-      c("full", "circadian", "level") else
-      c("full", "shape", "circadian", "trend", "level")
-    set <- dance_traj_omnibus_set(ff, which = want)
-    blocks <- Filter(function(r) isTRUE(r$ok), set$results)
+    # back F(12, 1823.5) = 2.028. Only the blocks that differ are shown, and
+    # which those are is decided in harmonic_traj_tests() so the two panels
+    # cannot disagree -- or compute the same expensive test twice.
+    tt <- harmonic_traj_tests(); req(!is.null(tt))
+    blocks <- Filter(function(r) isTRUE(r$ok), tt$blocks)
     lab <- c(full = "Full trajectory", shape = "Temporal shape (trend + harmonics)",
              circadian = "Rhythmic block (all harmonics)",
              trend = "Non-periodic trend", level = "Baseline / reference level at t = 0")

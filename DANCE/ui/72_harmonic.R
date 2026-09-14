@@ -190,6 +190,34 @@ ui_tab_harmonic <- tabItem(
                              solution to average.")),
 
               hr(),
+              # ============================================================
+                # DEGREES OF FREEDOM (P21 amendment 5)
+                # ============================================================
+                # There is NO sample-size theorem here. Kenward-Roger is the
+                # better small-sample approximation at every n, and the only
+                # thing that changes with n is how long it takes: it refits the
+                # reduced model and computes an adjusted covariance, so one KR
+                # test costs about as much as the original fit. Benchmarked on
+                # 1052 participants with two harmonics: the fit 21.2 s, each KR
+                # test 18.6 s, each Satterthwaite test under 0.1 s.
+                #
+                # So this is a COMPUTATIONAL choice, offered as one, with the
+                # measured cost stated. It is not a statistical threshold.
+                h5("Degrees of freedom"),
+              radioButtons("harmonic_df_method", NULL,
+                           choices = c("Kenward-Roger (preferred)" = "kr",
+                                       "Satterthwaite (much faster on large samples)" = "satterthwaite"),
+                           selected = "kr"),
+              helpText(HTML("Kenward\u2013Roger is the better small-sample approximation at
+                             <b>every</b> sample size \u2014 there is no n above which
+                             Satterthwaite becomes correct instead. What changes with n is the
+                             <b>cost</b>: each KR test refits the reduced model, so on ~1000
+                             participants with two harmonics it takes about 19 s per block
+                             against under 0.1 s for Satterthwaite. Choose Satterthwaite to
+                             explore quickly; switch back before you report. The method that
+                             ran is always named in the output.")),
+
+              hr(),
               h5("Model comparison and diagnostics"),
               # AUDIT (P15.2). These are TWO INDEPENDENT diagnostics that sat under
               # one heading with nothing separating them, so the tau field read as
