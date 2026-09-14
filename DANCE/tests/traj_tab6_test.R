@@ -107,6 +107,22 @@ drive <- function(ff, label) {
               sum(okb), ff$spec$trend),
       sprintf("block availability is wrong: %s", paste(names(okb)[!okb], collapse = ", ")))
 
+  # WITHOUT A TREND, two of the five blocks are the same test and two of the
+  # four component views are degenerate. Found by running on real data, where
+  # shape and circadian both came back F(12, 1823.5) = 2.028 -- one test printed
+  # twice under two names reads as corroboration. Tab 6 now shows only the
+  # blocks and views that differ; this pins the fact that justifies it.
+  if (identical(ff$spec$trend, "none")) {
+    chk(identical(set$results$shape$terms, set$results$circadian$terms) &&
+          abs(set$results$shape$statistic - set$results$circadian$statistic) < 1e-12,
+        "with no trend, shape and circadian ARE the same test (so only one is shown)",
+        "shape and circadian differ with no trend in the model")
+    tv0 <- e$dance_traj_predict(ff, component = "trend", n_time = 10)
+    chk(max(abs(tv0$table$fit)) < 1e-12,
+        "and the nonperiodic view is identically zero (so it is not offered)",
+        "the nonperiodic view is non-zero with no trend fitted")
+  }
+
   # 3. the four component views, each with a band
   pv <- lapply(e$DANCE_TRAJ_COMPONENTS, function(cc)
     e$dance_traj_predict(ff, component = cc, n_time = 40))

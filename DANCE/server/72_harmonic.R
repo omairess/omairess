@@ -5452,7 +5452,14 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
   # ---- 2. SECONDARY: the component decomposition ----------------------------
   output$harmonic_traj_components <- renderUI({
     ff <- harmonic_traj(); req(isTRUE(ff$ok))
-    set <- dance_traj_omnibus_set(ff, which = c("full", "shape", "circadian", "trend", "level"))
+    # Without a trend, the SHAPE block and the CIRCADIAN block contain exactly
+    # the same terms, and printing both prints one test twice under two names --
+    # which reads as corroboration. Real data made this obvious: both rows came
+    # back F(12, 1823.5) = 2.028. Only the blocks that differ are shown.
+    want <- if (identical(ff$spec$trend, "none"))
+      c("full", "circadian", "level") else
+      c("full", "shape", "circadian", "trend", "level")
+    set <- dance_traj_omnibus_set(ff, which = want)
     blocks <- Filter(function(r) isTRUE(r$ok), set$results)
     lab <- c(full = "Full trajectory", shape = "Temporal shape (trend + harmonics)",
              circadian = "Rhythmic block (all harmonics)",
@@ -5505,11 +5512,34 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
   })
 
   # ---- 3. THE FOUR COMPONENT VIEWS, per design cell -------------------------
+  # With no trend in the model, "nonperiodic change from origin" is identically
+  # zero and "baseline + harmonics" is identical to the full trajectory. Found by
+  # running on real data: the selector offered all four regardless, so two of
+  # them drew a flat zero line and a duplicate. The options now follow the model.
+  harmonic_traj_component <- reactive({
+    cc <- input$harmonic_traj_component %||% "full"
+    ff <- harmonic_traj()
+    if (isTRUE(ff$ok) && identical(ff$spec$trend, "none") &&
+        cc %in% c("trend", "baseline_harm")) "full" else cc
+  })
+  observe({
+    ff <- harmonic_traj()
+    if (!isTRUE(ff$ok)) return()
+    ch <- c("Full fitted trajectory" = "full",
+            "Harmonics only (zero baseline)" = "harmonics")
+    if (!identical(ff$spec$trend, "none"))
+      ch <- c(ch, "Baseline + harmonics" = "baseline_harm",
+                  "Nonperiodic change from origin" = "trend")
+    sel <- isolate(input$harmonic_traj_component) %||% "full"
+    updateSelectInput(session, "harmonic_traj_component", choices = ch,
+                      selected = if (sel %in% ch) sel else "full")
+  })
+
   output$harmonic_traj_curves <- renderPlotly({
     ff <- harmonic_traj(); req(isTRUE(ff$ok))
     pr <- dance_traj_predict(ff, conf = 0.95,
                              band = input$harmonic_traj_band %||% "pointwise",
-                             component = input$harmonic_traj_component %||% "full",
+                             component = harmonic_traj_component(),
                              n_time = 160)
     req(isTRUE(pr$ok))
     cols <- dance_group_colors(pr$cells)
@@ -5524,7 +5554,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
                   line = list(color = cols[[cl]], width = 2.4))
     }
     if (isTRUE(input$harmonic_traj_raw) &&
-        identical(input$harmonic_traj_component %||% "full", "full")) {
+        identical(harmonic_traj_component(), "full")) {
       # raw points belong only under the FULL trajectory: the other three views
       # are components of the fit, and no observation corresponds to one
       dd <- ff$spec$data
@@ -5538,7 +5568,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
                                marker = list(color = dance_group_rgba(cols[[cl]], 0.35), size = 4))
       }
     }
-    ylab <- switch(input$harmonic_traj_component %||% "full",
+    ylab <- switch(harmonic_traj_component(),
       full = {
         md <- values$harmonic_model
         if (!is.null(md$dv_name))
@@ -5558,8 +5588,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
   output$harmonic_traj_band_note <- renderUI({
     ff <- harmonic_traj(); req(isTRUE(ff$ok))
     pr <- dance_traj_predict(ff, band = input$harmonic_traj_band %||% "pointwise",
-                             component = input$harmonic_traj_component %||% "full",
-                             n_time = 2)
+                             component = harmonic_traj_component(), n_time = 2)
     req(isTRUE(pr$ok))
     tags$div(style = "font-size:11px;color:#777;margin-top:4px", pr$note)
   })

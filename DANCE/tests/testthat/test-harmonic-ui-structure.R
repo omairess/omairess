@@ -90,3 +90,16 @@ test_that("no second analysis module was added alongside this one", {
     expect_false(grepl('tabName = "mixed_cosinor"', src, fixed = TRUE), info = basename(f))
   }
 })
+
+
+test_that("tab 6 does not offer views or rows the fitted model cannot produce", {
+  # Both guards were added after running on real data, where the selector
+  # offered a component that draws a flat zero line and the decomposition
+  # printed one test twice under two names.
+  expect_true(grepl("harmonic_traj_component <- reactive", srv, fixed = TRUE))
+  expect_true(grepl("updateSelectInput(session, \"harmonic_traj_component\"", srv, fixed = TRUE))
+  # the decomposition's block list is conditional on the trend
+  blk <- regmatches(srv, regexpr('want <- if \\(identical\\(ff\\$spec\\$trend, "none"\\)[^\n]*\n[^\n]*\n[^\n]*', srv))
+  expect_true(length(blk) == 1)
+  expect_true(grepl('c\\("full", "circadian", "level"\\)', blk))
+})
