@@ -248,6 +248,7 @@ Rscript tests/bootstrap_bounds_test.R     # the P21 phase-1 defect fixes
 Rscript tests/traj_framework_test.R       # the trajectory framework; slow
                                          # measures the omnibus's size AND power on every run
 Rscript tests/traj_band_test.R            # trajectory bands, difference curves, contrasts
+Rscript tests/traj_tab6_test.R            # the Group / Condition Comparison pipeline
 Rscript tests/traj_amendments_test.R      # the phase-3 statistical amendments
 Rscript tests/cosinor_convention_test.R   # one acrophase convention, end to end
 Rscript tests/glmmcosinor_crosscheck_test.R  # vs an independent implementation; skips if absent

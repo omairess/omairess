@@ -3577,6 +3577,57 @@ were matched.
 New: `tests/glmmcosinor_crosscheck_test.R`, which skips itself when the package
 is absent.
 
+### 4.25 P21 phase 4 — the backend becomes reachable
+
+Phases 0–3 added five helper files under `server/` and touched no `ui/` file at
+all, so none of the new statistics could be reached from the app. Phase 4 wires
+it into the **existing** Harmonic Regression module. One module, seven tabs, same
+order; the sophistication goes inside tab 6 and the backend.
+
+**Settings panel.** "Study Design" (between / within / mixed, with only the
+relevant factor selectors) replaces a single optional "Group Variable" that could
+express exactly one design. A readout counts levels per participant, states what
+the *data* say each factor is, flags disagreement with the selection in amber,
+and reports participants / cells / curves. ΔAICc comparison, bounding and the
+boundary-fits rule move behind a collapsed **Advanced** panel — unchanged, and no
+longer standing between a new user and the Run button. Bootstrap CIs come the
+other way, out as "Uncertainty". "Homeostatic Trend Model" → "Non-periodic Trend
+Model", and the "Two-Process Model" and "classic Process S" claims go: a cosinor
+plus a trend separates a periodic component from a non-periodic one, which is not
+the mechanistic Borbély model.
+
+**The four component views are now a backend feature, not a plotting trick.**
+`dance_traj_predict(component = )` takes `full`, `harmonics`, `baseline_harm` or
+`trend`, masking fixed-effect columns by term class off the `terms` object — so a
+covariate or interaction the user added is classified by the same rule as
+everything else rather than by name-matching. `trend` is formed as a *contrast*
+against the t0 row, which is why its band pinches to exactly zero at the origin
+rather than only its point estimate doing so. Verified: `full` = `baseline_harm`
++ `trend` to 0.0e+00.
+
+**Tab 6** is five panels over ONE fitted model, in reading order: the primary
+full-trajectory test per factorial effect (`dance_traj_block_test`, new — the
+same machinery as the named omnibus but over an arbitrary term set, which a
+runtime-chosen factorial needs); the component decomposition with per-harmonic
+derived amplitude and acrophase from the same coefficient vector; the fitted
+curves with the component and band selectors; the difference curve; and pairwise
+post-hoc with simple effects and multiplicity. The legacy two-stage comparison is
+**kept**, below, behind a disclosure and labelled with what it cannot do.
+
+`tests/traj_tab6_test.R` drives the whole pipeline for four designs — 2-group
+between, 3-condition within, 2×2 mixed with a trend, 3×2 with two harmonics —
+and checks every panel has something to render, including the ones that must
+refuse. It also checks that **every output id the UI asks for is rendered by some
+server file**: a missing one renders as blank space with no error anywhere, which
+a parse-only smoke test cannot see. Its own first draft searched only
+`72_harmonic.R` and reported three false positives from `74_polar_density.R` —
+the same class of mistake it exists to catch.
+
+Still not promoted: the expanded validation grid has not run at N = 1000, and
+tab 6 carries the provisional-calibration notice on every result.
+
+New: `tests/traj_tab6_test.R`, `tests/testthat/test-harmonic-ui-structure.R`.
+
 ## 5. Rename table
 
 | source | source app | merged app |

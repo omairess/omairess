@@ -5328,6 +5328,357 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
   })
   
   # Group comparison plot
+
+  # ==========================================================================
+  # TAB 6: THE MIXED-EFFECTS TRAJECTORY COMPARISON (P21 phase 4)
+  # ==========================================================================
+  # ONE fit, in one reactive, feeding every panel below it. That is the point of
+  # the redesign: the omnibus, the component table, the curves, the difference
+  # curve and the pairwise contrasts are all views of the SAME fitted model, so
+  # they cannot disagree with each other the way separate procedures can.
+  #
+  # It is an eventReactive on the Run button, not a plain reactive: refitting a
+  # mixed model on every keystroke in the design panel would be unusable.
+  harmonic_traj <- eventReactive(input$run_harmonic, {
+    dt <- harmonic_design_terms()
+    chosen <- c(dt$between, dt$within)
+    if (!length(chosen))
+      return(list(ok = FALSE, message = paste(
+        "No design factor is selected. Choose a study design and at least one",
+        "factor to compare trajectories between.")))
+    req(values$data)
+    Y <- if (identical(input$harmonic_data_source, "smoothed") && !is.null(values$smooth_data))
+      values$smooth_data else values$data
+    tv <- values$time_points %||% seq_len(ncol(Y))
+    subj <- values$subject_ids %||% rownames(Y) %||% as.character(seq_len(nrow(Y)))
+
+    fl <- list()
+    for (f in chosen) {
+      v <- values$covariates[[f]]
+      if (is.null(v) || length(v) != nrow(Y))
+        return(list(ok = FALSE, message = sprintf(
+          "'%s' has %s values for %d curves -- it cannot be used as a design factor.",
+          f, if (is.null(v)) "no" else length(v), nrow(Y))))
+      fl[[f]] <- v
+    }
+    # The roles the USER chose are passed as an override, so a deliberate choice
+    # wins over the data-derived guess -- and dance_traj_classify records it as
+    # an override rather than pretending the data said it.
+    roles <- c(stats::setNames(rep("between", length(dt$between)), dt$between),
+               stats::setNames(rep("within",  length(dt$within)),  dt$within))
+
+    d <- try(dance_traj_long(Y, tv, subj, fl), silent = TRUE)
+    if (inherits(d, "try-error"))
+      return(list(ok = FALSE, message = paste("Could not build the model frame:",
+                                              conditionMessage(attr(d, "condition")))))
+    trend <- input$harmonic_trend_type %||% "none"
+    tau <- if (identical(trend, "exp_sat"))
+      suppressWarnings(as.numeric(input$harmonic_tau_fixed %||% NA)) else NULL
+    if (identical(trend, "exp_sat") && !is.finite(tau))
+      return(list(ok = FALSE, message = paste(
+        "A saturating trend needs a value for tau. Set one under Advanced, or",
+        "choose a different trend: tau is nonlinear and cannot be read off the",
+        "design matrix the way the other trends can.")))
+
+    withProgress(message = "Fitting the trajectory model...", value = 0.3, {
+      sp <- dance_traj_spec(d, period = input$harmonic_period %||% 24,
+                            n_harmonics = input$n_harmonics %||% 1,
+                            trend = trend, tau = tau, roles = roles)
+      if (!isTRUE(sp$ok)) return(list(ok = FALSE, message = sp$message))
+      incProgress(0.4)
+      ff <- dance_traj_fit(sp)
+      if (!isTRUE(ff$ok)) return(list(ok = FALSE, message = ff$message))
+      incProgress(0.3)
+      ff
+    })
+  })
+
+  # The model actually fitted, its random structure, and its calibration status.
+  # A reader who does not know which random structure was used is reading an
+  # unnamed model, and the ladder can descend.
+  output$harmonic_traj_header <- renderUI({
+    ff <- harmonic_traj()
+    if (!isTRUE(ff$ok)) return(div(class = "alert alert-warning", ff$message))
+    cal <- dance_traj_calibration(ff, "kr", "full")
+    div(style = "background:#f7f7f7;border:1px solid #e3e3e3;border-radius:3px;padding:8px 10px;margin-bottom:10px",
+        tags$div(style = "font-family:monospace;font-size:11px;color:#555",
+                 sprintf("%s + %s", ff$spec$fixed_formula, ff$re_formula)),
+        tags$div(style = "font-size:12px;color:#555;margin-top:4px",
+                 sprintf("%s — %d participants, %d curves, %d cells. Random structure: %s (rung %d of %d).%s",
+                         ff$spec$design_kind, ff$spec$n_participants, ff$spec$n_curves,
+                         nrow(ff$spec$cells), ff$re_label, ff$re_rung, ff$n_rungs,
+                         if (isTRUE(ff$singular))
+                           sprintf(" %d variance dimension(s) at the boundary, kept.", ff$boundary_dims)
+                         else "")),
+        if (!isTRUE(cal$validated))
+          tags$div(style = "font-size:11px;color:#8a5a12;margin-top:6px", cal$calibration)
+        else tags$div(style = "font-size:11px;color:#8a5a12;margin-top:6px",
+                      "Provisional calibration — see the validation notes."))
+  })
+
+  # ---- 1. PRIMARY: the full trajectory difference, per factorial effect ------
+  output$harmonic_traj_primary <- renderUI({
+    ff <- harmonic_traj(); req(isTRUE(ff$ok))
+    dts <- ff$spec$design_terms
+    # each factorial effect gets its own full-trajectory test: the main effects
+    # and, when there is more than one factor, their interaction
+    effects <- unlist(lapply(seq_along(dts), function(k) utils::combn(dts, k, paste, collapse = ":")),
+                      use.names = FALSE)
+    tl <- attr(stats::terms(stats::as.formula(ff$spec$fixed_formula)), "term.labels")
+    rows <- lapply(effects, function(ef) {
+      parts <- strsplit(ef, ":", fixed = TRUE)[[1]]
+      keep <- tl[vapply(tl, function(term) {
+        p <- strsplit(term, ":", fixed = TRUE)[[1]]
+        setequal(intersect(p, dts), parts)
+      }, logical(1))]
+      if (!length(keep)) return(NULL)
+      r <- dance_traj_block_test(ff, keep)
+      if (!isTRUE(r$ok)) return(NULL)
+      tags$tr(
+        tags$td(style = "padding:4px 12px 4px 0;font-weight:600", gsub(":", " × ", ef)),
+        tags$td(style = "padding:4px 12px 4px 0;font-family:monospace",
+                sprintf("F(%.0f, %.1f) = %.3f", r$df1, r$df2, r$statistic)),
+        tags$td(style = "padding:4px 0;font-family:monospace",
+                sprintf("p %s", dance_fmt_p(r$p))))
+    })
+    rows <- Filter(Negate(is.null), rows)
+    if (!length(rows)) return(helpText("No testable design terms in this model."))
+    tagList(tags$table(style = "margin:4px 0 6px 0", tags$tbody(rows)),
+            tags$div(style = "font-size:11px;color:#777",
+                     sprintf("%s. Each row tests level, trend and all harmonics jointly.",
+                             dance_traj_omnibus(ff, "full")$method %||% "Kenward-Roger F")))
+  })
+
+  # ---- 2. SECONDARY: the component decomposition ----------------------------
+  output$harmonic_traj_components <- renderUI({
+    ff <- harmonic_traj(); req(isTRUE(ff$ok))
+    set <- dance_traj_omnibus_set(ff, which = c("full", "shape", "circadian", "trend", "level"))
+    blocks <- Filter(function(r) isTRUE(r$ok), set$results)
+    lab <- c(full = "Full trajectory", shape = "Temporal shape (trend + harmonics)",
+             circadian = "Rhythmic block (all harmonics)",
+             trend = "Non-periodic trend", level = "Baseline / reference level at t = 0")
+    rows <- lapply(names(blocks), function(b) {
+      r <- blocks[[b]]
+      tags$tr(
+        tags$td(style = "padding:3px 12px 3px 0", lab[[b]] %||% b),
+        tags$td(style = "padding:3px 12px 3px 0;color:#777", sprintf("%d terms", length(r$terms))),
+        tags$td(style = "padding:3px 12px 3px 0;font-family:monospace",
+                sprintf("F(%.0f, %.1f) = %.2f", r$df1, r$df2, r$statistic)),
+        tags$td(style = "padding:3px 0;font-family:monospace", dance_fmt_p(r$p)))
+    })
+    # derived per-harmonic quantities, from the SAME fit
+    drows <- list()
+    for (h in seq_len(ff$spec$n_harmonics)) {
+      co <- dance_traj_cell_coefs(ff, h)
+      if (!isTRUE(co$ok)) next
+      ap <- dance_traj_amp_phase_ci(co, method = "joint", n_draw = 6000)
+      if (!isTRUE(ap$ok)) next
+      for (i in seq_len(nrow(ap$table))) {
+        r <- ap$table[i, ]
+        drows[[length(drows) + 1L]] <- tags$tr(
+          tags$td(style = "padding:3px 12px 3px 0", sprintf("H%d amplitude — %s", h, r$cell)),
+          tags$td(style = "padding:3px 12px 3px 0;color:#777", "derived"),
+          tags$td(style = "padding:3px 12px 3px 0;font-family:monospace",
+                  sprintf("%.3f", r$amplitude)),
+          tags$td(style = "padding:3px 0;font-family:monospace",
+                  sprintf("[%.3f, %.3f]", r$amplitude_lo, r$amplitude_hi)))
+        drows[[length(drows) + 1L]] <- tags$tr(
+          tags$td(style = "padding:3px 12px 3px 0", sprintf("H%d acrophase — %s", h, r$cell)),
+          tags$td(style = "padding:3px 12px 3px 0;color:#777", "circular"),
+          tags$td(style = "padding:3px 12px 3px 0;font-family:monospace",
+                  sprintf("%.2f h", r$acrophase_time)),
+          tags$td(style = "padding:3px 0;font-family:monospace",
+                  if (isTRUE(r$phase_defined))
+                    sprintf("arc %.2f h", r$acrophase_arc_time)
+                  else "undefined (amplitude may be zero)"))
+      }
+    }
+    tagList(
+      tags$table(style = "margin:4px 0", tags$tbody(rows, drows)),
+      tags$div(style = "font-size:11px;color:#777;margin-top:6px",
+        HTML(paste(
+          "Joint rows are block tests on the fitted model; derived rows come from the",
+          "<b>same</b> coefficient vector and covariance, with the acrophase interval",
+          "reported as an <b>arc</b> and suppressed where the amplitude interval covers",
+          "zero. The baseline row is the fitted value at the reference time, which is",
+          "<b>not</b> a MESOR when a trend is present."))))
+  })
+
+  # ---- 3. THE FOUR COMPONENT VIEWS, per design cell -------------------------
+  output$harmonic_traj_curves <- renderPlotly({
+    ff <- harmonic_traj(); req(isTRUE(ff$ok))
+    pr <- dance_traj_predict(ff, conf = 0.95,
+                             band = input$harmonic_traj_band %||% "pointwise",
+                             component = input$harmonic_traj_component %||% "full",
+                             n_time = 160)
+    req(isTRUE(pr$ok))
+    cols <- dance_group_colors(pr$cells)
+    p <- plot_ly()
+    for (cl in pr$cells) {
+      d <- pr$table[pr$table$cell == cl, , drop = FALSE]
+      p <- p %>%
+        add_ribbons(x = d$t, ymin = d$lo, ymax = d$hi, name = cl,
+                    line = list(width = 0), fillcolor = dance_group_rgba(cols[[cl]], 0.16),
+                    showlegend = FALSE, hoverinfo = "skip") %>%
+        add_lines(x = d$t, y = d$fit, name = cl,
+                  line = list(color = cols[[cl]], width = 2.4))
+    }
+    if (isTRUE(input$harmonic_traj_raw) &&
+        identical(input$harmonic_traj_component %||% "full", "full")) {
+      # raw points belong only under the FULL trajectory: the other three views
+      # are components of the fit, and no observation corresponds to one
+      dd <- ff$spec$data
+      key <- if (length(ff$spec$design_terms))
+        do.call(paste, c(lapply(ff$spec$design_terms, function(f) as.character(dd[[f]])),
+                         list(sep = " x "))) else rep("(all)", nrow(dd))
+      for (cl in pr$cells) {
+        i <- key == cl
+        if (!any(i)) next
+        p <- p %>% add_markers(x = dd$t[i], y = dd$y[i], name = cl, showlegend = FALSE,
+                               marker = list(color = dance_group_rgba(cols[[cl]], 0.35), size = 4))
+      }
+    }
+    ylab <- switch(input$harmonic_traj_component %||% "full",
+      full = {
+        md <- values$harmonic_model
+        if (!is.null(md$dv_name))
+          paste0(md$dv_name, if (!is.null(md$dv_units)) paste0(" (", md$dv_units, ")") else "")
+        else "Response"
+      },
+      harmonics = "Periodic component (centred on 0)",
+      baseline_harm = "Baseline + harmonics",
+      trend = "Change from the reference time")
+    p %>% layout(
+      xaxis = list(title = sprintf("Time (%s)", ff$spec$time_units %||% "h")),
+      yaxis = list(title = ylab),
+      hovermode = "x unified",
+      legend = list(orientation = "h", y = -0.18))
+  })
+
+  output$harmonic_traj_band_note <- renderUI({
+    ff <- harmonic_traj(); req(isTRUE(ff$ok))
+    pr <- dance_traj_predict(ff, band = input$harmonic_traj_band %||% "pointwise",
+                             component = input$harmonic_traj_component %||% "full",
+                             n_time = 2)
+    req(isTRUE(pr$ok))
+    tags$div(style = "font-size:11px;color:#777;margin-top:4px", pr$note)
+  })
+
+  # ---- 4. DIFFERENCE CURVE: one contrast, not two curves subtracted ---------
+  output$harmonic_traj_diff_a_ui <- renderUI({
+    ff <- harmonic_traj(); req(isTRUE(ff$ok))
+    cl <- dance_traj_cell_grid(ff$spec)$.cell
+    selectInput("harmonic_traj_diff_a", "Cell A:", choices = cl, selected = cl[1])
+  })
+  output$harmonic_traj_diff_b_ui <- renderUI({
+    ff <- harmonic_traj(); req(isTRUE(ff$ok))
+    cl <- dance_traj_cell_grid(ff$spec)$.cell
+    selectInput("harmonic_traj_diff_b", "Cell B:", choices = cl,
+                selected = if (length(cl) > 1) cl[2] else cl[1])
+  })
+
+  harmonic_traj_diff <- reactive({
+    ff <- harmonic_traj(); req(isTRUE(ff$ok))
+    a <- input$harmonic_traj_diff_a; b <- input$harmonic_traj_diff_b
+    req(a, b)
+    dance_traj_diff_curve(ff, a, b, n_time = 160,
+                          band = if (isTRUE(input$harmonic_traj_diff_sim))
+                            "simultaneous" else "pointwise")
+  })
+
+  output$harmonic_traj_diff_plot <- renderPlotly({
+    dc <- harmonic_traj_diff()
+    if (!isTRUE(dc$ok)) return(plotly_empty() %>%
+                                 layout(title = list(text = dc$message, font = list(size = 12))))
+    d <- dc$table
+    plot_ly() %>%
+      add_ribbons(x = d$t, ymin = d$lo, ymax = d$hi, line = list(width = 0),
+                  fillcolor = "rgba(31,107,74,0.16)", showlegend = FALSE, hoverinfo = "skip") %>%
+      add_lines(x = d$t, y = d$diff, line = list(color = "#1F6B4A", width = 2.4),
+                name = sprintf("%s − %s", dc$cell1, dc$cell2)) %>%
+      add_lines(x = range(d$t), y = c(0, 0),
+                line = list(color = "#999", width = 1, dash = "dot"),
+                showlegend = FALSE, hoverinfo = "skip") %>%
+      layout(xaxis = list(title = "Time"),
+             yaxis = list(title = sprintf("%s − %s", dc$cell1, dc$cell2)),
+             hovermode = "x unified", showlegend = FALSE)
+  })
+
+  output$harmonic_traj_diff_note <- renderUI({
+    dc <- harmonic_traj_diff()
+    if (!isTRUE(dc$ok)) return(NULL)
+    d <- dc$table
+    sep <- if (any(d$excludes_zero)) {
+      r <- range(d$t[d$excludes_zero])
+      sprintf("The band excludes zero between %.1f and %.1f h.", r[1], r[2])
+    } else "The band covers zero throughout."
+    tags$div(style = "font-size:11px;color:#777;margin-top:4px",
+             paste(sep, dc$note))
+  })
+
+  # ---- 5. PAIRWISE POST-HOC, over an arbitrary factorial --------------------
+  output$harmonic_traj_effect_ui <- renderUI({
+    ff <- harmonic_traj(); req(isTRUE(ff$ok))
+    dts <- ff$spec$design_terms
+    ch <- c("All design cells" = "_all_")
+    if (length(dts) > 1) {
+      # simple effects: one factor, inside each level of the others
+      for (f in dts) ch[sprintf("%s, within each other level", f)] <- f
+    }
+    selectInput("harmonic_traj_effect", "Effect to inspect:", choices = ch)
+  })
+
+  output$harmonic_traj_pairwise <- renderUI({
+    ff <- harmonic_traj(); req(isTRUE(ff$ok))
+    what <- input$harmonic_traj_what %||% "level"
+    adj  <- input$harmonic_traj_adjust %||% "holm"
+    eff  <- input$harmonic_traj_effect %||% "_all_"
+    dts  <- ff$spec$design_terms
+
+    res <- if (identical(eff, "_all_") || !(eff %in% dts)) {
+      list(list(title = NULL, r = dance_traj_contrasts(ff, what, adjust = adj)))
+    } else {
+      # every combination of the OTHER factors is one slice
+      others <- setdiff(dts, eff)
+      lv <- lapply(others, function(f) levels(ff$spec$data[[f]]))
+      names(lv) <- others
+      grid <- expand.grid(lv, stringsAsFactors = FALSE)
+      lapply(seq_len(nrow(grid)), function(i) {
+        at <- as.list(grid[i, , drop = FALSE])
+        list(title = paste(sprintf("%s = %s", names(at), unlist(at)), collapse = ", "),
+             r = dance_traj_simple_effects(ff, eff, at = at, what = what, adjust = adj))
+      })
+    }
+
+    blocks <- lapply(res, function(x) {
+      r <- x$r
+      if (!isTRUE(r$ok)) return(tags$div(style = "color:#8a5a12;font-size:12px", r$message))
+      tb <- r$table
+      rows <- lapply(seq_len(nrow(tb)), function(i) {
+        z <- tb[i, ]
+        tags$tr(
+          tags$td(style = "padding:3px 12px 3px 0", sprintf("%s vs %s", z$cell1, z$cell2)),
+          tags$td(style = "padding:3px 12px 3px 0;font-family:monospace",
+                  if (isTRUE(z$defined)) sprintf("%+.3f", z$estimate) else sprintf("%+.3f", z$estimate)),
+          tags$td(style = "padding:3px 12px 3px 0;font-family:monospace",
+                  if (isTRUE(z$defined)) sprintf("[%.3f, %.3f]", z$lo, z$hi) else "—"),
+          tags$td(style = "padding:3px 12px 3px 0;font-family:monospace",
+                  if (isTRUE(z$defined)) dance_fmt_p(z$p_raw) else "—"),
+          tags$td(style = "padding:3px 0;font-family:monospace;font-weight:600",
+                  if (isTRUE(z$defined)) dance_fmt_p(z$p_adj) else "undefined"))
+      })
+      tagList(
+        if (!is.null(x$title)) tags$div(style = "font-weight:600;margin-top:10px;font-size:13px", x$title),
+        tags$table(style = "margin:4px 0",
+          tags$thead(tags$tr(lapply(c("Pair", "Estimate", "95% CI", "p", "p adj"), function(h)
+            tags$th(style = "text-align:left;padding:2px 12px 2px 0;font-size:11px;color:#777;font-weight:500", h)))),
+          tags$tbody(rows)),
+        tags$div(style = "font-size:11px;color:#777", r$unit))
+    })
+    tagList(blocks, tags$div(style = "font-size:11px;color:#777;margin-top:8px",
+                             res[[1]]$r$note %||% ""))
+  })
+
   output$harmonic_group_comparison_plot <- renderPlotly({
     req(values$harmonic_model)
     mod <- values$harmonic_model

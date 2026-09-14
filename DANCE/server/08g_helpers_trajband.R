@@ -126,12 +126,57 @@ dance_traj_ddf <- function(fit) {
 }
 
 # ------------------------------------------------------------------------------
+# THE FOUR COMPONENT VIEWS
+# ------------------------------------------------------------------------------
+# One fitted model, four ways of looking at it. They are not four models and not
+# four fits: each is the SAME coefficient vector with a different subset of the
+# design columns allowed to contribute, so every one of them carries the same
+# covariance and gets a band by the same quadratic form.
+#
+#   full            baseline + trend + harmonics -- everything the model fits
+#   harmonics       the periodic part alone, centred on zero
+#   baseline_harm   baseline + harmonics, with the non-periodic trend removed
+#   trend           f(t) - f(0): the non-periodic change, exactly zero at t0
+#
+# The last one is a CONTRAST, not a sub-model: subtracting the t0 row is what
+# makes it zero at the origin, and it is done to the design matrix so that the
+# band narrows to zero there too, as it must.
+DANCE_TRAJ_COMPONENTS <- c("full", "harmonics", "baseline_harm", "trend")
+
+DANCE_TRAJ_COMPONENT_LABEL <- c(
+  full          = "Full fitted trajectory",
+  harmonics     = "Harmonics only (zero baseline)",
+  baseline_harm = "Baseline + harmonics",
+  trend         = "Nonperiodic change from origin")
+
+# Which fixed-effect columns survive for a given view. Works off the terms
+# object, so a covariate or an interaction the user added is classified by the
+# same rule as everything else rather than by name-matching.
+dance_traj_component_mask <- function(fit, X, component) {
+  spec <- fit$spec
+  tl <- attr(stats::terms(stats::as.formula(spec$fixed_formula), data = spec$data),
+             "term.labels")
+  asg <- attr(X, "assign")
+  has <- function(term, set) any(strsplit(term, ":", fixed = TRUE)[[1]] %in% set)
+  keep_term <- vapply(tl, function(term) switch(component,
+    full          = TRUE,
+    harmonics     = has(term, spec$harm_terms),
+    baseline_harm = !has(term, spec$trend_terms),
+    trend         = has(term, spec$trend_terms)), logical(1))
+  # assign == 0 is the intercept: present for full and baseline+harmonics,
+  # absent for the two views that are explicitly centred on zero
+  keep_int <- component %in% c("full", "baseline_harm")
+  ifelse(asg == 0L, keep_int, keep_term[pmax(asg, 1L)])
+}
+
+# ------------------------------------------------------------------------------
 # ONE FITTED TRAJECTORY PER CELL, WITH A BAND
 # ------------------------------------------------------------------------------
 dance_traj_predict <- function(fit, times = NULL, conf = 0.95,
                                band = c("pointwise", "simultaneous"),
-                               n_time = 200) {
-  band <- match.arg(band)
+                               n_time = 200,
+                               component = c("full", "harmonics", "baseline_harm", "trend")) {
+  band <- match.arg(band); component <- match.arg(component)
   if (!isTRUE(fit$ok)) return(list(ok = FALSE, message = fit$message))
   spec <- fit$spec
   if (is.null(times))
@@ -144,6 +189,15 @@ dance_traj_predict <- function(fit, times = NULL, conf = 0.95,
 
   rows <- lapply(seq_len(nrow(grid)), function(i) {
     X <- dance_traj_design_rows(fit, grid[i, , drop = FALSE], times)
+    mask <- dance_traj_component_mask(fit, X, component)
+    X[, !mask] <- 0
+    if (identical(component, "trend")) {
+      # f(t) - f(0), as a contrast on the design matrix, so the band is zero at
+      # the origin rather than merely the point estimate being zero there
+      X0 <- dance_traj_design_rows(fit, grid[i, , drop = FALSE], spec$t0)
+      X0[, !mask] <- 0
+      X <- sweep(X, 2, X0[1, ], "-")
+    }
     keep <- intersect(colnames(X), names(bv$beta))
     X <- X[, keep, drop = FALSE]
     Vk <- bv$V[keep, keep, drop = FALSE]
@@ -156,6 +210,8 @@ dance_traj_predict <- function(fit, times = NULL, conf = 0.95,
   out <- do.call(rbind, rows)
   rownames(out) <- NULL
   list(ok = TRUE, table = out, cells = grid$.cell, grid = grid,
+       component = component,
+       component_label = unname(DANCE_TRAJ_COMPONENT_LABEL[component]),
        times = times, conf = conf, band = band, multiplier = mult, ddf = ddf,
        covariates_held_at = if (length(spec$covariates))
          sprintf("covariate(s) %s held at their sample mean",

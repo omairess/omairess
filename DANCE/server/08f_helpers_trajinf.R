@@ -280,6 +280,30 @@ dance_traj_omnibus <- function(fit, which = DANCE_TRAJ_BLOCKS,
     return(list(ok = FALSE, which = which,
                 label = unname(DANCE_TRAJ_BLOCK_LABEL[which]),
                 message = sprintf("No %s x design terms in this model -- nothing to test.", which)))
+  r <- dance_traj_block_test(fit, terms_in, df_method, kr_max_subjects, which)
+  r$which <- which
+  r$label <- unname(DANCE_TRAJ_BLOCK_LABEL[which])
+  r
+}
+
+# ------------------------------------------------------------------------------
+# THE SAME TEST, OVER AN ARBITRARY SET OF TERMS
+# ------------------------------------------------------------------------------
+# dance_traj_omnibus() answers one of five NAMED questions. This is the same
+# machinery over any term set, which is what a factorial design needs: "the full
+# trajectory effect of Group" is every term involving Group and nothing else,
+# and there is no fixed name for that in a design the user chose at runtime.
+# Both go through here, so a named block and an ad-hoc one cannot end up tested
+# by different code.
+dance_traj_block_test <- function(fit, terms_in,
+                                  df_method = c("auto", "kr", "satterthwaite"),
+                                  kr_max_subjects = NULL, block = "custom") {
+  df_method <- match.arg(df_method)
+  if (!isTRUE(fit$ok)) return(list(ok = FALSE, message = fit$message))
+  tl <- attr(stats::terms(stats::as.formula(fit$spec$fixed_formula)), "term.labels")
+  terms_in <- intersect(terms_in, tl)
+  if (!length(terms_in))
+    return(list(ok = FALSE, message = "None of those terms are in the fitted model."))
 
   m <- fit$model
   reduced_formula <- stats::as.formula(
@@ -288,17 +312,15 @@ dance_traj_omnibus <- function(fit, which = DANCE_TRAJ_BLOCKS,
   # glmmTMB: asymptotic Wald only, and labelled as such
   if (identical(fit$engine, "glmmTMB")) {
     m0 <- tryCatch(stats::update(m, reduced_formula), error = function(e) NULL)
-    if (is.null(m0)) return(list(ok = FALSE, which = which,
-                                 message = "The reduced model could not be fitted."))
+    if (is.null(m0)) return(list(ok = FALSE, message = "The reduced model could not be fitted."))
     an <- tryCatch(stats::anova(m0, m), error = function(e) NULL)
-    if (is.null(an)) return(list(ok = FALSE, which = which,
-                                 message = "The block comparison failed."))
-    return(list(ok = TRUE, which = which, terms = terms_in,
+    if (is.null(an)) return(list(ok = FALSE, message = "The block comparison failed."))
+    return(list(ok = TRUE, block = block, terms = terms_in,
                 method = "asymptotic likelihood-ratio (glmmTMB)",
                 statistic = an$Chisq[2], df1 = an$`Chi Df`[2], df2 = NA_real_,
                 p = an$`Pr(>Chisq)`[2],
-                validated = dance_traj_calibration(fit, "wald", which)$validated,
-                calibration = dance_traj_calibration(fit, "wald", which)$calibration,
+                validated = dance_traj_calibration(fit, "wald", block)$validated,
+                calibration = dance_traj_calibration(fit, "wald", block)$calibration,
                 caveat = paste("Kenward-Roger is unavailable on this engine; this test is",
                                "asymptotic and is optimistic in small samples.")))
   }
@@ -328,8 +350,8 @@ dance_traj_omnibus <- function(fit, which = DANCE_TRAJ_BLOCKS,
       tryCatch(pbkrtest::KRmodcomp(mL, m0), error = function(e) NULL)
     if (!is.null(kr)) {
       st <- kr$test
-      cal <- dance_traj_calibration(fit, "kr", which)
-      return(list(ok = TRUE, which = which, terms = terms_in,
+      cal <- dance_traj_calibration(fit, "kr", block)
+      return(list(ok = TRUE, block = block, terms = terms_in,
                   method = "Kenward-Roger F",
                   df_method = "kr",
                   method_note = paste("Kenward-Roger: the preferred small-sample F",
@@ -348,9 +370,9 @@ dance_traj_omnibus <- function(fit, which = DANCE_TRAJ_BLOCKS,
     keep <- attr(X, "assign") %in% which(attr(stats::terms(m), "term.labels") %in% terms_in)
     L <- diag(ncol(X))[keep, , drop = FALSE]
     ct <- tryCatch(lmerTest::contest(m, L, joint = TRUE), error = function(e) NULL)
-    cals <- dance_traj_calibration(fit, "satterthwaite", which)
+    cals <- dance_traj_calibration(fit, "satterthwaite", block)
     if (!is.null(ct))
-      return(list(ok = TRUE, which = which, terms = terms_in,
+      return(list(ok = TRUE, block = block, terms = terms_in,
                   method = "Satterthwaite F",
                   df_method = "satterthwaite",
                   method_note = if (capped) sprintf(paste(
@@ -371,12 +393,11 @@ dance_traj_omnibus <- function(fit, which = DANCE_TRAJ_BLOCKS,
   # last resort: a likelihood-ratio test on ML refits
   mm <- refit_ml(m)
   m0 <- tryCatch(stats::update(mm, reduced_formula), error = function(e) NULL)
-  if (is.null(m0)) return(list(ok = FALSE, which = which,
-                               message = "The reduced model could not be fitted."))
+  if (is.null(m0)) return(list(ok = FALSE, message = "The reduced model could not be fitted."))
   an <- tryCatch(stats::anova(m0, mm), error = function(e) NULL)
-  if (is.null(an)) return(list(ok = FALSE, which = which, message = "The block comparison failed."))
-  call <- dance_traj_calibration(fit, "lrt", which)
-  list(ok = TRUE, which = which, terms = terms_in,
+  if (is.null(an)) return(list(ok = FALSE, message = "The block comparison failed."))
+  call <- dance_traj_calibration(fit, "lrt", block)
+  list(ok = TRUE, block = block, terms = terms_in,
        method = "likelihood-ratio on ML refits",
        statistic = an$Chisq[2], df1 = an$Df[2], df2 = NA_real_, p = an$`Pr(>Chisq)`[2],
        validated = call$validated, provisional = call$provisional,
@@ -787,4 +808,13 @@ dance_traj_selection_from_fit <- function(fit, selected = character(0)) {
   if (isTRUE(fit$simplified)) s <- union(s, "random")
   if (isTRUE(fit$tau_estimated)) s <- union(s, "tau")
   dance_traj_selection_state(s)
+}
+
+
+# One p-value format for the whole module, so the screen, the report and the
+# exported script cannot render the same number three different ways.
+dance_fmt_p <- function(p, digits = 3) {
+  if (!is.finite(p)) return("\u2014")
+  if (p < .001) return("< .001")
+  sub("^0", "", formatC(p, format = "f", digits = digits))
 }

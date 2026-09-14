@@ -372,18 +372,92 @@ ui_tab_harmonic <- tabItem(
                        column(12, verbatimTextOutput("harmonic_gof_stats"))
                      )
             ),
+            # ==========================================================
+            # 6. GROUP / CONDITION COMPARISON  (P21 phase 4)
+            # ==========================================================
+            # Primary result first, decomposition below it, then the pictures,
+            # then post-hoc. The order is the order it should be read in: the
+            # full-trajectory test is the answer to "do these differ", and
+            # everything under it explains why.
             tabPanel("6. Group / Condition Comparison", icon = icon("users"),
-                     fluidRow(
-                       column(12, 
-                              uiOutput("harmonic_selector_group"),
-                              hr()
-                       )
-                     ),
-                     fluidRow(
-                       column(12, plotlyOutput("harmonic_group_comparison_plot", height = "500px"))
-                     ),
+                     uiOutput("harmonic_traj_header"),
+
+                     h4("Primary \u2014 full trajectory difference"),
+                     helpText(HTML("Does the fitted trajectory differ? Level, non-periodic trend
+                                    and every harmonic, tested <b>jointly</b>. A group that is
+                                    simply higher all day counts as different even when its
+                                    amplitude and acrophase are identical.")),
+                     uiOutput("harmonic_traj_primary"),
+
                      hr(),
-                     verbatimTextOutput("harmonic_group_test_results")
+                     h4("Secondary \u2014 trajectory components"),
+                     helpText("Why they differ. Only rows that apply to the fitted model are shown."),
+                     uiOutput("harmonic_traj_components"),
+
+                     hr(),
+                     h4("Estimated trajectories"),
+                     fluidRow(
+                       column(4, selectInput("harmonic_traj_component", "Component:",
+                                             choices = c("Full fitted trajectory" = "full",
+                                                         "Harmonics only (zero baseline)" = "harmonics",
+                                                         "Baseline + harmonics" = "baseline_harm",
+                                                         "Nonperiodic change from origin" = "trend"),
+                                             selected = "full")),
+                       column(4, selectInput("harmonic_traj_band", "Confidence band:",
+                                             choices = c("Pointwise" = "pointwise",
+                                                         "Simultaneous (Scheffe)" = "simultaneous"),
+                                             selected = "pointwise")),
+                       column(4, checkboxInput("harmonic_traj_raw", "Overlay raw data", FALSE))
+                     ),
+                     plotlyOutput("harmonic_traj_curves", height = "440px"),
+                     uiOutput("harmonic_traj_band_note"),
+
+                     hr(),
+                     h4("Difference between two cells"),
+                     fluidRow(
+                       column(5, uiOutput("harmonic_traj_diff_a_ui")),
+                       column(5, uiOutput("harmonic_traj_diff_b_ui")),
+                       column(2, br(), checkboxInput("harmonic_traj_diff_sim", "Simultaneous", TRUE))
+                     ),
+                     plotlyOutput("harmonic_traj_diff_plot", height = "340px"),
+                     uiOutput("harmonic_traj_diff_note"),
+
+                     hr(),
+                     h4("Pairwise comparisons"),
+                     fluidRow(
+                       column(4, uiOutput("harmonic_traj_effect_ui")),
+                       column(4, selectInput("harmonic_traj_what", "Compare:",
+                                             choices = c("Level (at t = 0)" = "level",
+                                                         "Amplitude" = "amplitude",
+                                                         "Acrophase" = "phase"),
+                                             selected = "level")),
+                       column(4, selectInput("harmonic_traj_adjust", "Multiplicity:",
+                                             choices = c("Holm" = "holm",
+                                                         "Bonferroni" = "bonferroni",
+                                                         "None (family is then wrong)" = "none"),
+                                             selected = "holm"))
+                     ),
+                     uiOutput("harmonic_traj_pairwise"),
+
+                     hr(),
+                     # The two-stage output is KEPT, below and labelled. It is a
+                     # different estimator answering a related question, and
+                     # phase 5 decides its fate -- deleting it now would remove a
+                     # comparison a reader may want while the new path is still
+                     # provisionally calibrated.
+                     tags$details(
+                       tags$summary(tags$b("Legacy two-stage comparison"),
+                                    style = "cursor:pointer; padding:6px 0; color:#555"),
+                       helpText(HTML("Fits one model per participant and compares the point
+                                      estimates. It cannot express a repeated-measures design
+                                      and discards each participant's precision, which is why
+                                      it is no longer the primary result \u2014 but it is kept
+                                      so the two can be compared on real data.")),
+                       uiOutput("harmonic_selector_group"),
+                       plotlyOutput("harmonic_group_comparison_plot", height = "500px"),
+                       hr(),
+                       verbatimTextOutput("harmonic_group_test_results")
+                     )
             )
           )
         )
