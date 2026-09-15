@@ -5662,6 +5662,14 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
           "hours, on that harmonic's own effective period. The baseline row is the fitted",
           "value at the reference time, which is <b>not</b> a MESOR when a trend is",
           "present."))),
+      # emmeans turns its df adjustment off above 3000 observations and says so
+      # on the CONSOLE, which nobody running a Shiny app is reading. The choice
+      # it makes is a statistical one, so it belongs on the screen.
+      local({
+        nt <- Filter(Negate(is.null), lapply(cf, function(co) co$df_note))
+        if (length(nt)) tags$div(style = "font-size:11px;color:#777;margin-top:4px",
+                                 HTML(nt[[1]]))
+      }),
       if (mixed) tags$div(style = "font-size:11px;color:#c0392b;margin-top:4px",
         HTML(paste0(
           "<b>Not every row used the same approximation</b> (", 

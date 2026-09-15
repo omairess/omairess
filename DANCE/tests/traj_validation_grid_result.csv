@@ -1,3 +1,5 @@
 "cell","description","block","n_sim","n_failed","rate","ci_lo","ci_hi","verdict","top_rung_pct","singular_pct","minutes"
 "k1_nt_mixed","K=1, no trend, 2x2 mixed, 16 participants","circadian",250,0,0.048,0.0250449969239461,0.082344629087715,"INCONCLUSIVE (interval too wide)",100,60.8,6.86690558989843
 "k1_nt_n8","K=1, no trend, 2x2 mixed, 8 participants","circadian",250,0,0.004,0.00010126610417905,0.0220838650006332,"PASS",100,93.2,4.90281940698624
+"real_k2_lin_full","FULL block, K=2, linear trend, 4 between-groups, irregular + unbalanced","full",250,0,0.016,0.00437622650897409,0.0404573806320992,"PASS",100,98.4,61.6357582767804
+"real_k2_lin_circ","CIRCADIAN block, same configuration as real_k2_lin_full","circadian",250,0,0.016,0.00437622650897409,0.0404573806320992,"PASS",100,98.4,64.4307869474093

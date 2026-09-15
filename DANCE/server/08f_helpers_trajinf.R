@@ -431,8 +431,7 @@ dance_traj_cell_coefs <- function(fit, harmonic = 1) {
 
   specs <- stats::as.formula(paste("~", paste(spec$design_terms, collapse = " * ")))
   grab <- function(term) {
-    e <- tryCatch(emmeans::emtrends(fit$model, specs = specs, var = term),
-                  error = function(e) NULL)
+    e <- dance_emtrends(fit, specs, term)
     if (is.null(e)) return(NULL)
     list(est = summary(e)[[paste0(term, ".trend")]],
          V = stats::vcov(e), grid = as.data.frame(e)[, spec$design_terms, drop = FALSE])
@@ -449,7 +448,9 @@ dance_traj_cell_coefs <- function(fit, harmonic = 1) {
        a = A$est, b = B$est, Va = A$V, Vb = B$V,
        # cov(a_i, b_i) is not returned by emmeans across two emtrends calls;
        # it is recovered from the linear maps below
-       joint = jc$blocks, linfct = jc$linfct, vcov_beta = jc$vcov_beta)
+       joint = jc$blocks, linfct = jc$linfct, vcov_beta = jc$vcov_beta,
+       df_mode = dance_emm_df_mode(fit)$mode %||% "adjusted",
+       df_note = dance_emm_df_mode(fit)$note)
 }
 
 # The covariance of the cell coefficients, WITHIN and BETWEEN cells.
@@ -472,8 +473,7 @@ dance_traj_joint_cov <- function(fit, ck, sk, specs) {
   Vb <- tryCatch(as.matrix(stats::vcov(fit$model)), error = function(e) NULL)
   if (is.null(Vb)) return(list(blocks = NULL, linfct = NULL, vcov_beta = NULL))
   L <- function(term) {
-    e <- tryCatch(emmeans::emtrends(fit$model, specs = specs, var = term),
-                  error = function(e) NULL)
+    e <- dance_emtrends(fit, specs, term)
     if (is.null(e)) return(NULL)
     e@linfct
   }

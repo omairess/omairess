@@ -595,3 +595,47 @@ dance_traj_describe <- function(spec) {
     spec$re_ladder[[1]]$formula, length(spec$re_ladder))
   paste(l, collapse = "\n")
 }
+
+# ------------------------------------------------------------------------------
+# emmeans DISABLES its df adjustment above a size limit -- state it, do not leak it
+# ------------------------------------------------------------------------------
+# emmeans defaults pbkrtest.limit and lmerTest.limit to 3000 OBSERVATIONS. Above
+# that it drops to asymptotic inference and prints a note advising that the limit
+# be raised to the size of the data. Taking that advice on a model this size is a
+# bad idea: pbkrtest::vcovAdj() forms matrices of order n_obs, so at 24,776
+# observations a single one is about 4.9 GB, and it needs several of them plus
+# derivatives with respect to every variance component -- of which a full
+# trajectory model has around twenty.
+#
+# What the limit disables is a SMALL-SAMPLE correction, and the limit is only
+# ever tripped by large samples. At ~1300 participants the t multiplier on the
+# residual df is 1.9617 against 1.9600 for z. So the correct response is to
+# request asymptotic inference DELIBERATELY and report that it was requested --
+# not to let a console note carry a statistical decision the screen never shows.
+dance_emm_df_mode <- function(fit) {
+  n_obs <- tryCatch(stats::nobs(fit$model), error = function(e) NA_integer_)
+  lim <- tryCatch(min(emmeans::get_emm_option("pbkrtest.limit"),
+                      emmeans::get_emm_option("lmerTest.limit")),
+                  error = function(e) 3000)
+  over <- isTRUE(is.finite(n_obs) && is.finite(lim) && n_obs > lim)
+  list(mode = if (over) "asymptotic" else NULL, over = over,
+       n_obs = n_obs, limit = lim,
+       note = if (over) sprintf(paste(
+         "Cell quantities (amplitude, acrophase and every contrast built on them)",
+         "use asymptotic z inference. This fit has %s observations and emmeans",
+         "applies its small-sample df adjustment only up to %s. The adjustment is",
+         "negligible at this sample size, and computing it would require matrices",
+         "of order %s -- which is why the limit exists. Raising it, as the emmeans",
+         "console note suggests, is not recommended here."),
+         format(n_obs, big.mark = ","), format(lim, big.mark = ","),
+         format(n_obs, big.mark = ",")) else NULL)
+}
+
+# One entry point for every emtrends call, so the df mode cannot be asked for in
+# one place and forgotten in another.
+dance_emtrends <- function(fit, specs, var) {
+  dm <- dance_emm_df_mode(fit)
+  args <- list(object = fit$model, specs = specs, var = var)
+  if (!is.null(dm$mode)) args$lmer.df <- dm$mode
+  tryCatch(do.call(emmeans::emtrends, args), error = function(e) NULL)
+}

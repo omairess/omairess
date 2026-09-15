@@ -481,10 +481,8 @@ dance_traj_group_fits <- function(fit, conf = 0.95) {
   # finite difference on the design row would be a guess. One call per column,
   # not one per column per cell.
   trend_tr <- stats::setNames(lapply(spec$trend_terms, function(nm) {
-    em <- tryCatch(emmeans::emtrends(
-      fit$model,
-      specs = stats::as.formula(paste("~", paste(spec$design_terms, collapse = " * "))),
-      var = nm), error = function(e) NULL)
+    em <- dance_emtrends(fit, stats::as.formula(
+      paste("~", paste(spec$design_terms, collapse = " * "))), nm)
     if (is.null(em)) return(NULL)
     s <- summary(em)
     data.frame(.cell = do.call(paste, c(lapply(spec$design_terms,
