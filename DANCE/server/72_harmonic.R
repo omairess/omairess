@@ -5350,7 +5350,25 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
   #
   # It is an eventReactive on the Run button, not a plain reactive: refitting a
   # mixed model on every keystroke in the design panel would be unusable.
-  harmonic_traj <- eventReactive(input$run_harmonic, {
+  # IT DEPENDS ON THE FITTED MODEL, NOT ON THE BUTTON.
+  # ------------------------------------------------------------------------
+  # The first version keyed off input$run_harmonic and rebuilt the model frame
+  # from scratch -- including the time vector, which it read from a
+  # `values$time_points` that DOES NOT EXIST anywhere in this app. It was a name
+  # I invented, so it was always NULL, and the fallback quietly used COLUMN
+  # INDICES as the time variable. Every acrophase, amplitude and contrast in tab
+  # 6 was then computed against 1..ncol(Y) while the period said 24, which is
+  # not a display problem: it is a different analysis, and it looked plausible
+  # because a 24 h period over a 16-point index range just draws a monotone arc.
+  #
+  # Keying off values$harmonic_model instead makes the module have ONE model.
+  # The time vector, period, harmonic count, trend and clock origin all come
+  # from the object the rest of the app already built and reports, so tab 6
+  # cannot describe a different fit from tab 1.
+  harmonic_traj <- reactive({
+    mod <- values$harmonic_model
+    if (is.null(mod)) return(list(ok = FALSE, message =
+      "Press Run Harmonic Regression first."))
     dt <- harmonic_design_terms()
     chosen <- c(dt$between, dt$within)
     if (!length(chosen))
@@ -5358,9 +5376,14 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
         "No design factor is selected. Choose a study design and at least one",
         "factor to compare trajectories between.")))
     req(values$data)
-    Y <- if (identical(input$harmonic_data_source, "smoothed") && !is.null(values$smooth_data))
+    Y <- if (identical(mod$data_source %||% "raw", "smoothed") && !is.null(values$smooth_data))
       values$smooth_data else values$data
-    tv <- values$time_points %||% seq_len(ncol(Y))
+    # the model-elapsed axis the fit was built on, and the offset back to clock
+    tv <- mod$time_vec
+    if (is.null(tv) || length(tv) != ncol(Y))
+      return(list(ok = FALSE, message = sprintf(
+        "The model's time vector has %s values for %d columns -- re-run the fit.",
+        if (is.null(tv)) "no" else length(tv), ncol(Y))))
     subj <- values$subject_ids %||% rownames(Y) %||% as.character(seq_len(nrow(Y)))
 
     fl <- list()
@@ -5382,7 +5405,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     if (inherits(d, "try-error"))
       return(list(ok = FALSE, message = paste("Could not build the model frame:",
                                               conditionMessage(attr(d, "condition")))))
-    trend <- input$harmonic_trend_type %||% "none"
+    trend <- mod$trend_type %||% "none"
     tau <- if (identical(trend, "exp_sat"))
       suppressWarnings(as.numeric(input$harmonic_tau_fixed %||% NA)) else NULL
     if (identical(trend, "exp_sat") && !is.finite(tau))
@@ -5392,14 +5415,17 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
         "design matrix the way the other trends can.")))
 
     withProgress(message = "Fitting the trajectory model...", value = 0.3, {
-      sp <- dance_traj_spec(d, period = input$harmonic_period %||% 24,
-                            n_harmonics = input$n_harmonics %||% 1,
+      sp <- dance_traj_spec(d, period = mod$period %||% 24,
+                            n_harmonics = mod$n_harmonics %||% 1,
                             trend = trend, tau = tau, roles = roles)
       if (!isTRUE(sp$ok)) return(list(ok = FALSE, message = sp$message))
       incProgress(0.4)
       ff <- dance_traj_fit(sp)
       if (!isTRUE(ff$ok)) return(list(ok = FALSE, message = ff$message))
       incProgress(0.3)
+      # the offset that turns this model's elapsed axis back into clock time,
+      # carried on the fit so every panel converts the same way
+      ff$clock_origin <- dance_clock_origin(mod)
       ff
     })
   })
@@ -5583,8 +5609,17 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
         drows[[length(drows) + 1L]] <- tags$tr(
           tags$td(style = "padding:3px 12px 3px 0", sprintf("H%d acrophase — %s", h, r$cell)),
           tags$td(style = "padding:3px 12px 3px 0;color:#777", "circular"),
+          # CLOCK TIME, like every other acrophase this app reports. The derived
+          # column holds MODEL-ELAPSED hours on the harmonic's own effective
+          # period; converting is what the legacy tables already do, and showing
+          # one convention here and another there is how an acrophase gets
+          # misread by exactly the offset between them.
           tags$td(style = "padding:3px 12px 3px 0;font-family:monospace",
-                  sprintf("%.2f h", r$acrophase_time)),
+                  dance_clock_label(
+                    dance_acrophase_clock(hours = r$acrophase_time,
+                                          period = ff$spec$period, harmonic = h,
+                                          clock_origin = ff$clock_origin %||% 0)$first,
+                    ff$spec$period, show_day = FALSE)),
           tags$td(style = "padding:3px 0;font-family:monospace",
                   if (isTRUE(r$phase_defined))
                     sprintf("arc %.2f h", r$acrophase_arc_time)
@@ -5598,8 +5633,10 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
           "Joint rows are block tests on the fitted model; derived rows come from the",
           "<b>same</b> coefficient vector and covariance, with the acrophase interval",
           "reported as an <b>arc</b> and suppressed where the amplitude interval covers",
-          "zero. The baseline row is the fitted value at the reference time, which is",
-          "<b>not</b> a MESOR when a trend is present."))))
+          "zero. Acrophases are <b>clock times</b>; the arc beside each is its width, in",
+          "hours, on that harmonic's own effective period. The baseline row is the fitted",
+          "value at the reference time, which is <b>not</b> a MESOR when a trend is",
+          "present."))))
   })
 
   # ---- 3. THE FOUR COMPONENT VIEWS, per design cell -------------------------
@@ -5669,8 +5706,21 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       harmonics = "Periodic component (centred on 0)",
       baseline_harm = "Baseline + harmonics",
       trend = "Change from the reference time")
+    # CLOCK TIME ON THE AXIS, not elapsed. The model is fitted on an axis
+    # anchored at the first observation, but nobody reads a sleepiness
+    # trajectory in "hours since the study started", and every other plot in
+    # this module already labels the clock. The tick VALUES stay on the model
+    # axis so the traces do not move; only the labels are converted.
+    co <- ff$clock_origin %||% 0
+    P <- ff$spec$period %||% 24
+    brk <- pretty(range(pr$times), n = 8)
+    brk <- brk[brk >= min(pr$times) & brk <= max(pr$times)]
     p %>% layout(
-      xaxis = list(title = sprintf("Time (%s)", ff$spec$time_units %||% "h")),
+      xaxis = list(title = if (co != 0) "Clock time" else
+                     sprintf("Time (%s)", ff$spec$time_units %||% "h"),
+                   tickmode = "array", tickvals = brk,
+                   ticktext = dance_clock_label(brk + co, P, show_day = TRUE,
+                                                with_minutes = FALSE)),
       yaxis = list(title = ylab),
       hovermode = "x unified",
       legend = list(orientation = "h", y = -0.18))
@@ -5719,7 +5769,15 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       add_lines(x = range(d$t), y = c(0, 0),
                 line = list(color = "#999", width = 1, dash = "dot"),
                 showlegend = FALSE, hoverinfo = "skip") %>%
-      layout(xaxis = list(title = "Time"),
+      layout(xaxis = local({
+               ff <- harmonic_traj(); co <- ff$clock_origin %||% 0
+               brk <- pretty(range(d$t), n = 8)
+               brk <- brk[brk >= min(d$t) & brk <= max(d$t)]
+               list(title = if (co != 0) "Clock time" else "Time",
+                    tickmode = "array", tickvals = brk,
+                    ticktext = dance_clock_label(brk + co, ff$spec$period %||% 24,
+                                                 show_day = TRUE, with_minutes = FALSE))
+             }),
              yaxis = list(title = sprintf("%s − %s", dc$cell1, dc$cell2)),
              hovermode = "x unified", showlegend = FALSE)
   })

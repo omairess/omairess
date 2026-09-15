@@ -156,11 +156,34 @@ test_that("P16.1: a full scan is coalesced into one animation frame", {
 
 test_that("P16.1: plotly never triggers a global resize", {
   js <- raw_of("ui/00_theme.R")
-  expect_true(grepl("if (g) { try { Plotly.Plots.resize(g); } catch (e) {} return; }",
-                    js, fixed = TRUE))
+  # The PROPERTY, not the formatting. This used to pin the exact one-line form
+  # of the plotly branch, so reflowing it into a block -- to copy the box size
+  # onto the widget before resizing, which is what makes a drag actually change
+  # the drawing -- failed a test whose point was untouched. What matters is that
+  # the plotly path resizes the widget directly and RETURNS, so control never
+  # reaches the global window event below it.
+  expect_true(grepl("Plotly.Plots.resize(g)", js, fixed = TRUE))
+  i_plotly <- regexpr("Plotly.Plots.resize(g)", js, fixed = TRUE)
+  i_return <- regexpr("return;", substr(js, i_plotly, nchar(js)), fixed = TRUE)
+  i_global <- regexpr("window.dispatchEvent(new Event('resize'))",
+                      substr(js, i_plotly, nchar(js)), fixed = TRUE)
+  expect_gt(i_return, 0)                 # it returns after resizing ...
+  expect_lt(i_return, i_global)          # ... before the global dispatch
   expect_true(grepl("if (!isRPlot) return;", js, fixed = TRUE))
   expect_true(grepl("var isRPlot = el.classList.contains('shiny-plot-output');",
                     js, fixed = TRUE))
+})
+
+test_that("P16.1: a drag resizes the WIDGET, not just the box around it", {
+  js <- raw_of("ui/00_theme.R")
+  # Plotly.Plots.resize() measures the graph's own element, and every
+  # plotlyOutput here carries a fixed inline height. Without copying the box's
+  # size onto the element first, dragging grew the frame and left the drawing
+  # its original size inside it.
+  expect_true(grepl("el.style.height = box.clientHeight", js, fixed = TRUE))
+  i_copy   <- regexpr("el.style.height = box.clientHeight", js, fixed = TRUE)
+  i_resize <- regexpr("Plotly.Plots.resize(g)", js, fixed = TRUE)
+  expect_lt(i_copy, i_resize)            # copy the size BEFORE resizing
 })
 
 test_that("P16.1: the observer's initial callback is ignored", {

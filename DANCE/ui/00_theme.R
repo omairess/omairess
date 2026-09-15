@@ -128,10 +128,26 @@ ui_theme_css <- tags$head(
         new ResizeObserver(function () {
           if (first) { first = false; return; }   // the initial observe() call
 
+          // THE WIDGET HAS TO BE TOLD, not just the box around it.
+          // Plotly.Plots.resize() measures the graph's OWN element, and every
+          // plotlyOutput in this app is emitted with a fixed inline
+          // height:NNNpx. So dragging the wrapper grew the box, plotly
+          // re-measured the unchanged element, and the drawing stayed its
+          // original size inside a larger frame -- which reads as the resize
+          // covering part of the graph rather than doing nothing. (No quote
+          // marks in here: this JS lives inside an R string, and a stray one
+          // ends the string mid-comment.) Copy the box size onto the element
+          // first, then resize.
           if (window.Plotly) {
             var g = el.classList.contains('js-plotly-plot')
                   ? el : el.querySelector('.js-plotly-plot');
-            if (g) { try { Plotly.Plots.resize(g); } catch (e) {} return; }
+            if (g) {
+              el.style.height = box.clientHeight + 'px';
+              el.style.width  = '100%';
+              if (g !== el) { g.style.height = box.clientHeight + 'px'; g.style.width = '100%'; }
+              try { Plotly.Plots.resize(g); } catch (e) {}
+              return;
+            }
           }
           if (!isRPlot) return;
 
