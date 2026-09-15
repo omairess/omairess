@@ -5527,6 +5527,16 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     list(effects = stats::setNames(lapply(effects, get1), effects),
          blocks  = stats::setNames(lapply(want, get1), want),
          n_computed = length(uniq), n_requested = length(keys),
+         # THE METHOD IS PER TEST, NOT PER TABLE. dance_traj_block_test() asks
+         # for Kenward-Roger and falls through to Satterthwaite when KRmodcomp
+         # fails on that particular reduced model -- silently, and one block at
+         # a time. This used to read the FIRST successful result and print its
+         # method under the whole table, so a table could carry two different
+         # approximations and say it carried one. That is how a denominator df
+         # ends up looking impossible: the blocks are not comparable because
+         # they were not all computed the same way.
+         methods_all = unique(vapply(Filter(function(r) isTRUE(r$ok), computed),
+                                     function(r) r$method %||% "F test", character(1))),
          method = (Filter(function(r) isTRUE(r$ok), computed)[[1]]$method) %||% "F test")
   })
 
@@ -5580,6 +5590,19 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     lab <- c(full = "Full trajectory", shape = "Temporal shape (trend + harmonics)",
              circadian = "Rhythmic block (all harmonics)",
              trend = "Non-periodic trend", level = "Baseline / reference level at t = 0")
+    # Marked per row, and only when the table is not uniform: the denominator df
+    # of an F test is a property of the approximation that produced it, so two
+    # rows computed by different approximations cannot be read against each
+    # other -- and a df that looks impossible next to its neighbour is usually
+    # this, not an error in the fit.
+    mixed <- length(tt$methods_all %||% character(0)) > 1L
+    short_m <- function(m) {
+      if (grepl("Kenward", m, fixed = TRUE)) return("KR")
+      if (grepl("Satterth", m, fixed = TRUE)) return("Satt.")
+      if (grepl("asymptotic", m, fixed = TRUE)) return("Wald")
+      if (grepl("likelihood", m, fixed = TRUE)) return("LRT")
+      m
+    }
     rows <- lapply(names(blocks), function(b) {
       r <- blocks[[b]]
       tags$tr(
@@ -5587,7 +5610,9 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
         tags$td(style = "padding:3px 12px 3px 0;color:#777", sprintf("%d terms", length(r$terms))),
         tags$td(style = "padding:3px 12px 3px 0;font-family:monospace",
                 sprintf("F(%.0f, %.1f) = %.2f", r$df1, r$df2, r$statistic)),
-        tags$td(style = "padding:3px 0;font-family:monospace", dance_fmt_p(r$p)))
+        tags$td(style = "padding:3px 12px 3px 0;font-family:monospace", dance_fmt_p(r$p)),
+        if (mixed) tags$td(style = "padding:3px 0;font-size:11px;color:#c0392b",
+                           short_m(r$method %||% "")))
     })
     # derived per-harmonic quantities, from the SAME fit
     drows <- list()
@@ -5636,7 +5661,16 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
           "zero. Acrophases are <b>clock times</b>; the arc beside each is its width, in",
           "hours, on that harmonic's own effective period. The baseline row is the fitted",
           "value at the reference time, which is <b>not</b> a MESOR when a trend is",
-          "present."))))
+          "present."))),
+      if (mixed) tags$div(style = "font-size:11px;color:#c0392b;margin-top:4px",
+        HTML(paste0(
+          "<b>Not every row used the same approximation</b> (", 
+          paste(vapply(tt$methods_all, short_m, character(1)), collapse = ", "),
+          "). Kenward-Roger was attempted and failed on at least one block, which falls",
+          " back to Satterthwaite for that block alone. The denominator df belongs to the",
+          " approximation that produced it, so rows marked differently are not directly",
+          " comparable with each other. Select Satterthwaite under Advanced to compute",
+          " every row the same way."))))
   })
 
   # ---- 3. THE FOUR COMPONENT VIEWS, per design cell -------------------------
