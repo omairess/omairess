@@ -5497,31 +5497,42 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       c("full", "circadian", "level") else
       c("full", "shape", "circadian", "trend", "level")
 
-    # WHAT IS TESTED IS A SET OF TERMS, AND TWO NAMES CAN NAME THE SAME SET.
-    # In a design with ONE factor, "the full trajectory effect of Group" and the
-    # "full" block are the same terms -- so the first version of this reactive
-    # ran the identical Kenward-Roger test twice under two names, at about 20 s
-    # each. Requests are collected first, keyed by their sorted term vector, and
-    # each DISTINCT set is computed once; the named views then read from that.
-    terms_for_effect <- function(ef) {
-      parts <- strsplit(ef, ":", fixed = TRUE)[[1]]
-      tl[vapply(tl, function(term) setequal(
-        intersect(strsplit(term, ":", fixed = TRUE)[[1]], dts), parts), logical(1))]
-    }
-    req_terms <- c(stats::setNames(lapply(effects, terms_for_effect), effects),
-                   stats::setNames(lapply(want, function(w) dance_traj_block_terms(ff, w)), want))
-    keys <- vapply(req_terms, function(x) paste(sort(x), collapse = "|"), character(1))
-    uniq <- keys[!duplicated(keys) & nzchar(keys)]
+    # BRIEF 1-3. EVERY TEST HERE IS NOW A MODEL-BASED MARGINAL CONTRAST.
+    # It used to select treatment-coded term blocks: "the Group effect" was every
+    # model term mentioning Group, dropped and refitted. With a second factor in
+    # the model that is the Group effect AT THE REFERENCE LEVEL of the other
+    # factor, not a marginal main effect -- and since dance_traj_long() rebuilds
+    # design factors from as.character(), the reference level is whichever one
+    # sorts first alphabetically, which is not a scientific choice. Measured on a
+    # 3 x 3 design with a real interaction, renaming the condition levels moved
+    # the "Group effect" from F(6, 97.5) = 4.27 to 35.10, p 7e-4 to 3e-22. The
+    # marginal test gives the same answer either way.
+    #
+    # A request is an (effect, block) pair, and two of them can still be the SAME
+    # hypothesis -- in a one-factor design the full trajectory effect of Group and
+    # the full block are identical -- so requests are deduplicated on the contrast
+    # matrix itself rather than on a name. Kenward-Roger refits per test, so this
+    # is worth doing.
+    reqs <- c(lapply(effects, function(ef) list(effect = strsplit(ef, ":", fixed = TRUE)[[1]],
+                                                block = "full", name = ef)),
+              lapply(want, function(w) list(effect = character(0), block = w, name = w)))
+    Ls <- lapply(reqs, function(r) tryCatch(
+      dance_traj_marginal_L(ff, r$effect, r$block), error = function(e) NULL))
+    keys <- vapply(Ls, function(L) if (is.null(L)) "" else
+      paste(format(round(unclass(L), 10), scientific = FALSE), collapse = "|"), character(1))
+    uniq <- unique(keys[nzchar(keys)])
 
     withProgress(message = sprintf("Testing %d coefficient block%s...",
                                    length(uniq), if (length(uniq) == 1L) "" else "s"),
                  value = 0, {
       computed <- lapply(uniq, function(k) {
         incProgress(1 / length(uniq))
-        dance_traj_block_test(ff, req_terms[[match(k, keys)]], df_method = dfm)
+        i <- match(k, keys)
+        dance_traj_marginal_test(ff, reqs[[i]]$effect, reqs[[i]]$block, df_method = dfm)
       })
       names(computed) <- uniq
     })
+    names(keys) <- vapply(reqs, function(r) r$name, character(1))
     get1 <- function(nm) if (nzchar(keys[[nm]])) computed[[keys[[nm]]]] else NULL
 
     list(effects = stats::setNames(lapply(effects, get1), effects),
@@ -5607,7 +5618,10 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       r <- blocks[[b]]
       tags$tr(
         tags$td(style = "padding:3px 12px 3px 0", lab[[b]] %||% b),
-        tags$td(style = "padding:3px 12px 3px 0;color:#777", sprintf("%d terms", length(r$terms))),
+        # contrasts, not terms: the hypothesis is an L matrix now, and its row
+        # count is what the numerator df actually is
+        tags$td(style = "padding:3px 12px 3px 0;color:#777",
+                sprintf("%d contrasts", r$n_contrasts %||% length(r$terms))),
         tags$td(style = "padding:3px 12px 3px 0;font-family:monospace",
                 sprintf("F(%.0f, %.1f) = %.2f", r$df1, r$df2, r$statistic)),
         tags$td(style = "padding:3px 12px 3px 0;font-family:monospace", dance_fmt_p(r$p)),

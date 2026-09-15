@@ -55,6 +55,18 @@
 
 if (!exists("%||%", mode = "function")) `%||%` <- function(a, b) if (is.null(a)) b else a
 
+
+# Refit this fit's model with a different fixed-effect formula and/or likelihood,
+# from the spec rather than from the recorded call. Used wherever a reduced model
+# is needed: the glmmTMB comparison and the last-resort likelihood-ratio test.
+dance_traj_refit <- function(fit, drop_terms = character(0), REML = fit$REML) {
+  spec <- fit$spec
+  ff <- spec$fixed_formula
+  if (length(drop_terms)) ff <- paste(ff, "-", paste(drop_terms, collapse = " - "))
+  dance_traj_fit_one(spec, fit$re_formula, fit$engine %||% "lmer", REML,
+                     fit$residual_cor, fixed_formula = ff)
+}
+
 # ------------------------------------------------------------------------------
 # FIVE STATUSES, NOT ONE
 # ------------------------------------------------------------------------------
@@ -173,8 +185,14 @@ dance_traj_status <- function(m) {
 # ONE FIT at a given rung
 # ------------------------------------------------------------------------------
 dance_traj_fit_one <- function(spec, re_formula, engine = "lmer", REML = TRUE,
-                               cor_struct = NULL) {
-  f <- stats::as.formula(paste(spec$fixed_formula, "+", re_formula))
+                               cor_struct = NULL, fixed_formula = NULL) {
+  # fixed_formula overrides the spec's, so a REDUCED model can be built the same
+  # way the full one was. stats::update() cannot do this job here: the recorded
+  # call refers to `d` and `REML` by name, which exist only in this function's
+  # frame, so update() re-evaluates it somewhere those are not found and fails
+  # with "object 'd' not found". Rebuilding from the spec has no such dependency.
+  fixed_formula <- fixed_formula %||% spec$fixed_formula
+  f <- stats::as.formula(paste(fixed_formula, "+", re_formula))
   d <- spec$data
   if (identical(engine, "glmmTMB")) {
     if (!requireNamespace("glmmTMB", quietly = TRUE)) return(NULL)
@@ -191,14 +209,14 @@ dance_traj_fit_one <- function(spec, re_formula, engine = "lmer", REML = TRUE,
         # lag, so an uneven grid would silently call unequal gaps equal.
         d$.tf <- factor(match(d$t, sort(unique(d$t))),
                         levels = seq_along(sort(unique(d$t))))
-        f <- stats::as.formula(paste(spec$fixed_formula, "+", re_formula,
+        f <- stats::as.formula(paste(fixed_formula, "+", re_formula,
                                      sprintf("+ ar1(0 + .tf | %s)", grp)))
       } else {
         # ou() is the continuous-time (Ornstein-Uhlenbeck) analogue: the
         # correlation decays in ACTUAL elapsed time, so an uneven grid is
         # handled as an uneven grid.
         d$.tn <- glmmTMB::numFactor(d$t)
-        f <- stats::as.formula(paste(spec$fixed_formula, "+", re_formula,
+        f <- stats::as.formula(paste(fixed_formula, "+", re_formula,
                                      sprintf("+ ou(0 + .tn | %s)", grp)))
       }
     }
@@ -431,7 +449,25 @@ dance_traj_fit_report <- function(fit) {
   a("Random structure:  rung %d of %d -- %s", fit$re_rung, fit$n_rungs, fit$re_label)
   if (isTRUE(fit$simplified)) a("  ! %s", fit$note)
   if (isTRUE(fit$ar1)) a("Residuals:         AR(1) within participant")
-  a("Convergence:       converged, non-singular")
+  # BRIEF 8. This line used to be the literal string "converged, non-singular",
+  # printed whatever the fit had actually done -- while dance_traj_status() had
+  # already separated the five states and dance_traj_fit() had stored every one
+  # of them on the object three lines above. In the configuration the validation
+  # grid covers, 98% of fits are singular; every one of them was reported here as
+  # non-singular. The states are reported separately because they mean different
+  # things: a singular fit is a converged fit AT a boundary and its fixed-effect
+  # tests stand, a rank-deficient one is missing fixed-effect columns the formula
+  # asked for and its block tests do not test what they name.
+  a("Convergence:       %s", if (isTRUE(fit$converged)) "converged" else
+                             "DID NOT CONVERGE")
+  a("Singular:          %s", if (isTRUE(fit$singular))
+      sprintf("yes -- %d random-effect dimension%s at a boundary (term kept)",
+              fit$boundary_dims %||% 0L,
+              if (identical(fit$boundary_dims %||% 0L, 1L)) "" else "s")
+    else "no")
+  a("Fixed-effect rank: %s", if (isTRUE(fit$rank_deficient))
+      sprintf("DEFICIENT -- dropped: %s", paste(fit$dropped_terms, collapse = ", "))
+    else "full")
   if (length(fit$attempts) > 1) {
     a("Rungs tried:")
     for (at in fit$attempts)

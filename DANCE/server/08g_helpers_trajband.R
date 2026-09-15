@@ -300,8 +300,9 @@ dance_traj_diff_curve <- function(fit, cell1, cell2, times = NULL, conf = 0.95,
 # which amplitude and phase contrasts are not.
 dance_traj_contrasts <- function(fit, what = c("level", "amplitude", "phase"),
                                  harmonic = 1, conf = 0.95, at_time = NULL,
-                                 adjust = c("holm", "bonferroni", "none")) {
-  what <- match.arg(what); adjust <- match.arg(adjust)
+                                 adjust = c("holm", "bonferroni", "none"),
+                                 method = c("joint", "delta"), n_draw = 20000) {
+  what <- match.arg(what); adjust <- match.arg(adjust); method <- match.arg(method)
   if (!isTRUE(fit$ok)) return(list(ok = FALSE, message = fit$message))
   spec <- fit$spec
   if (!length(spec$design_terms))
@@ -326,7 +327,8 @@ dance_traj_contrasts <- function(fit, what = c("level", "amplitude", "phase"),
       se <- sqrt(max(0, as.numeric(d %*% Vk %*% t(d))))
       data.frame(cell1 = grid$.cell[i], cell2 = grid$.cell[j],
                  estimate = est, se = se, lo = est - z * se, hi = est + z * se,
-                 statistic = est / se, defined = TRUE, stringsAsFactors = FALSE)
+                 statistic = est / se, defined = TRUE, p_draw = NA_real_,
+                 stringsAsFactors = FALSE)
     })
     tab <- do.call(rbind, rows)
     unit <- sprintf("fitted value at t = %.3f %s", tt, spec$time_units %||% "")
@@ -341,6 +343,29 @@ dance_traj_contrasts <- function(fit, what = c("level", "amplitude", "phase"),
         "could be attributed to the wrong pair. Refusing rather than guessing.")))
     rows <- lapply(seq_len(ncol(pairs)), function(p) {
       i <- ord[pairs[1, p]]; j <- ord[pairs[2, p]]
+      # BRIEF 7. The joint path draws from the 4-dimensional distribution of both
+      # cells' (cos, sin) pairs and reads the contrast off the draws -- amplitude
+      # by quantiles, phase circularly. Nothing is linearised, so neither the
+      # amplitude interval can cross zero nor the phase interval exceed the
+      # circle. The delta method stays as the fast option for a rhythm already
+      # far from the origin.
+      if (identical(method, "joint")) {
+        pj <- dance_traj_pair_joint(co, i, j, conf, n_draw = n_draw)
+        if (is.null(pj)) return(NULL)
+        if (identical(what, "phase"))
+          return(data.frame(cell1 = pj$cell1, cell2 = pj$cell2,
+                            estimate = pj$diff_time, se = pj$se_time,
+                            lo = pj$lo, hi = pj$hi,
+                            statistic = if (isTRUE(pj$defined)) pj$diff_time / pj$se_time else NA_real_,
+                            defined = isTRUE(pj$defined), p_draw = pj$phase_p,
+                            stringsAsFactors = FALSE))
+        return(data.frame(cell1 = pj$cell1, cell2 = pj$cell2,
+                          estimate = pj$amp_diff, se = pj$amp_se,
+                          lo = pj$amp_lo, hi = pj$amp_hi,
+                          statistic = pj$amp_diff / pj$amp_se,
+                          defined = TRUE, p_draw = pj$amp_p,
+                          stringsAsFactors = FALSE))
+      }
       if (identical(what, "phase")) {
         pc <- dance_traj_phase_contrast(co, i, j, conf)
         if (is.null(pc)) return(NULL)
@@ -348,7 +373,8 @@ dance_traj_contrasts <- function(fit, what = c("level", "amplitude", "phase"),
                           estimate = pc$diff_time, se = pc$se_time,
                           lo = pc$lo, hi = pc$hi,
                           statistic = if (isTRUE(pc$defined)) pc$diff_time / pc$se_time else NA_real_,
-                          defined = isTRUE(pc$defined), stringsAsFactors = FALSE))
+                          defined = isTRUE(pc$defined), p_draw = NA_real_,
+                          stringsAsFactors = FALSE))
       }
       cv <- dance_traj_pair_cov(co, i, j)
       if (is.null(cv)) return(NULL)
@@ -360,7 +386,7 @@ dance_traj_contrasts <- function(fit, what = c("level", "amplitude", "phase"),
       data.frame(cell1 = co$cells[i], cell2 = co$cells[j],
                  estimate = est, se = se, lo = est - z * se, hi = est + z * se,
                  statistic = est / se, defined = A1 > 0 && A2 > 0,
-                 stringsAsFactors = FALSE)
+                 p_draw = NA_real_, stringsAsFactors = FALSE)
     })
     rows <- Filter(Negate(is.null), rows)
     if (!length(rows)) return(list(ok = FALSE, message = "No contrast could be formed."))
@@ -376,7 +402,7 @@ dance_traj_contrasts <- function(fit, what = c("level", "amplitude", "phase"),
   if (!identical(adjust, "none"))
     tab$p_adj[tab$defined] <- stats::p.adjust(tab$p_raw[tab$defined], method = adjust)
   rownames(tab) <- NULL
-  list(ok = TRUE, what = what, harmonic = harmonic, unit = unit,
+  list(ok = TRUE, what = what, harmonic = harmonic, unit = unit, method = method,
        table = tab, conf = conf, adjust = adjust, n_cells = m,
        n_contrasts = nrow(tab),
        note = paste(
@@ -390,8 +416,16 @@ dance_traj_contrasts <- function(fit, what = c("level", "amplitude", "phase"),
                       adjust, nrow(tab)),
          if (identical(what, "level"))
            "Intervals are Wald on a normal reference, not the Kenward-Roger F of the omnibus."
+         else if (identical(method, "joint"))
+           sprintf(paste("Amplitude and phase are nonlinear maps of the cell's (cos, sin)",
+                         "pair. These intervals are drawn from the JOINT distribution of",
+                         "both cells' pairs (%d draws, exact cross-cell covariance):",
+                         "nothing is linearised, the amplitude interval cannot cross",
+                         "zero and the phase interval is an arc. p_draw is the",
+                         "proportion of draws on the far side of zero."), n_draw)
          else paste("Amplitude and phase are nonlinear maps of the cell's (cos, sin) pair;",
-                    "these are delta-method intervals with the exact cross-cell covariance."),
+                    "these are DELTA-METHOD intervals with the exact cross-cell covariance,",
+                    "accurate when the rhythm is well separated from the origin."),
          if (any(!tab$defined))
            sprintf(paste("%d contrast(s) are UNDEFINED because a cell's amplitude",
                          "interval covers zero (Bingham's rule) and are excluded from",

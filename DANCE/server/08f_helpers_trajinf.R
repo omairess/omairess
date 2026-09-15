@@ -257,14 +257,31 @@ dance_traj_calibration <- function(fit, method_kind = "kr", block = "circadian")
                           fit$engine))
   if (isTRUE(fit$ar1) || !is.null(fit$residual_cor))
     out <- c(out, "it models a residual correlation structure")
+  # BRIEF 6. The grid simulated the MAXIMAL random structure -- every cell it
+  # cleared reported rung 1 in 100% of replicates, singular fits retained. A fit
+  # that descended the ladder is a different model from the one measured, and it
+  # descended because the maximal one did not converge, which is exactly the
+  # situation where a type-I rate is least likely to carry over. Inheriting
+  # validated = TRUE from K = 1, no trend, balanced, KR while silently sitting on
+  # a reduced structure is the failure this guards.
+  rung <- fit$re_rung %||% 1L
+  if (!identical(as.integer(rung), 1L))
+    out <- c(out, sprintf(paste(
+      "its random-effects structure fell back to rung %d of %d (%s) because the",
+      "requested structure did not converge, and the grid measured the requested",
+      "structure"), as.integer(rung), fit$n_rungs %||% NA_integer_,
+      fit$re_label %||% "unlabelled"))
   if (length(unique(spec$cells$n_obs)) > 1L)
     out <- c(out, "its design cells are unbalanced")
   if (!isTRUE(spec$time_regular %||% TRUE))
     out <- c(out, "its observations are irregularly spaced in time")
+  re_structure <- fit$re_formula %||% NA_character_
   if (!length(out))
-    return(list(validated = TRUE, provisional = TRUE,
+    return(list(validated = TRUE, provisional = TRUE, re_rung = as.integer(rung),
+                re_structure = re_structure,
                 calibration = DANCE_TRAJ_OMNIBUS_PROVISIONAL))
-  list(validated = FALSE, provisional = FALSE,
+  list(validated = FALSE, provisional = FALSE, re_rung = as.integer(rung),
+       re_structure = re_structure,
        calibration = sprintf(DANCE_TRAJ_OMNIBUS_UNCALIBRATED,
                              paste(out, collapse = "; ")))
 }
@@ -311,14 +328,26 @@ dance_traj_block_test <- function(fit, terms_in,
 
   # glmmTMB: asymptotic Wald only, and labelled as such
   if (identical(fit$engine, "glmmTMB")) {
-    m0 <- tryCatch(stats::update(m, reduced_formula), error = function(e) NULL)
+    # BRIEF 4. A likelihood-ratio test between models that DIFFER IN FIXED
+    # EFFECTS is not valid on REML fits: the REML likelihood is the likelihood of
+    # error contrasts, and two models with different fixed-effect design matrices
+    # define different contrasts, so their REML likelihoods are not comparable at
+    # all. Both sides are refitted with ML here. (The lmer path never had this
+    # problem: KRmodcomp and contest are built for REML fits.) Final parameter
+    # estimation elsewhere may still use REML.
+    mML <- if (isTRUE(fit$REML)) dance_traj_refit(fit, REML = FALSE) else m
+    if (is.null(mML))
+      return(list(ok = FALSE, message = paste(
+        "The full model could not be refitted with ML, which a fixed-effect",
+        "likelihood-ratio test on this engine requires.")))
+    m0 <- dance_traj_refit(fit, terms_in, REML = FALSE)
     if (is.null(m0)) return(list(ok = FALSE, message = "The reduced model could not be fitted."))
-    an <- tryCatch(stats::anova(m0, m), error = function(e) NULL)
+    an <- tryCatch(stats::anova(m0, mML), error = function(e) NULL)
     if (is.null(an)) return(list(ok = FALSE, message = "The block comparison failed."))
     return(list(ok = TRUE, block = block, terms = terms_in,
                 method = "asymptotic likelihood-ratio (glmmTMB)",
                 statistic = an$Chisq[2], df1 = an$`Chi Df`[2], df2 = NA_real_,
-                p = an$`Pr(>Chisq)`[2],
+                p = an$`Pr(>Chisq)`[2], reml_refit = isTRUE(fit$REML),
                 validated = dance_traj_calibration(fit, "wald", block)$validated,
                 calibration = dance_traj_calibration(fit, "wald", block)$calibration,
                 caveat = paste("Kenward-Roger is unavailable on this engine; this test is",
@@ -338,14 +367,23 @@ dance_traj_block_test <- function(fit, terms_in,
       "Kenward-Roger was requested but pbkrtest is not installed. Install it, or",
       "pass df_method = 'satterthwaite' to accept the cheaper approximation.")))
 
-  # both KR and the LRT need ML fits when the FIXED effects differ
-  refit_ml <- function(mod) if (isTRUE(fit$REML))
-    tryCatch(stats::update(mod, REML = FALSE), error = function(e) mod) else mod
+  # Both the LRT and the glmmTMB comparison need ML fits when the FIXED effects
+  # differ. This used to be stats::update() with the REML fit as the error
+  # fallback -- so when update() failed, which it does here because the recorded
+  # call names locals of the fitting frame, the test SILENTLY compared REML fits
+  # and reported nothing unusual. Rebuilding from the spec cannot fail that way,
+  # and a failure is now a refusal rather than a wrong answer.
 
   if (use_kr) {
     # KR compares REML fits, which is correct for fixed-effect contrasts
     mL <- if (inherits(m, "lmerModLmerTest")) as(m, "lmerMod") else m
-    m0 <- tryCatch(stats::update(mL, reduced_formula), error = function(e) NULL)
+    # Rebuilt from the spec rather than stats::update(). update() happens to work
+    # on an lmer fit -- the formula carries the fitting frame, so `d` is still
+    # reachable -- but when it does not, this branch returns NULL and the code
+    # falls silently through to Satterthwaite for THAT BLOCK ONLY, which is how a
+    # results table ends up carrying two approximations while naming one.
+    m0 <- dance_traj_refit(fit, terms_in, REML = fit$REML)
+    if (!is.null(m0) && inherits(m0, "lmerModLmerTest")) m0 <- as(m0, "lmerMod")
     kr <- if (is.null(m0)) NULL else
       tryCatch(pbkrtest::KRmodcomp(mL, m0), error = function(e) NULL)
     if (!is.null(kr)) {
@@ -391,8 +429,11 @@ dance_traj_block_test <- function(fit, terms_in,
   }
 
   # last resort: a likelihood-ratio test on ML refits
-  mm <- refit_ml(m)
-  m0 <- tryCatch(stats::update(mm, reduced_formula), error = function(e) NULL)
+  mm <- if (isTRUE(fit$REML)) dance_traj_refit(fit, REML = FALSE) else m
+  if (is.null(mm)) return(list(ok = FALSE, message = paste(
+    "The full model could not be refitted with ML, which a fixed-effect",
+    "likelihood-ratio test requires.")))
+  m0 <- dance_traj_refit(fit, terms_in, REML = FALSE)
   if (is.null(m0)) return(list(ok = FALSE, message = "The reduced model could not be fitted."))
   an <- tryCatch(stats::anova(m0, mm), error = function(e) NULL)
   if (is.null(an)) return(list(ok = FALSE, message = "The block comparison failed."))
@@ -734,6 +775,92 @@ dance_traj_amp_phase_joint <- function(coefs, conf = 0.95, n_draw = 20000,
 
 # The dispatcher. `joint` is the default because it is right in the regime the
 # delta method is wrong in, and the two agree where the delta method is right.
+# ------------------------------------------------------------------------------
+# BRIEF 7: the PAIRWISE contrast from the joint distribution of both cells
+# ------------------------------------------------------------------------------
+# dance_traj_amp_phase_joint() already draws per cell. A contrast between two
+# cells needs the same treatment on the joint distribution of all FOUR
+# coefficients, because the two cells are correlated -- they are built from the
+# same interaction coefficients -- and dance_traj_pair_cov() returns that exact
+# 4 x 4 block. Each draw gives an amplitude difference and a WRAPPED phase
+# difference; the differences are summarised directly, amplitude by quantiles and
+# phase circularly, so neither is linearised and neither can produce an interval
+# wider than the circle it lives on.
+#
+# The delta method stays available and remains the right choice for a
+# well-identified rhythm where speed matters.
+dance_traj_pair_joint <- function(coefs, i, j, conf = 0.95, n_draw = 20000,
+                                  seed = 20240601) {
+  if (!isTRUE(coefs$ok)) return(NULL)
+  pc <- dance_traj_pair_cov(coefs, i, j)
+  if (is.null(pc)) return(NULL)
+  old <- if (exists(".Random.seed", .GlobalEnv)) get(".Random.seed", .GlobalEnv) else NULL
+  set.seed(seed)
+  on.exit(if (!is.null(old)) assign(".Random.seed", old, .GlobalEnv), add = TRUE)
+
+  mu <- c(coefs$a[i], coefs$b[i], coefs$a[j], coefs$b[j])
+  V <- (pc$V + t(pc$V)) / 2
+  ev <- eigen(V, symmetric = TRUE)
+  R <- ev$vectors %*% diag(sqrt(pmax(0, ev$values)), length(mu)) %*% t(ev$vectors)
+  Z <- matrix(stats::rnorm(length(mu) * n_draw), ncol = length(mu)) %*% R
+  a1 <- mu[1] + Z[, 1]; b1 <- mu[2] + Z[, 2]
+  a2 <- mu[3] + Z[, 3]; b2 <- mu[4] + Z[, 4]
+
+  A1d <- sqrt(a1^2 + b1^2); A2d <- sqrt(a2^2 + b2^2)
+  dA <- A2d - A1d
+  wrap <- function(x) ((x + pi) %% (2 * pi)) - pi
+  dP <- wrap(atan2(b2, a2) - atan2(b1, a1))
+
+  p <- (1 - conf) / 2
+  k <- coefs$effective_period / (2 * pi)
+  A1 <- sqrt(mu[1]^2 + mu[2]^2); A2 <- sqrt(mu[3]^2 + mu[4]^2)
+
+  # Identifiability, endpoint by endpoint, on the SAME rule the per-cell joint
+  # method uses: the phase of a cell is identified when its joint confidence
+  # region for (cos, sin) excludes the origin. A contrast of two angles is no
+  # better identified than its worse endpoint.
+  T2 <- function(m2, V2) {
+    inv <- tryCatch(solve(V2), error = function(e) NULL)
+    if (is.null(inv)) return(NA_real_)
+    as.numeric(t(m2) %*% inv %*% m2)
+  }
+  t1 <- T2(mu[1:2], V[1:2, 1:2, drop = FALSE])
+  t2 <- T2(mu[3:4], V[3:4, 3:4, drop = FALSE])
+  crit <- stats::qchisq(conf, 2)
+  defined <- isTRUE(is.finite(t1) && is.finite(t2) && t1 > crit && t2 > crit)
+
+  # phase summarised CIRCULARLY: the draws' own mean direction, then quantiles of
+  # the signed deviation from it, so the interval is an arc and not a symmetric
+  # interval pretending to be one
+  mdir <- atan2(mean(sin(dP)), mean(cos(dP)))
+  dev <- wrap(dP - mdir)
+  q_dev <- stats::quantile(dev, c(p, 1 - p), names = FALSE)
+  arc <- diff(q_dev)
+
+  list(cell1 = coefs$cells[i], cell2 = coefs$cells[j], method = "joint",
+       n_draw = n_draw, seed = seed, exact_cov = isTRUE(pc$exact),
+       amp1 = A1, amp2 = A2,
+       amp_diff = A2 - A1,
+       amp_lo = stats::quantile(dA, p, names = FALSE),
+       amp_hi = stats::quantile(dA, 1 - p, names = FALSE),
+       amp_se = stats::sd(dA),
+       amp_p = 2 * min(mean(dA <= 0), mean(dA >= 0)),
+       diff_time = wrap(atan2(mu[4], mu[3]) - atan2(mu[2], mu[1])) * k,
+       se_time = if (defined) stats::sd(dev) * k else NA_real_,
+       lo = if (defined) (mdir + q_dev[1]) * k else NA_real_,
+       hi = if (defined) (mdir + q_dev[2]) * k else NA_real_,
+       arc_time = if (defined) arc * k else NA_real_,
+       # a two-sided circular p-value: how much of the difference distribution
+       # sits on the far side of zero from its own mean direction
+       phase_p = if (defined) 2 * min(mean(wrap(dP) <= 0), mean(wrap(dP) >= 0)) else NA_real_,
+       effective_period = coefs$effective_period, defined = defined,
+       note = if (!defined) paste(
+         "At least one cell's joint confidence region for (cos, sin) contains the",
+         "origin, so its acrophase is not identified and neither is this contrast",
+         "(Bingham et al., 1982). The wrapped point difference is reported without",
+         "an interval.") else NULL)
+}
+
 dance_traj_amp_phase_ci <- function(coefs, conf = 0.95,
                                     method = c("joint", "delta"), ...) {
   method <- match.arg(method)
@@ -822,4 +949,260 @@ dance_fmt_p <- function(p, digits = 3) {
   if (!is.finite(p)) return("\u2014")
   if (p < .001) return("< .001")
   sub("^0", "", formatC(p, format = "f", digits = digits))
+}
+
+# ==============================================================================
+# LAYER C': MODEL-BASED MARGINAL TRAJECTORY CONTRASTS  (brief items 1, 2, 3, 5)
+# ==============================================================================
+# WHY THIS EXISTS. dance_traj_block_terms() picks TREATMENT-CODED term blocks --
+# every model term mentioning Group, say -- and dance_traj_block_test() drops
+# them and refits. In a one-factor design that is the right test. In
+#
+#     y ~ (1 + basis) * Group * Condition
+#
+# it is not: with treatment contrasts the Group block is the Group effect AT THE
+# REFERENCE LEVEL OF CONDITION, because the Group:Condition terms stay in the
+# reduced model and carry the rest. Relevel Condition and the "Group effect"
+# changes. That is not a marginal main effect and it should never have been
+# labelled as one.
+#
+# The fix is to stop reading coefficient blocks and start writing down the
+# hypothesis. Every quantity these tests are about is a linear functional of the
+# fixed effects, so each is a row of an L matrix and the test is L beta = 0,
+# which KRmodcomp and contest both take directly.
+#
+# AND IT FIXES THE LEVEL BLOCK TOO (brief 2). The basis is anchored at t0:
+#
+#     c_k(t) = cos(k w (t - t0)),   s_k(t) = sin(k w (t - t0))
+#
+# so at t = t0 every cosine column is 1 and every sine column is 0, and
+#
+#     yhat(t0) = beta_0 + a_1 + a_2 + ...
+#
+# The old level block was "terms that do not involve a basis column", i.e. the
+# intercept block alone -- which is the intercept coefficient, NOT the fitted
+# value at t0, whenever there is any harmonic in the model. The comment there
+# asserted the two were the same. They are not. The level row is now the design
+# row evaluated at t0, the same construction dance_traj_contrasts() already used
+# for its PAIRWISE level contrast, which was right all along.
+# ------------------------------------------------------------------------------
+
+# One design row for a cell with the basis columns set by hand rather than by a
+# time. Every fixed term is (a basis column) x (design dummies), degree one in
+# the basis columns, so the row for "the coefficient of basis j in cell c" is the
+# row at basis = e_j minus the row at basis = 0.
+dance_traj_beta_row <- function(fit, cell_row, bvals) {
+  spec <- fit$spec; d <- spec$data
+  nd <- data.frame(t = spec$t0)
+  for (nm in spec$basis_terms) nd[[nm]] <- unname(bvals[[nm]] %||% 0)
+  for (f in spec$design_terms)
+    nd[[f]] <- factor(as.character(cell_row[[f]]), levels = levels(d[[f]]))
+  for (f in spec$covariates)
+    nd[[f]] <- if (is.numeric(d[[f]])) mean(d[[f]], na.rm = TRUE)
+               else factor(levels(d[[f]])[1], levels = levels(d[[f]]))
+  tm <- stats::delete.response(stats::terms(stats::as.formula(spec$fixed_formula), data = d))
+  drop(stats::model.matrix(tm, data = nd, contrasts.arg = NULL))
+}
+
+# For every design cell: the fitted value at t0, and the coefficient of each
+# basis column, each as a row of the map from beta.
+dance_traj_cell_functionals <- function(fit) {
+  spec <- fit$spec
+  grid <- dance_traj_cell_grid(spec)
+  bt <- spec$basis_terms
+  zero <- stats::setNames(rep(0, length(bt)), bt)
+  cells <- lapply(seq_len(nrow(grid)), function(i) {
+    cr <- grid[i, , drop = FALSE]
+    z <- dance_traj_beta_row(fit, cr, zero)
+    coef <- lapply(bt, function(j) {
+      b <- zero; b[[j]] <- 1
+      dance_traj_beta_row(fit, cr, b) - z
+    })
+    names(coef) <- bt
+    list(level0 = drop(dance_traj_design_rows(fit, cr, spec$t0)),
+         intercept = z, coef = coef)
+  })
+  list(grid = grid, cells = cells, basis = bt)
+}
+
+# The contrast matrix for a factorial effect over the design cells: difference
+# contrasts on the factors IN the effect, equal-weight averaging over the ones
+# that are not. Equal weights are what makes it a MARGINAL effect -- the same
+# convention emmeans uses -- and difference contrasts span the effect's subspace
+# whatever the reference level is, which is why the test does not move when a
+# factor is releveled. Works for any number of levels and any number of factors.
+dance_traj_effect_contrasts <- function(fit, effect_terms) {
+  spec <- fit$spec
+  dt <- spec$design_terms
+  effect_terms <- intersect(effect_terms, dt)
+  grid <- dance_traj_cell_grid(spec)
+  # No effect named means the WHOLE design: every cell equal on this component,
+  # which is the omnibus the component table asks. G - 1 independent differences,
+  # and like the marginal contrasts below it does not depend on which level any
+  # factor happens to sort first.
+  if (!length(effect_terms)) {
+    G <- nrow(grid)
+    if (G < 2L) return(NULL)
+    C <- cbind(-1, diag(G - 1L))
+    colnames(C) <- grid$.cell
+    return(C)
+  }
+  lev <- lapply(dt, function(f) levels(spec$data[[f]])); names(lev) <- dt
+  # difference contrasts for an effect factor, the averaging row for the rest
+  parts <- lapply(dt, function(f) {
+    L <- length(lev[[f]])
+    if (f %in% effect_terms) {
+      if (L < 2L) return(NULL)
+      cbind(-1, diag(L - 1L))                      # (L-1) x L
+    } else matrix(1 / L, nrow = 1L, ncol = L)      # 1 x L, the marginal average
+  })
+  if (any(vapply(parts, is.null, logical(1)))) return(NULL)
+  # expand.grid varies the FIRST factor fastest; kronecker varies its SECOND
+  # argument fastest, so the factors are folded in reverse to match the grid.
+  C <- Reduce(function(A, B) kronecker(A, B), rev(parts))
+  colnames(C) <- grid$.cell
+  C
+}
+
+DANCE_TRAJ_BLOCK_COMPONENTS <- function(spec, block) {
+  lvl <- ".level@t0"
+  switch(block,
+    full      = c(lvl, spec$basis_terms),
+    shape     = spec$basis_terms,
+    circadian = spec$harm_terms,
+    trend     = spec$trend_terms,
+    level     = lvl,
+    character(0))
+}
+
+# L for "effect E has no influence on component set J", as one joint hypothesis.
+dance_traj_marginal_L <- function(fit, effect_terms, block) {
+  spec <- fit$spec
+  C <- dance_traj_effect_contrasts(fit, effect_terms)
+  if (is.null(C) || !nrow(C)) return(NULL)
+  comps <- DANCE_TRAJ_BLOCK_COMPONENTS(spec, block)
+  if (!length(comps)) return(NULL)
+  fx <- dance_traj_cell_functionals(fit)
+  blocks <- lapply(comps, function(cp) {
+    R <- do.call(rbind, lapply(fx$cells, function(ce)
+      if (identical(cp, ".level@t0")) ce$level0 else ce$coef[[cp]]))
+    out <- C %*% R
+    rownames(out) <- paste0(cp, " [", seq_len(nrow(out)), "]")
+    out
+  })
+  L <- do.call(rbind, blocks)
+  L[abs(L) < 1e-12] <- 0
+  L[rowSums(abs(L)) > 0, , drop = FALSE]
+}
+
+# BRIEF 5. A rank-deficient fit has columns the formula asked for and the model
+# does not contain. A hypothesis row that puts weight on one of them is not a
+# hypothesis about the model that was fitted, and testing it anyway -- which is
+# what dropping the column silently amounts to -- answers a question nobody
+# asked. Estimability is checked before any inference, not reported afterwards.
+dance_traj_L_estimable <- function(fit, L) {
+  bv <- dance_traj_beta(fit)
+  have <- names(bv$beta)[!is.na(bv$beta)]
+  missing <- setdiff(colnames(L), have)
+  bad <- if (!length(missing)) character(0) else
+    missing[vapply(missing, function(cn) any(abs(L[, cn]) > 1e-10), logical(1))]
+  list(ok = !length(bad), dropped = bad,
+       L = if (length(bad)) NULL else L[, have, drop = FALSE])
+}
+
+# The test itself. Same two approximations as dance_traj_block_test, driven by an
+# L matrix instead of a refit, so a named block and a marginal effect cannot end
+# up tested by different machinery.
+dance_traj_marginal_test <- function(fit, effect_terms, block = "full",
+                                     df_method = c("auto", "kr", "satterthwaite"),
+                                     kr_max_subjects = NULL) {
+  df_method <- match.arg(df_method)
+  if (!isTRUE(fit$ok)) return(list(ok = FALSE, message = fit$message))
+  L <- dance_traj_marginal_L(fit, effect_terms, block)
+  if (is.null(L) || !nrow(L))
+    return(list(ok = FALSE, block = block, effect = effect_terms, message = sprintf(
+      "No %s contrast exists for %s in this design.", block,
+      paste(effect_terms, collapse = " x "))))
+
+  est <- dance_traj_L_estimable(fit, L)
+  if (!est$ok)
+    return(list(ok = FALSE, block = block, effect = effect_terms,
+                not_estimable = TRUE, dropped_terms = est$dropped,
+                message = paste(
+                  "Requested trajectory model/contrast is not identifiable from these",
+                  "data. The fixed-effect design matrix is rank deficient and the",
+                  "hypothesis puts weight on coefficients the model does not contain:",
+                  paste(est$dropped, collapse = ", "))))
+  L <- est$L
+  # drop dependent rows: a redundant row makes the numerator df wrong
+  qrL <- qr(t(L))
+  if (qrL$rank < nrow(L)) L <- L[qrL$pivot[seq_len(qrL$rank)], , drop = FALSE]
+
+  m <- fit$model
+  cal <- function(kind) dance_traj_calibration(fit, kind, block)
+  common <- list(ok = TRUE, block = block, which = block, effect = effect_terms,
+                 marginal = TRUE, n_contrasts = nrow(L),
+                 label = unname(DANCE_TRAJ_BLOCK_LABEL[block]))
+
+  if (identical(fit$engine, "glmmTMB")) {
+    bv <- dance_traj_beta(fit)
+    b <- bv$beta[colnames(L)]; V <- bv$V[colnames(L), colnames(L), drop = FALSE]
+    LV <- L %*% V %*% t(L)
+    stat <- tryCatch(as.numeric(t(L %*% b) %*% solve(LV) %*% (L %*% b)),
+                     error = function(e) NA_real_)
+    if (!is.finite(stat)) return(list(ok = FALSE, message = "The contrast covariance is singular."))
+    ca <- cal("wald")
+    return(c(common, list(method = "asymptotic Wald (glmmTMB)", df_method = "wald",
+                          statistic = stat, df1 = nrow(L), df2 = NA_real_,
+                          p = stats::pchisq(stat, nrow(L), lower.tail = FALSE),
+                          validated = ca$validated, provisional = ca$provisional,
+                          calibration = ca$calibration,
+                          caveat = paste("Kenward-Roger is unavailable on this engine;",
+                                         "this test is asymptotic."))))
+  }
+
+  n_subj <- fit$spec$n_participants
+  kr_ok <- requireNamespace("pbkrtest", quietly = TRUE)
+  capped <- !is.null(kr_max_subjects) && is.finite(n_subj) && n_subj > kr_max_subjects
+  use_kr <- switch(df_method, kr = kr_ok, satterthwaite = FALSE,
+                   auto = kr_ok && !capped)
+  if (use_kr) {
+    mL <- if (inherits(m, "lmerModLmerTest")) as(m, "lmerMod") else m
+    kr <- tryCatch(pbkrtest::KRmodcomp(mL, L), error = function(e) NULL)
+    if (!is.null(kr)) {
+      st <- kr$test; ca <- cal("kr")
+      return(c(common, list(method = "Kenward-Roger F", df_method = "kr",
+                            statistic = unname(st["Ftest", "stat"]),
+                            df1 = unname(st["Ftest", "ndf"]),
+                            df2 = unname(st["Ftest", "ddf"]),
+                            p = unname(st["Ftest", "p.value"]),
+                            validated = ca$validated, provisional = ca$provisional,
+                            calibration = ca$calibration)))
+    }
+  }
+  if (inherits(m, "lmerModLmerTest") && requireNamespace("lmerTest", quietly = TRUE)) {
+    ct <- tryCatch(lmerTest::contest(m, L, joint = TRUE), error = function(e) NULL)
+    if (!is.null(ct)) {
+      ca <- cal("satterthwaite")
+      return(c(common, list(method = "Satterthwaite F", df_method = "satterthwaite",
+                            statistic = ct[["F value"]], df1 = ct[["NumDF"]],
+                            df2 = ct[["DenDF"]], p = ct[["Pr(>F)"]],
+                            validated = ca$validated, provisional = ca$provisional,
+                            calibration = ca$calibration)))
+    }
+  }
+  # An L-matrix hypothesis has no reduced-model refit to fall back on, so a Wald
+  # chi-square on the model covariance is the last resort, and says so.
+  bv <- dance_traj_beta(fit)
+  b <- bv$beta[colnames(L)]; V <- bv$V[colnames(L), colnames(L), drop = FALSE]
+  stat <- tryCatch(as.numeric(t(L %*% b) %*% solve(L %*% V %*% t(L)) %*% (L %*% b)),
+                   error = function(e) NA_real_)
+  if (!is.finite(stat)) return(list(ok = FALSE, message = "The contrast covariance is singular."))
+  ca <- cal("wald")
+  c(common, list(method = "asymptotic Wald", df_method = "wald", statistic = stat,
+                 df1 = nrow(L), df2 = NA_real_,
+                 p = stats::pchisq(stat, nrow(L), lower.tail = FALSE),
+                 validated = ca$validated, provisional = ca$provisional,
+                 calibration = ca$calibration,
+                 caveat = "Both F approximations were unavailable; this test is asymptotic."))
 }

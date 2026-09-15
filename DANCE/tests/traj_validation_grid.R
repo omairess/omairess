@@ -42,6 +42,7 @@ if (is.na(N_MAIN) || N_MAIN < 1) N_MAIN <- 1000L
 ONLY <- Sys.getenv("DANCE_GRID_CELLS")
 ONLY <- if (nzchar(ONLY)) trimws(strsplit(ONLY, ",")[[1]]) else NULL
 PASS_UPPER <- 0.08
+MARGINAL <- nzchar(Sys.getenv("DANCE_GRID_MARGINAL"))
 
 # ------------------------------------------------------------------------------
 # ONE GENERATOR, covering every axis the grid varies
@@ -188,7 +189,14 @@ run_cell <- function(cl) {
     ff <- try(e$dance_traj_fit(sp), silent = TRUE)
     if (inherits(ff, "try-error") || !isTRUE(ff$ok)) next
     rung[i] <- ff$re_rung; sing[i] <- isTRUE(ff$singular)
-    o <- try(e$dance_traj_omnibus(ff, cl$block), silent = TRUE)
+    # DANCE_GRID_MARGINAL=1 runs the same cells through the marginal L-matrix
+    # path the app now uses, so the calibration measured here is the calibration
+    # of the test that actually ships. For the whole-design blocks the two state
+    # the same hypothesis; they do not share an implementation, and a type-I rate
+    # is a property of an implementation.
+    o <- if (MARGINAL)
+      try(e$dance_traj_marginal_test(ff, character(0), cl$block), silent = TRUE)
+    else try(e$dance_traj_omnibus(ff, cl$block), silent = TRUE)
     if (!inherits(o, "try-error") && isTRUE(o$ok)) p[i] <- o$p %||% NA_real_
   }
   pp <- p[is.finite(p)]
@@ -202,6 +210,9 @@ run_cell <- function(cl) {
              else if (ci[2] > PASS_UPPER) "INCONCLUSIVE (interval too wide)"
              else "FAIL"
   data.frame(cell = cl$id, description = cl$desc, block = cl$block,
+             # which implementation was measured: a type-I rate belongs to code,
+             # not to a hypothesis, and these two state the same hypothesis
+             path = if (MARGINAL) "marginal-L" else "refit-block",
              n_sim = m, n_failed = n - m, rate = rate,
              ci_lo = ci[1], ci_hi = ci[2], verdict = verdict,
              top_rung_pct = 100 * mean(rung == 1, na.rm = TRUE),
