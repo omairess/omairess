@@ -50,6 +50,12 @@ PASS_UPPER <- 0.08
 # because that is what repeated-measures data looks like and it is the harder
 # case: it is the configuration that measured 0.283 before the curve-level rung
 # existed.
+# An irregular observation protocol: 19 times over just past one period, no two
+# gaps alike. Fixed across replicates because that is how a study's schedule
+# behaves -- awkward, but the same awkward for everyone.
+TIMES_IRREG <- c(0, 1.4, 2.1, 4.3, 5.0, 7.2, 8.9, 9.5, 11.1, 12.8,
+                 13.3, 15.6, 16.2, 17.9, 19.1, 20.4, 21.0, 22.3, 23.1)
+
 gen <- function(seed, n_per_group = 8, groups = c("a", "b"), conds = c("p", "q"),
                 nt = 12, amp = 4, amp2 = 0, slope = 0, noise = 1,
                 shift = 0, shift_cell = NULL, level = 0, level_group = NULL,
@@ -134,6 +140,31 @@ GRID <- list(
   cell("k1_lin_full",   "FULL block, K=1, linear trend, 2x2 mixed",
        list(slope = 0.08), trend = "linear", block = "full"),
   cell("k1_nt_level",   "LEVEL block, K=1, no trend, 2x2 mixed", block = "level"),
+  # --- the configuration a real study actually has ---------------------------
+  # Asked for directly: the app warned that a user's fit was OUTSIDE this grid
+  # on five counts at once -- full block, K = 2, a linear trend, unbalanced
+  # cells and irregular times -- and the honest answer to "then simulate THAT"
+  # is these cells. Every axis is varied one at a time above; real data varies
+  # them together, and approximations that each survive alone can still fail in
+  # combination, so the combination has to be its own cell.
+  #
+  # Deliberately at 32 participants and not at the ~1300 of the study that
+  # prompted it. Kenward-Roger and Satterthwaite are SMALL-sample corrections:
+  # the approximation is under most strain when the variance components are
+  # poorly determined, and it only improves as participants are added. A cell
+  # that holds at n = 32 therefore covers the same structure at n = 1305, and
+  # costs minutes instead of days. If it fails at 32 the honest next step is to
+  # climb the sample size until it holds, not to assume the study is fine.
+  cell("real_k2_lin_full",  "FULL block, K=2, linear trend, 4 between-groups, irregular + unbalanced",
+       list(groups = c("a", "b", "c", "d"), conds = "p", n_per_group = 8,
+            amp2 = 2, slope = 0.08, drop_frac = 0.10, times = TIMES_IRREG),
+       K = 2, trend = "linear", block = "full", within = FALSE,
+       n = max(200L, N_MAIN %/% 4L)),
+  cell("real_k2_lin_circ",  "CIRCADIAN block, same configuration as real_k2_lin_full",
+       list(groups = c("a", "b", "c", "d"), conds = "p", n_per_group = 8,
+            amp2 = 2, slope = 0.08, drop_frac = 0.10, times = TIMES_IRREG),
+       K = 2, trend = "linear", block = "circadian", within = FALSE,
+       n = max(200L, N_MAIN %/% 4L)),
   # --- power, so size is never read on its own -------------------------------
   cell("pow_phase_05",  "POWER: 0.5 rad phase shift in one cell",
        list(shift = 0.5, shift_cell = "a q"), planted = TRUE,
