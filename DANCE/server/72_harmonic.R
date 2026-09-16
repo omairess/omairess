@@ -6004,15 +6004,31 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     selectInput("harmonic_traj_effect", "Effect to inspect:", choices = ch)
   })
 
+  # The pairwise vocabulary follows the fit, like the component selector: the
+  # omnibus blocks a model can answer depend on whether it has a trend and more
+  # than one harmonic, and a duplicate pair of blocks is one entry, not two.
+  observe({
+    ff <- harmonic_traj()
+    if (!isTRUE(ff$ok)) return()
+    ws <- dance_traj_pair_whats(ff)
+    ch <- stats::setNames(ws, unname(DANCE_TRAJ_PAIR_LABEL[ws]))
+    sel <- isolate(input$harmonic_traj_what) %||% "level"
+    updateSelectInput(session, "harmonic_traj_what", choices = ch,
+                      selected = if (sel %in% ws) sel else "level")
+  })
+
   output$harmonic_traj_pairwise <- renderUI({
     ff <- harmonic_traj(); req(isTRUE(ff$ok))
     what <- input$harmonic_traj_what %||% "level"
     adj  <- input$harmonic_traj_adjust %||% "holm"
     eff  <- input$harmonic_traj_effect %||% "_all_"
+    dfm  <- input$harmonic_df_method %||% "kr"
     dts  <- ff$spec$design_terms
+    if (!what %in% dance_traj_pair_whats(ff)) what <- "level"
 
     res <- if (identical(eff, "_all_") || !(eff %in% dts)) {
-      list(list(title = NULL, r = dance_traj_contrasts(ff, what, adjust = adj)))
+      list(list(title = NULL, r = dance_traj_contrasts(ff, what, adjust = adj,
+                                                       df_method = dfm)))
     } else {
       # every combination of the OTHER factors is one slice
       others <- setdiff(dts, eff)
@@ -6022,7 +6038,8 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       lapply(seq_len(nrow(grid)), function(i) {
         at <- as.list(grid[i, , drop = FALSE])
         list(title = paste(sprintf("%s = %s", names(at), unlist(at)), collapse = ", "),
-             r = dance_traj_simple_effects(ff, eff, at = at, what = what, adjust = adj))
+             r = dance_traj_simple_effects(ff, eff, at = at, what = what, adjust = adj,
+                                           df_method = dfm))
       })
     }
 
@@ -6030,14 +6047,22 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       r <- x$r
       if (!isTRUE(r$ok)) return(tags$div(style = "color:#8a5a12;font-size:12px", r$message))
       tb <- r$table
+      # A JOINT row compares the cells on several components at once, so it has an
+      # F and a p and NO single estimate. Printing a blank Estimate column beside
+      # it would read as a missing number rather than an absent quantity, so the
+      # header changes with the comparison.
+      joint <- isTRUE(r$joint)
+      hdr <- if (joint) c("Pair", "Test", "", "p", "p adj")
+             else c("Pair", "Estimate", "95% CI", "p", "p adj")
       rows <- lapply(seq_len(nrow(tb)), function(i) {
         z <- tb[i, ]
         tags$tr(
           tags$td(style = "padding:3px 12px 3px 0", sprintf("%s vs %s", z$cell1, z$cell2)),
           tags$td(style = "padding:3px 12px 3px 0;font-family:monospace",
-                  if (isTRUE(z$defined)) sprintf("%+.3f", z$estimate) else sprintf("%+.3f", z$estimate)),
+                  if (joint) sprintf("F(%g, %.1f) = %.2f", z$df1, z$df2, z$statistic)
+                  else sprintf("%+.3f", z$estimate)),
           tags$td(style = "padding:3px 12px 3px 0;font-family:monospace",
-                  if (isTRUE(z$defined)) sprintf("[%.3f, %.3f]", z$lo, z$hi) else "—"),
+                  if (joint) "" else if (isTRUE(z$defined)) sprintf("[%.3f, %.3f]", z$lo, z$hi) else "—"),
           tags$td(style = "padding:3px 12px 3px 0;font-family:monospace",
                   if (isTRUE(z$defined)) dance_fmt_p(z$p_raw) else "—"),
           tags$td(style = "padding:3px 0;font-family:monospace;font-weight:600",
@@ -6046,7 +6071,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       tagList(
         if (!is.null(x$title)) tags$div(style = "font-weight:600;margin-top:10px;font-size:13px", x$title),
         tags$table(style = "margin:4px 0",
-          tags$thead(tags$tr(lapply(c("Pair", "Estimate", "95% CI", "p", "p adj"), function(h)
+          tags$thead(tags$tr(lapply(hdr, function(h)
             tags$th(style = "text-align:left;padding:2px 12px 2px 0;font-size:11px;color:#777;font-weight:500", h)))),
           tags$tbody(rows)),
         tags$div(style = "font-size:11px;color:#777", r$unit))

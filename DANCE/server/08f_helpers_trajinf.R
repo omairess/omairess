@@ -1124,15 +1124,30 @@ dance_traj_marginal_test <- function(fit, effect_terms, block = "full",
       "No %s contrast exists for %s in this design.", block,
       paste(effect_terms, collapse = " x "))))
 
+  dance_traj_L_test(fit, L, block, df_method, kr_max_subjects,
+                    common = list(effect = effect_terms, marginal = TRUE))
+}
+
+# The same test, given the L matrix directly. Split out of the function above so
+# that a PAIRWISE block contrast -- cell i minus cell j over the same component
+# set -- runs through exactly the machinery the omnibus does, rather than a
+# second implementation that could drift from it.
+dance_traj_L_test <- function(fit, L, block = "custom",
+                              df_method = c("auto", "kr", "satterthwaite"),
+                              kr_max_subjects = NULL, common = list()) {
+  df_method <- match.arg(df_method)
+  if (!isTRUE(fit$ok)) return(list(ok = FALSE, message = fit$message))
+  if (is.null(L) || !nrow(L))
+    return(list(ok = FALSE, block = block, message = "Empty contrast."))
   est <- dance_traj_L_estimable(fit, L)
   if (!est$ok)
-    return(list(ok = FALSE, block = block, effect = effect_terms,
+    return(c(common, list(ok = FALSE, block = block,
                 not_estimable = TRUE, dropped_terms = est$dropped,
                 message = paste(
                   "Requested trajectory model/contrast is not identifiable from these",
                   "data. The fixed-effect design matrix is rank deficient and the",
                   "hypothesis puts weight on coefficients the model does not contain:",
-                  paste(est$dropped, collapse = ", "))))
+                  paste(est$dropped, collapse = ", ")))))
   L <- est$L
   # drop dependent rows: a redundant row makes the numerator df wrong
   qrL <- qr(t(L))
@@ -1140,9 +1155,20 @@ dance_traj_marginal_test <- function(fit, effect_terms, block = "full",
 
   m <- fit$model
   cal <- function(kind) dance_traj_calibration(fit, kind, block)
-  common <- list(ok = TRUE, block = block, which = block, effect = effect_terms,
-                 marginal = TRUE, n_contrasts = nrow(L),
-                 label = unname(DANCE_TRAJ_BLOCK_LABEL[block]))
+  # A ONE-ROW hypothesis is a scalar contrast, so it has an estimate and an
+  # interval as well as a test, and a pairwise table wants those. A multi-row one
+  # does not: "the trajectories differ" has no single number attached to it.
+  bv <- dance_traj_beta(fit)
+  b <- bv$beta[colnames(L)]; Vb <- bv$V[colnames(L), colnames(L), drop = FALSE]
+  scalar <- if (nrow(L) == 1L) {
+    est1 <- as.numeric(L %*% b)
+    se1 <- sqrt(max(0, as.numeric(L %*% Vb %*% t(L))))
+    list(estimate = est1, se = se1)
+  } else list(estimate = NA_real_, se = NA_real_)
+
+  common <- c(common, list(ok = TRUE, block = block, which = block,
+                 n_contrasts = nrow(L), estimate = scalar$estimate, se = scalar$se,
+                 label = unname(DANCE_TRAJ_BLOCK_LABEL[block])))
 
   if (identical(fit$engine, "glmmTMB")) {
     bv <- dance_traj_beta(fit)
@@ -1205,4 +1231,59 @@ dance_traj_marginal_test <- function(fit, effect_terms, block = "full",
                  validated = ca$validated, provisional = ca$provisional,
                  calibration = ca$calibration,
                  caveat = "Both F approximations were unavailable; this test is asymptotic."))
+}
+
+# ------------------------------------------------------------------------------
+# PAIRWISE, over the same component blocks the omnibus tests
+# ------------------------------------------------------------------------------
+# The omnibus answers "do these cells differ in their rhythm"; this answers
+# "which pair". Same components, same L machinery, same df method -- the pair
+# contrast is just cell i minus cell j instead of a marginal contrast over all
+# of them, so a significant omnibus and an empty pairwise table cannot come from
+# two different notions of what the block IS.
+#
+# With more than one component the hypothesis is multi-row and there is no single
+# number to report: an F and its p, and the difference CURVE is where to look at
+# the size of it. With one component -- a single trend term, the level -- it is a
+# scalar and the estimate and interval come back too.
+dance_traj_pair_L <- function(fit, cell_i, cell_j, block) {
+  spec <- fit$spec
+  comps <- DANCE_TRAJ_BLOCK_COMPONENTS(spec, block)
+  if (!length(comps)) return(NULL)
+  fx <- dance_traj_cell_functionals(fit)
+  ii <- match(cell_i, fx$grid$.cell); jj <- match(cell_j, fx$grid$.cell)
+  if (is.na(ii) || is.na(jj)) return(NULL)
+  get1 <- function(ci, cp) if (identical(cp, ".level@t0")) fx$cells[[ci]]$level0
+                           else fx$cells[[ci]]$coef[[cp]]
+  L <- do.call(rbind, lapply(comps, function(cp) get1(ii, cp) - get1(jj, cp)))
+  rownames(L) <- comps
+  L[abs(L) < 1e-12] <- 0
+  L[rowSums(abs(L)) > 0, , drop = FALSE]
+}
+
+dance_traj_pair_block_test <- function(fit, cell_i, cell_j, block = "full",
+                                       df_method = c("auto", "kr", "satterthwaite"),
+                                       kr_max_subjects = NULL, conf = 0.95) {
+  df_method <- match.arg(df_method)
+  if (!isTRUE(fit$ok)) return(list(ok = FALSE, message = fit$message))
+  L <- dance_traj_pair_L(fit, cell_i, cell_j, block)
+  if (is.null(L) || !nrow(L))
+    return(list(ok = FALSE, message = sprintf(
+      "No %s contrast exists between those cells in this model.", block)))
+  r <- dance_traj_L_test(fit, L, block, df_method, kr_max_subjects,
+                         common = list(cell1 = cell_i, cell2 = cell_j, pairwise = TRUE))
+  if (!isTRUE(r$ok)) return(r)
+  # the interval, when there is a scalar to put one around: on the same df the
+  # test used, so the interval and the p-value agree about the reference
+  if (identical(r$df1, 1) || identical(as.integer(r$df1 %||% 0L), 1L)) {
+    ddf <- r$df2
+    mult <- if (is.finite(ddf) && ddf > 0) stats::qt(1 - (1 - conf) / 2, ddf)
+            else stats::qnorm(1 - (1 - conf) / 2)
+    r$lo <- r$estimate - mult * r$se
+    r$hi <- r$estimate + mult * r$se
+    r$multiplier <- mult
+  } else {
+    r$lo <- NA_real_; r$hi <- NA_real_
+  }
+  r
 }

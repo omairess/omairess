@@ -472,6 +472,10 @@ ui_tab_harmonic <- tabItem(
                      h4("Pairwise comparisons"),
                      fluidRow(
                        column(4, uiOutput("harmonic_traj_effect_ui")),
+                       # The choices are replaced from the server once a model is
+                       # fitted: the omnibus blocks it can answer depend on the
+                       # model, and offering a trend comparison to a model with
+                       # no trend is the same mistake the component selector had.
                        column(4, selectInput("harmonic_traj_what", "Compare:",
                                              choices = c("Level (at t = 0)" = "level",
                                                          "Amplitude" = "amplitude",

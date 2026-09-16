@@ -347,11 +347,50 @@ dance_traj_diff_curve <- function(fit, cell1, cell2, times = NULL, conf = 0.95,
 # assumption about the dependence between contrasts, and -- unlike Tukey -- does
 # not require the contrasts to be a balanced set of pairwise mean differences,
 # which amplitude and phase contrasts are not.
-dance_traj_contrasts <- function(fit, what = c("level", "amplitude", "phase"),
+DANCE_TRAJ_PAIR_WHAT <- c("level", "amplitude", "phase", DANCE_TRAJ_BLOCKS)
+
+# Which comparisons this fit can actually answer. The scalar three always; the
+# omnibus blocks only where they have terms and are not duplicates of each other
+# -- with no trend, "shape" and "circadian" are the same set of columns, and
+# offering both prints one test twice under two names, which reads as
+# corroboration. Same rule the omnibus table uses, so the two panels cannot
+# disagree about what exists.
+dance_traj_pair_whats <- function(fit) {
+  if (!isTRUE(fit$ok)) return(c("level", "amplitude", "phase"))
+  spec <- fit$spec
+  out <- c("level", "amplitude", "phase")
+  seen <- list()
+  for (b in c("full", "shape", "circadian", "trend")) {
+    cp <- DANCE_TRAJ_BLOCK_COMPONENTS(spec, b)
+    if (!length(cp)) next
+    key <- paste(sort(cp), collapse = "|")
+    if (key %in% seen) next
+    seen[[length(seen) + 1L]] <- key
+    out <- c(out, b)
+  }
+  out
+}
+
+DANCE_TRAJ_PAIR_LABEL <- c(
+  level     = "Level (at t = 0)",
+  amplitude = "Amplitude",
+  phase     = "Acrophase",
+  full      = "Full trajectory (joint)",
+  shape     = "Temporal shape (joint)",
+  circadian = "Rhythmic block (joint)",
+  trend     = "Non-periodic trend")
+
+dance_traj_contrasts <- function(fit, what = "level",
                                  harmonic = 1, conf = 0.95, at_time = NULL,
                                  adjust = c("holm", "bonferroni", "none"),
-                                 method = c("joint", "delta"), n_draw = 20000) {
-  what <- match.arg(what); adjust <- match.arg(adjust); method <- match.arg(method)
+                                 method = c("joint", "delta"), n_draw = 20000,
+                                 df_method = c("auto", "kr", "satterthwaite")) {
+  adjust <- match.arg(adjust); method <- match.arg(method)
+  df_method <- match.arg(df_method)
+  if (!identical(length(what), 1L) || !what %in% DANCE_TRAJ_PAIR_WHAT)
+    return(list(ok = FALSE, message = sprintf(
+      "'%s' is not a comparable quantity. Available: %s.",
+      paste(what, collapse = ", "), paste(DANCE_TRAJ_PAIR_WHAT, collapse = ", "))))
   if (!isTRUE(fit$ok)) return(list(ok = FALSE, message = fit$message))
   spec <- fit$spec
   if (!length(spec$design_terms))
@@ -361,6 +400,62 @@ dance_traj_contrasts <- function(fit, what = c("level", "amplitude", "phase"),
   if (m < 2) return(list(ok = FALSE, message = "Only one design cell."))
   pairs <- utils::combn(m, 2)
   z <- stats::qnorm(1 - (1 - conf) / 2)
+
+  # ---- THE OMNIBUS BLOCKS, PAIR BY PAIR ------------------------------------
+  # Same components and same L machinery as the omnibus row above the table, so
+  # a significant block test and an empty pairwise panel cannot come from two
+  # different notions of what the block is.
+  if (what %in% DANCE_TRAJ_BLOCKS) {
+    rows <- lapply(seq_len(ncol(pairs)), function(p) {
+      i <- pairs[1, p]; j <- pairs[2, p]
+      r <- dance_traj_pair_block_test(fit, grid$.cell[i], grid$.cell[j], what,
+                                      df_method = df_method, conf = conf)
+      if (!isTRUE(r$ok)) return(NULL)
+      data.frame(cell1 = grid$.cell[i], cell2 = grid$.cell[j],
+                 estimate = r$estimate %||% NA_real_, se = r$se %||% NA_real_,
+                 lo = r$lo %||% NA_real_, hi = r$hi %||% NA_real_,
+                 statistic = r$statistic, df1 = r$df1, df2 = r$df2 %||% NA_real_,
+                 defined = TRUE, p_draw = NA_real_, joint = r$df1 > 1,
+                 method = r$method, stringsAsFactors = FALSE)
+    })
+    rows <- Filter(Negate(is.null), rows)
+    if (!length(rows))
+      return(list(ok = FALSE, message = sprintf(
+        "No %s contrast could be formed. The block may not be identifiable here.", what)))
+    tab <- do.call(rbind, rows)
+    tab$p_raw <- vapply(seq_len(nrow(tab)), function(k) {
+      d2 <- tab$df2[k]
+      if (is.finite(d2)) stats::pf(tab$statistic[k], tab$df1[k], d2, lower.tail = FALSE)
+      else stats::pchisq(tab$statistic[k], tab$df1[k], lower.tail = FALSE)
+    }, numeric(1))
+    tab$p_adj <- tab$p_raw
+    if (!identical(adjust, "none"))
+      tab$p_adj <- stats::p.adjust(tab$p_raw, method = adjust)
+    rownames(tab) <- NULL
+    joint <- any(tab$joint)
+    return(list(ok = TRUE, what = what, harmonic = harmonic, method = tab$method[1],
+                block = what, joint = joint, table = tab, conf = conf, adjust = adjust,
+                n_cells = m, n_contrasts = nrow(tab),
+                label = unname(DANCE_TRAJ_PAIR_LABEL[what]),
+                unit = if (joint)
+                  sprintf("joint test over %d component(s); no single effect size -- read the difference curve for the size",
+                          max(tab$df1))
+                else "difference in the response's own units",
+                note = paste(
+                  sprintf("%d pairwise %s contrasts over %d design cells, on the SAME components and the same L matrix as the omnibus test.",
+                          nrow(tab), unname(DANCE_TRAJ_BLOCK_LABEL[what]), m),
+                  if (joint) paste(
+                    "Each row is a JOINT test: the cells are compared on every",
+                    "component of the block at once, so there is an F and a p but no",
+                    "single estimate. For the size and direction of a difference use",
+                    "the difference curve, or one of the scalar quantities.")
+                  else "One component, so each row is a scalar contrast with an interval.",
+                  if (identical(adjust, "none"))
+                    "NO multiplicity adjustment: with more than two cells these p-values are wrong as a family."
+                  else sprintf("p_adj is %s-adjusted across the family of %d.", adjust, nrow(tab)),
+                  sprintf("Degrees of freedom from %s, as chosen under Advanced.",
+                          tab$method[1]))))
+  }
 
   if (identical(what, "level")) {
     tt <- at_time %||% spec$t0
@@ -698,10 +793,17 @@ dance_traj_group_fits_gaps <- function() {
 # "Significant in one group and not the other" is not an interaction, and a
 # module that offers simple effects without offering the interaction invites
 # exactly that mistake.
-dance_traj_simple_effects <- function(fit, effect, at, what = c("level", "amplitude", "phase"),
+dance_traj_simple_effects <- function(fit, effect, at, what = "level",
                                       harmonic = 1, conf = 0.95, at_time = NULL,
-                                      adjust = c("holm", "bonferroni", "none")) {
-  what <- match.arg(what); adjust <- match.arg(adjust)
+                                      adjust = c("holm", "bonferroni", "none"),
+                                      df_method = c("auto", "kr", "satterthwaite")) {
+  adjust <- match.arg(adjust); df_method <- match.arg(df_method)
+  # the same vocabulary as the whole-design table: a slice of the design can be
+  # asked every question the design can
+  if (!identical(length(what), 1L) || !what %in% DANCE_TRAJ_PAIR_WHAT)
+    return(list(ok = FALSE, message = sprintf(
+      "'%s' is not a comparable quantity. Available: %s.",
+      paste(what, collapse = ", "), paste(DANCE_TRAJ_PAIR_WHAT, collapse = ", "))))
   if (!isTRUE(fit$ok)) return(list(ok = FALSE, message = fit$message))
   spec <- fit$spec
   dt <- spec$design_terms
@@ -720,7 +822,8 @@ dance_traj_simple_effects <- function(fit, effect, at, what = c("level", "amplit
   if (sum(keep) < 2)
     return(list(ok = FALSE, message = "That slice of the design holds fewer than two cells."))
 
-  all_ct <- dance_traj_contrasts(fit, what, harmonic, conf, at_time, adjust = "none")
+  all_ct <- dance_traj_contrasts(fit, what, harmonic, conf, at_time, adjust = "none",
+                                 df_method = df_method)
   if (!isTRUE(all_ct$ok)) return(all_ct)
   cells <- grid$.cell[keep]
   tab <- all_ct$table[all_ct$table$cell1 %in% cells & all_ct$table$cell2 %in% cells, ,
@@ -734,6 +837,7 @@ dance_traj_simple_effects <- function(fit, effect, at, what = c("level", "amplit
     tab$p_adj[tab$defined] <- stats::p.adjust(tab$p_raw[tab$defined], method = adjust)
   rownames(tab) <- NULL
   list(ok = TRUE, what = what, effect = effect, at = at, unit = all_ct$unit,
+       joint = all_ct$joint %||% FALSE, label = all_ct$label,
        table = tab, conf = conf, adjust = adjust, cells = cells,
        note = paste(
          sprintf("The simple effect of %s at %s.", effect,
