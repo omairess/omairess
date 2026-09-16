@@ -4550,7 +4550,8 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
         }
         
         p <- p %>% add_lines(x = time_fine, y = mean_pred,
-                             line = list(color = DANCE_EMPHASIS, width = 3), name = "Population Mean")
+                             line = list(color = DANCE_EMPHASIS, width = 3),
+                             legendgroup = "pop_mean", name = "Population Mean")
         
         # Add confidence band if requested (use SD of individual amplitudes)
         if(isTRUE(input$harmonic_show_ci)) {
@@ -4568,6 +4569,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
           p <- p %>% add_ribbons(x = time_fine, ymin = lower_pred, ymax = upper_pred,
                                  line = list(color = 'transparent'),
                                  fillcolor = dance_group_rgba(DANCE_EMPHASIS, 0.18),
+                                 legendgroup = "pop_mean",
                                  name = "95% CI")
         }
         
@@ -4760,6 +4762,42 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
   })
   
   # Polar plot for acrophase
+  # ---------------------------------------------------------------------------
+  # THE MIXED-EFFECTS CELL VECTORS, for the polar dial
+  # ---------------------------------------------------------------------------
+  # The dial drew group means of the PER-PARTICIPANT cosinor fits -- a two-stage
+  # estimator -- while tab 6 reported the mixed-effects cell estimates for the
+  # same groups, and nothing on screen said which was which. They are close on
+  # balanced data with many participants (the two-stage group vector is the
+  # amplitude of the MEAN (cos, sin) pair, which is what the mixed model also
+  # estimates), close enough to agree to several figures and hide the fact that
+  # they are different estimators. They are not close when a group is small,
+  # unbalanced, or has participants with few observations -- exactly where it
+  # matters -- because only the mixed model shrinks and weights them.
+  #
+  # Returns ok = FALSE WITH A REASON rather than silently falling back: the dial
+  # says which estimator it drew.
+  harmonic_polar_mixed <- function(h) {
+    gv <- harmonic_group_var_eff()
+    if (is.null(gv) || identical(gv, "_none_"))
+      return(list(ok = FALSE, why = "no grouping variable is selected"))
+    ff <- harmonic_traj()
+    if (!isTRUE(ff$ok))
+      return(list(ok = FALSE, why = ff$message %||% "the trajectory model is unavailable"))
+    if (!setequal(ff$spec$design_terms, gv))
+      return(list(ok = FALSE, why = sprintf(
+        "the tab 6 design is %s, so its cells are not the %s groups on this dial",
+        paste(ff$spec$design_terms, collapse = " x "), gv)))
+    if (h > (ff$spec$n_harmonics %||% 1L))
+      return(list(ok = FALSE, why = sprintf("the trajectory model fits %d harmonic(s)",
+                                            ff$spec$n_harmonics %||% 1L)))
+    co <- dance_traj_cell_coefs(ff, h)
+    if (!isTRUE(co$ok)) return(list(ok = FALSE, why = co$message))
+    ap <- dance_traj_amp_phase_ci(co, method = "joint", n_draw = 6000)
+    if (!isTRUE(ap$ok)) return(list(ok = FALSE, why = ap$message))
+    list(ok = TRUE, table = ap$table)
+  }
+
   output$harmonic_polar_plot <- renderPlotly({
     req(values$harmonic_model)
     mod <- values$harmonic_model
@@ -4776,7 +4814,18 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     # Convert to degrees for polar plot
     theta_deg <- phi_to_degrees(params[[acro_rad_col]])
     r <- params[[amp_col]]
-    
+
+    clock_o0 <- dance_clock_origin(mod)
+    hov <- function(td) dance_polar_hover_clock(td, mod$period, h,
+                                                clock_origin = clock_o0)
+    HT <- paste0("amplitude %{r:.3f}<br>acrophase %{text}",
+                 "<br><span style='font-size:10px'>%{theta:.1f}&deg; on the H",
+                 h, " dial</span><extra>%{fullData.name}</extra>")
+
+    want_mixed <- identical(input$polar_vector_source %||% "mixed", "mixed")
+    mx <- if (want_mixed) harmonic_polar_mixed(h) else list(ok = FALSE, why = NULL)
+    use_mixed <- isTRUE(mx$ok)
+
     p <- plot_ly(type = 'scatterpolar', mode = 'markers')
     
     # Check if we have group fits - color points by group
@@ -4796,22 +4845,36 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
             r = r[g_mask], theta = theta_deg[g_mask],
             type = 'scatterpolar', mode = 'markers',
             marker = list(size = 8, color = unname(group_colors[[g_name]]), opacity = 0.7),
-            name = paste("Group:", g_name)
+            name = paste("Group:", g_name),
+            text = hov(theta_deg[g_mask]), hovertemplate = HT
           )
         }
 
-        # Add group mean vector for selected harmonic
+        # Add group mean vector for selected harmonic, from whichever estimator
+        # the reader asked for. Both use atan2(beta_sin, beta_cos) on a
+        # zero-based model axis, so the angle means the same thing either way
+        # and only the ESTIMATE changes -- no rotation, no reconversion.
         g_fit <- mod$group_fits[[g_name]]
-        acro_deg <- phi_to_degrees(g_fit$mean_acrophases_rad[h])
+        g_amp <- g_fit$mean_amplitudes[h]
+        g_rad <- g_fit$mean_acrophases_rad[h]
+        if (use_mixed) {
+          i_mx <- match(g_name, mx$table$cell)
+          if (!is.na(i_mx)) {
+            g_amp <- mx$table$amplitude[i_mx]
+            g_rad <- mx$table$acrophase_rad[i_mx]
+          }
+        }
+        acro_deg <- phi_to_degrees(g_rad)
         if(acro_deg < 0) acro_deg <- acro_deg + 360
 
         p <- p %>% add_trace(
-          r = c(0, g_fit$mean_amplitudes[h]),
+          r = c(0, g_amp),
           theta = c(0, acro_deg),
           type = 'scatterpolar', mode = 'lines+markers',
           line = list(color = unname(group_colors[[g_name]]), width = 3),
           marker = list(size = 12, color = unname(group_colors[[g_name]]), symbol = 'diamond'),
-          name = paste("Mean:", g_name)
+          name = paste(if (use_mixed) "Mixed:" else "Mean:", g_name),
+          text = c(hov(0), hov(acro_deg)), hovertemplate = HT
         )
       }
 
@@ -4827,7 +4890,8 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
           mode = 'lines+markers',
           line = list(color = 'black', width = 4, dash = 'dash'),
           marker = list(size = 14, color = 'black', symbol = 'star'),
-          name = "Overall Population Mean"
+          name = "Overall Population Mean",
+          text = c(hov(0), hov(acro_deg)), hovertemplate = HT
         )
       }
 
@@ -4836,7 +4900,8 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       p <- p %>% add_trace(
         r = r, theta = theta_deg,
         marker = list(size = 8, color = DANCE_SERIES1, opacity = 0.7),
-        name = "Individual"
+        name = "Individual",
+        text = hov(theta_deg), hovertemplate = HT
       )
 
       # Add mean vector if requested
@@ -4851,7 +4916,8 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
           mode = 'lines+markers',
           line = list(color = DANCE_EMPHASIS, width = 3),
           marker = list(size = 12, color = DANCE_EMPHASIS, symbol = 'diamond'),
-          name = "Population Mean"
+          name = "Population Mean",
+          text = c(hov(0), hov(acro_deg)), hovertemplate = HT
         )
       }
     }
@@ -4955,6 +5021,14 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
         sprintf("clock times; the model origin is %s",
                 dance_clock_label(clock_o, mod$period, show_day = FALSE))
       else "clock times"
+    # WHICH ESTIMATOR DREW THE BOLD VECTORS. Not a footnote: the point cloud and
+    # the group vectors come from different places, and a dial that does not say
+    # so is how a figure quietly disagrees with the table beside it.
+    polar_sub <- paste0(polar_sub, " &middot; group vectors: ",
+      if (use_mixed) "mixed-effects model"
+      else if (want_mixed && !is.null(mx$why))
+        sprintf("two-stage (mixed-effects unavailable -- %s)", mx$why)
+      else "two-stage, mean of participant fits")
 
     p %>% layout(
       uirevision = "fck-acrophase-polar",
@@ -5740,20 +5814,21 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
   harmonic_traj_component <- reactive({
     cc <- input$harmonic_traj_component %||% "full"
     ff <- harmonic_traj()
-    if (isTRUE(ff$ok) && identical(ff$spec$trend, "none") &&
-        cc %in% c("trend", "baseline_harm")) "full" else cc
+    # the fit decides the vocabulary, so a stale selection from a previous model
+    # -- H2 after refitting with one harmonic, a trend view with no trend --
+    # falls back rather than asking for a component that does not exist
+    if (!isTRUE(ff$ok)) return(cc)
+    if (cc %in% dance_traj_components(ff)) cc else "full"
   })
   observe({
     ff <- harmonic_traj()
     if (!isTRUE(ff$ok)) return()
-    ch <- c("Full fitted trajectory" = "full",
-            "Harmonics only (zero baseline)" = "harmonics")
-    if (!identical(ff$spec$trend, "none"))
-      ch <- c(ch, "Baseline + harmonics" = "baseline_harm",
-                  "Nonperiodic change from origin" = "trend")
+    comps <- dance_traj_components(ff)
+    ch <- stats::setNames(comps, vapply(comps, dance_traj_component_label,
+                                        character(1), period = ff$spec$period))
     sel <- isolate(input$harmonic_traj_component) %||% "full"
     updateSelectInput(session, "harmonic_traj_component", choices = ch,
-                      selected = if (sel %in% ch) sel else "full")
+                      selected = if (sel %in% comps) sel else "full")
   })
 
   output$harmonic_traj_curves <- renderPlotly({
@@ -5767,11 +5842,15 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     p <- plot_ly()
     for (cl in pr$cells) {
       d <- pr$table[pr$table$cell == cl, , drop = FALSE]
+      # legendgroup, or clicking a name in the legend hides the LINE and leaves
+      # its band behind -- reported from a real session, and it makes the plot
+      # worse than useless: a shaded band with no curve reads as a different
+      # group's uncertainty. Plotly ties visibility to the group, not the name.
       p <- p %>%
-        add_ribbons(x = d$t, ymin = d$lo, ymax = d$hi, name = cl,
+        add_ribbons(x = d$t, ymin = d$lo, ymax = d$hi, name = cl, legendgroup = cl,
                     line = list(width = 0), fillcolor = dance_group_rgba(cols[[cl]], 0.16),
                     showlegend = FALSE, hoverinfo = "skip") %>%
-        add_lines(x = d$t, y = d$fit, name = cl,
+        add_lines(x = d$t, y = d$fit, name = cl, legendgroup = cl,
                   line = list(color = cols[[cl]], width = 2.4))
     }
     if (isTRUE(input$harmonic_traj_raw) &&
@@ -5785,11 +5864,16 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       for (cl in pr$cells) {
         i <- key == cl
         if (!any(i)) next
-        p <- p %>% add_markers(x = dd$t[i], y = dd$y[i], name = cl, showlegend = FALSE,
+        p <- p %>% add_markers(x = dd$t[i], y = dd$y[i], name = cl, legendgroup = cl,
+                               showlegend = FALSE,
                                marker = list(color = dance_group_rgba(cols[[cl]], 0.35), size = 4))
       }
     }
-    ylab <- switch(harmonic_traj_component(),
+    cmp <- harmonic_traj_component()
+    kh <- dance_traj_component_harmonic(cmp)
+    ylab <- if (!is.na(kh))
+      sprintf("H%d component (centred on 0)", kh)
+    else switch(cmp,
       full = {
         md <- values$harmonic_model
         if (!is.null(md$dv_name))
@@ -5855,9 +5939,13 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
                                  layout(title = list(text = dc$message, font = list(size = 12))))
     d <- dc$table
     plot_ly() %>%
+      # legendgroup: the band has no legend entry of its own, so without it
+      # hiding the difference curve leaves its shading behind
       add_ribbons(x = d$t, ymin = d$lo, ymax = d$hi, line = list(width = 0),
+                  legendgroup = "diff",
                   fillcolor = "rgba(31,107,74,0.16)", showlegend = FALSE, hoverinfo = "skip") %>%
       add_lines(x = d$t, y = d$diff, line = list(color = "#1F6B4A", width = 2.4),
+                legendgroup = "diff",
                 name = sprintf("%s − %s", dc$cell1, dc$cell2)) %>%
       add_lines(x = range(d$t), y = c(0, 0),
                 line = list(color = "#999", width = 1, dash = "dot"),

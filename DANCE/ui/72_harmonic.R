@@ -332,6 +332,24 @@ ui_tab_harmonic <- tabItem(
                               h4("Polar Plot Settings"),
                               uiOutput("harmonic_selector_polar"),
                               helpText("Acrophase displayed in polar coordinates. Radius = Amplitude, Angle = Acrophase."),
+                              # WHICH ESTIMATOR THE GROUP VECTORS COME FROM.
+                              # The dial used to draw group means of the
+                              # PER-PARTICIPANT cosinor fits, with nothing on
+                              # screen saying so -- while tab 6 reported the
+                              # mixed-effects cell estimates for the same
+                              # groups. Two numbers under one name is how a
+                              # figure and its table come to disagree.
+                              radioButtons("polar_vector_source", "Group vectors from:",
+                                           choices = c(
+                                             "Mixed-effects model (tab 6)" = "mixed",
+                                             "Two-stage (mean of participants)" = "two_stage"),
+                                           selected = "mixed"),
+                              helpText(HTML(paste(
+                                "The faint point cloud is always the",
+                                "<b>per-participant</b> fits; only the bold group",
+                                "vectors follow this choice. Mixed-effects needs",
+                                "the tab 6 model, and will fit it if it has not",
+                                "been fitted yet."))),
                               checkboxInput("polar_show_mean", "Show Population Mean Vector", TRUE),
                               checkboxInput("polar_show_ellipse", "Show Confidence Ellipse", TRUE)
                        )

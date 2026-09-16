@@ -149,6 +149,42 @@ DANCE_TRAJ_COMPONENT_LABEL <- c(
   baseline_harm = "Baseline + harmonics",
   trend         = "Nonperiodic change from origin")
 
+# "Harmonics only" is every harmonic summed, which is the right default and the
+# wrong view for the question "what is H2 doing on its own". With two harmonics
+# fitted, the sum is the only thing that was ever drawable, so the 12 h component
+# -- the one that decides how far the visible peak sits from the H1 acrophase --
+# had no picture anywhere. Each harmonic gets its own option.
+#
+# The vocabulary depends on the FIT, not on a constant: a one-harmonic model has
+# no H2 to offer and a no-trend model has no trend view, and a selector that
+# offers either draws a flat zero line and calls it a component.
+dance_traj_components <- function(fit) {
+  if (!isTRUE(fit$ok)) return("full")
+  K <- fit$spec$n_harmonics %||% 1L
+  out <- c("full", "harmonics")
+  if (K > 1L) out <- c(out, sprintf("harmonic%d", seq_len(K)))
+  if (!identical(fit$spec$trend %||% "none", "none"))
+    out <- c(out, "baseline_harm", "trend")
+  out
+}
+
+dance_traj_component_label <- function(component, period = 24) {
+  k <- dance_traj_component_harmonic(component)
+  if (!is.na(k)) return(sprintf("Harmonic %d only (period %s h)", k,
+                                format(round(period / k, 2), trim = TRUE)))
+  # %||% would not help here: a name that is not in the vector indexes to NA,
+  # not NULL, and an NA label reaches the selector as a blank option
+  if (component %in% names(DANCE_TRAJ_COMPONENT_LABEL))
+    unname(DANCE_TRAJ_COMPONENT_LABEL[component]) else component
+}
+
+# The harmonic number a component names, or NA for the views that are not one.
+dance_traj_component_harmonic <- function(component) {
+  m <- regmatches(component, regexpr("^harmonic([0-9]+)$", component))
+  if (!length(m)) return(NA_integer_)
+  as.integer(sub("^harmonic", "", m))
+}
+
 # Which fixed-effect columns survive for a given view. Works off the terms
 # object, so a covariate or an interaction the user added is classified by the
 # same rule as everything else rather than by name-matching.
@@ -158,13 +194,20 @@ dance_traj_component_mask <- function(fit, X, component) {
              "term.labels")
   asg <- attr(X, "assign")
   has <- function(term, set) any(strsplit(term, ":", fixed = TRUE)[[1]] %in% set)
-  keep_term <- vapply(tl, function(term) switch(component,
-    full          = TRUE,
-    harmonics     = has(term, spec$harm_terms),
-    baseline_harm = !has(term, spec$trend_terms),
-    trend         = has(term, spec$trend_terms)), logical(1))
+  kh <- dance_traj_component_harmonic(component)
+  # one harmonic on its own: its own cos and sin columns and nothing else
+  one_harm <- if (is.na(kh)) NULL else intersect(paste0(c("c", "s"), kh), spec$harm_terms)
+  keep_term <- vapply(tl, function(term) {
+    if (!is.na(kh)) return(has(term, one_harm))
+    switch(component,
+      full          = TRUE,
+      harmonics     = has(term, spec$harm_terms),
+      baseline_harm = !has(term, spec$trend_terms),
+      trend         = has(term, spec$trend_terms))
+  }, logical(1))
   # assign == 0 is the intercept: present for full and baseline+harmonics,
-  # absent for the two views that are explicitly centred on zero
+  # absent for the views that are explicitly centred on zero -- a single
+  # harmonic among them, since it is a deviation and not a level
   keep_int <- component %in% c("full", "baseline_harm")
   ifelse(asg == 0L, keep_int, keep_term[pmax(asg, 1L)])
 }
@@ -174,10 +217,16 @@ dance_traj_component_mask <- function(fit, X, component) {
 # ------------------------------------------------------------------------------
 dance_traj_predict <- function(fit, times = NULL, conf = 0.95,
                                band = c("pointwise", "simultaneous"),
-                               n_time = 200,
-                               component = c("full", "harmonics", "baseline_harm", "trend")) {
-  band <- match.arg(band); component <- match.arg(component)
+                               n_time = 200, component = "full") {
+  band <- match.arg(band)
   if (!isTRUE(fit$ok)) return(list(ok = FALSE, message = fit$message))
+  # validated against what THIS fit can offer, rather than match.arg against a
+  # constant: the per-harmonic views exist only when the harmonics do
+  ok_comp <- dance_traj_components(fit)
+  if (!identical(length(component), 1L) || !component %in% ok_comp)
+    return(list(ok = FALSE, message = sprintf(
+      "'%s' is not a component of this fit. Available: %s.",
+      paste(component, collapse = ", "), paste(ok_comp, collapse = ", "))))
   spec <- fit$spec
   if (is.null(times))
     times <- seq(min(spec$data$t), max(spec$data$t), length.out = n_time)
@@ -211,7 +260,7 @@ dance_traj_predict <- function(fit, times = NULL, conf = 0.95,
   rownames(out) <- NULL
   list(ok = TRUE, table = out, cells = grid$.cell, grid = grid,
        component = component,
-       component_label = unname(DANCE_TRAJ_COMPONENT_LABEL[component]),
+       component_label = dance_traj_component_label(component, spec$period),
        times = times, conf = conf, band = band, multiplier = mult, ddf = ddf,
        covariates_held_at = if (length(spec$covariates))
          sprintf("covariate(s) %s held at their sample mean",

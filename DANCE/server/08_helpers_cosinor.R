@@ -661,6 +661,18 @@ dance_clock_label <- function(t, period = 24, show_day = TRUE, with_minutes = TR
   out
 }
 
+# An angle on an acrophase dial IS a clock time, and until now the only way to
+# read one was off the tick labels by eye. The dial for harmonic h spans
+# period/h, so a full turn is the effective period and the angle converts
+# linearly before the origin is added back. Used for the hover label, so a
+# vector on the polar plot and a row in the trajectory table can be compared
+# without arithmetic -- they are the same number or one of them is wrong.
+dance_polar_hover_clock <- function(theta_deg, period = 24, harmonic = 1,
+                                    clock_origin = 0) {
+  elapsed <- (theta_deg / 360) * (period / harmonic)
+  dance_clock_label((elapsed + clock_origin) %% period, period, show_day = FALSE)
+}
+
 # Tick positions on the LINEAR axis, labelled in clock time. Returns NULL when
 # the range is degenerate, so a caller can fall back to plotly's own ticks.
 dance_clock_ticks <- function(t_range, period = 24, target_n = 12) {

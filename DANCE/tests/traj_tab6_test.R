@@ -172,29 +172,46 @@ drive <- function(ff, label) {
           abs(set$results$shape$statistic - set$results$circadian$statistic) < 1e-12,
         "with no trend, shape and circadian ARE the same test (so only one is shown)",
         "shape and circadian differ with no trend in the model")
+    # It used to return a curve of exact zeros. It now REFUSES: a view that can
+    # only draw a flat line is not a component of this model, and offering it
+    # and then drawing nothing is how two of the four selector entries came to
+    # be a zero line and a duplicate.
     tv0 <- e$dance_traj_predict(ff, component = "trend", n_time = 10)
-    chk(max(abs(tv0$table$fit)) < 1e-12,
-        "and the nonperiodic view is identically zero (so it is not offered)",
-        "the nonperiodic view is non-zero with no trend fitted")
+    chk(!isTRUE(tv0$ok) && grepl("not a component of this fit", tv0$message %||% ""),
+        "and the nonperiodic view is refused outright, not drawn as zeros",
+        "the nonperiodic view was accepted on a model with no trend")
+    chk(!any(c("trend", "baseline_harm") %in% e$dance_traj_components(ff)),
+        "neither trend view is offered for this fit",
+        "a trend view is still offered with no trend fitted")
   }
 
-  # 3. the four component views, each with a band
-  pv <- lapply(e$DANCE_TRAJ_COMPONENTS, function(cc)
-    e$dance_traj_predict(ff, component = cc, n_time = 40))
-  names(pv) <- e$DANCE_TRAJ_COMPONENTS
+  # 3. the component views the FIT offers, each with a band
+  comps <- e$dance_traj_components(ff)
+  pv <- lapply(comps, function(cc) e$dance_traj_predict(ff, component = cc, n_time = 40))
+  names(pv) <- comps
   chk(all(vapply(pv, function(p) isTRUE(p$ok) && all(is.finite(p$table$fit)), logical(1))),
-      "all four component views render, per design cell",
+      sprintf("all %d component views render, per design cell", length(comps)),
       "a component view failed")
-  # the identity that makes them views of ONE model rather than four models
-  fl <- pv$full$table; bh <- pv$baseline_harm$table; tr <- pv$trend$table
-  chk(max(abs(fl$fit - (bh$fit + tr$fit))) < 1e-8,
-      sprintf("full == baseline+harmonics plus trend (max diff %.1e)",
-              max(abs(fl$fit - (bh$fit + tr$fit)))),
-      "the component views do not decompose the full trajectory")
-  t0 <- tr$t == min(tr$t)
-  chk(max(abs(tr$fit[t0])) < 1e-9 && max(abs(tr$hi[t0] - tr$lo[t0])) < 1e-9,
-      "the nonperiodic view is zero at the reference time, band included",
-      "the trend view is not pinned to zero at the origin")
+  # the identity that makes them views of ONE model rather than several models
+  if (all(c("baseline_harm", "trend") %in% comps)) {
+    fl <- pv$full$table; bh <- pv$baseline_harm$table; tr <- pv$trend$table
+    chk(max(abs(fl$fit - (bh$fit + tr$fit))) < 1e-8,
+        sprintf("full == baseline+harmonics plus trend (max diff %.1e)",
+                max(abs(fl$fit - (bh$fit + tr$fit)))),
+        "the component views do not decompose the full trajectory")
+    t0 <- tr$t == min(tr$t)
+    chk(max(abs(tr$fit[t0])) < 1e-9 && max(abs(tr$hi[t0] - tr$lo[t0])) < 1e-9,
+        "the nonperiodic view is zero at the reference time, band included",
+        "the trend view is not pinned to zero at the origin")
+  }
+  # and each harmonic on its own sums back to the harmonics view
+  hk <- grep("^harmonic[0-9]+$", comps, value = TRUE)
+  if (length(hk)) {
+    tot <- Reduce(`+`, lapply(hk, function(k) pv[[k]]$table$fit))
+    chk(max(abs(tot - pv$harmonics$table$fit)) < 1e-9,
+        sprintf("the %d per-harmonic views sum to 'harmonics only'", length(hk)),
+        "the per-harmonic views do not sum to the harmonics view")
+  }
 
   # 4. difference curve
   cells <- e$dance_traj_cell_grid(ff$spec)$.cell
