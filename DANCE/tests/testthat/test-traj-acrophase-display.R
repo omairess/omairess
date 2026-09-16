@@ -147,3 +147,145 @@ test_that("the peak search is confined to one period and says its resolution", {
   expect_true(all(pk$table$peak_t >= pk$window[1] & pk$table$peak_t <= pk$window[2]))
   expect_lt(pk$resolution_min, 2)            # sub-two-minute grid
 })
+
+# ==============================================================================
+# The peak row shipped with the clock offset LEFT OUT: the table converted
+# model-elapsed hours with `peak_t %% period`, so on a study starting at 08:00 a
+# peak at 08:00 (+1d) was reported as 00:00. The previous test checked peak_t --
+# the elapsed value, which was right -- and never the number a reader sees.
+# The conversion now lives in the helper, and these check it there.
+# ==============================================================================
+
+# Two fixtures, because the formula has two parts and ONE fixture can only pin
+# one of them. The app builds its model on an axis that already starts at zero
+# and carries the clock offset separately (t0 = 0, origin = 8), so a conversion
+# that forgets t0 survives every run inside the app. A fit on raw clock times
+# has t0 = 8 AND origin = 8, where the two cancel, so a conversion that forgets
+# the origin survives that one. Only both together fix (t - t0) + origin.
+mk_elapsed <- function(nper = 12, seed = 20) {
+  m <- mk(nper, seed)
+  set.seed(seed)
+  P <- 24; tp <- seq(0, 24, length.out = 13)      # ELAPSED, as the app builds it
+  truth <- c(A = 2.0, B = 1.0)
+  grp <- rep(names(truth), each = nper)
+  Y <- t(sapply(seq_along(grp), function(i) {
+    g <- grp[i]
+    50 + rnorm(1, 0, 6) + 16 * cos(2*pi*((tp + 8) - truth[[g]])/P) +
+      7 * cos(2*pi*2*((tp + 8) - (truth[[g]] - 3))/P) + 0.20 * tp + rnorm(length(tp), 0, 4)
+  }))
+  sp <- e$dance_traj_spec(e$dance_traj_long(
+    Y, tp, sprintf("S%03d", seq_along(grp)), list(Group = grp)), 24, 2, "linear")
+  ff <- e$dance_traj_fit(sp)
+  ff$clock_origin <- 8                            # the offset back to the clock
+  list(fit = ff, truth = truth, period = P)
+}
+
+test_that("the peak carries its own clock time, measured from the BASIS origin", {
+  skip_if_not_installed("lme4")
+  for (nm in c("raw clock axis", "elapsed axis, as the app builds it")) {
+    m <- if (identical(nm, "raw clock axis")) mk() else mk_elapsed()
+    skip_if_not(isTRUE(m$fit$ok))
+    sp <- m$fit$spec; P <- sp$period; co <- m$fit$clock_origin
+    pk <- e$dance_traj_curve_peaks(m$fit, "full")
+    expect_true(isTRUE(pk$ok), info = nm)
+    for (i in seq_len(nrow(pk$table))) {
+      r <- pk$table[i, ]
+      expect_equal(r$peak_clock, (r$peak_t - sp$t0 + co) %% P, info = nm)
+      expect_equal(r$trough_clock, (r$trough_t - sp$t0 + co) %% P, info = nm)
+    }
+    expect_equal(pk$window_clock, (pk$window - sp$t0 + co) %% P, info = nm)
+    if (!identical(nm, "raw clock axis")) {
+      # on the app's axis the origin is what the old code dropped, and dropping
+      # it must give a DIFFERENT answer or this proves nothing
+      expect_equal(sp$t0, 0)
+      expect_false(isTRUE(all.equal(pk$table$peak_clock, pk$table$peak_t %% P)))
+    } else {
+      # here t0 and the origin cancel, which is why the raw-clock fixture alone
+      # could never have caught the missing origin
+      expect_equal(sp$t0, co)
+    }
+  }
+})
+
+test_that("with one harmonic and no trend, the curve peak IS the acrophase", {
+  skip_if_not_installed("lme4"); skip_if_not_installed("emmeans")
+  # the one configuration where the two are the same number, so the peak search
+  # can be checked against an independent quantity rather than against itself
+  set.seed(44)
+  tp <- seq(8, 32, length.out = 25)
+  grp <- rep(c("A", "B"), each = 14)
+  Y <- t(sapply(seq_along(grp), function(i)
+    40 + rnorm(1, 0, 4) + 12 * cos(2 * pi * (tp - 2) / 24) + rnorm(length(tp), 0, 2)))
+  sp <- e$dance_traj_spec(e$dance_traj_long(
+    Y, tp, sprintf("S%03d", seq_along(grp)), list(Group = grp)), 24, 1, "none")
+  ff <- e$dance_traj_fit(sp); skip_if_not(isTRUE(ff$ok))
+  ff$clock_origin <- sp$t0
+  pk <- e$dance_traj_curve_peaks(ff, "full")
+  co <- e$dance_traj_cell_coefs(ff, 1); skip_if_not(isTRUE(co$ok))
+  ap <- e$dance_traj_amp_phase_ci(co, method = "joint", n_draw = 4000)
+  for (i in seq_len(nrow(ap$table))) {
+    acro <- e$dance_acrophase_clock(hours = ap$table$acrophase_time[i], period = 24,
+                                    harmonic = 1, clock_origin = ff$clock_origin)$hours
+    peak <- pk$table$peak_clock[match(ap$table$cell[i], pk$table$cell)]
+    gap <- abs(((acro - peak + 12) %% 24) - 12)
+    expect_lt(gap, 0.1)                      # within the search grid
+    expect_lt(abs(((acro - 2 + 12) %% 24) - 12), 0.5)   # and both near the truth
+  }
+})
+
+test_that("nothing renders a peak by converting the elapsed value itself", {
+  # the bug was a call site, not the helper, so the call sites are what is checked
+  src <- paste(vapply(parse(file.path(app_dir, "server/72_harmonic.R")),
+                      function(x) paste(deparse(x), collapse = " "), character(1)),
+               collapse = " ")
+  src <- gsub("[[:space:]]+", " ", src)
+  expect_false(grepl("peak_t %% ", src, fixed = TRUE))
+  expect_true(grepl("peak_clock", src, fixed = TRUE))
+})
+
+test_that("the acrophase interval endpoints span exactly the reported arc", {
+  skip_if_not_installed("lme4"); skip_if_not_installed("emmeans")
+  m <- mk(); skip_if_not(isTRUE(m$fit$ok))
+  co <- e$dance_traj_cell_coefs(m$fit, 1); skip_if_not(isTRUE(co$ok))
+  ap <- e$dance_traj_amp_phase_ci(co, method = "joint", n_draw = 6000)
+  P <- m$period
+  for (i in seq_len(nrow(ap$table))) {
+    r <- ap$table[i, ]
+    if (!isTRUE(r$phase_defined)) next
+    # the arc is the width of the interval the endpoints describe -- the table
+    # shows both, and they have to be the same statement
+    expect_equal((r$acrophase_hi - r$acrophase_lo) %% P, r$acrophase_arc_time,
+                 tolerance = 1e-8)
+    expect_gt(r$acrophase_arc_time, 0)
+    expect_lt(r$acrophase_arc_time, P)
+    # the estimate lies inside its own interval, the short way round
+    d1 <- ((r$acrophase_time - r$acrophase_lo) %% P)
+    expect_lte(d1, r$acrophase_arc_time + 1e-8)
+  }
+})
+
+test_that("an undefined phase reports no interval rather than a misleading one", {
+  skip_if_not_installed("lme4"); skip_if_not_installed("emmeans")
+  # a fixture built so H2 IS weak: a second harmonic well inside the noise, so
+  # its (cos, sin) region covers the origin and its angle means nothing
+  set.seed(77)
+  tp <- seq(0, 24, length.out = 13); nper <- 10
+  grp <- rep(c("A", "B"), each = nper)
+  Y <- t(sapply(seq_along(grp), function(i)
+    40 + rnorm(1, 0, 5) + 14 * cos(2*pi*tp/24) + 0.15 * cos(2*pi*2*tp/24) +
+      rnorm(length(tp), 0, 6)))
+  sp <- e$dance_traj_spec(e$dance_traj_long(
+    Y, tp, sprintf("S%03d", seq_along(grp)), list(Group = grp)), 24, 2, "none")
+  ff <- e$dance_traj_fit(sp); skip_if_not(isTRUE(ff$ok))
+  ff$clock_origin <- 8
+  co <- e$dance_traj_cell_coefs(ff, 2)
+  skip_if_not(isTRUE(co$ok))
+  ap <- e$dance_traj_amp_phase_ci(co, method = "joint", n_draw = 4000)
+  und <- !ap$table$phase_defined
+  expect_true(any(und))          # the fixture must actually produce one
+  expect_true(all(is.na(ap$table$acrophase_lo[und])))
+  expect_true(all(is.na(ap$table$acrophase_hi[und])))
+  expect_true(all(is.na(ap$table$acrophase_arc_time[und])))
+  # the POINT estimate still exists -- it is the interval that does not
+  expect_true(all(is.finite(ap$table$acrophase_time[und])))
+})

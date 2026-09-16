@@ -5721,13 +5721,15 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
                   sprintf("[%.3f, %.3f]", r$amplitude_lo, r$amplitude_hi)))
         drows[[length(drows) + 1L]] <- tags$tr(
           tags$td(style = "padding:3px 12px 3px 0", sprintf("H%d acrophase — %s", h, r$cell)),
-          tags$td(style = "padding:3px 12px 3px 0;color:#777", "circular"),
+          tags$td(style = "padding:3px 12px 3px 0;color:#777",
+                  if (isTRUE(r$phase_defined)) "circular" else "circular (weak)"),
           # CLOCK TIME, like every other acrophase this app reports. The derived
           # column holds MODEL-ELAPSED hours on the harmonic's own effective
           # period; converting is what the legacy tables already do, and showing
           # one convention here and another there is how an acrophase gets
           # misread by exactly the offset between them.
-          tags$td(style = "padding:3px 12px 3px 0;font-family:monospace",
+          tags$td(style = sprintf("padding:3px 12px 3px 0;font-family:monospace;%s",
+                                  if (isTRUE(r$phase_defined)) "" else "color:#aaa"),
                   dance_clock_label(
                     # $hours, NOT $first. dance_acrophase_clock() returns
                     # hours / all_hours / elapsed / effective_period / harmonic /
@@ -5741,10 +5743,24 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
                                           period = ff$spec$period, harmonic = h,
                                           clock_origin = ff$clock_origin %||% 0)$hours,
                     ff$spec$period, show_day = FALSE)),
+          # THE INTERVAL, in the same clock as the estimate. An arc width alone
+          # says how PRECISE the phase is but not WHERE it is, so it could not be
+          # quoted or compared without doing the arithmetic by hand. Both now:
+          # the endpoints to report, the width to compare across cells. An
+          # interval crossing the period boundary is marked, because
+          # "[22:40, 01:15]" read left to right looks like an empty range.
           tags$td(style = "padding:3px 0;font-family:monospace",
-                  if (isTRUE(r$phase_defined))
-                    sprintf("arc %.2f h", r$acrophase_arc_time)
-                  else "undefined (amplitude may be zero)"))
+                  if (isTRUE(r$phase_defined)) {
+                    to_clock <- function(x) dance_clock_label(
+                      dance_acrophase_clock(hours = x, period = ff$spec$period,
+                                            harmonic = h,
+                                            clock_origin = ff$clock_origin %||% 0)$hours,
+                      ff$spec$period, show_day = FALSE)
+                    sprintf("[%s, %s]%s  arc %.2f h", to_clock(r$acrophase_lo),
+                            to_clock(r$acrophase_hi),
+                            if (isTRUE(r$acrophase_wraps)) " (wraps)" else "",
+                            r$acrophase_arc_time)
+                  } else "no interval: the (cos, sin) region includes the origin"))
       }
     }
     # WHERE THE DRAWN CURVE PEAKS, per cell. Asked for directly: the H1 acrophase
@@ -5761,11 +5777,12 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
                   sprintf("Fitted curve peak — %s", pr$cell)),
           tags$td(style = "padding:3px 12px 3px 0;color:#777", "plotted"),
           tags$td(style = "padding:3px 12px 3px 0;font-family:monospace",
-                  dance_clock_label(pr$peak_t %% ff$spec$period, ff$spec$period,
-                                    show_day = FALSE)),
-          tags$td(style = "padding:3px 0;font-family:monospace;color:#777",
+                  dance_clock_label(pr$peak_clock, ff$spec$period, show_day = FALSE)),
+          tags$td(style = sprintf("padding:3px 0;font-family:monospace;color:%s",
+                                  if (isTRUE(pr$peak_interior)) "#777" else "#c0392b"),
                   if (isTRUE(pr$peak_interior)) sprintf("value %.2f", pr$peak_fit)
-                  else sprintf("value %.2f (at the window edge)", pr$peak_fit)))
+                  else sprintf("value %.2f — still rising here, so this is the end of the search window and NOT a peak",
+                               pr$peak_fit)))
       }
     }
     tagList(

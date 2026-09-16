@@ -889,13 +889,30 @@ dance_traj_curve_peaks <- function(fit, component = "full", n_time = 1441L,
   times <- seq(spec$t0, t_hi, length.out = max(51L, as.integer(n_time)))
   pr <- dance_traj_predict(fit, times = times, component = component)
   if (!isTRUE(pr$ok)) return(NULL)
+  # THE CLOCK TIME IS COMPUTED HERE, not by whoever renders the row. The first
+  # version returned only peak_t -- model-elapsed hours -- and the table
+  # converted it with `peak_t %% period`, forgetting to add the origin back. On
+  # a study starting at 08:00 that reported an 08:00 (+1d) peak as 00:00. The
+  # offset now travels with the number, so a caller cannot convert it wrongly,
+  # and the test checks the CLOCK value rather than the elapsed one.
+  # clock = (t - t0) + origin. The ELAPSED part is t - t0, not t: peak_t is an
+  # absolute value on whatever axis the model was built on, and only the offset
+  # FROM THE BASIS ORIGIN is what clock_origin is the clock time of. In this app
+  # the model axis already starts at zero, so t0 = 0 and the two agree -- which
+  # is exactly why leaving t0 out would survive every run here and be wrong for
+  # anyone who fitted on raw clock times.
+  co <- fit$clock_origin %||% 0
+  P <- spec$period
+  to_clock <- function(t) (t - spec$t0 + co) %% P
   sp <- split(pr$table, pr$table$cell)
   out <- do.call(rbind, lapply(names(sp), function(cl) {
     d <- sp[[cl]]
     i <- which.max(d$fit); j <- which.min(d$fit)
     data.frame(cell = cl,
                peak_t = d$t[i], peak_fit = d$fit[i],
+               peak_clock = to_clock(d$t[i]),
                trough_t = d$t[j], trough_fit = d$fit[j],
+               trough_clock = to_clock(d$t[j]),
                # on the boundary the maximum inside the window is not a turning
                # point of the curve, and saying so is the difference between a
                # peak and the end of the search
@@ -904,6 +921,7 @@ dance_traj_curve_peaks <- function(fit, component = "full", n_time = 1441L,
   }))
   rownames(out) <- NULL
   list(ok = TRUE, table = out, component = component,
-       window = c(spec$t0, t_hi), clock_origin = spec$t0,
+       window = c(spec$t0, t_hi), clock_origin = co,
+       window_clock = to_clock(c(spec$t0, t_hi)),
        resolution_min = 60 * (t_hi - spec$t0) / (length(times) - 1))
 }
