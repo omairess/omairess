@@ -807,3 +807,54 @@ dance_traj_participant_curves <- function(fit, harmonic = 1, conf = 0.95) {
          "between-participant SD. A histogram or boxplot of this column must say",
          "so on its face, or it will be read as the population distribution."))
 }
+
+# ------------------------------------------------------------------------------
+# WHERE THE DRAWN CURVE ACTUALLY PEAKS
+# ------------------------------------------------------------------------------
+# Three different times get called "the peak" and they are not the same number:
+#
+#   H1 acrophase        the maximum of the FIRST HARMONIC ALONE. With a second
+#                       harmonic in the model this is not where the curve peaks:
+#                       H2 adds its own maximum, and the sum peaks somewhere
+#                       between them, pulled towards whichever is larger.
+#   curve peak          the maximum of the fitted trajectory AS DRAWN -- level,
+#                       trend and every harmonic together. This is the time a
+#                       reader takes off the plot, and it is what this returns.
+#   two-stage acrophase what a per-participant single-harmonic cosinor gives,
+#                       averaged over the group. A one-harmonic no-trend fit has
+#                       to absorb H2 and the trend into its single cosine, so its
+#                       acrophase is displaced again, by however much they carry.
+#
+# Reading any one of them against a plot of another is how an acrophase gets
+# called wrong when nothing is. The peak is found by evaluating the fitted curve
+# on a fine grid over ONE period from the origin -- a grid, not calculus, because
+# the sum of harmonics plus an arbitrary trend has no closed-form maximum.
+dance_traj_curve_peaks <- function(fit, component = "full", n_time = 1441L,
+                                   within_period = TRUE) {
+  if (!isTRUE(fit$ok)) return(NULL)
+  spec <- fit$spec
+  t_hi <- if (isTRUE(within_period))
+    min(spec$t0 + spec$period, max(spec$data$t, na.rm = TRUE))
+  else max(spec$data$t, na.rm = TRUE)
+  if (!is.finite(t_hi) || t_hi <= spec$t0) return(NULL)
+  times <- seq(spec$t0, t_hi, length.out = max(51L, as.integer(n_time)))
+  pr <- dance_traj_predict(fit, times = times, component = component)
+  if (!isTRUE(pr$ok)) return(NULL)
+  sp <- split(pr$table, pr$table$cell)
+  out <- do.call(rbind, lapply(names(sp), function(cl) {
+    d <- sp[[cl]]
+    i <- which.max(d$fit); j <- which.min(d$fit)
+    data.frame(cell = cl,
+               peak_t = d$t[i], peak_fit = d$fit[i],
+               trough_t = d$t[j], trough_fit = d$fit[j],
+               # on the boundary the maximum inside the window is not a turning
+               # point of the curve, and saying so is the difference between a
+               # peak and the end of the search
+               peak_interior = i > 1L && i < nrow(d),
+               stringsAsFactors = FALSE)
+  }))
+  rownames(out) <- NULL
+  list(ok = TRUE, table = out, component = component,
+       window = c(spec$t0, t_hi), clock_origin = spec$t0,
+       resolution_min = 60 * (t_hi - spec$t0) / (length(times) - 1))
+}

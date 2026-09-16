@@ -5655,14 +5655,43 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
           # misread by exactly the offset between them.
           tags$td(style = "padding:3px 12px 3px 0;font-family:monospace",
                   dance_clock_label(
+                    # $hours, NOT $first. dance_acrophase_clock() returns
+                    # hours / all_hours / elapsed / effective_period / harmonic /
+                    # clock_origin, and its COMMENT on the first element reads
+                    # "first maximum on the clock" -- which is where $first came
+                    # from. R returns NULL for a name that is not there, so this
+                    # cell has been rendering EMPTY, silently, since it was
+                    # written: no error, no NA, just a blank column where the
+                    # acrophase should be.
                     dance_acrophase_clock(hours = r$acrophase_time,
                                           period = ff$spec$period, harmonic = h,
-                                          clock_origin = ff$clock_origin %||% 0)$first,
+                                          clock_origin = ff$clock_origin %||% 0)$hours,
                     ff$spec$period, show_day = FALSE)),
           tags$td(style = "padding:3px 0;font-family:monospace",
                   if (isTRUE(r$phase_defined))
                     sprintf("arc %.2f h", r$acrophase_arc_time)
                   else "undefined (amplitude may be zero)"))
+      }
+    }
+    # WHERE THE DRAWN CURVE PEAKS, per cell. Asked for directly: the H1 acrophase
+    # did not match the peaks visible in the trajectory plot, and it is not
+    # supposed to -- H1 is one harmonic, the plotted curve is level + trend + H1 +
+    # H2. Showing both, next to each other, is cheaper than explaining the
+    # difference every time.
+    pk <- tryCatch(dance_traj_curve_peaks(ff, "full"), error = function(e) NULL)
+    if (!is.null(pk) && isTRUE(pk$ok)) {
+      for (i in seq_len(nrow(pk$table))) {
+        pr <- pk$table[i, ]
+        drows[[length(drows) + 1L]] <- tags$tr(
+          tags$td(style = "padding:3px 12px 3px 0",
+                  sprintf("Fitted curve peak — %s", pr$cell)),
+          tags$td(style = "padding:3px 12px 3px 0;color:#777", "plotted"),
+          tags$td(style = "padding:3px 12px 3px 0;font-family:monospace",
+                  dance_clock_label(pr$peak_t %% ff$spec$period, ff$spec$period,
+                                    show_day = FALSE)),
+          tags$td(style = "padding:3px 0;font-family:monospace;color:#777",
+                  if (isTRUE(pr$peak_interior)) sprintf("value %.2f", pr$peak_fit)
+                  else sprintf("value %.2f (at the window edge)", pr$peak_fit)))
       }
     }
     tagList(
@@ -5675,7 +5704,15 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
           "zero. Acrophases are <b>clock times</b>; the arc beside each is its width, in",
           "hours, on that harmonic's own effective period. The baseline row is the fitted",
           "value at the reference time, which is <b>not</b> a MESOR when a trend is",
-          "present."))),
+          "present.",
+          "<br><b>An H1 acrophase is not the peak of the drawn curve.</b> H1 is the first",
+          "harmonic alone; the plotted trajectory is level + trend + every harmonic, and",
+          "H2 has its own maximum that shifts where the sum peaks. The <i>fitted curve",
+          "peak</i> rows give the time a reader takes off the plot. A third number again",
+          "is the two-stage acrophase in the polar plots: a per-participant",
+          "single-harmonic cosinor has to absorb H2 and the trend into one cosine, which",
+          "displaces it further. Compare like with like, and judge any gap against the",
+          "<b>arc</b> beside the acrophase, not against the eye."))),
       # emmeans turns its df adjustment off above 3000 observations and says so
       # on the CONSOLE, which nobody running a Shiny app is reading. The choice
       # it makes is a statistical one, so it belongs on the screen.
