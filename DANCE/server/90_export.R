@@ -1485,7 +1485,7 @@
                     mx$n_permutations, format(mx$alpha), mx$correction))
         add("for (nm in c('within','between','interaction'))")
         add("  cat(nm, ' global p = ', mixed_fit[[nm]]$global_p, '\\n', sep = '')")
-      } else if(identical(mx$kind, "fanova") || identical(mx$kind, "model")) {
+      } else {
         emit_kernel("dance_mixed_fanova")
         emit_kernel("dance_mixed_fanova_curves")
         add(sprintf("mixed_fit <- dance_mixed_fanova(mixed_long, k_time = %d, k_subject = %d, method = '%s')",
@@ -1495,12 +1495,6 @@
         add("cat('AIC full', mixed_fit$aic_full, 'vs additive', mixed_fit$aic_additive,")
         add("    ' delta', mixed_fit$aic_delta, '\\n')")
         add("mixed_curves <- dance_mixed_fanova_curves(mixed_fit)")
-      } else {
-        emit_kernel("dance_mixed_cosinor")
-        add(sprintf("mixed_fit <- dance_mixed_cosinor(mixed_long, period = %s, n_harmonics = %d)",
-                    format(mx$period), mx$n_harmonics))
-        add("print(mixed_fit$cells)")
-        add("print(mixed_fit$tests)")
       }
       add("")
     }

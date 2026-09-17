@@ -145,12 +145,6 @@ test_that("alpha is clamped rather than producing invalid hex", {
 })
 
 # --------------------------------------------- no stray palettes survive
-test_that("rainbow() is gone from the pairwise plots", {
-  src <- paste(readLines(file.path(app_dir, "server/73_cosinor_pairwise.R"), warn = FALSE),
-               collapse = "\n")
-  expect_false(grepl("rainbow(n_groups", src, fixed = TRUE))
-})
-
 test_that("the harmonic tab no longer hard-codes its own hues", {
   src <- paste(readLines(file.path(app_dir, "server/72_harmonic.R"), warn = FALSE),
                collapse = "\n")
@@ -221,7 +215,8 @@ test_that("the acrophase dial does not stack its radial axis on 12 o'clock", {
   src <- paste(readLines(file.path(app_dir, "server/72_harmonic.R"), warn = FALSE),
                collapse = "\n")
   blk <- sub(".*output\\$harmonic_polar_plot", "", src)
-  blk <- substr(blk, 1, 12000)
+  # the renderer grew a mixed-effects branch ahead of its layout call
+  blk <- substr(blk, 1, 40000)
   # angle = 90 put the radial title and its ticks through the topmost angular
   # label and up into the subtitle; 45 deg is midway between two 30 deg ticks
   expect_false(grepl("tickangle = 0, angle = 90", blk, fixed = TRUE))

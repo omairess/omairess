@@ -89,22 +89,21 @@ test_that("P18.1: every derived result is cleared when the data changes", {
 
 test_that("P18.1: the slots this review found are declared and cleared", {
   cleared <- reset_clears()
-  for (nm in c("mixed_results", "hp_pairwise_all", "hp_pairwise_param",
-               "hp_pairwise_correction", "hp_acrophase_param",
-               "hp_acrophase_differs"))
+  for (nm in c("mixed_results", "harmonic_model"))
     expect_true(nm %in% cleared, info = nm)
   # and declared in the state, so they exist before a module invents them
   decl <- paste(readLines(file.path(app_dir, "server/00_state.R"), warn = FALSE),
                 collapse = "\n")
-  for (nm in c("mixed_results", "hp_pairwise_all", "hp_acrophase_differs"))
+  for (nm in c("mixed_results", "harmonic_model"))
     expect_true(grepl(paste0(nm, "\\s*=\\s*NULL"), decl), info = nm)
+  # the legacy two-stage pairwise module is gone, and so are its slots
+  expect_false(grepl("hp_pairwise", decl, fixed = TRUE))
 })
 
 test_that("P18.1: the reset actually nulls them, run for real", {
   e <- state_env()
   v <- new.env(parent = emptyenv())
-  slots <- c("mixed_results", "hp_pairwise_all", "hp_acrophase_differs",
-             "pca_results", "harmonic_model", "fanova_results")
+  slots <- c("mixed_results", "pca_results", "harmonic_model", "fanova_results")
   for (nm in slots) assign(nm, list(ok = TRUE), envir = v)
   e$dance_reset_analyses(v)
   for (nm in slots) expect_null(get(nm, envir = v), info = nm)
@@ -116,11 +115,11 @@ test_that("P18.1: a re-smooth keeps the mixed result but clears the rest", {
   # SMOOTHED curves does not.
   e <- state_env()
   v <- new.env(parent = emptyenv())
-  for (nm in c("mixed_results", "pca_results", "harmonic_model", "hp_pairwise_all"))
+  for (nm in c("mixed_results", "pca_results", "harmonic_model"))
     assign(nm, list(ok = TRUE), envir = v)
   e$dance_reset_analyses(v, keep_smoothing = TRUE)
   expect_false(is.null(get("mixed_results", envir = v)))
-  for (nm in c("pca_results", "harmonic_model", "hp_pairwise_all"))
+  for (nm in c("pca_results", "harmonic_model"))
     expect_null(get(nm, envir = v), info = nm)
 
   # and smoothing itself never rewrites values$data, which is what makes that
@@ -136,7 +135,7 @@ test_that("P18.2: the generator emits the mixed kernels", {
               collapse = "\n")
   expect_true(grepl("12. MIXED DESIGN", ex, fixed = TRUE))
   for (k in c("dance_mixed_long", "dance_mixed_check", "dance_mixed_balance",
-              "dance_mixed_fanova", "dance_mixed_fanova_curves", "dance_mixed_cosinor"))
+              "dance_mixed_fanova", "dance_mixed_fanova_curves"))
     expect_true(grepl(paste0('emit_kernel("', k, '")'), ex, fixed = TRUE), info = k)
   # the script must say which data the mixed model saw, since the rest of the
   # pipeline runs on smoothed curves
@@ -175,7 +174,7 @@ test_that("P18.4: the raw-observations choice is stated where it is read", {
   expect_false(file.exists(file.path(app_dir, "ui/55_mixed.R")))
 
   # and every entry point really reads values$data, not values$smooth_data
-  for (f in c("server/51b_fanova_mixed_views.R", "server/73_cosinor_pairwise.R")) {
+  for (f in c("server/51b_fanova_mixed_views.R")) {
     src <- paste(readLines(file.path(app_dir, f), warn = FALSE), collapse = "\n")
     if (!grepl("dance_mixed_long(", src, fixed = TRUE)) next
     expect_true(grepl("dance_mixed_long(values$data", src, fixed = TRUE), info = f)

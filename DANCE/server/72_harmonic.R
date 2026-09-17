@@ -427,6 +427,20 @@
   output$harmonic_subject_selector <- renderUI({
     req(values$harmonic_model)
     mod <- values$harmonic_model
+    if (harmonic_is_mixed()) {
+      # ONE model: the cell curves are the fit; a participant is that cell's
+      # curve plus their conditional modes. Chosen by curve id, not row index,
+      # because a within-participant design gives a participant several curves.
+      ff <- harmonic_traj(); if (!isTRUE(ff$ok)) return(NULL)
+      d <- ff$spec$data
+      cv <- if ("curve" %in% names(d)) "curve" else "subject"
+      curves <- unique(as.character(d[[cv]]))
+      return(selectInput("harmonic_subject_select", "Show:",
+                  choices = c("Cell curves (the fitted model)" = "mean",
+                              "All participants (shrunken) over the cells" = "all",
+                              stats::setNames(curves, paste("Participant", curves))),
+                  selected = "mean"))
+    }
     if(!is.null(mod$individual_fits)) {
       n_subj <- length(mod$individual_fits)
       
@@ -463,45 +477,7 @@
     }
   })
   
-  # Harmonic selector for parameter distribution
-  output$harmonic_selector_dist <- renderUI({
-    req(values$harmonic_model)
-    mod <- values$harmonic_model
-    if(mod$n_harmonics > 1) {
-      fluidRow(
-        column(4,
-               selectInput("selected_harmonic_dist", "Display Harmonic:", 
-                           choices = setNames(1:mod$n_harmonics, paste("H", 1:mod$n_harmonics, sep="")),
-                           selected = 1)
-        ),
-        column(8,
-               helpText("Select which harmonic to display in the amplitude and acrophase distributions.")
-        )
-      )
-    } else {
-      helpText("Only one harmonic fitted (fundamental).")
-    }
-  })
   
-  # Harmonic selector for group comparison
-  output$harmonic_selector_group <- renderUI({
-    req(values$harmonic_model)
-    mod <- values$harmonic_model
-    if(mod$n_harmonics > 1) {
-      fluidRow(
-        column(4,
-               selectInput("selected_harmonic_group", "Compare Harmonic:", 
-                           choices = setNames(1:mod$n_harmonics, paste("H", 1:mod$n_harmonics, sep="")),
-                           selected = 1)
-        ),
-        column(8,
-               helpText("Select which harmonic to use for group comparisons.")
-        )
-      )
-    } else {
-      helpText("Only one harmonic fitted (fundamental).")
-    }
-  })
   
 
   # ==============================================================================
@@ -1679,18 +1655,6 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
                             t_shifted <- newtime - t_offset
                             A_sat * (1 - exp(-t_shifted / tau))
                           },
-                          "two_process" = {
-                            if(!is.null(fit$S_trajectory) && !is.null(fit$time) &&
-                               "beta_S" %in% names(coefs)) {
-                              S_interp <- tryCatch({
-                                approx(fit$time, fit$S_trajectory, xout = newtime,
-                                       rule = 2, ties = "ordered")$y
-                              }, error = function(e) rep(NA_real_, length(newtime)))
-                              coefs["beta_S"] * S_interp
-                            } else {
-                              rep(0, length(newtime))
-                            }
-                          },
                           rep(0, length(newtime))
       )
       pred <- pred + trend_val
@@ -1698,13 +1662,13 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     
     # Determine coefficient offset based on trend type
     n_trend_coefs <- switch(trend_type,
-                            "none" = 0, "linear" = 1, "log" = 1, "exp_sat" = 0, "two_process" = 0, 0)
+                            "none" = 0, "linear" = 1, "log" = 1, "exp_sat" = 0, 0)
     coef_offset <- 1 + n_trend_coefs
 
     if(component == "total" || component == "all") {
       for(h in 1:n_harmonics) {
         omega <- 2 * pi * h / period
-        if(trend_type == "exp_sat" || trend_type == "two_process") {
+        if(trend_type == "exp_sat") {
           beta_cos <- coefs[paste0("b_cos", h)]
           beta_sin <- coefs[paste0("b_sin", h)]
         } else {
@@ -1718,7 +1682,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     } else if(is.numeric(component) && component >= 1 && component <= n_harmonics) {
       h <- component
       omega <- 2 * pi * h / period
-      if(trend_type == "exp_sat" || trend_type == "two_process") {
+      if(trend_type == "exp_sat") {
         beta_cos <- coefs[paste0("b_cos", h)]
         beta_sin <- coefs[paste0("b_sin", h)]
       } else {
@@ -1750,7 +1714,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     
     # Determine coefficient offset
     n_trend_coefs <- switch(trend_type,
-                            "none" = 0, "linear" = 1, "log" = 1, "exp_sat" = 0, "two_process" = 0, 0)
+                            "none" = 0, "linear" = 1, "log" = 1, "exp_sat" = 0, 0)
     coef_offset <- 1 + n_trend_coefs
     
     components <- list()
@@ -1767,18 +1731,6 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
                             tau <- coefs["tau"]
                             A_sat * (1 - exp(-(newtime - t_offset) / tau))
                           },
-                          "two_process" = {
-                            if(!is.null(fit$S_trajectory) && !is.null(fit$time) &&
-                               "beta_S" %in% names(coefs)) {
-                              S_interp <- tryCatch({
-                                approx(fit$time, fit$S_trajectory, xout = newtime,
-                                       rule = 2, ties = "ordered")$y
-                              }, error = function(e) rep(NA_real_, length(newtime)))
-                              coefs["beta_S"] * S_interp
-                            } else {
-                              rep(0, length(newtime))
-                            }
-                          },
                           rep(0, length(newtime))
       )
       components$trend <- trend_val
@@ -1786,7 +1738,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
 
     for(h in 1:n_harmonics) {
       omega <- 2 * pi * h / period
-      if(trend_type == "exp_sat" || trend_type == "two_process") {
+      if(trend_type == "exp_sat") {
         beta_cos <- coefs[paste0("b_cos", h)]
         beta_sin <- coefs[paste0("b_sin", h)]
       } else {
@@ -1863,8 +1815,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
                     "linear" = "Linear Trend",
                     "log" = "Log Trend",
                     "exp_sat" = "Exp. Saturation",
-                    "two_process" = "Process S",
-                    "Process S"  # default
+                    trend_type
     )
     if(nchar(prefix) > 0) paste(label, prefix) else label
   }
@@ -1893,9 +1844,6 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     if(trend_type == "linear") return("trend_linear" %in% names(params))
     if(trend_type == "log") return("trend_log" %in% names(params))
     if(trend_type == "exp_sat") return("A_sat" %in% names(params) || "tau" %in% names(params))
-    if(trend_type == "two_process") {
-      return("beta_S" %in% names(params) && "tau_w" %in% names(params) && "tau_s" %in% names(params))
-    }
     return(FALSE)
   }
   
@@ -1987,6 +1935,12 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       # wrong one; removing it is the honest version of that warning.
       # ======================================================================
       Y <- values$data
+      # WHICH ESTIMATOR. Everything downstream reads mod$approach and shows the
+      # output of that estimator only. The per-participant fits below run under
+      # both approaches: under mixed-effects they are not displayed, but they
+      # are the same cheap OLS pass and keep the model object one shape for the
+      # export and the report.
+      approach <- input$harmonic_approach %||% "mixed"
       n_subjects <- nrow(Y)
       n_time <- ncol(Y)
       period <- input$harmonic_period
@@ -2219,13 +2173,13 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       # Default is "midnight" -- the current behaviour -- so nothing downstream
       # changes unless the user asks for it.
       # ======================================================================
-      time_origin <- input$harmonic_time_origin %||% "first_observation"   # P6.7
-      time_vec_model <- time_vec
-      origin_shift <- 0
-      if(identical(time_origin, "first_observation")) {
-        origin_shift <- min(time_vec, na.rm = TRUE)
-        time_vec_model <- time_vec - origin_shift
-      }
+      # ALWAYS the first observation. The midnight origin was kept "for
+      # continuity with earlier runs"; it put the trend and the harmonics on two
+      # different anchors and made the intercept the value at neither. There is
+      # no analysis that needs it, so it is not offered.
+      time_origin <- "first_observation"
+      origin_shift <- min(time_vec, na.rm = TRUE)
+      time_vec_model <- time_vec - origin_shift
 
       # Store time offsets for prediction
       t_offset_global <- min(time_vec_model)
@@ -2923,7 +2877,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       
       # Bootstrap CIs if requested
       boot_results <- NULL
-      if(isTRUE(input$harmonic_bootstrap)) {
+      if(isTRUE(input$harmonic_bootstrap) && identical(approach, "two_stage")) {
         B <- input$harmonic_n_boot
         boot_mesor <- numeric(B)
         boot_amplitude <- numeric(B)
@@ -3028,7 +2982,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       # minutes of compute on 1305 subjects, and it should not run unasked.
       # ======================================================================
       model_selection <- NULL
-      if(isTRUE(input$harmonic_model_selection)) {
+      if(isTRUE(input$harmonic_model_selection) && identical(approach, "two_stage")) {
         # AUDIT (P14). The grid used to be hardcoded here as
         # c("none", "linear", "exp_sat") x 1:3. It omitted the `log` trend the
         # UI offers -- so a user who selected it saw a table their own model was
@@ -3093,7 +3047,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       #      wakefulness)
       # ======================================================================
       conditioning <- NULL
-      if(trend_type == "exp_sat" && nrow(individual_params) > 0) {
+      if(identical(approach, "two_stage") && trend_type == "exp_sat" && nrow(individual_params) > 0) {
         conditioning <- list()
 
         cors <- list()
@@ -3198,7 +3152,8 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       }
 
       # Store results
-      values$harmonic_model <- list(
+      hm_new <- list(
+        approach = approach,
         conditioning = conditioning,
         bingham_summary = bingham_summary,
         loocv_is_true_cv = {
@@ -3242,8 +3197,20 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
         subjects_with_nas = subjects_with_nas,
         Y = Y
       )
-      
-      showNotification("Harmonic regression complete!", type = "message")
+      if (identical(approach, "mixed")) {
+        # ONE fitted model for the whole module. Fitted here, once, when the
+        # button is pressed, and carried on the model object -- so the fitted
+        # curves, the polar dial, the individual table, the diagnostics and the
+        # comparison tab are all views of the same object and cannot disagree.
+        hm_new$traj <- fit_harmonic_traj(hm_new)
+        if (!isTRUE(hm_new$traj$ok))
+          showNotification(paste("Mixed-effects fit:", hm_new$traj$message),
+                           type = "error", duration = 15)
+      }
+      values$harmonic_model <- hm_new
+
+      showNotification(if (identical(approach, "mixed")) "Mixed-effects cosinor complete!"
+                       else "Two-stage cosinor complete!", type = "message")
       
     }, error = function(e) {
       showNotification(paste("Error:", e$message), type = "error")
@@ -3281,740 +3248,399 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
 
   # ============================================================================
   # Summary output
+  # ----------------------------------------------------------------------------
+  # One text, two approaches. The panel reads the model object the Run button
+  # stored and prints, in this order: the choices, the fit outcomes, the time
+  # points, the model equation (symbolic, then with the fitted numbers per
+  # group or per design cell), the information criteria of the fitted model,
+  # the model comparison, and the diagnostics. What the old report also carried
+  # -- Rayleigh tests, arithmetic-versus-vector means, the commonality
+  # percentages, the correlation matrix -- lives on the tab that owns it (polar
+  # plot, individual table, diagnostics) and is not repeated here.
   #
-  # CHANGELOG (2026-09-03 audit)
-  #   1.1  the pooled fitted equation is built by dance_format_equation(), the
-  #        same renderer the group equations use. The duplicate builder that
-  #        silently dropped the homeostatic term is gone.
-  #   1.2  both resultants are printed, each labelled with what it is for, and
-  #        the Rayleigh Z comes from the unweighted one.
-  #   1.3  commonality analysis replaces two overlapping marginal R2s. The
-  #        auto-generated dominance verdict is deleted.
-  #   1.4  the fitted constant is called the intercept. A genuine
-  #        rhythm-adjusted mean is computed and called the MESOR.
-  #   1.5  group sizes are reconciled against n fitted; UNASSIGNED is a row.
-  #   1.6  every averaged quantity names the estimator that produced it.
-  #   1.7  fmt2() throughout; DV named; H2 phase convention stated; the
-  #        "(units)" placeholder is gone.
-  #   2.1  the data source is stated and the significance rate is flagged.
-  #   2.3  converged / boundary / failed are reported separately.
-  #   2.4  Delta-AICc table with Akaike weights instead of mean AIC/AICc/BIC.
-  #   2.5  Bingham joint confidence regions.
+  # The report body is a plain function so the on-screen panel and the text
+  # download share it verbatim.
   # ============================================================================
-  # The report body lives in a plain function so the on-screen panel and the
-  # text download share it verbatim.
   .print_harmonic_summary <- function() {
     req(values$harmonic_model)
     mod <- values$harmonic_model
+    mixed <- identical(mod$approach %||% "two_stage", "mixed")
+    ff <- if (mixed) mod$traj else NULL
     period <- mod$period
     nh <- mod$n_harmonics
     trend_type <- mod$trend_type %||% "none"
     params <- mod$individual_params
     pop <- mod$pop_mean_fit
-
     dv <- mod$dv_name %||% "the dependent variable"
     dvu <- mod$dv_units
-    # The clock time that model t = 0 corresponds to. Every acrophase printed
-    # below is converted through it exactly once, by dance_acrophase_label().
     clock_o <- dance_clock_origin(mod)
+    dfm <- input$harmonic_df_method %||% "kr"
 
     hdr <- function(x) cat("\n--- ", x, " ---\n", sep = "")
+    kv  <- function(k, v) cat(sprintf("%-20s %s\n", paste0(k, ":"), v))
+    acro_clock <- function(rad, h)
+      dance_acrophase_label(hours = (rad %% (2 * pi)) * (period / h) / (2 * pi),
+                            period = period, harmonic = h, clock_origin = clock_o)
+    t_first <- min(mod$time_vec, na.rm = TRUE)
+    clock_first <- dance_clock_label(clock_o + t_first, period, show_day = FALSE)
 
-    cat("=== Harmonic Regression (Cosinor Analysis) Results ===\n\n")
+    cat("=== Cosinor (harmonic regression) results ===\n")
 
-    # ---- what is being modelled --------------------------------------------
-    # AUDIT 1.7: the DV was never named. A report that does not say what Y is
-    # cannot be checked for admissibility by anyone reading it.
-    cat("Dependent variable: ", dv,
-        if(!is.null(dvu)) paste0(" (", dvu, ")") else "", "\n", sep = "")
-    if(is.finite(mod$dv_min) || is.finite(mod$dv_max)) {
-      cat("  Admissible range: [",
-          if(is.finite(mod$dv_min)) fmt2(mod$dv_min) else "-Inf", ", ",
-          if(is.finite(mod$dv_max)) fmt2(mod$dv_max) else "Inf", "]\n", sep = "")
+    # ---- 1. the choices -------------------------------------------------------
+    hdr("Choices")
+    kv("Approach", if (mixed)
+         "MIXED-EFFECTS: one model over every observation; participants are random effects"
+       else "TWO-STAGE: one cosinor per participant; the estimates are then compared")
+    kv("Dependent variable", paste0(dv, if (!is.null(dvu)) paste0(" (", dvu, ")") else ""))
+    kv("Admissible range", if (is.finite(mod$dv_min) || is.finite(mod$dv_max))
+         sprintf("[%s, %s]", if (is.finite(mod$dv_min)) fmt2(mod$dv_min) else "-Inf",
+                 if (is.finite(mod$dv_max)) fmt2(mod$dv_max) else "Inf")
+       else "not specified (set one to have the fitted curves checked)")
+    kv("Period", sprintf("%s h, %d harmonic%s (%s)", fmtn(period, 0), nh,
+                         if (nh == 1) "" else "s", dance_harmonic_label(nh)))
+    kv("Trend", switch(trend_type,
+         none = "none (rhythm only)",
+         linear = "linear, beta*t",
+         log = "logarithmic, beta*log(t + 1)",
+         exp_sat = paste0("saturating exponential, A_sat*(1 - e^(-t/tau))",
+                          if (mixed && isTRUE(is.finite(ff$spec$tau)))
+                            sprintf("; tau held at %s h", fmt1(ff$spec$tau)) else ""),
+         trend_type))
+    if (mixed && isTRUE(ff$ok)) {
+      cls <- ff$spec$classification
+      des <- if (length(ff$spec$design_terms)) paste(vapply(ff$spec$design_terms, function(f) {
+        r <- cls[cls$factor == f, ][1, ]
+        sprintf("%s (%s, %d levels)", f, r$role, r$n_levels)
+      }, character(1)), collapse = "; ") else "none -- one trajectory for the whole sample"
+      kv("Design factors", des)
+      kv("Denominator df", switch(dfm, kr = "Kenward-Roger", satterthwaite = "Satterthwaite", dfm))
     } else {
-      cat("  Admissible range: not specified (set it to have fitted values checked)\n")
+      kv("Grouping factor", mod$group_var_name %||% "none")
     }
-    cat("Period: ", fmtn(period, 0), " h\n", sep = "")
-    cat("Number of harmonics: ", nh, "\n", sep = "")
+    kv("Time origin", sprintf("first observation; t = 0 is %s on the clock",
+                              dance_clock_label(clock_o, period, show_day = FALSE)))
+    kv("Data", paste0("raw observations",
+                      if (isTRUE((mod$subjects_with_nas %||% 0) > 0))
+                        sprintf(" (%d participant(s) have missing values; the fit uses the observations present)",
+                                as.integer(mod$subjects_with_nas)) else ""))
 
-    # ---- the data source is no longer a choice: always the raw observations ---
-    {
-      cat("Data: RAW observations (the only option; the cosinor needs no interpolation)\n")
-      if(!is.null(mod$subjects_with_nas) && mod$subjects_with_nas > 0) {
-        cat("  ", mod$subjects_with_nas, " subjects have missing values; the cosinor uses",
-            " the observations present.\n", sep = "")
-      }
-    }
-
-    # ---- model specification ------------------------------------------------
-    if(trend_type != "none") {
-      trend_label <- switch(trend_type,
-                            "linear" = "LINEAR (beta*t)",
-                            "log" = "LOGARITHMIC (beta*log(t+1))",
-                            "exp_sat" = "SATURATING EXPONENTIAL (A_sat*(1-e^(-t/tau)))",
-                            "Unknown")
-      cat("Homeostatic trend: ", trend_label, "\n", sep = "")
-      cat("Two-process model: Process S (trend) separated from Process C (circadian)\n")
-    } else {
-      cat("Homeostatic trend: None (circadian only)\n")
-    }
-
-    # AUDIT 1.4.3: say which origin the coefficients are on.
-    if(identical(mod$time_origin, "first_observation")) {
-      cat("Time origin: FIRST OBSERVATION. t = 0 in the model is ",
-          dance_clock_label(mod$origin_shift, mod$period), " on the clock.\n",
-          "  Both the trend and the harmonics are anchored there, so the intercept is\n",
-          "  the model value at the start of the recording and is directly\n",
-          "  interpretable. Axes and hover text still read in CLOCK time: the plots add\n",
-          "  the ", fmt1(mod$origin_shift), " h shift back before labelling.\n", sep = "")
-    } else {
-      cat("Time origin: MIDNIGHT (t = 0 at clock 00:00).\n")
-      if(trend_type == "exp_sat") {
-        cat("  ! The trend is anchored at the first observation (t - ",
-            fmt2(mod$pop_mean_fit$t_offset %||% 0), ") while the harmonics are anchored at\n",
-            "    midnight. The intercept is therefore the constant of a model with two\n",
-            "    origins and is not the value at either. Set Time origin =\n",
-            "    'first observation' to remove the ambiguity.\n", sep = "")
-      }
-    }
-
-    # ---- AUDIT 2.3: convergence, reported honestly -------------------------
-    fa <- mod$fit_audit
+    # ---- 2. fit outcomes ------------------------------------------------------
     hdr("Fit outcomes")
-    if(!is.null(fa)) {
-      cat(sprintf("Subjects attempted:         %d\n", fa$n_attempted))
-      cat(sprintf("  Converged, interior:      %d\n", fa$n_converged))
-      cat(sprintf("  Converged, on a bound:    %d  (%s)\n", fa$n_boundary,
-                  if(isTRUE(fa$include_boundary)) "INCLUDED - see the bound table below"
-                  else "excluded by your choice"))
-      cat(sprintf("  Did not converge:         %d  (always excluded: no solution to average)\n",
-                  fa$n_nonconverged))
-      cat(sprintf("  Failed outright:          %d\n", fa$n_failed))
-      cat(sprintf("Population summaries below use %d subject(s).\n", nrow(params)))
-      if(isTRUE(fa$gate_relaxed))
-        cat("  ! Too few fits pass the gate; ALL returned fits are included. Provisional.\n")
-      if(fa$n_nonconverged + fa$n_boundary > 0)
-        cat("  The original code counted all of these as successes, which is how an\n",
-            "  R-squared range starting near 0.06 coexisted with '100% successfully fitted'.\n", sep = "")
-
-      # ====================================================================
-      # WHICH bounds, and who hit more than one
-      #
-      # A fit pinned to a constraint converged to the EDGE of the feasible
-      # region, not to an interior optimum: the value is where the optimiser
-      # was stopped, and its standard error is meaningless. That is worth
-      # seeing per parameter, because a bound catching most of the sample is a
-      # badly chosen bound rather than a sample full of odd subjects -- and a
-      # subject pinned on TWO parameters at once is usually a ridge, where the
-      # two trade off against each other along a flat direction of the
-      # likelihood.
-      # ====================================================================
-      bs <- if(isTRUE(fa$include_boundary)) fa$bounds_kept else fa$bounds
-      if(!is.null(bs) && bs$n_any > 0) {
-        hdr("Parameter bounds hit")
-        cat(sprintf("%d of %d summarised fit(s) sit on at least one bound (%s%%).\n",
-                    bs$n_any, bs$n, fmt1(100 * bs$n_any / bs$n)))
-        if(!is.null(bs$per_bound)) {
-          cat("\nWhich bound:\n")
-          cat(sprintf("  %-26s %8s %8s\n", "bound", "n", "% of n"))
-          for(i in seq_len(nrow(bs$per_bound)))
-            cat(sprintf("  %-26s %8d %7s%%\n", bs$per_bound$bound[i],
-                        bs$per_bound$n[i], fmt1(bs$per_bound$pct[i])))
-        }
-        cat("\nHow many bounds per fit:\n")
-        cat(sprintf("  %-12s %10s %8s\n", "bounds hit", "n fits", "% of n"))
-        for(i in seq_len(nrow(bs$per_count)))
-          cat(sprintf("  %-12d %10d %7s%%\n", bs$per_count$n_bounds[i],
-                      bs$per_count$n_subjects[i], fmt1(bs$per_count$pct[i])))
-
-        if(!is.null(bs$multi)) {
-          cat(sprintf("\n%d fit(s) hit MORE THAN ONE bound. Two parameters pinned at once is\n",
-                      nrow(bs$multi)))
-          cat("usually a ridge: they trade off along a flat direction of the likelihood,\n")
-          cat("so neither is separately identified and a group comparison of either is a\n")
-          cat("comparison of where the optimiser stopped.\n\n")
-          cat(sprintf("  %-16s %6s %10s   %s\n", "subject", "row", "n bounds", "bounds"))
-          show_n <- min(nrow(bs$multi), 40)
-          for(i in seq_len(show_n))
-            cat(sprintf("  %-16s %6d %10d   %s\n", bs$multi$subject[i], bs$multi$row[i],
-                        bs$multi$n_bounds[i], bs$multi$bounds[i]))
-          if(nrow(bs$multi) > show_n)
-            cat(sprintf("  ... and %d more (the full list is in the parameter CSV export).\n",
-                        nrow(bs$multi) - show_n))
-        }
-
-        if(isTRUE(fa$include_boundary))
-          cat("\nThese fits ARE included in everything below. Their values are real -- the\n",
-              "optimiser did converge to them -- but they are the edge of the feasible\n",
-              "region, so their SEs are meaningless and they pull the mean toward the\n",
-              "bound. Untick 'Include fits that hit a parameter bound' to exclude them\n",
-              "and see how much the summaries move.\n", sep = "")
-        else
-          cat("\nThese fits are EXCLUDED from everything below, which makes the sample\n",
-              "smaller and possibly biased toward subjects the model happened to suit.\n", sep = "")
+    if (mixed) {
+      if (!isTRUE(ff$ok)) {
+        cat("The mixed-effects model did not fit: ", ff$message, "\n", sep = "")
+        cat("Nothing below this line is available for this run.\n")
+        return(invisible(NULL))
       }
+      cat(sprintf("Participants: %d   curves: %d   observations: %d   design cells: %d\n",
+                  ff$spec$n_participants, ff$spec$n_curves, ff$spec$n_obs, nrow(ff$spec$cells)))
+      cat(dance_traj_fit_report(ff), "\n", sep = "")
     } else {
-      cat(sprintf("Subjects summarised: %d\n", nrow(params)))
+      fa <- mod$fit_audit
+      if (!is.null(fa)) {
+        cat(sprintf("Participants attempted:     %d\n", fa$n_attempted))
+        cat(sprintf("  converged, interior:      %d\n", fa$n_converged))
+        cat(sprintf("  converged, on a bound:    %d  (%s)\n", fa$n_boundary,
+                    if (isTRUE(fa$include_boundary)) "included" else "excluded by your choice"))
+        cat(sprintf("  did not converge:         %d  (always excluded)\n", fa$n_nonconverged))
+        cat(sprintf("  failed outright:          %d\n", fa$n_failed))
+        cat(sprintf("Summaries below use %d participant(s).\n", nrow(params)))
+        if (isTRUE(fa$gate_relaxed))
+          cat("  ! Too few fits pass the gate; ALL returned fits are included. Provisional.\n")
+        bs <- if (isTRUE(fa$include_boundary)) fa$bounds_kept else fa$bounds
+        if (!is.null(bs) && isTRUE(bs$n_any > 0)) {
+          cat(sprintf("Parameter bounds hit by %d of %d summarised fit(s)%s:\n", bs$n_any, bs$n,
+                      if (isTRUE(fa$include_boundary)) " (INCLUDED: their SEs are meaningless and they pull the mean toward the bound)"
+                      else " (excluded)"))
+          if (!is.null(bs$per_bound))
+            for (i in seq_len(nrow(bs$per_bound)))
+              cat(sprintf("  %-26s %5d  (%s%%)\n", bs$per_bound$bound[i],
+                          bs$per_bound$n[i], fmt1(bs$per_bound$pct[i])))
+          if (!is.null(bs$multi))
+            cat(sprintf("  %d fit(s) sit on more than one bound (a likelihood ridge; see the parameter CSV).\n",
+                        nrow(bs$multi)))
+        }
+      } else {
+        cat(sprintf("Participants summarised: %d\n", nrow(params)))
+      }
     }
 
-    cat("\nNumber of time points: ", length(mod$time_vec), "\n", sep = "")
-    if(length(mod$time_vec) <= 24) {
-      if(isTRUE(mod$wrap_applied) && !is.null(mod$original_times)) {
+    # ---- 3. time points -------------------------------------------------------
+    hdr("Time points")
+    cat("Number of time points: ", length(mod$time_vec), "\n", sep = "")
+    if (length(mod$time_vec) <= 24) {
+      if (isTRUE(mod$wrap_applied) && !is.null(mod$original_times)) {
         cat("Original times (clock):  ", paste(fmtn(mod$original_times, 1), collapse = ", "), "\n", sep = "")
         cat("Adjusted times (linear): ", paste(fmtn(mod$time_vec_clock %||% mod$time_vec, 1), collapse = ", "), "\n", sep = "")
-        cat("(Times after midnight were adjusted for chronological order)\n")
+        cat("(Times after midnight were adjusted for chronological order.)\n")
       } else {
-        cat("Time points used: ",
-            paste(fmtn(mod$time_vec_clock %||% mod$time_vec, 2), collapse = ", "), "\n", sep = "")
+        cat("Clock times: ", paste(fmtn(mod$time_vec_clock %||% mod$time_vec, 2), collapse = ", "), "\n", sep = "")
       }
-      if(isTRUE(mod$origin_shift > 0))
+      if (isTRUE(clock_o > 0))
         cat("Model times (t = 0 at the first observation): ",
-            paste(fmtn(mod$time_vec, 2), collapse = ", "), "\n",
-            "  The times above are CLOCK times; these are what the coefficients were\n",
-            "  fitted on. They differ by the ", fmt1(mod$origin_shift),
-            " h origin shift, and every plot converts\n  back before labelling its axis.\n", sep = "")
+            paste(fmtn(mod$time_vec, 2), collapse = ", "), "\n", sep = "")
     }
     diffs <- diff(mod$time_vec)
-    if(length(unique(round(diffs, 2))) > 1) {
-      cat("Spacing: UNEQUAL (", paste(unique(fmtn(diffs, 2)), collapse = ", "), ")\n", sep = "")
-    } else {
-      cat("Spacing: Equal (", fmt2(diffs[1]), ")\n", sep = "")
-    }
+    if (length(unique(round(diffs, 2))) > 1)
+      cat("Spacing: UNEQUAL (", paste(unique(fmtn(diffs, 2)), collapse = ", "), " h)\n", sep = "")
+    else
+      cat("Spacing: equal (", fmt2(diffs[1]), " h)\n", sep = "")
 
-    if(is.null(pop)) return(invisible(NULL))
-
-    # ========================================================================
-    # AUDIT 1.4: the central-value section, with the two quantities separated
-    # ========================================================================
-    hdr("Central value")
-    # AUDIT: beta_0 is a COEFFICIENT, not a level. Calling it "the intercept at
-    # t = 0" invited reading it as the value the response started at, which it
-    # is not: at the first observation the harmonics are generally non-zero, and
-    # with a saturating trend anchored there S(t_min) = 0 exactly, so the two
-    # differ by the harmonic sum. Both are reported, under names that say what
-    # they are.
-    cat("Constant term (beta_0):                  ", fmt3(pop$intercept),
-        "   [arithmetic mean of the fitted constants]\n", sep = "")
-    .v0 <- dance_value_at(pop$mean_coefs, mod, min(mod$time_vec, na.rm = TRUE))
-    if(is.finite(.v0))
-      cat("Predicted value at the first observation (",
-          dance_clock_label(dance_clock_origin(mod) + min(mod$time_vec, na.rm = TRUE),
-                          period, show_day = FALSE), "): ",
-          fmt2(.v0), if(!is.null(dvu)) paste0(" ", dvu) else "", "\n", sep = "")
-    if(trend_type != "none" && is.finite(pop$rhythm_adjusted_mean)) {
-      cat("MESOR (rhythm-adjusted mean over the observed window):  ",
-          fmt3(pop$rhythm_adjusted_mean), "\n", sep = "")
-      cat("  = time-average of beta_0 + S(t) over t in [",
-          fmt2(pop$window[1]), ", ", fmt2(pop$window[2]), "] h, by integration.\n", sep = "")
-      cat("  The intercept is NOT the MESOR when the model carries a trend: it is the\n")
-      cat("  constant of the fit, and with a saturating trend it sits far below the\n")
-      cat("  level the data actually occupy. The difference here is ",
-          fmt2(pop$rhythm_adjusted_mean - pop$intercept), " units.\n", sep = "")
-      if(is.finite(pop$harmonic_window_mean))
-        cat("  (The harmonics contribute ", fmt3(pop$harmonic_window_mean),
-            " to the window mean; that is exactly zero only over a whole number\n",
-            "   of periods, and this window is not one.)\n", sep = "")
-    } else {
-      cat("MESOR (rhythm-adjusted mean): ", fmt3(pop$rhythm_adjusted_mean),
-          "  [no trend, so it equals the intercept]\n", sep = "")
-    }
-
-    # ========================================================================
-    # Vector-averaged rhythm parameters
-    # ========================================================================
-    hdr("Population rhythm parameters (VECTOR-averaged)")
-    cat("Estimator: amplitude-weighted vector mean of (amplitude, acrophase) pairs.\n")
-    cat("This is the correct population estimator for circular data and is unchanged.\n\n")
-    # AUDIT: acrophases are printed in CLOCK time. They are estimated on the
-    # model's axis, which under time_origin = "first_observation" is elapsed
-    # hours from the first observation -- so 19.18 there is 03:11 on the clock,
-    # and printing the elapsed number as a time of day was wrong by the origin
-    # shift. dance_acrophase_label() is the only place that arithmetic happens.
-    for(h in seq_len(nh)) {
-      eff <- period / h
-      cat(sprintf("  H%d: amplitude = %s, acrophase = %s  (%s deg)\n",
-                  h, fmt3(pop$mean_amplitudes[h]),
-                  dance_acrophase_label(hours = pop$mean_acrophases_time[h],
-                                      period = period, harmonic = h,
-                                      clock_origin = clock_o),
-                  fmt2(phi_to_degrees(pop$mean_acrophases_rad[h]))))
-      if(clock_o != 0)
-        cat(sprintf("      (model-elapsed %s h + %s h origin)\n",
-                    fmt2(pop$mean_acrophases_time[h]), fmt1(clock_o)))
-      if(h > 1)
-        cat(sprintf("      H%d repeats every %s h, so it has %d maxima per day; all are shown.\n",
-                    h, fmtn(eff, 0), h))
-    }
-
-    # AUDIT: the H1 acrophase is where the FIRST HARMONIC peaks. The fitted
-    # curve also carries the trend and the higher harmonics, so its maximum sits
-    # elsewhere -- and it is the curve's maximum a reader sees on the plot.
-    # Reporting both stops the acrophase looking wrong against its own figure.
-    cpk <- dance_curve_peak_clock(pop$mean_coefs, mod)
-    if(!is.null(cpk)) {
-      cat(sprintf("\n  Maximum of the COMPLETE fitted curve: %s (value %s)\n",
-                  dance_clock_label(cpk$peak_clock, period, show_day = FALSE),
-                  fmt2(cpk$peak_value)))
-      cat(sprintf("  Minimum of the complete fitted curve: %s (value %s)\n",
-                  dance_clock_label(cpk$trough_clock, period, show_day = FALSE),
-                  fmt2(cpk$trough_value)))
-      cat("  NOT the H1 acrophase: the curve also contains ",
-          if(trend_type != "none") "the homeostatic trend" else "no trend",
-          if(nh > 1) " and the higher harmonics" else "", ".\n", sep = "")
-      if(isTRUE(cpk$peak_at_edge))
-        cat("  ! The maximum sits at the edge of the observed window: the curve was\n",
-            "    still rising when the recording stopped, so this is a boundary value,\n",
-            "    not a peak the data contain.\n", sep = "")
-    }
-
-    # ========================================================================
-    # AUDIT 1.2: two resultants, unambiguously labelled
-    # ========================================================================
-    hdr("Circular concentration and the Rayleigh test")
-    for(h in seq_len(nh)) {
-      rr <- pop$resultants[[h]]
-      if(is.null(rr)) next
-      eff <- period / h
-      cat(sprintf("H%d  n = %d\n", h, rr$n))
-      cat(sprintf("  r-bar (UNWEIGHTED, for Rayleigh):        %s\n", fmt3(rr$r_unweighted)))
-      cat(sprintf("  r-bar (AMPLITUDE-WEIGHTED, for the vector mean): %s\n", fmt3(rr$r_weighted)))
-      cat(sprintf("  Rayleigh Z = %s, p = %s   [Z = n * r_unweighted^2]\n",
-                  fmt1e(rr$rayleigh$Z), format.pval(rr$rayleigh$p, digits = 3, eps = 1e-16)))
-      cat(sprintf("  Circular SD = %s h\n", fmt3(rr$circ_sd_hours)))
-      if(h == 1)
-        cat("  The Rayleigh test is defined on UNIT vectors (Mardia & Jupp 2000; Berens\n",
-            "  2009). Using the amplitude-weighted resultant here would inflate Z; the\n",
-            "  two are printed together so they can never be confused again.\n", sep = "")
-    }
-
-    # ========================================================================
-    # AUDIT 1.1: ONE equation renderer, for the pooled fit and the groups alike
-    # ========================================================================
+    # ---- 4. the model equation, symbolic --------------------------------------
     hdr("Model equation (symbolic)")
     sym <- "Y(t) = beta_0"
-    if(trend_type == "linear")       sym <- paste0(sym, " + beta*t")
-    else if(trend_type == "log")     sym <- paste0(sym, " + beta*log(t+1)")
-    else if(trend_type == "exp_sat") sym <- paste0(sym, " + A_sat*(1 - e^(-t/tau))")
-    for(h in seq_len(nh))
+    if (trend_type == "linear")       sym <- paste0(sym, " + beta*t")
+    else if (trend_type == "log")     sym <- paste0(sym, " + beta*log(t+1)")
+    else if (trend_type == "exp_sat") sym <- paste0(sym, " + A_sat*(1 - e^(-t/tau))")
+    for (h in seq_len(nh))
       sym <- paste0(sym, sprintf(" + A%d*cos(2pi*%d*t/%s - phi%d)", h, h, fmtn(period, 0), h))
-    cat(sym, "\n")
-    cat("  beta_0 = intercept (NOT the MESOR when a trend is present)\n")
-    cat("  A_h, phi_h = amplitude and acrophase of harmonic h\n")
-    if(trend_type == "exp_sat")
-      cat("  A_sat = asymptote, tau = time constant (h)\n")
+    if (mixed) {
+      cat(sym, " + b_i(t) + e\n", sep = "")
+      cat("  beta_0, beta, A_h, phi_h: fixed effects, one set per design cell\n")
+      cat("  b_i(t): participant i's deviation from its cell's curve (random effects on the same basis)\n")
+      cat("  e: residual error\n")
+      cat("  Fixed effects:  ", ff$spec$fixed_formula, "\n", sep = "")
+      cat("  Random effects: ", ff$re_formula, "\n", sep = "")
+    } else {
+      cat(sym, " + e,   fitted separately to each participant's series\n", sep = "")
+    }
+    cat("  beta_0 = the constant term (NOT the MESOR when a trend is present)\n")
+    cat("  A_h, phi_h = amplitude and acrophase of harmonic h; t in hours from the first observation\n")
+    if (trend_type == "exp_sat") cat("  A_sat = asymptote, tau = time constant (h)\n")
 
-    hdr("Fitted model equation (pooled)")
-    cat(dance_format_equation(pop$intercept, trend_type, pop$trend_coefs,
-                            pop$mean_amplitudes, pop$mean_acrophases_rad,
-                            period, pop$t_offset %||% 0), "\n")
-    cat("  Rendered by the same function as the group equations below. The pooled\n")
-    cat("  equation previously omitted the homeostatic term entirely.\n")
-
-    # AUDIT 1.7: admissibility of the fitted curve
-    if(is.finite(mod$dv_min) || is.finite(mod$dv_max)) {
-      tt <- seq(min(mod$time_vec), max(mod$time_vec), length.out = 400)
-      yy <- predict_from_coefs(pop$mean_coefs, tt, period, nh, trend_type,
-                               pop$t_offset %||% 0, 0)
+    # ---- 5. the fitted equations ---------------------------------------------
+    show_curve <- function(label, b0, trend_coefs, amps, acros_rad, n_txt, coefs_for_peak = NULL, peak = NULL) {
+      cat("\n", label, if (!is.null(n_txt)) paste0(" (", n_txt, ")") else "", ":\n", sep = "")
+      cat("  ", dance_format_equation(b0, trend_type, trend_coefs, amps, acros_rad,
+                                     period, mod$t_offset %||% 0), "\n", sep = "")
+      for (h in seq_len(nh))
+        cat(sprintf("  H%d: amplitude %s, acrophase %s%s\n", h, fmt3(amps[h]),
+                    acro_clock(acros_rad[h], h),
+                    if (h > 1) sprintf(" (%d maxima per day, all shown)", h) else ""))
+      if (!is.null(peak))
+        cat(sprintf("  Complete fitted curve: maximum %s at %s, minimum %s at %s%s\n",
+                    fmt2(peak$max_value), dance_clock_label(peak$max_clock, period, show_day = FALSE),
+                    fmt2(peak$min_value), dance_clock_label(peak$min_clock, period, show_day = FALSE),
+                    if (isTRUE(peak$edge)) " [maximum on the window edge: not a turning point]" else ""))
+    }
+    check_range <- function(yy, what) {
+      if (!(is.finite(mod$dv_min) || is.finite(mod$dv_max))) return(invisible(NULL))
       bc <- dance_check_bounds(yy, mod$dv_min, mod$dv_max)
-      if(!bc$ok) {
-        cat(sprintf("  ! The pooled fitted curve leaves the admissible range: min %s, max %s.\n",
+      if (!bc$ok)
+        cat(sprintf("  ! %s leaves the admissible range: fitted min %s, max %s. A model that predicts\n    impossible values is misspecified, not merely imprecise.\n",
+                    what, fmt2(bc$min), fmt2(bc$max)))
+      else
+        cat(sprintf("  Fitted range over the window [%s, %s]: within the admissible range.\n",
                     fmt2(bc$min), fmt2(bc$max)))
-        cat("    A fit that predicts impossible values is misspecified, not merely imprecise.\n")
-      } else {
-        cat(sprintf("  Fitted range over the window: [%s, %s] - within the admissible range.\n",
-                    fmt2(bc$min), fmt2(bc$max)))
-      }
     }
 
-    # ========================================================================
-    # AUDIT 1.6: arithmetic summaries, each labelled with its estimator
-    # ========================================================================
-    hdr("Individual parameters (ARITHMETIC means, +/- linear SD)")
-    cat("Estimator: arithmetic. These are NOT the vector means above; for a circular\n")
-    cat("quantity the two differ, and only the vector mean is a valid population value.\n\n")
-    cat(sprintf("  Intercept:  %s (SD %s)   [arithmetic]\n",
-                fmt3(mean(params$mesor, na.rm = TRUE)), fmt3(sd(params$mesor, na.rm = TRUE))))
-
-    if(trend_type == "linear" && "trend_linear" %in% names(params)) {
-      cat(sprintf("  Linear trend (beta): %s (SD %s) %s   [arithmetic]\n",
-                  fmt4(mean(params$trend_linear, na.rm = TRUE)),
-                  fmt4(sd(params$trend_linear, na.rm = TRUE)),
-                  if(!is.null(dvu)) paste0(dvu, "/h") else "per hour"))
-    } else if(trend_type == "log" && "trend_log" %in% names(params)) {
-      cat(sprintf("  Log trend (beta): %s (SD %s)   [arithmetic]\n",
-                  fmt4(mean(params$trend_log, na.rm = TRUE)),
-                  fmt4(sd(params$trend_log, na.rm = TRUE))))
-    } else if(trend_type == "exp_sat") {
-      if("A_sat" %in% names(params)) {
-        # AUDIT 1.7: the "(units)" placeholder is replaced by the real unit, or
-        # by nothing at all when the user has not named one.
-        cat(sprintf("  A_sat (asymptote):   %s (SD %s)%s   [arithmetic]\n",
-                    fmt3(mean(params$A_sat, na.rm = TRUE)),
-                    fmt3(sd(params$A_sat, na.rm = TRUE)),
-                    if(!is.null(dvu)) paste0(" ", dvu) else ""))
+    if (mixed) {
+      hdr("Fitted equations (fixed effects, per design cell)")
+      cat("These are the curves drawn on the fitted-curves tab and on the comparison tab:\n")
+      cat("the same fixed effects of the same model, with no participant deviation.\n")
+      ce <- dance_traj_cell_equations(ff)
+      pk <- tryCatch(dance_traj_curve_peaks(ff, "full"), error = function(e) NULL)
+      pr_full <- tryCatch(dance_traj_predict(ff, component = "full", n_time = 200), error = function(e) NULL)
+      for (i in seq_len(nrow(ce$table))) {
+        r <- ce$table[i, ]; cname <- r$cell
+        amps <- vapply(seq_len(nh), function(h) r[[paste0("amplitude_", h)]], numeric(1))
+        acr  <- vapply(seq_len(nh), function(h) r[[paste0("acrophase_rad_", h)]], numeric(1))
+        n_txt <- if (is.finite(r$n_participants)) sprintf("%d participant(s), %d observations",
+                                                         r$n_participants, r$n_obs) else NULL
+        peak <- if (!is.null(pk) && cname %in% pk$cell) {
+          q <- pk[pk$cell == cname, ][1, ]
+          list(max_value = q$peak_fit, max_clock = q$peak_clock,
+               min_value = q$trough_fit, min_clock = q$trough_clock, edge = !isTRUE(q$peak_interior))
+        } else NULL
+        show_curve(if (identical(cname, "(all)")) "Whole sample" else paste0("Cell ", cname),
+                   r$intercept, ce$trend_coefs[[i]], amps, acr, n_txt, peak = peak)
+        cat(sprintf("  Level at the first observation (%s): %s%s\n", clock_first,
+                    fmt2(r$level_at_t0), if (!is.null(dvu)) paste0(" ", dvu) else ""))
+        if (!is.null(pr_full) && isTRUE(pr_full$ok))
+          check_range(pr_full$table$fit[pr_full$table$cell == cname], "This cell's curve")
       }
-      if("tau" %in% names(params)) {
-        tm <- mean(params$tau, na.rm = TRUE); ts <- sd(params$tau, na.rm = TRUE)
-        cat(sprintf("  tau (time constant): %s (SD %s) h   [arithmetic]\n", fmt2(tm), fmt2(ts)))
-        # AUDIT 2.2: the ridge, stated where the numbers are
-        if(is.finite(tm) && is.finite(ts) && tm > 0 && ts / tm > 0.5)
-          cat(sprintf("    ! SD/mean = %s. Over this window (1 - e^(-t/tau)) moves only from\n",
-                      fmt2(ts / tm)),
-              "      about 0.44 to 0.88 and is close to linear, so it is strongly collinear\n",
-              "      with the intercept. A spread this wide is a likelihood ridge, not\n",
-              "      population heterogeneity. See the conditioning section below.\n", sep = "")
+      cat("\nAmplitude and acrophase are read off the cell's (cos, sin) fixed effects; their\n")
+      cat("intervals and the between-cell tests are on the comparison tab. Participant-level\n")
+      cat("(shrunken) estimates are in the individual table.\n")
+    } else {
+      if (is.null(pop)) return(invisible(NULL))
+      hdr("Fitted equations (per-participant estimates, averaged)")
+      cat("The constant and the trend are arithmetic means of the per-participant fits;\n")
+      cat("amplitude and acrophase are amplitude-weighted VECTOR means of the per-participant\n")
+      cat("(amplitude, acrophase) pairs, the population estimator for a circular quantity.\n")
+      peak_of <- function(coefs) {
+        cpk <- dance_curve_peak_clock(coefs, mod)
+        if (is.null(cpk)) return(NULL)
+        list(max_value = cpk$peak_value, max_clock = cpk$peak_clock,
+             min_value = cpk$trough_value, min_clock = cpk$trough_clock, edge = isTRUE(cpk$peak_at_edge))
       }
-    }
+      show_curve("Pooled", pop$intercept, pop$trend_coefs, pop$mean_amplitudes,
+                 pop$mean_acrophases_rad, sprintf("%d participants", nrow(params)),
+                 peak = peak_of(pop$mean_coefs))
+      .v0 <- dance_value_at(pop$mean_coefs, mod, t_first)
+      if (is.finite(.v0))
+        cat(sprintf("  Level at the first observation (%s): %s%s\n", clock_first, fmt2(.v0),
+                    if (!is.null(dvu)) paste0(" ", dvu) else ""))
+      if (trend_type != "none" && is.finite(pop$rhythm_adjusted_mean))
+        cat(sprintf("  MESOR (rhythm-adjusted mean over the window): %s; the constant term is %s\n",
+                    fmt3(pop$rhythm_adjusted_mean), fmt3(pop$intercept)))
+      tt <- seq(min(mod$time_vec), max(mod$time_vec), length.out = 400)
+      check_range(predict_from_coefs(pop$mean_coefs, tt, period, nh, trend_type,
+                                     pop$t_offset %||% 0, 0), "The pooled curve")
 
-    for(h in seq_len(nh)) {
-      eff <- period / h
-      ac <- params[[paste0("acrophase_time_", h)]]
-      rr <- pop$resultants[[h]]
-      cat(sprintf("  H%d amplitude: %s (SD %s)   [arithmetic]\n", h,
-                  fmt3(mean(params[[paste0("amplitude_", h)]], na.rm = TRUE)),
-                  fmt3(sd(params[[paste0("amplitude_", h)]], na.rm = TRUE))))
-      # Circular SD is a DISPERSION and is invariant to the origin shift, so it
-      # is printed as-is. Only the mean DIRECTION moves with the origin.
-      cat(sprintf("  H%d acrophase: circular mean %s, circular SD %s h   [circular]\n",
-                  h, dance_acrophase_label(phi_rad = rr$mean_dir_unweighted,
-                                         period = period, harmonic = h,
-                                         clock_origin = clock_o),
-                  fmt2(rr$circ_sd_hours)))
-      cat(sprintf("               (arithmetic mean %s, linear SD %s h - shown only to\n",
-                  dance_acrophase_label(hours = mean(ac, na.rm = TRUE), period = period,
-                                      harmonic = h, clock_origin = clock_o, all = FALSE),
-                  fmt2(sd(ac, na.rm = TRUE))))
-      cat("                make the difference visible; do not report these for a phase)\n")
-      if(h > 1)
-        cat(sprintf("               H%d has %d maxima per day, all shown above\n", h, h))
-    }
-
-    cat(sprintf("\n  R-squared: mean %s, range [%s, %s]\n",
-                fmt3(mean(params$r_squared, na.rm = TRUE)),
-                fmt3(min(params$r_squared, na.rm = TRUE)),
-                fmt3(max(params$r_squared, na.rm = TRUE))))
-    sig_rate <- 100 * sum(params$p_value < 0.05, na.rm = TRUE) / nrow(params)
-    cat(sprintf("  Significant rhythms (p<0.05): %d / %d (%s%%)\n",
-                sum(params$p_value < 0.05, na.rm = TRUE), nrow(params), fmt1(sig_rate)))
-    cat("    The zero-amplitude test is now the harmonics GIVEN the trend (full vs\n")
-    cat("    trend-only F test). It previously charged the rhythm with the whole\n")
-    cat("    model's sum of squares, including everything Process S explained.\n")
-
-    # ========================================================================
-    # AUDIT 2.5: confidence intervals
-    # ========================================================================
-    if(!is.null(mod$boot_results)) {
-      hdr(sprintf("Bootstrap CIs (B = %d, subject-level resampling)", mod$boot_results$B))
-      cat(sprintf("  Intercept: [%s, %s]\n",
-                  fmt3(mod$boot_results$mesor_ci[1]), fmt3(mod$boot_results$mesor_ci[2])))
-      cat(sprintf("  Amplitude: [%s, %s]\n",
-                  fmt3(mod$boot_results$amplitude_ci[1]), fmt3(mod$boot_results$amplitude_ci[2])))
-      # P21/A3: a CIRCULAR percentile interval. Its endpoints can run lo > hi,
-      # which is not a bug but a rhythm peaking near the origin, so the width is
-      # printed separately rather than left to be read off the endpoints.
-      .cc <- mod$boot_results$acrophase_ci_circular
-      cat(sprintf("  Acrophase: [%s, %s]   (H1, clock time)\n",
-                  dance_acrophase_label(hours = mod$boot_results$acrophase_ci[1],
-                                      period = period, harmonic = 1,
-                                      clock_origin = clock_o, all = FALSE),
-                  dance_acrophase_label(hours = mod$boot_results$acrophase_ci[2],
-                                      period = period, harmonic = 1,
-                                      clock_origin = clock_o, all = FALSE)))
-      if(!is.null(.cc)) {
-        cat(sprintf("             circular interval, width %s h (+/- %s h about the mean direction)\n",
-                    fmt2(.cc$width), fmt2(.cc$half_width)))
-        if(isTRUE(.cc$wraps)) {
-          .lin <- mod$boot_results$acrophase_ci_linear
-          cat("             this interval WRAPS past the origin, so its endpoints run high to low.\n")
-          if(!is.null(.lin))
-            cat(sprintf("             a linear quantile would have reported [%s, %s] h, width %s h --\n             nearly the whole cycle, which is the artefact this replaces.\n",
-                        fmt2(.lin[1]), fmt2(.lin[2]), fmt2(as.numeric(.lin[2] - .lin[1]))))
+      if (!is.null(mod$group_fits) && length(mod$group_fits) >= 1) {
+        ga <- attr(mod$group_fits, "audit")
+        n_in <- attr(mod$group_fits, "n_in_groups") %||% NA
+        n_fit <- attr(mod$group_fits, "n_fitted") %||% nrow(params)
+        cat(sprintf("\nBy %s: group sizes sum to %s of %s fitted participants%s.\n",
+                    mod$group_var_name %||% "group", fmtn(n_in, 0), fmtn(n_fit, 0),
+                    if (!is.null(ga) && ga$n_unassigned > 0)
+                      sprintf("; %d without a usable label appear as UNASSIGNED", ga$n_unassigned) else ""))
+        if (!is.null(ga) && length(ga$dropped_small) > 0)
+          cat(sprintf("  Not summarised (fewer than 3 fitted participants): %s\n",
+                      paste(ga$dropped_small, collapse = ", ")))
+        for (g_name in names(mod$group_fits)) {
+          g <- mod$group_fits[[g_name]]
+          show_curve(paste0("Group '", g_name, "'"), g$intercept, g$trend_coefs,
+                     g$mean_amplitudes, g$mean_acrophases_rad, sprintf("n = %d", g$n),
+                     peak = peak_of(g$mean_coefs))
+          .gv0 <- dance_value_at(g$mean_coefs, mod, t_first)
+          if (is.finite(.gv0))
+            cat(sprintf("  Level at the first observation (%s): %s%s\n", clock_first, fmt2(.gv0),
+                        if (!is.null(dvu)) paste0(" ", dvu) else ""))
+          if (trend_type != "none" && is.finite(g$rhythm_adjusted_mean))
+            cat(sprintf("  MESOR (rhythm-adjusted mean): %s\n", fmt3(g$rhythm_adjusted_mean)))
         }
-      }
-      cat(sprintf("  Resampling unit: %s (%d resampled per replicate, repeats kept).\n",
-                  mod$boot_results$resample_unit %||% "participant",
-                  mod$boot_results$n_resampled %||% NA_integer_))
-    }
-    if(!is.null(mod$bingham_summary)) {
-      hdr("Bingham joint confidence regions (Bingham et al. 1982)")
-      cat("The elliptical joint region for the (amplitude, acrophase) pair, per subject,\n")
-      cat("summarised across subjects. This is the standard cosinor reporting requirement\n")
-      cat("and the app previously computed nothing of the kind for a nonlinear fit.\n\n")
-      for(h in seq_len(nh)) {
-        b <- mod$bingham_summary[[h]]
-        if(is.null(b)) next
-        cat(sprintf("  H%d: acrophase identified in %d / %d subjects (%s%%)\n",
-                    h, b$n_identified, b$n, fmt1(100 * b$n_identified / b$n)))
-        cat(sprintf("      median half-width: amplitude +/- %s, acrophase +/- %s h\n",
-                    fmt3(b$median_amp_halfwidth), fmt2(b$median_acro_halfwidth_h)))
-        cat("      Half-widths are durations and carry no origin; the acrophases they\n")
-        cat("      bracket are the clock times reported above.\n")
-        if(b$n_identified < b$n)
-          cat("      where it is not identified the region covers the origin, i.e. that\n",
-              "      subject has no resolvable phase at all. Quoting one would be worse\n",
-              "      than quoting none.\n", sep = "")
+        cat("\nGroup differences are tested on the comparison tab, on the per-participant\n")
+        cat("estimates (MANOVA, population-mean cosinor, Watson-Williams).\n")
       }
     }
 
-    # ========================================================================
-    # AUDIT 2.4: Delta-AICc, not mean AIC
-    # AUDIT (P15.4): ... but the FITTED model's own criteria are now printed too.
-    #
-    # These were removed on the argument that "with no competing model they are
-    # constant offsets of one another and carry no information". That argument
-    # was correct when it was made and is not correct any more, for two reasons.
-    # First, there IS a competing set now, and a reader who wants to locate the
-    # reported model in the Delta-AICc table needs its absolute value to do it.
-    # Second -- and this is what the user actually asked -- the free-tau fit's
-    # AIC is what the free-vs-fixed tau check differences, so quoting a Delta
-    # while withholding both terms leaves no way to check the subtraction.
-    #
-    # What stays true is the reason the SDs were dropped: AICc - AIC and
-    # BIC - AIC are deterministic functions of n and k, so with a single
-    # specification their spreads carry the spread of AIC and nothing else.
-    # They are printed as means over subjects, with that stated.
-    # ========================================================================
-    if(any(c("aic", "aicc", "bic") %in% names(params))) {
-      hdr("Information criteria for the fitted model")
-      n_obs <- length(mod$time_vec)
-      k_par <- dance_model_npar(trend_type, nh) + 1L   # + residual variance
-      cat(sprintf("  Specification: %s, fitted per subject on n = %s observations,
-",
-                  dance_model_label(trend_type, nh), fmtn(n_obs, 0)))
-      cat(sprintf("  k = %s free parameters%s.
-", fmtn(k_par, 0),
-                  if(identical(trend_type, "exp_sat"))
-                    " (tau estimated freely; see the free-vs-fixed check below)" else ""))
-      for(nmi in c("aic", "aicc", "bic")) {
-        if(!nmi %in% names(params)) next
-        v <- suppressWarnings(as.numeric(params[[nmi]]))
-        v <- v[is.finite(v)]
-        if(!length(v)) next
-        cat(sprintf("    mean %-4s = %s  (SD %s, over %s subjects)\n",
+    # ---- 6. information criteria of the fitted model ---------------------------
+    hdr("Information criteria of the fitted model")
+    if (mixed) {
+      m <- ff$model
+      ll <- tryCatch(stats::logLik(m), error = function(e) NULL)
+      if (!is.null(ll)) {
+        cat(sprintf("  logLik %s (%s, %d parameters)   AIC %s   BIC %s\n",
+                    fmt2(as.numeric(ll)), if (isTRUE(ff$REML)) "REML" else "ML",
+                    as.integer(attr(ll, "df")), fmt2(stats::AIC(m)), fmt2(stats::BIC(m))))
+        if (isTRUE(ff$REML))
+          cat("  REML criteria compare models with the SAME fixed effects only (different random\n",
+              "  structures); to compare fixed effects, the comparison tab refits by ML.\n", sep = "")
+      } else cat("  not available for this fit\n")
+    } else if (any(c("aic", "aicc", "bic") %in% names(params))) {
+      k_par <- dance_model_npar(trend_type, nh) + 1L
+      cat(sprintf("  Specification %s, fitted per participant on n = %s observations, k = %s parameters\n",
+                  dance_model_label(trend_type, nh), fmtn(length(mod$time_vec), 0), fmtn(k_par, 0)))
+      for (nmi in c("aic", "aicc", "bic")) {
+        if (!nmi %in% names(params)) next
+        v <- suppressWarnings(as.numeric(params[[nmi]])); v <- v[is.finite(v)]
+        if (!length(v)) next
+        cat(sprintf("    mean %-4s = %s  (SD %s over %s participants)\n",
                     toupper(nmi), fmt2(mean(v)), fmt2(stats::sd(v)), fmtn(length(v), 0)))
       }
-      cat("  These are means over subjects of a per-subject criterion, not the\n")
-      cat("  criterion of a single pooled fit. AICc - AIC and BIC - AIC are fixed\n")
-      cat("  functions of n and k here, so for ONE specification the three rank\n")
-      cat("  subjects identically; they separate models, not subjects. Compare them\n")
-      cat("  only against the same quantity from another specification -- which is\n")
-      cat("  what the Delta-AICc table does.\n")
-    }
+      cat("  Means over participants of a per-participant criterion, not the criterion of one\n")
+      cat("  pooled fit. Compare them only against the same quantity from another specification,\n")
+      cat("  which is what the Delta-AICc table does.\n")
+    } else cat("  not available\n")
 
-    if(!is.null(mod$model_selection)) {
-      hdr("Model selection (Delta-AICc across a nested set)")
-      ms  <- mod$model_selection
-      sel <- attr(ms, "selected")
-      cat(sprintf("  %-20s %12s %10s %8s\n", "model", "AICc", "dAICc", "weight"))
-      for(i in seq_len(nrow(ms))) {
-        # P14: mark the specification actually reported, so the reader does not
-        # have to match a label by eye to find their own model in the table.
-        mark <- if(!is.null(sel) && identical(ms$model[i], sel)) " <-- reported" else ""
-        cat(sprintf("  %-20s %12s %10s %8s%s\n", ms$model[i],
-                    fmt2(ms$AICc[i]), fmt2(ms$dAICc[i]), fmt3(ms$weight[i]), mark))
+    # ---- 7. model comparison -----------------------------------------------------
+    hdr("Model comparison")
+    if (mixed) {
+      cat("Random-effects ladder (the fullest structure that converged is the one used):\n")
+      if (length(ff$attempts)) {
+        for (at in ff$attempts)
+          cat(sprintf("  %d. %-52s %s\n", at$rung, at$formula,
+                      if (!isTRUE(at$fitted)) "did not fit"
+                      else if (!isTRUE(at$converged)) "did not converge"
+                      else if (isTRUE(at$singular)) "singular"
+                      else "accepted"))
+      } else cat(sprintf("  rung %d of %d: %s\n", ff$re_rung, ff$n_rungs, ff$re_label))
+      if (isTRUE(ff$singular))
+        cat("  A singular fit is a converged fit at a boundary (a variance at zero); the fixed-effect\n",
+            "  tests stand and the term is kept.\n", sep = "")
+      cal <- dance_traj_calibration(ff, dfm, "full")
+      cat("\nCalibration of the omnibus tests: ", if (isTRUE(cal$validated)) "provisional" else "NOT validated", "\n", sep = "")
+      cat("  ", cal$calibration, "\n", sep = "")
+      cat("The design-factor tests (whole trajectory, shape, circadian, trend, level) and the\n")
+      cat("pairwise comparisons are on the comparison tab; nested fixed-effect comparisons there\n")
+      cat("use ML refits of this model.\n")
+    } else {
+      if (!is.null(mod$model_selection)) {
+        ms <- mod$model_selection; sel <- attr(ms, "selected")
+        cat("Delta-AICc across the nested set (AICc averaged per participant, same participants in every cell):\n")
+        cat(sprintf("  %-20s %12s %10s %8s\n", "model", "AICc", "dAICc", "weight"))
+        for (i in seq_len(nrow(ms)))
+          cat(sprintf("  %-20s %12s %10s %8s%s\n", ms$model[i], fmt2(ms$AICc[i]),
+                      fmt2(ms$dAICc[i]), fmt3(ms$weight[i]),
+                      if (!is.null(sel) && identical(ms$model[i], sel)) " <-- reported" else ""))
+        cat("  Harmonics are cumulative (H1-H2 contains harmonics 1 AND 2). Akaike weights\n")
+        cat("  redistribute over this set only: 'best of these', not 'probably correct'.\n")
+      } else {
+        cat("Nested-model comparison not run (enable 'Compare nested models' under Advanced).\n")
       }
-      cat("\n  AICc averaged per subject over the same subjects for every cell.\n")
-      # P14: the set is every trend the UI offers crossed with the CUMULATIVE
-      # harmonic sets up to the number selected. Say so: "H1-H2" is not "H2",
-      # and the old label invited exactly that reading.
-      cat("  Harmonics are cumulative: H1-H2 is the model containing harmonics 1 AND 2.\n")
-      cat("  The set stops at the ", attr(ms, "n_harmonics_max") %||% "selected",
-          " harmonic(s) you selected; models beyond that are not fitted, so they\n",
-          "  cannot take Akaike weight away from the ones you are choosing between.\n",
-          sep = "")
-      cat("  Absolute AIC/AICc/BIC means with SDs are not reported: with no competing\n")
-      cat("  model they are constant offsets of one another (which is why all three\n")
-      cat("  SDs printed identically), and with n/k = ", fmtn(length(mod$time_vec), 0),
-          "/", fmtn(dance_model_npar(trend_type, nh) + 1, 0),   # P14: one rule
-          " a high R-squared is near-guaranteed.\n", sep = "")
-    } else if("aicc" %in% names(params)) {
-      hdr("Model selection")
-      cat("  Enable 'Compare nested models' to get a Delta-AICc table with Akaike weights.\n")
-      cat("  Absolute AIC/AICc/BIC are deliberately not summarised here: without a\n")
-      cat("  competing model they carry no information, and AICc - AIC and BIC - AIC are\n")
-      cat("  constant offsets (", fmt4(2 * 8 * 9 / (length(mod$time_vec) - 8 - 1)),
-          " and ", fmt4(8 * (log(length(mod$time_vec)) - 2)),
-          " for k = 8 here), which is why their SDs were identical.\n", sep = "")
-      if("loocv_rmse" %in% names(params)) {
-        is_cv <- mod$loocv_is_true_cv
-        cat(sprintf("  %s: mean %s\n",
-                    if(isTRUE(is_cv)) "LOOCV RMSE (genuine leave-one-out refits)"
-                    else "In-sample residual RMSE (NOT cross-validated)",
-                    fmt4(mean(params$loocv_rmse, na.rm = TRUE))))
-        if(!isTRUE(is_cv))
-          cat("    The nonlinear path used to report this number under the name 'LOOCV\n",
-              "    RMSE' while computing it from the fitted values. It is training error.\n", sep = "")
-      }
-    }
-
-    # ========================================================================
-    # AUDIT 1.3: commonality analysis, and no dominance verdict
-    # ========================================================================
-    im <- pop$indiv_means
-    if(!is.null(im) && !is.null(im$unique_S) && is.finite(im$unique_S)) {
-      hdr("Variance decomposition (commonality analysis)")
-      cat("Chevan & Sutherland (1991); Ray-Mukherjee et al. (2014).\n\n")
-      cat(sprintf("  Unique to Process S (homeostatic): %s  (%s%% of total R-squared)\n",
-                  fmt3(im$unique_S), fmt1(im$percent_S)))
-      cat(sprintf("  Unique to Process C (circadian):   %s  (%s%%)\n",
-                  fmt3(im$unique_C), fmt1(im$percent_C)))
-      cat(sprintf("  Shared between S and C:            %s  (%s%%)\n",
-                  fmt3(im$shared_SC), fmt1(im$percent_shared)))
-      cat(sprintf("  ------------------------------------------------\n"))
-      cat(sprintf("  Total R-squared:                   %s  (%s%%)\n",
-                  fmt3(im$unique_S + im$unique_C + im$shared_SC),
-                  fmt1(im$percent_S + im$percent_C + im$percent_shared)))
-      cat("\n  These three sum to the total by construction. The previous output printed\n")
-      cat("  two overlapping MARGINAL R-squareds (0.283 and 0.838 against a total of\n")
-      cat("  0.892) and called their ratios 'proportions', which summed to 124.7%; the\n")
-      cat("  shared component was invisible because it was being counted twice.\n")
-      if(isTRUE(im$shared_SC < 0))
-        cat("  ! The shared component is NEGATIVE: S and C are acting as mutual\n",
-            "    suppressors here. That is a real finding about the design, not an error.\n", sep = "")
-      cat("\n  The marginal R-squareds this is computed from, for audit:\n")
-      cat(sprintf("    trend-only model:     %s\n", fmt3(im$r_squared_S)))
-      cat(sprintf("    harmonics-only model: %s\n", fmt3(im$r_squared_C)))
-      cat("\n  No dominance verdict is emitted. The old report concluded 'Circadian rhythm\n")
-      cat("  (C) is the dominant component' from overlapping R-squareds; and any such\n")
-      cat("  claim would have to account for C using ", 2 * nh,
-          " parameters against S's ",
-          dance_trend_npar(trend_type),                        # P14: one rule
-          ".\n", sep = "")
-    }
-
-    # ========================================================================
-    # AUDIT 2.2: conditioning
-    # ========================================================================
-    if(!is.null(mod$conditioning)) {
-      hdr("Parameter conditioning (AUDIT 2.2)")
       cn <- mod$conditioning
-      if(!is.null(cn$mean_cor)) {
-        cat("Mean within-subject parameter correlation matrix:\n")
-        print(round(cn$mean_cor, 3))
-        cat("\n")
-      }
-      if(!is.null(cn$tau_fixed_delta_aic)) {
-        cat(sprintf("Free-tau vs tau fixed at %s h:  Delta-AIC = %s (%s)\n",
+      if (!is.null(cn) && !is.null(cn$tau_fixed_delta_aic)) {
+        cat(sprintf("Free tau vs tau held at %s h: Delta-AIC = %s (%s)\n",
                     fmt1(cn$tau_fixed_value), fmt2(cn$tau_fixed_delta_aic),
-                    if(cn$tau_fixed_delta_aic > 0)
+                    if (cn$tau_fixed_delta_aic > 0)
                       "the free-tau fit is NOT better by AIC: tau is not identified by these data"
                     else "the free-tau fit is preferred"))
-        cat(sprintf("  Delta-AIC = AIC(free tau) - AIC(tau fixed), averaged over the %s subject(s)\n",
+        cat(sprintf("  AIC(free) - AIC(fixed), averaged over the %s participant(s) scorable in both fits.\n",
                     fmtn(cn$tau_fixed_n %||% NA, 0)))
-        cat("  scorable in BOTH fits. This is a separate check from the Delta-AICc
-")
-        cat("  table above, which estimates tau freely in every saturating cell.\n")
-      } else if(isTRUE(cn$tau_fixed_skipped)) {
-        # P15.3: an empty box is a choice, and it must not look like a result.
-        cat("Free-tau vs fixed-tau: NOT RUN -- no value was given for tau.\n")
-        cat("  Enter a value in 'tau held at (h)' to test whether the free tau\n")
-        cat("  earns its extra parameter. Until then, nothing here says whether\n")
-        cat("  tau is identified by these data.\n")
+      } else if (!is.null(cn) && isTRUE(cn$tau_fixed_skipped)) {
+        cat("Free-tau vs fixed-tau check: NOT RUN -- enter a value in 'tau held at (h)'.\n")
       }
-      if(!is.null(cn$kappa_before))
-        cat(sprintf("Design-matrix condition number: %s (midnight origin) -> %s (first-observation origin)\n",
-                    fmt1(cn$kappa_before), fmt1(cn$kappa_after)))
     }
 
-    # ========================================================================
-    # Groups
-    # ========================================================================
-    if(!is.null(mod$group_fits) && length(mod$group_fits) >= 1) {
-      ga <- attr(mod$group_fits, "audit")
-      hdr(sprintf("Group-specific parameters%s",
-                  if(!is.null(mod$group_var_name)) paste0(" (", mod$group_var_name, ")") else ""))
-
-      # AUDIT 1.5: the accounting, before any group is printed
-      n_in <- attr(mod$group_fits, "n_in_groups") %||% NA
-      n_fit <- attr(mod$group_fits, "n_fitted") %||% nrow(params)
-      cat(sprintf("Group sizes sum to %s; %s subjects were fitted.\n",
-                  fmtn(n_in, 0), fmtn(n_fit, 0)))
-      if(!is.null(ga) && ga$n_unassigned > 0)
-        cat(sprintf("  %d subject(s) have no usable group label and appear as UNASSIGNED below.\n",
-                    ga$n_unassigned),
-            "  They were previously pooled into every population statistic and into no\n",
-            "  group, which is why the group sizes did not add up to the total.\n", sep = "")
-      if(!is.null(ga) && length(ga$dropped_small) > 0)
-        cat(sprintf("  Group(s) not summarised (fewer than 3 fitted subjects): %s\n",
-                    paste(ga$dropped_small, collapse = ", ")))
-      if(is.finite(n_in) && is.finite(n_fit) && n_in != n_fit)
-        cat("  ! THESE DO NOT RECONCILE. Some subjects are being dropped silently.\n")
-      else
-        cat("  These reconcile.\n")
-
-      cat("\nEstimator key, per line: [arithmetic] = ordinary mean and SD.\n")
-      cat("                         [vector]     = amplitude-weighted vector mean.\n")
-      cat("                         [circular]   = circular mean / circular SD.\n")
-      cat("A linear SD is never printed beside a vector- or circular-averaged value.\n")
-
-      for(g_name in names(mod$group_fits)) {
-        g <- mod$group_fits[[g_name]]
-        cat(sprintf("\nGroup '%s' (n = %d):\n", g_name, g$n))
-
-        # AUDIT: "Intercept (at t = 0)" invited reading beta_0 as a starting
-        # level. It is a coefficient; the starting level is the fitted value at
-        # the first observation, and the two differ by the harmonic sum there.
-        cat(sprintf("  Constant term (beta_0):        %s (SD %s)   [arithmetic]\n",
-                    fmt3(g$intercept), fmt3(g$sd_mesor)))
-        .gv0 <- dance_value_at(g$mean_coefs, mod, min(mod$time_vec, na.rm = TRUE))
-        if(is.finite(.gv0))
-          cat(sprintf("  Predicted value at start (%s): %s%s\n",
-                      dance_clock_label(dance_clock_origin(mod) +
-                                        min(mod$time_vec, na.rm = TRUE), period,
-                                      show_day = FALSE),
-                      fmt2(.gv0), if(!is.null(dvu)) paste0(" ", dvu) else ""))
-        if(trend_type != "none" && is.finite(g$rhythm_adjusted_mean))
-          cat(sprintf("  MESOR (rhythm-adjusted mean):  %s   [integrated over the window]\n",
-                      fmt3(g$rhythm_adjusted_mean)))
-
-        if(!is.null(g$trend_params) && length(g$trend_params) > 0) {
-          for(pn in names(g$trend_params)) {
-            lbl <- switch(pn, "trend_linear" = "Linear trend", "trend_log" = "Log trend",
-                          "A_sat" = "A_sat (asymptote)", "tau" = "tau (time constant, h)", pn)
-            cat(sprintf("  %-30s %s (SD %s)   [arithmetic]\n", paste0(lbl, ":"),
-                        fmt3(g$trend_params[[pn]]$mean), fmt3(g$trend_params[[pn]]$sd)))
-          }
-        }
-
-        for(h in seq_len(nh)) {
-          rr <- if(!is.null(g$resultants)) g$resultants[[h]] else NULL
-          cat(sprintf("  H%d amplitude: %s   [vector]\n", h, fmt3(g$mean_amplitudes[h])))
-          cat(sprintf("                %s (SD %s)   [arithmetic]\n",
-                      fmt3(g$amp_arithmetic[h]), fmt3(g$sd_amplitudes[h])))
-          cat(sprintf("  H%d acrophase: %s   [vector]\n", h,
-                      dance_acrophase_label(hours = g$mean_acrophases_time[h],
-                                          period = period, harmonic = h,
-                                          clock_origin = clock_o)))
-          if(!is.null(rr)) {
-            cat(sprintf("                r-bar unweighted %s (Rayleigh Z = %s, p = %s)   [circular]\n",
-                        fmt3(rr$r_unweighted), fmt1e(rr$rayleigh$Z),
-                        format.pval(rr$rayleigh$p, digits = 3, eps = 1e-16)))
-            cat(sprintf("                r-bar amplitude-weighted %s\n", fmt3(rr$r_weighted)))
-          }
-          if(h > 1)
-            cat(sprintf("                H%d has %d maxima per day, all shown\n", h, h))
-        }
-
-        gpk <- dance_curve_peak_clock(g$mean_coefs, mod)
-        if(!is.null(gpk))
-          cat(sprintf("  Complete fitted curve peaks at %s (value %s), troughs at %s\n",
-                      dance_clock_label(gpk$peak_clock, period, show_day = FALSE),
-                      fmt2(gpk$peak_value),
-                      dance_clock_label(gpk$trough_clock, period, show_day = FALSE)))
-
-        cat("\n  Fitted equation:\n  ")
-        cat(dance_format_equation(g$intercept, trend_type, g$trend_coefs,
-                                g$mean_amplitudes, g$mean_acrophases_rad,
-                                period, pop$t_offset %||% 0), "\n")
-
-        if(!is.null(g$variance_decomp)) {
-          vd <- g$variance_decomp
-          cat("  Variance decomposition (commonality):\n")
-          cat(sprintf("    unique S %s%%, unique C %s%%, shared %s%%\n",
-                      fmt1(vd$percent_S), fmt1(vd$percent_C),
-                      fmt1(vd$percent_shared %||% NA_real_)))
+    # ---- 8. diagnostics ----------------------------------------------------------
+    hdr("Diagnostics")
+    if (mixed) {
+      m <- ff$model
+      cat(sprintf("  Residual SD (sigma): %s\n", fmt4(stats::sigma(m))))
+      r2 <- dance_traj_r2(ff)
+      if (!is.null(r2))
+        cat(sprintf("  R-squared: marginal %s (fixed effects), conditional %s (fixed + random)\n    [%s]\n",
+                    fmt3(r2$marginal), fmt3(r2$conditional), r2$method))
+      cat(sprintf("  Convergence %s; singular %s; fixed-effect rank %s.\n",
+                  if (isTRUE(ff$converged)) "ok" else "FAILED",
+                  if (isTRUE(ff$singular)) "yes (boundary, kept)" else "no",
+                  if (isTRUE(ff$rank_deficient)) "DEFICIENT" else "full"))
+      cat("  Residual normality and the residual plots are on the diagnostics tab.\n")
+    } else {
+      cat(sprintf("  R-squared per participant: mean %s, range [%s, %s]\n",
+                  fmt3(mean(params$r_squared, na.rm = TRUE)),
+                  fmt3(min(params$r_squared, na.rm = TRUE)),
+                  fmt3(max(params$r_squared, na.rm = TRUE))))
+      n_sig <- sum(params$p_value < 0.05, na.rm = TRUE)
+      cat(sprintf("  Detectable rhythms (zero-amplitude F test, harmonics given the trend, p < .05): %d / %d (%s%%)\n",
+                  n_sig, nrow(params), fmt1(100 * n_sig / nrow(params))))
+      if (!is.null(mod$bingham_summary)) {
+        for (h in seq_len(nh)) {
+          b <- mod$bingham_summary[[h]]; if (is.null(b)) next
+          cat(sprintf("  H%d acrophase identified (joint region excludes the origin) in %d / %d participants (%s%%)\n",
+                      h, b$n_identified, b$n, fmt1(100 * b$n_identified / b$n)))
         }
       }
+      if (!is.null(mod$boot_results)) {
+        br <- mod$boot_results
+        cat(sprintf("  Bootstrap CIs (B = %d, %s resampling): constant [%s, %s]; H1 amplitude [%s, %s]; H1 acrophase [%s, %s]\n",
+                    br$B, br$resample_unit %||% "participant",
+                    fmt3(br$mesor_ci[1]), fmt3(br$mesor_ci[2]),
+                    fmt3(br$amplitude_ci[1]), fmt3(br$amplitude_ci[2]),
+                    dance_acrophase_label(hours = br$acrophase_ci[1], period = period, harmonic = 1,
+                                          clock_origin = clock_o, all = FALSE),
+                    dance_acrophase_label(hours = br$acrophase_ci[2], period = period, harmonic = 1,
+                                          clock_origin = clock_o, all = FALSE)))
+        if (!is.null(br$acrophase_ci_circular) && isTRUE(br$acrophase_ci_circular$wraps))
+          cat("    (the acrophase interval wraps past the origin, so its endpoints run high to low)\n")
+      }
+      im <- pop$indiv_means
+      if (!is.null(im) && !is.null(im$unique_S) && is.finite(im$unique_S))
+        cat(sprintf("  Variance shares (commonality): trend %s%%, rhythm %s%%, shared %s%% of the total R-squared\n",
+                    fmt1(im$percent_S), fmt1(im$percent_C), fmt1(im$percent_shared)))
+      cat("  Residual normality and the residual plots are on the diagnostics tab.\n")
     }
 
     invisible(NULL)
@@ -4022,54 +3648,58 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
 
   output$harmonic_summary <- renderPrint({ .print_harmonic_summary() })
 
-  # Parameters table
+  # The table under the text: a spread of the per-participant quantities. Under
+  # the two-stage approach these are the independent per-participant fits;
+  # under the mixed-effects approach they are the conditional (shrunken)
+  # participant estimates of the one model, and the heading says which.
   output$harmonic_parameters_table <- renderUI({
     req(values$harmonic_model)
     mod <- values$harmonic_model
-    params <- mod$individual_params
-    
-    # Build summary table with all harmonics
-    # AUDIT 1.4: this column is the fitted constant, not a rhythm-adjusted mean.
-    param_names <- c("Intercept (b0, t=0)")
-    mean_vals <- c(mean(params$mesor))
-    sd_vals <- c(sd(params$mesor))
-    min_vals <- c(min(params$mesor))
-    max_vals <- c(max(params$mesor))
-    
-    for(h in 1:mod$n_harmonics) {
-      amp_col <- paste0("amplitude_", h)
-      acro_col <- paste0("acrophase_time_", h)
-      
-      # AUDIT: acrophase columns hold MODEL-elapsed hours; the table reports
-      # clock time. The mean is converted; the SD is a dispersion, carries no
-      # origin, and is left alone.
-      .co <- dance_clock_origin(mod)
-      .to_clock <- function(v) (v + .co) %% mod$period
-      param_names <- c(param_names, paste0("Amplitude H", h),
-                       paste0("Acrophase H", h, " (clock h)"))
-      mean_vals <- c(mean_vals, mean(params[[amp_col]]), .to_clock(mean(params[[acro_col]])))
-      sd_vals <- c(sd_vals, sd(params[[amp_col]]), sd(params[[acro_col]]))
-      min_vals <- c(min_vals, min(params[[amp_col]]), .to_clock(min(params[[acro_col]])))
-      max_vals <- c(max_vals, max(params[[amp_col]]), .to_clock(max(params[[acro_col]])))
+    .co <- dance_clock_origin(mod)
+    .to_clock <- function(v) (v + .co) %% mod$period
+    rows <- list()
+    push <- function(name, x, clock = FALSE) {
+      x <- suppressWarnings(as.numeric(x)); x <- x[is.finite(x)]
+      if (!length(x)) return(invisible(NULL))
+      rows[[length(rows) + 1L]] <<- data.frame(
+        Parameter = name,
+        Mean = round(if (clock) .to_clock(mean(x)) else mean(x), 3),
+        SD = round(stats::sd(x), 3),
+        Min = round(if (clock) .to_clock(min(x)) else min(x), 3),
+        Max = round(if (clock) .to_clock(max(x)) else max(x), 3),
+        stringsAsFactors = FALSE)
     }
-    
-    param_names <- c(param_names, "R²", "% Rhythm")
-    mean_vals <- c(mean_vals, mean(params$r_squared), mean(params$percent_rhythm))
-    sd_vals <- c(sd_vals, sd(params$r_squared), sd(params$percent_rhythm))
-    min_vals <- c(min_vals, min(params$r_squared), min(params$percent_rhythm))
-    max_vals <- c(max_vals, max(params$r_squared), max(params$percent_rhythm))
-    
-    summary_df <- data.frame(
-      Parameter = param_names,
-      Mean = round(mean_vals, 3),
-      SD = round(sd_vals, 3),
-      Min = round(min_vals, 3),
-      Max = round(max_vals, 3)
-    )
-    
+    if (harmonic_is_mixed()) {
+      ff <- harmonic_traj(); req(isTRUE(ff$ok))
+      pt <- dance_traj_participant_table(ff); req(isTRUE(pt$ok))
+      tb <- pt$table
+      push("Level at the first observation", tb$level_at_t0)
+      for (tm in ff$spec$trend_terms) push(paste0("Trend (", tm, ")"), tb[[tm]])
+      for (h in seq_len(ff$spec$n_harmonics)) {
+        push(paste0("Amplitude H", h), tb[[paste0("amplitude_", h)]])
+        push(paste0("Acrophase H", h, " (clock h)"), tb[[paste0("acrophase_time_", h)]], clock = TRUE)
+      }
+      title <- sprintf("Participant estimates (conditional modes of the one model, %d curves)", nrow(tb))
+      note <- pt$note
+    } else {
+      params <- mod$individual_params
+      push("Constant term (beta_0)", params$mesor)
+      for (h in seq_len(mod$n_harmonics)) {
+        push(paste0("Amplitude H", h), params[[paste0("amplitude_", h)]])
+        push(paste0("Acrophase H", h, " (clock h)"), params[[paste0("acrophase_time_", h)]], clock = TRUE)
+      }
+      push("R\u00b2", params$r_squared)
+      push("% Rhythm", params$percent_rhythm)
+      title <- sprintf("Per-participant fits (%d participants)", nrow(params))
+      note <- paste("Arithmetic spread of the independent per-participant estimates. The",
+                    "acrophase mean here is arithmetic; the circular (vector) mean is in",
+                    "the summary above.")
+    }
+    summary_df <- do.call(rbind, rows)
     tagList(
-      h4("Parameter Summary"),
-      renderTable(summary_df, striped = TRUE, hover = TRUE, bordered = TRUE)
+      h4(title),
+      renderTable(summary_df, striped = TRUE, hover = TRUE, bordered = TRUE),
+      helpText(note)
     )
   })
   
@@ -4081,584 +3711,199 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     time_fine <- seq(min(mod$time_vec), max(mod$time_vec), length.out = 200)
     subject_select <- input$harmonic_subject_select
     if(is.null(subject_select)) subject_select <- "mean"
-    tp_response_type <- if(!is.null(mod$two_process_params$response_type)) mod$two_process_params$response_type else "gaussian"
     
     p <- plot_ly()
-    
-    if(subject_select == "all") {
-      # Overlay all subjects - colored by group if available
-      # AUDIT: one palette for the whole app, keyed by group NAME so a group
-      # keeps its colour across every figure and is not repainted when another
-      # group is filtered out. See server/02b_helpers_palette.R.
-      .glv <- names(mod$group_fits)
-      group_colors_hex <- dance_group_colors(.glv)
-      if(!is.null(mod$group_fits) && length(mod$group_fits) >= 1 && 
-         !is.null(harmonic_group_var_eff()) && harmonic_group_var_eff() != "_none_") {
-        
-        group_var <- values$covariates[[harmonic_group_var_eff()]]
-        groups <- names(mod$group_fits)
-        
-        for(i in seq_along(mod$individual_fits)) {
-          fit_i <- mod$individual_fits[[i]]
-          if(!is.null(fit_i) && fit_i$success) {
-            pred_i <- predict_cosinor(fit_i, time_fine)
-            grp <- as.character(group_var[i])
-            .c <- group_colors_hex[[grp]] %||% NA_character_
-            line_color <- if(!is.na(.c)) dance_group_rgba(.c, 0.4) else 'rgba(100,100,100,0.3)'
-            
-            p <- p %>% add_lines(x = time_fine, y = pred_i, 
-                                 line = list(color = line_color, width = 1),
-                                 showlegend = FALSE, hoverinfo = "skip")
-          }
-        }
-        
-        # Add group mean curves using all harmonics
-        for(g_idx in seq_along(groups)) {
-          g_name <- groups[g_idx]
-          g_fit <- mod$group_fits[[g_name]]
-          if(mod$trend_type == "two_process") {
-            params <- mod$individual_params
-            params$group <- group_var[params$subject]
-            grp_params <- params[params$group == g_name & !is.na(params$group), ]
-            group_idx <- which(group_var == g_name)
-            S_t <- compute_mean_S_from_fits(mod$individual_fits, time_fine, group_idx)
-            g_pred <- predict_two_process_mean_curve(grp_params, time_fine, mod$period, mod$n_harmonics, S_t, tp_response_type)
-          } else {
-            # Use mean_coefs for full multi-harmonic prediction
-            g_pred <- predict_from_coefs(g_fit$mean_coefs, time_fine, mod$period, mod$n_harmonics, mod$trend_type, mod$t_offset, mod$t_center)
-          }
-          
-          p <- p %>% add_lines(x = time_fine, y = g_pred,
-                               line = list(color = unname(group_colors_hex[[g_name]]), width = 3),
-                               name = paste("Mean:", g_name))
-        }
-        
-        # Show harmonic components for grouped data (same as "mean" view)
-        if(isTRUE(input$harmonic_show_components) && mod$n_harmonics >= 1) {
-          params <- mod$individual_params
-          params$group <- group_var[params$subject]
-          
-          # Lighter versions of group colors for components
-          group_comp_colors <- dance_group_colors(names(mod$group_fits))
-          
-          # Show group-specific harmonic components
-          for(g_idx in seq_along(groups)) {
-            g_name <- groups[g_idx]
-            grp_params <- params[params$group == g_name & !is.na(params$group), ]
-            
-            if(nrow(grp_params) > 0) {
-              grp_mesor <- mean(grp_params$mesor, na.rm = TRUE)
-              
-              grp_coefs <- c(grp_mesor)
-              trend_coefs <- get_mean_trend_coefs(grp_params, mod$trend_type)
-              if(length(trend_coefs) > 0) {
-                grp_coefs <- c(grp_coefs, trend_coefs)
-              }
-              for(h in 1:mod$n_harmonics) {
-                grp_coefs <- c(grp_coefs, 
-                               mean(grp_params[[paste0("beta_cos_", h)]], na.rm = TRUE),
-                               mean(grp_params[[paste0("beta_sin_", h)]], na.rm = TRUE))
-              }
-              
-              n_trend_coefs <- length(trend_coefs)
-              coef_offset <- 1 + n_trend_coefs
-              
-              for(h in 1:mod$n_harmonics) {
-                omega <- 2 * pi * h / mod$period
-                beta_cos <- grp_coefs[coef_offset + 2 * h - 1]
-                beta_sin <- grp_coefs[coef_offset + 2 * h]
-                comp_vals <- grp_mesor + beta_cos * cos(omega * time_fine) + beta_sin * sin(omega * time_fine)
-                
-                p <- p %>% add_lines(x = time_fine, y = comp_vals,
-                                     line = list(color = unname(group_comp_colors[[g_name]]), width = 1.5, dash = 'dot'),
-                                     name = paste0("H", h, " (", g_name, ")"))
-              }
-              
-              # Plot trend line using helper function
-              if(mod$trend_type == "two_process") {
-                group_idx <- which(group_var == g_name)
-                S_t <- compute_mean_S_from_fits(mod$individual_fits, time_fine, group_idx)
-                trend_line <- compute_two_process_trend_line(grp_params, time_fine, S_t, tp_response_type)
-              } else {
-                trend_line <- compute_trend_line(grp_params, mod$trend_type, time_fine, mod$t_offset)
-              }
-              if(!is.null(trend_line)) {
-                p <- p %>% add_lines(x = time_fine, y = trend_line,
-                                     line = list(color = unname(group_colors_hex[[g_name]]), width = 1.5, dash = 'dash'),
-                                     name = paste0(get_trend_label(mod$trend_type), " (", g_name, ")"))
-              }
-            }
-          }
-          
-          # Overall harmonics in gray
-          overall_mesor <- mean(params$mesor, na.rm = TRUE)
-          overall_coefs <- c(overall_mesor)
-          overall_trend_coefs <- get_mean_trend_coefs(params, mod$trend_type)
-          if(length(overall_trend_coefs) > 0) {
-            overall_coefs <- c(overall_coefs, overall_trend_coefs)
-          }
-          for(h in 1:mod$n_harmonics) {
-            overall_coefs <- c(overall_coefs, 
-                               mean(params[[paste0("beta_cos_", h)]], na.rm = TRUE),
-                               mean(params[[paste0("beta_sin_", h)]], na.rm = TRUE))
-          }
-          
-          n_trend_coefs <- length(overall_trend_coefs)
-          coef_offset <- 1 + n_trend_coefs
-          
-          for(h in 1:mod$n_harmonics) {
-            omega <- 2 * pi * h / mod$period
-            beta_cos <- overall_coefs[coef_offset + 2 * h - 1]
-            beta_sin <- overall_coefs[coef_offset + 2 * h]
-            comp_vals <- overall_mesor + beta_cos * cos(omega * time_fine) + beta_sin * sin(omega * time_fine)
-            
-            p <- p %>% add_lines(x = time_fine, y = comp_vals,
-                                 line = list(color = 'gray40', width = 1, dash = 'dot'),
-                                 name = paste0("H", h, " (overall)"))
-          }
-          
-          # Plot overall trend line using helper function
-          if(mod$trend_type == "two_process") {
-            S_t <- compute_mean_S_from_fits(mod$individual_fits, time_fine)
-            overall_trend_line <- compute_two_process_trend_line(params, time_fine, S_t, tp_response_type)
-          } else {
-            overall_trend_line <- compute_trend_line(params, mod$trend_type, time_fine, mod$t_offset)
-          }
-          if(!is.null(overall_trend_line)) {
-            p <- p %>% add_lines(x = time_fine, y = overall_trend_line,
-                                 line = list(color = 'black', width = 1, dash = 'dash'),
-                                 name = paste0(get_trend_label(mod$trend_type), " (overall)"))
-          }
-        }
-        
-      } else {
-        # No groups - all same color
-        for(i in seq_along(mod$individual_fits)) {
-          fit_i <- mod$individual_fits[[i]]
-          if(!is.null(fit_i) && fit_i$success) {
-            pred_i <- predict_cosinor(fit_i, time_fine)
-            p <- p %>% add_lines(x = time_fine, y = pred_i, 
-                                 line = list(color = 'rgba(100, 100, 100, 0.3)', width = 1),
-                                 showlegend = FALSE, hoverinfo = "skip")
-          }
-        }
-        
-        # Add mean curve - either from pop_mean_fit or computed from individual params
-        if(!is.null(mod$pop_mean_fit)) {
-          pop <- mod$pop_mean_fit
-          if(mod$trend_type == "two_process") {
-            params <- mod$individual_params
-            S_t <- compute_mean_S_from_fits(mod$individual_fits, time_fine)
-            mean_pred <- predict_two_process_mean_curve(params, time_fine, mod$period, mod$n_harmonics, S_t, tp_response_type)
-          } else {
-            mean_pred <- predict_from_coefs(pop$mean_coefs, time_fine, mod$period, mod$n_harmonics, mod$trend_type, mod$t_offset, mod$t_center)
-          }
-          p <- p %>% add_lines(x = time_fine, y = mean_pred,
-                               line = list(color = DANCE_EMPHASIS, width = 3), name = "Population Mean")
-        } else {
-          # Compute mean from individual parameters (for individual analysis type)
-          params <- mod$individual_params
-          mean_mesor <- mean(params$mesor, na.rm = TRUE)
-          mean_coefs <- c(mean_mesor)
-          
-          mean_trend_coefs <- get_mean_trend_coefs(params, mod$trend_type)
-          if(length(mean_trend_coefs) > 0) {
-            mean_coefs <- c(mean_coefs, mean_trend_coefs)
-          }
-          
-          for(h in 1:mod$n_harmonics) {
-            mean_coefs <- c(mean_coefs, 
-                            mean(params[[paste0("beta_cos_", h)]], na.rm = TRUE),
-                            mean(params[[paste0("beta_sin_", h)]], na.rm = TRUE))
-          }
-          
-          if(mod$trend_type == "two_process") {
-            S_t <- compute_mean_S_from_fits(mod$individual_fits, time_fine)
-            mean_pred <- predict_two_process_mean_curve(params, time_fine, mod$period, mod$n_harmonics, S_t, tp_response_type)
-          } else {
-            mean_pred <- predict_from_coefs(mean_coefs, time_fine, mod$period, mod$n_harmonics, mod$trend_type, mod$t_offset, mod$t_center)
-          }
-          p <- p %>% add_lines(x = time_fine, y = mean_pred,
-                               line = list(color = DANCE_EMPHASIS, width = 3), name = "Population Mean")
-        }
-        
-        # Show harmonic components for no-groups case
-        if(isTRUE(input$harmonic_show_components) && mod$n_harmonics >= 1) {
-          params <- mod$individual_params
-          overall_mesor <- mean(params$mesor, na.rm = TRUE)
-          
-          overall_coefs <- c(overall_mesor)
-          overall_trend_coefs <- get_mean_trend_coefs(params, mod$trend_type)
-          if(length(overall_trend_coefs) > 0) {
-            overall_coefs <- c(overall_coefs, overall_trend_coefs)
-          }
-          for(h in 1:mod$n_harmonics) {
-            overall_coefs <- c(overall_coefs, 
-                               mean(params[[paste0("beta_cos_", h)]], na.rm = TRUE),
-                               mean(params[[paste0("beta_sin_", h)]], na.rm = TRUE))
-          }
-          
-          colors <- dance_component_colors(max(mod$n_harmonics, 1))
-          n_trend_coefs <- length(overall_trend_coefs)
-          coef_offset <- 1 + n_trend_coefs
-          
-          for(h in 1:mod$n_harmonics) {
-            omega <- 2 * pi * h / mod$period
-            beta_cos <- overall_coefs[coef_offset + 2 * h - 1]
-            beta_sin <- overall_coefs[coef_offset + 2 * h]
-            comp_vals <- overall_mesor + beta_cos * cos(omega * time_fine) + beta_sin * sin(omega * time_fine)
-            
-            p <- p %>% add_lines(x = time_fine, y = comp_vals,
-                                 line = list(color = colors[h], width = 1.5, dash = 'dot'),
-                                 name = paste0("H", h))
-          }
-          
-          # Plot trend line using helper function
-          if(mod$trend_type == "two_process") {
-            S_t <- compute_mean_S_from_fits(mod$individual_fits, time_fine)
-            trend_line <- compute_two_process_trend_line(params, time_fine, S_t, tp_response_type)
-          } else {
-            trend_line <- compute_trend_line(params, mod$trend_type, time_fine, mod$t_offset)
-          }
-          if(!is.null(trend_line)) {
-            p <- p %>% add_lines(x = time_fine, y = trend_line,
-                                 line = list(color = 'black', width = 1.5, dash = 'dash'),
-                                 name = get_trend_label(mod$trend_type))
-          }
-        }
-      }
-      
-    } else if(subject_select == "mean") {
-      # Show mean curve(s) - either population or by group
-      
-      # Check if we have group fits
-      if(!is.null(mod$group_fits) && length(mod$group_fits) >= 1) {
-        # Show each group's mean curve - use hex colors for proper transparency
-        # AUDIT: one palette for the whole app, keyed by group NAME so a group
-      # keeps its colour across every figure and is not repainted when another
-      # group is filtered out. See server/02b_helpers_palette.R.
-      .glv <- names(mod$group_fits)
-      group_colors_hex <- dance_group_colors(.glv)
-        color_idx <- 1
-        
-        for(g_name in names(mod$group_fits)) {
-          g_fit <- mod$group_fits[[g_name]]
-          if(mod$trend_type == "two_process") {
-            params <- mod$individual_params
-            group_var <- values$covariates[[harmonic_group_var_eff()]]
-            params$group <- group_var[params$subject]
-            grp_params <- params[params$group == g_name & !is.na(params$group), ]
-            group_idx <- which(group_var == g_name)
-            S_t <- compute_mean_S_from_fits(mod$individual_fits, time_fine, group_idx)
-            g_pred <- predict_two_process_mean_curve(grp_params, time_fine, mod$period, mod$n_harmonics, S_t, tp_response_type)
-          } else {
-            # Use mean_coefs for full multi-harmonic prediction
-            g_pred <- predict_from_coefs(g_fit$mean_coefs, time_fine, mod$period, mod$n_harmonics, mod$trend_type, mod$t_offset, mod$t_center)
-          }
 
-          # Only add line if predictions are valid (not all NA/NaN/Inf)
-          if(any(is.finite(g_pred))) {
-            p <- p %>% add_lines(x = time_fine, y = g_pred,
-                                 line = list(color = unname(group_colors_hex[[g_name]]), width = 3),
-                                 name = paste("Group:", g_name))
-          }
-          
-          # Add confidence band if requested (approximate using first harmonic SD)
-          if(isTRUE(input$harmonic_show_ci) && !is.null(g_fit$sd_amplitudes)) {
-            # Simple approximation: scale curve by amplitude uncertainty
-            amp_se <- g_fit$sd_amplitudes[1] / sqrt(g_fit$n)
-            scale_upper <- 1 + 1.96 * amp_se / g_fit$mean_amplitudes[1]
-            scale_lower <- max(0, 1 - 1.96 * amp_se / g_fit$mean_amplitudes[1])
-            
-            g_upper <- g_fit$mean_mesor + (g_pred - g_fit$mean_mesor) * scale_upper
-            g_lower <- g_fit$mean_mesor + (g_pred - g_fit$mean_mesor) * scale_lower
-            
-            # Use rgba with 0.25 transparency for confidence band
-            ci_color <- dance_group_rgba(group_colors_hex[[g_name]], 0.25)
-            
-            # Add ribbon with legend entry so it can be toggled
-            p <- p %>% add_ribbons(x = time_fine, ymin = g_lower, ymax = g_upper,
-                                   line = list(color = 'transparent'),
-                                   fillcolor = ci_color,
-                                   name = paste("95% CI:", g_name),
-                                   legendgroup = paste0("group_", g_name),
-                                   showlegend = TRUE, hoverinfo = "skip")
-          }
-          
-          color_idx <- color_idx + 1
-        }
-        
-        # Show harmonic components for grouped data
-        if(isTRUE(input$harmonic_show_components) && mod$n_harmonics >= 1) {
-          params <- mod$individual_params
-          group_var <- values$covariates[[harmonic_group_var_eff()]]
-          params$group <- group_var[params$subject]
-          
-          # Lighter versions of group colors for components
-          group_comp_colors <- dance_group_colors(names(mod$group_fits))
-          
-          # Show group-specific harmonic components
-          g_idx <- 1
-          for(g_name in names(mod$group_fits)) {
-            grp_params <- params[params$group == g_name & !is.na(params$group), ]
-            
-            if(nrow(grp_params) > 0) {
-              grp_mesor <- mean(grp_params$mesor, na.rm = TRUE)
-              
-              # Build group-specific coefficients using helper
-              grp_coefs <- c(grp_mesor)
-              grp_trend_coefs <- get_mean_trend_coefs(grp_params, mod$trend_type)
-              if(length(grp_trend_coefs) > 0) {
-                grp_coefs <- c(grp_coefs, grp_trend_coefs)
-              }
-              for(h in 1:mod$n_harmonics) {
-                grp_coefs <- c(grp_coefs, 
-                               mean(grp_params[[paste0("beta_cos_", h)]], na.rm = TRUE),
-                               mean(grp_params[[paste0("beta_sin_", h)]], na.rm = TRUE))
-              }
-              
-              n_trend_coefs <- length(grp_trend_coefs)
-              coef_offset <- 1 + n_trend_coefs
-              
-              # Plot each harmonic for this group
-              for(h in 1:mod$n_harmonics) {
-                omega <- 2 * pi * h / mod$period
-                beta_cos <- grp_coefs[coef_offset + 2 * h - 1]
-                beta_sin <- grp_coefs[coef_offset + 2 * h]
-                comp_vals <- grp_mesor + beta_cos * cos(omega * time_fine) + beta_sin * sin(omega * time_fine)
-                
-                p <- p %>% add_lines(x = time_fine, y = comp_vals,
-                                     line = list(color = unname(group_comp_colors[[g_name]]), width = 1.5, dash = 'dot'),
-                                     name = paste0("H", h, " (", g_name, ")"))
-              }
-              
-              # Plot trend line using helper function
-              if(mod$trend_type == "two_process") {
-                group_idx <- which(group_var == g_name)
-                S_t <- compute_mean_S_from_fits(mod$individual_fits, time_fine, group_idx)
-                grp_trend_line <- compute_two_process_trend_line(grp_params, time_fine, S_t, tp_response_type)
-              } else {
-                grp_trend_line <- compute_trend_line(grp_params, mod$trend_type, time_fine, mod$t_offset)
-              }
-              if(!is.null(grp_trend_line)) {
-                p <- p %>% add_lines(x = time_fine, y = grp_trend_line,
-                                     line = list(color = unname(group_colors_hex[[g_name]]), width = 1.5, dash = 'dash'),
-                                     name = paste0(get_trend_label(mod$trend_type), " (", g_name, ")"))
-              }
-            }
-            g_idx <- g_idx + 1
-          }
-          
-          # Also show overall (pooled) harmonics in gray for reference
-          overall_mesor <- mean(params$mesor, na.rm = TRUE)
-          overall_coefs <- c(overall_mesor)
-          overall_trend_coefs <- get_mean_trend_coefs(params, mod$trend_type)
-          if(length(overall_trend_coefs) > 0) {
-            overall_coefs <- c(overall_coefs, overall_trend_coefs)
-          }
-          for(h in 1:mod$n_harmonics) {
-            overall_coefs <- c(overall_coefs, 
-                               mean(params[[paste0("beta_cos_", h)]], na.rm = TRUE),
-                               mean(params[[paste0("beta_sin_", h)]], na.rm = TRUE))
-          }
-          
-          n_trend_coefs <- length(overall_trend_coefs)
-          coef_offset <- 1 + n_trend_coefs
-          
-          for(h in 1:mod$n_harmonics) {
-            omega <- 2 * pi * h / mod$period
-            beta_cos <- overall_coefs[coef_offset + 2 * h - 1]
-            beta_sin <- overall_coefs[coef_offset + 2 * h]
-            comp_vals <- overall_mesor + beta_cos * cos(omega * time_fine) + beta_sin * sin(omega * time_fine)
-            
-            p <- p %>% add_lines(x = time_fine, y = comp_vals,
-                                 line = list(color = 'gray40', width = 1, dash = 'dot'),
-                                 name = paste0("H", h, " (overall)"))
-          }
-          
-          # Plot overall trend using helper function
-          if(mod$trend_type == "two_process") {
-            S_t <- compute_mean_S_from_fits(mod$individual_fits, time_fine)
-            overall_trend_line <- compute_two_process_trend_line(params, time_fine, S_t, tp_response_type)
-          } else {
-            overall_trend_line <- compute_trend_line(params, mod$trend_type, time_fine, mod$t_offset)
-          }
-          if(!is.null(overall_trend_line)) {
-            p <- p %>% add_lines(x = time_fine, y = overall_trend_line,
-                                 line = list(color = 'black', width = 1, dash = 'dash'),
-                                 name = paste0(get_trend_label(mod$trend_type), " (overall)"))
-          }
-        }
-        
-        # Also add individual data points colored by group if requested
-        if(isTRUE(input$harmonic_show_data)) {
-          group_var <- values$covariates[[harmonic_group_var_eff()]]
-          for(i in seq_along(mod$individual_fits)) {
-            fit_i <- mod$individual_fits[[i]]
-            if(!is.null(fit_i) && fit_i$success) {
-              grp <- as.character(group_var[i])
-              grp_idx <- which(names(mod$group_fits) == grp)
-              .c <- group_colors_hex[[grp]] %||% NA_character_
-              pt_color <- if(!is.na(.c)) dance_group_rgba(.c, 0.3) else 'rgba(100,100,100,0.2)'
-              
-              p <- p %>% add_markers(x = fit_i$time, y = fit_i$y,
-                                     marker = list(color = pt_color, size = 3),
-                                     showlegend = FALSE, hoverinfo = "skip")
-            }
-          }
-        }
-        
-      } else {
-        # No groups - compute mean from individual parameters
-        params <- mod$individual_params
-        mean_mesor <- mean(params$mesor, na.rm = TRUE)
-        
-        # Build mean_coefs from individual parameters using helper
-        mean_coefs <- c(mean_mesor)
-        
-        # Add mean trend coefficients based on type
-        mean_trend_coefs <- get_mean_trend_coefs(params, mod$trend_type)
-        if(length(mean_trend_coefs) > 0) {
-          mean_coefs <- c(mean_coefs, mean_trend_coefs)
-        }
-        
-        # Add mean harmonic coefficients
-        for(h in 1:mod$n_harmonics) {
-          mean_coefs <- c(mean_coefs, 
-                          mean(params[[paste0("beta_cos_", h)]], na.rm = TRUE),
-                          mean(params[[paste0("beta_sin_", h)]], na.rm = TRUE))
-        }
-        
-        if(mod$trend_type == "two_process") {
-          S_t <- compute_mean_S_from_fits(mod$individual_fits, time_fine)
-          mean_pred <- predict_two_process_mean_curve(params, time_fine, mod$period, mod$n_harmonics, S_t, tp_response_type)
-        } else {
-          mean_pred <- predict_from_coefs(mean_coefs, time_fine, mod$period, mod$n_harmonics, mod$trend_type, mod$t_offset, mod$t_center)
-        }
-        
-        p <- p %>% add_lines(x = time_fine, y = mean_pred,
-                             line = list(color = DANCE_EMPHASIS, width = 3),
-                             legendgroup = "pop_mean", name = "Population Mean")
-        
-        # Add confidence band if requested (use SD of individual amplitudes)
-        if(isTRUE(input$harmonic_show_ci)) {
-          amp_sd <- sd(params$amplitude_1, na.rm = TRUE)
-          amp_mean <- mean(params$amplitude_1, na.rm = TRUE)
-          n_valid <- sum(!is.na(params$amplitude_1))
-          amp_se <- amp_sd / sqrt(n_valid)
-          
-          scale_upper <- 1 + 1.96 * amp_se / amp_mean
-          scale_lower <- max(0, 1 - 1.96 * amp_se / amp_mean)
-          
-          upper_pred <- mean_mesor + (mean_pred - mean_mesor) * scale_upper
-          lower_pred <- mean_mesor + (mean_pred - mean_mesor) * scale_lower
-          
-          p <- p %>% add_ribbons(x = time_fine, ymin = lower_pred, ymax = upper_pred,
-                                 line = list(color = 'transparent'),
-                                 fillcolor = dance_group_rgba(DANCE_EMPHASIS, 0.18),
-                                 legendgroup = "pop_mean",
-                                 name = "95% CI")
-        }
-        
-        # Show harmonic components if requested
-        if(isTRUE(input$harmonic_show_components) && mod$n_harmonics >= 1) {
-          colors <- dance_component_colors(max(mod$n_harmonics, 1))
-          n_trend_coefs <- length(mean_trend_coefs)
-          coef_offset <- 1 + n_trend_coefs
-          
-          for(h in 1:mod$n_harmonics) {
-            omega <- 2 * pi * h / mod$period
-            beta_cos <- mean_coefs[coef_offset + 2 * h - 1]
-            beta_sin <- mean_coefs[coef_offset + 2 * h]
-            comp_vals <- mean_mesor + beta_cos * cos(omega * time_fine) + beta_sin * sin(omega * time_fine)
-            
-            p <- p %>% add_lines(x = time_fine, y = comp_vals,
-                                 line = list(color = colors[h], width = 1.5, dash = 'dot'),
-                                 name = paste("H", h, "(τ/", h, ")", sep=""))
-          }
-          
-          # Show trend component if present using helper
-          if(mod$trend_type == "two_process") {
-            S_t <- compute_mean_S_from_fits(mod$individual_fits, time_fine)
-            trend_line <- compute_two_process_trend_line(params, time_fine, S_t, tp_response_type)
-          } else {
-            trend_line <- compute_trend_line(params, mod$trend_type, time_fine, mod$t_offset)
-          }
-          if(!is.null(trend_line)) {
-            p <- p %>% add_lines(x = time_fine, y = trend_line,
-                                 line = list(color = 'black', width = 1.5, dash = 'dash'),
-                                 name = get_trend_label(mod$trend_type))
-          }
-        }
-        
-        # Add individual data as faint points if requested
-        if(isTRUE(input$harmonic_show_data)) {
-          for(i in seq_along(mod$individual_fits)) {
-            fit_i <- mod$individual_fits[[i]]
-            if(!is.null(fit_i) && fit_i$success) {
-              p <- p %>% add_markers(x = fit_i$time, y = fit_i$y,
-                                     marker = list(color = 'rgba(100, 100, 100, 0.2)', size = 3),
-                                     showlegend = FALSE, hoverinfo = "skip")
-            }
+    if (harmonic_is_mixed()) {
+      # ======================================================================
+      # MIXED-EFFECTS: the cell curves ARE the ones tab 6 draws -- the same
+      # dance_traj_predict() call on the same fit -- so the two tabs cannot
+      # show different trajectories. Participants are conditional predictions.
+      # ======================================================================
+      ff <- harmonic_traj(); req(isTRUE(ff$ok))
+      pr <- dance_traj_predict(ff, conf = 0.95, band = "pointwise",
+                               component = "full", n_time = 200)
+      req(isTRUE(pr$ok))
+      cols <- dance_group_colors(pr$cells)
+      sel <- subject_select
+      one <- !(sel %in% c("all", "mean"))
+      if (identical(sel, "all") || one) {
+        pp <- dance_traj_participant_predict(ff, times = pr$times)
+        if (isTRUE(pp$ok)) {
+          keep <- if (one) sel else unique(pp$table$curve)
+          for (cl in keep) {
+            dcl <- pp$table[pp$table$curve == cl, , drop = FALSE]
+            if (!nrow(dcl)) next
+            col <- cols[[dcl$cell[1]]] %||% "#777777"
+            p <- p %>% add_lines(
+              x = dcl$t, y = dcl$fit,
+              name = if (one) sprintf("Participant %s (shrunken)", dcl$subject[1])
+                     else sprintf("%s participant", dcl$cell[1]),
+              legendgroup = if (one) "participant" else paste0("pp_", dcl$cell[1]),
+              showlegend = one,
+              line = list(color = dance_group_rgba(col, if (one) 0.95 else 0.30),
+                          width = if (one) 2.2 else 1))
           }
         }
       }
-      
-    } else {
-      # Single subject
-      i <- as.integer(subject_select)
-      fit_i <- mod$individual_fits[[i]]
-      
-      if(!is.null(fit_i) && fit_i$success) {
-        pred_i <- predict_cosinor(fit_i, time_fine)
-        
-        p <- p %>% add_lines(x = time_fine, y = pred_i,
-                             line = list(color = DANCE_SERIES1, width = 2), 
-                             name = paste("Subject", i))
-        
-        if(isTRUE(input$harmonic_show_data)) {
-          p <- p %>% add_markers(x = fit_i$time, y = fit_i$y,
-                                 marker = list(color = DANCE_SERIES1, size = 6),
-                                 name = "Observed Data")
+      for (cl in pr$cells) {
+        d <- pr$table[pr$table$cell == cl, , drop = FALSE]
+        if (isTRUE(input$harmonic_show_ci))
+          p <- p %>% add_ribbons(x = d$t, ymin = d$lo, ymax = d$hi, name = cl,
+                                 legendgroup = cl, line = list(width = 0),
+                                 fillcolor = dance_group_rgba(cols[[cl]], 0.16),
+                                 showlegend = FALSE, hoverinfo = "skip")
+        p <- p %>% add_lines(x = d$t, y = d$fit, name = cl, legendgroup = cl,
+                             line = list(color = cols[[cl]], width = 2.6,
+                                         dash = if (one) "dot" else "solid"))
+      }
+      if (isTRUE(input$harmonic_show_data)) {
+        dd <- ff$spec$data
+        dts <- ff$spec$design_terms
+        key <- if (length(dts))
+          do.call(paste, c(lapply(dts, function(f) as.character(dd[[f]])), list(sep = " x ")))
+          else rep(pr$cells[1], nrow(dd))
+        cvn <- if ("curve" %in% names(dd)) "curve" else "subject"
+        for (cl in pr$cells) {
+          i <- key == cl
+          if (one) i <- i & as.character(dd[[cvn]]) == sel
+          if (!any(i)) next
+          p <- p %>% add_markers(x = dd$t[i], y = dd$y[i], name = cl, legendgroup = cl,
+                                 showlegend = FALSE,
+                                 marker = list(color = dance_group_rgba(cols[[cl]], 0.35), size = 4))
         }
-        
-        # Show harmonic components if requested
-        if(isTRUE(input$harmonic_show_components) && mod$n_harmonics >= 1) {
-          components <- get_harmonic_components(fit_i, time_fine)
-          colors <- dance_component_colors(max(mod$n_harmonics, 1))
-          for(h in 1:mod$n_harmonics) {
-            comp_name <- paste0("harmonic_", h)
-            comp_vals <- components$mesor[1] + components[[comp_name]]
-            p <- p %>% add_lines(x = time_fine, y = comp_vals,
-                                 line = list(color = colors[h], width = 1.5, dash = 'dot'),
-                                 name = paste("H", h, "(τ/", h, ")", sep=""))
+      }
+    } else {
+      # ======================================================================
+      # TWO-STAGE: one OLS cosinor per participant. The group (or pooled) line
+      # and its band come from dance_ts_group_curves() -- the SAME call the
+      # comparison tab makes -- so the two tabs draw the same curve: the
+      # group's mean-coefficient curve with a pointwise band from the spread
+      # of the participants' own fitted curves. Participants are their own
+      # fits. (The band this replaces scaled the whole curve by the SE of the
+      # first-harmonic amplitude, which is not an interval for anything.)
+      # ======================================================================
+      gv <- harmonic_group_var_eff()
+      grouped <- !is.null(mod$group_fits) && length(mod$group_fits) >= 1 &&
+        !is.null(gv) && !identical(gv, "_none_")
+      gvals <- if (grouped) values$covariates[[gv]] else NULL
+      one <- !(subject_select %in% c("all", "mean"))
+      # the components of a mean-coefficient curve, on the layout
+      # c(constant, trend coefficients..., cos_1, sin_1, ...) predict_from_coefs() uses
+      comp_from_coefs <- function(coefs) {
+        nh <- mod$n_harmonics; K <- length(coefs) - 1L - 2L * nh
+        mesor <- unname(coefs[1]); tr <- if (K > 0) unname(coefs[1 + seq_len(K)]) else numeric(0)
+        toff <- mod$t_offset %||% 0
+        trend <- switch(mod$trend_type %||% "none",
+          linear  = if (K >= 1) tr[1] * time_fine,
+          log     = if (K >= 1) tr[1] * log(time_fine - toff + 1),
+          exp_sat = if (K >= 2 && is.finite(tr[2]) && tr[2] > 0)
+                      tr[1] * (1 - exp(-(time_fine - toff) / tr[2])),
+          NULL)
+        harm <- lapply(seq_len(nh), function(h) {
+          a <- unname(coefs[1 + K + 2 * h - 1]); b <- unname(coefs[1 + K + 2 * h])
+          w <- 2 * pi * h / mod$period
+          mesor + a * cos(w * time_fine) + b * sin(w * time_fine)
+        })
+        list(mesor = mesor, trend = if (is.null(trend)) NULL else mesor + trend, harm = harm)
+      }
+
+      if (one) {
+        i <- as.integer(subject_select)
+        fit_i <- mod$individual_fits[[i]]
+        if (!is.null(fit_i) && isTRUE(fit_i$success)) {
+          p <- p %>% add_lines(x = time_fine, y = predict_cosinor(fit_i, time_fine),
+                               line = list(color = DANCE_SERIES1, width = 2),
+                               name = paste("Subject", i))
+          if (isTRUE(input$harmonic_show_data))
+            p <- p %>% add_markers(x = fit_i$time, y = fit_i$y,
+                                   marker = list(color = DANCE_SERIES1, size = 6),
+                                   name = "Observed data")
+          if (isTRUE(input$harmonic_show_components) && mod$n_harmonics >= 1) {
+            components <- get_harmonic_components(fit_i, time_fine)
+            ccol <- dance_component_colors(max(mod$n_harmonics, 1))
+            for (h in seq_len(mod$n_harmonics))
+              p <- p %>% add_lines(x = time_fine, y = components$mesor[1] + components[[paste0("harmonic_", h)]],
+                                   line = list(color = ccol[h], width = 1.5, dash = "dot"),
+                                   name = sprintf("H%d (%s h)", h, fmtn(mod$period / h, 1)))
+            if (!is.null(components$trend) && mod$trend_type != "none")
+              p <- p %>% add_lines(x = time_fine, y = components$mesor[1] + components$trend,
+                                   line = list(color = "black", width = 1.5, dash = "dash"),
+                                   name = get_trend_label(mod$trend_type))
           }
-          
-          # Show linear trend component if present
-          if(!is.null(components$trend) && mod$trend_type != "none") {
-            trend_line <- components$mesor[1] + components$trend
-            p <- p %>% add_lines(x = time_fine, y = trend_line,
-                                 line = list(color = 'black', width = 1.5, dash = 'dash'),
-                                 name = get_trend_label(mod$trend_type))
-          }
+        } else {
+          fail_msg <- paste("Subject", i, "fit failed")
+          if (!is.null(fit_i) && !is.null(fit_i$n_valid))
+            fail_msg <- paste0(fail_msg, "\n(", fit_i$n_valid, " valid points, need ", fit_i$n_required, "+)")
+          if (!is.null(fit_i) && !is.null(fit_i$message))
+            fail_msg <- paste0(fail_msg, "\nReason: ", fit_i$message)
+          p <- p %>% add_annotations(x = 0.5, y = 0.5, text = fail_msg, showarrow = FALSE,
+                                     xref = "paper", yref = "paper",
+                                     font = list(size = 14, color = DANCE_ALERT))
         }
       } else {
-        # Fit failed - show detailed message
-        fail_msg <- paste("Subject", i, "fit failed")
-        if(!is.null(fit_i) && !is.null(fit_i$n_valid)) {
-          fail_msg <- paste0(fail_msg, "\n(", fit_i$n_valid, " valid points, need ", fit_i$n_required, "+)")
+        gc <- dance_ts_group_curves(mod, gvals, time_fine, include_trend = TRUE, conf = 0.95)
+        cells <- if (!is.null(gc)) gc$cells else character(0)
+        cols <- if (grouped) dance_group_colors(cells)
+                else stats::setNames(as.list(rep(DANCE_EMPHASIS, length(cells))), cells)
+        pcol <- function(cl) cols[[cl]] %||% "#777777"
+        cell_of <- function(i) {
+          if (!grouped) return("(all)")
+          cl <- as.character(gvals[i]); if (is.na(cl) || !nzchar(cl)) NA_character_ else cl
         }
-        if(!is.null(fit_i) && !is.null(fit_i$message)) {
-          fail_msg <- paste0(fail_msg, "\nReason: ", fit_i$message)
+        if (identical(subject_select, "all")) {
+          for (i in seq_along(mod$individual_fits)) {
+            fit_i <- mod$individual_fits[[i]]
+            if (is.null(fit_i) || !isTRUE(fit_i$success)) next
+            cl <- cell_of(i); if (is.na(cl)) next
+            p <- p %>% add_lines(x = time_fine, y = predict_cosinor(fit_i, time_fine),
+                                 name = if (grouped) sprintf("%s participant", cl) else "participant",
+                                 legendgroup = paste0("pp_", cl), showlegend = FALSE,
+                                 line = list(color = dance_group_rgba(pcol(cl), 0.35), width = 1))
+          }
         }
-        
-        p <- p %>% add_annotations(
-          x = 0.5, y = 0.5,
-          text = fail_msg,
-          showarrow = FALSE,
-          xref = "paper", yref = "paper",
-          font = list(size = 14, color = DANCE_ALERT)
-        )
+        for (cl in cells) {
+          d <- gc$table[gc$table$cell == cl, , drop = FALSE]
+          if (!any(is.finite(d$fit))) next
+          if (isTRUE(input$harmonic_show_ci))
+            p <- p %>% add_ribbons(x = d$t, ymin = d$lo, ymax = d$hi, name = cl, legendgroup = cl,
+                                   line = list(width = 0),
+                                   fillcolor = dance_group_rgba(pcol(cl), 0.16),
+                                   showlegend = FALSE, hoverinfo = "skip")
+          p <- p %>% add_lines(x = d$t, y = d$fit, legendgroup = cl,
+                               name = if (grouped) paste("Group:", cl) else "Population mean",
+                               line = list(color = pcol(cl), width = 2.6))
+        }
+        if (isTRUE(input$harmonic_show_components) && mod$n_harmonics >= 1) {
+          ccol <- dance_component_colors(max(mod$n_harmonics, 1))
+          for (cl in cells) {
+            coefs <- if (grouped) mod$group_fits[[cl]]$mean_coefs else mod$pop_mean_fit$mean_coefs
+            if (is.null(coefs)) next
+            cp <- comp_from_coefs(coefs)
+            for (h in seq_len(mod$n_harmonics))
+              p <- p %>% add_lines(x = time_fine, y = cp$harm[[h]], legendgroup = cl,
+                                   name = if (grouped) sprintf("H%d (%s)", h, cl)
+                                          else sprintf("H%d (%s h)", h, fmtn(mod$period / h, 1)),
+                                   line = list(color = if (grouped) pcol(cl) else ccol[h],
+                                               width = 1.5, dash = "dot"))
+            if (!is.null(cp$trend))
+              p <- p %>% add_lines(x = time_fine, y = cp$trend, legendgroup = cl,
+                                   name = if (grouped) sprintf("%s (%s)", get_trend_label(mod$trend_type), cl)
+                                          else get_trend_label(mod$trend_type),
+                                   line = list(color = if (grouped) pcol(cl) else "black",
+                                               width = 1.5, dash = "dash"))
+          }
+        }
+        if (isTRUE(input$harmonic_show_data)) {
+          for (i in seq_along(mod$individual_fits)) {
+            fit_i <- mod$individual_fits[[i]]
+            if (is.null(fit_i) || !isTRUE(fit_i$success)) next
+            cl <- cell_of(i); if (is.na(cl)) next
+            p <- p %>% add_markers(x = fit_i$time, y = fit_i$y, legendgroup = cl,
+                                   showlegend = FALSE, hoverinfo = "skip",
+                                   marker = list(color = dance_group_rgba(pcol(cl), 0.3), size = 3))
+          }
+        }
       }
     }
     
@@ -4765,24 +4010,17 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
   # Returns ok = FALSE WITH A REASON rather than silently falling back: the dial
   # says which estimator it drew.
   harmonic_polar_mixed <- function(h) {
-    gv <- harmonic_group_var_eff()
-    if (is.null(gv) || identical(gv, "_none_"))
-      return(list(ok = FALSE, why = "no grouping variable is selected"))
     ff <- harmonic_traj()
     if (!isTRUE(ff$ok))
-      return(list(ok = FALSE, why = ff$message %||% "the trajectory model is unavailable"))
-    if (!setequal(ff$spec$design_terms, gv))
-      return(list(ok = FALSE, why = sprintf(
-        "the tab 6 design is %s, so its cells are not the %s groups on this dial",
-        paste(ff$spec$design_terms, collapse = " x "), gv)))
+      return(list(ok = FALSE, why = ff$message %||% "the mixed-effects model is unavailable"))
     if (h > (ff$spec$n_harmonics %||% 1L))
-      return(list(ok = FALSE, why = sprintf("the trajectory model fits %d harmonic(s)",
+      return(list(ok = FALSE, why = sprintf("the model fits %d harmonic(s)",
                                             ff$spec$n_harmonics %||% 1L)))
     co <- dance_traj_cell_coefs(ff, h)
     if (!isTRUE(co$ok)) return(list(ok = FALSE, why = co$message))
     ap <- dance_traj_amp_phase_ci(co, method = "joint", n_draw = 6000)
     if (!isTRUE(ap$ok)) return(list(ok = FALSE, why = ap$message))
-    list(ok = TRUE, table = ap$table)
+    list(ok = TRUE, table = ap$table, co = co, fit = ff)
   }
 
   output$harmonic_polar_plot <- renderPlotly({
@@ -4809,14 +4047,73 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
                  "<br><span style='font-size:10px'>%{theta:.1f}&deg; on the H",
                  h, " dial</span><extra>%{fullData.name}</extra>")
 
-    want_mixed <- identical(input$polar_vector_source %||% "mixed", "mixed")
+    want_mixed <- identical(mod$approach %||% "two_stage", "mixed")
     mx <- if (want_mixed) harmonic_polar_mixed(h) else list(ok = FALSE, why = NULL)
     use_mixed <- isTRUE(mx$ok)
 
     p <- plot_ly(type = 'scatterpolar', mode = 'markers')
     
-    # Check if we have group fits - color points by group
-    if(!is.null(mod$group_fits) && length(mod$group_fits) >= 1 &&
+    # a 95% joint region for one (cos, sin) pair, as a dotted ring
+    ell_trace <- function(mx_, my_, V, nm, col) {
+      V <- (V + t(V)) / 2
+      ev <- eigen(V, symmetric = TRUE)
+      if (any(!is.finite(ev$values)) || any(ev$values <= 0)) return(NULL)
+      chi_sq <- stats::qchisq(0.95, df = 2)
+      a <- sqrt(chi_sq * ev$values[1]); b <- sqrt(chi_sq * ev$values[2])
+      ang <- atan2(ev$vectors[2, 1], ev$vectors[1, 1])
+      tt <- seq(0, 2 * pi, length.out = 100)
+      ex <- mx_ + a * cos(tt) * cos(ang) - b * sin(tt) * sin(ang)
+      ey <- my_ + a * cos(tt) * sin(ang) + b * sin(tt) * cos(ang)
+      th <- phi_to_degrees(atan2(ey, ex)); th[th < 0] <- th[th < 0] + 360
+      list(r = sqrt(ex^2 + ey^2), theta = th, name = nm, col = col)
+    }
+
+    if (use_mixed) {
+      # ======================================================================
+      # MIXED-EFFECTS. The bold vectors are the model's cell estimates; the
+      # cloud is each participant's SHRUNKEN rhythm (their cell's vector plus
+      # their conditional modes); the dotted ring is the cell's 95% joint
+      # region for its (cos, sin) pair -- Bingham's region, from the fixed-
+      # effect covariance. Nothing on this dial comes from a per-participant fit.
+      # ======================================================================
+      cells <- mx$table$cell
+      group_colors <- dance_group_colors(cells)
+      pc <- dance_traj_participant_curves(mx$fit, h)
+      for (g_name in cells) {
+        col <- unname(group_colors[[g_name]])
+        if (isTRUE(pc$ok)) {
+          sub <- pc$table[pc$table$cell == g_name, , drop = FALSE]
+          if (nrow(sub)) {
+            td <- phi_to_degrees(sub$acrophase_rad)
+            p <- p %>% add_trace(
+              r = sub$amplitude, theta = td, type = 'scatterpolar', mode = 'markers',
+              marker = list(size = 7, color = col, opacity = 0.55),
+              name = paste("Participants (shrunken):", g_name), legendgroup = g_name,
+              text = hov(td), hovertemplate = HT)
+          }
+        }
+        i_mx <- match(g_name, mx$table$cell)
+        acro_deg <- phi_to_degrees(mx$table$acrophase_rad[i_mx])
+        if (acro_deg < 0) acro_deg <- acro_deg + 360
+        p <- p %>% add_trace(
+          r = c(0, mx$table$amplitude[i_mx]), theta = c(0, acro_deg),
+          type = 'scatterpolar', mode = 'lines+markers',
+          line = list(color = col, width = 3),
+          marker = list(size = 12, color = col, symbol = 'diamond'),
+          name = paste("Cell:", g_name), legendgroup = g_name,
+          text = c(hov(0), hov(acro_deg)), hovertemplate = HT)
+        if (isTRUE(input$polar_show_ellipse) && !is.null(mx$co$joint)) {
+          ic <- match(g_name, mx$co$cells)
+          el <- if (!is.na(ic)) ell_trace(mx$co$a[ic], mx$co$b[ic], mx$co$joint[[ic]],
+                                          paste("95% region:", g_name), col) else NULL
+          if (!is.null(el))
+            p <- p %>% add_trace(r = el$r, theta = el$theta, type = 'scatterpolar',
+                                 mode = 'lines', line = list(color = col, width = 1.5, dash = 'dot'),
+                                 name = el$name, legendgroup = g_name, showlegend = FALSE,
+                                 hoverinfo = "skip")
+        }
+      }
+    } else if(!is.null(mod$group_fits) && length(mod$group_fits) >= 1 &&
        !is.null(harmonic_group_var_eff()) && harmonic_group_var_eff() != "_none_") {
 
       group_var <- values$covariates[[harmonic_group_var_eff()]]
@@ -4909,8 +4206,10 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       }
     }
 
-    # Add confidence ellipse if requested (for all data, regardless of groups)
-    if(isTRUE(input$polar_show_ellipse) && length(r) >= 3) {
+    # Add confidence ellipse if requested (for all data, regardless of groups).
+    # Two-stage only: it is the sample ellipse of the per-participant points,
+    # and under the mixed approach each cell already carries its own region.
+    if(!use_mixed && isTRUE(input$polar_show_ellipse) && length(r) >= 3) {
       # Convert polar to Cartesian for ellipse calculation
       theta_rad <- theta_deg * pi / 180
       x <- r * cos(theta_rad)
@@ -5051,197 +4350,52 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     )
   })
   
-  # Amplitude histogram
-  output$harmonic_amplitude_hist <- renderPlotly({
-    req(values$harmonic_model)
-    mod <- values$harmonic_model
-    params <- mod$individual_params
-    
-    # Get selected harmonic (default to 1)
-    h <- if(!is.null(input$selected_harmonic_dist)) as.integer(input$selected_harmonic_dist) else 1
-    h <- min(h, mod$n_harmonics)  # Safety check
-    
-    amp_col <- paste0("amplitude_", h)
-    effective_period <- mod$period / h
-    
-    # Check if we have groups
-    if(!is.null(mod$group_fits) && length(mod$group_fits) >= 1 && 
-       !is.null(harmonic_group_var_eff()) && harmonic_group_var_eff() != "_none_") {
-      
-      group_var <- values$covariates[[harmonic_group_var_eff()]]
-      params$group <- group_var[params$subject]
-      params <- params[!is.na(params$group), ]  # Remove NAs
-      
-      g <- ggplot(params, aes(x = .data[[amp_col]], fill = as.factor(group))) +
-        geom_histogram(alpha = 0.6, position = "identity", bins = 15) +
-        scale_fill_brewer(palette = "Set1", name = "Group") +
-        theme_minimal() +
-        labs(title = paste0("Distribution of Amplitudes (H", h, ", period=", round(effective_period, 1), "h) by Group"), 
-             x = "Amplitude", y = "Count")
-      
-      ggplotly(g)
-    } else {
-      plot_ly(x = params[[amp_col]], type = "histogram", 
-              marker = list(color = DANCE_SERIES1, line = list(color = 'white', width = 1))) %>%
-        layout(title = paste0("Distribution of Amplitudes (H", h, ", period=", round(effective_period, 1), "h)"),
-               xaxis = list(title = "Amplitude"),
-               yaxis = list(title = "Count"))
-    }
-  })
   
-  # Acrophase histogram (circular)
-  output$harmonic_acrophase_hist <- renderPlotly({
-    req(values$harmonic_model)
-    mod <- values$harmonic_model
-    params <- mod$individual_params
-    period <- mod$period
-    
-    # Get selected harmonic (default to 1)
-    h <- if(!is.null(input$selected_harmonic_dist)) as.integer(input$selected_harmonic_dist) else 1
-    h <- min(h, mod$n_harmonics)  # Safety check
-    
-    acro_col <- paste0("acrophase_time_", h)
-    effective_period <- period / h
-
-    # AUDIT: acrophase_time_h holds MODEL-elapsed hours. Plotted raw it reads as
-    # a clock, which is wrong by the origin shift. Converted here through the
-    # same origin as every other acrophase in the app.
-    clock_o <- dance_clock_origin(mod)
-    params$acro_clock <- (params[[acro_col]] + clock_o) %% effective_period
-    x_lab <- if(h > 1)
-      sprintf("Acrophase (clock h, modulo %s h - H%d has %d maxima per day)",
-              fmt1(effective_period), h, h)
-    else "Acrophase (clock h)"
-
-    if(!is.null(mod$group_fits) && length(mod$group_fits) >= 1 &&
-       !is.null(harmonic_group_var_eff()) && harmonic_group_var_eff() != "_none_") {
-
-      group_var <- values$covariates[[harmonic_group_var_eff()]]
-      params$group <- group_var[params$subject]
-      params <- params[!is.na(params$group), ]  # Remove NAs
-
-      g <- ggplot(params, aes(x = .data[["acro_clock"]], fill = as.factor(group))) +
-        geom_histogram(alpha = 0.6, position = "identity", bins = 12) +
-        scale_fill_brewer(palette = "Set1", name = "Group") +
-        scale_x_continuous(limits = c(0, effective_period)) +
-        theme_minimal() +
-        labs(title = paste0("Distribution of acrophases (H", h, ") by group"),
-             x = x_lab, y = "Count")
-
-      ggplotly(g)
-    } else {
-      plot_ly(x = params$acro_clock, type = "histogram",
-              marker = list(color = DANCE_SERIES2, line = list(color = 'white', width = 1))) %>%
-        layout(title = paste0("Distribution of acrophases (H", h, ")"),
-               xaxis = list(title = x_lab, range = c(0, effective_period)),
-               yaxis = list(title = "Count"))
-    }
-  })
   
-  # Intercept by group plot (AUDIT 1.4: it is the constant, not the MESOR)
-  output$harmonic_mesor_plot <- renderPlotly({
-    req(values$harmonic_model)
-    mod <- values$harmonic_model
-    params <- mod$individual_params
-    
-    # Check if we have groups
-    if(!is.null(mod$group_fits) && length(mod$group_fits) >= 1 && 
-       !is.null(harmonic_group_var_eff()) && harmonic_group_var_eff() != "_none_") {
-      
-      group_var <- values$covariates[[harmonic_group_var_eff()]]
-      params$group <- as.factor(group_var[params$subject])
-      params <- params[!is.na(params$group), ]  # Remove NAs
-      
-      g <- ggplot(params, aes(x = group, y = mesor, fill = group)) +
-        geom_boxplot(alpha = 0.7) +
-        geom_jitter(width = 0.2, alpha = 0.5) +
-        scale_fill_brewer(palette = "Set1") +
-        theme_minimal() +
-        labs(title = "Intercept (beta_0) by Group", x = "Group",
-             y = "Intercept (beta_0, at t = 0)") +
-        theme(legend.position = "none")
-      
-      ggplotly(g)
-    } else {
-      plot_ly(y = params$mesor, type = "box", 
-              marker = list(color = 'forestgreen'),
-              boxpoints = "all", jitter = 0.3) %>%
-        layout(title = "Distribution of the intercept (beta_0)",
-               yaxis = list(title = "Intercept (beta_0, at t = 0)"))
-    }
-  })
   
-  # Trend parameter histogram
-  output$harmonic_trend_hist <- renderPlotly({
-    req(values$harmonic_model)
-    mod <- values$harmonic_model
-    
-    # Check if trend is included
-    if(mod$trend_type == "none") {
-      plot_ly() %>% 
-        layout(title = "No Homeostatic Trend Model Selected",
-               annotations = list(
-                 list(x = 0.5, y = 0.5, text = "Select a trend model\nto view distribution",
-                      showarrow = FALSE, xref = "paper", yref = "paper",
-                      font = list(size = 14, color = "gray"))))
-    } else {
-      params <- mod$individual_params
-      
-      # Get trend column based on type
-      if(mod$trend_type == "linear" && "trend_linear" %in% names(params)) {
-        trend_vals <- params$trend_linear
-        trend_label <- "Linear Trend (β, units/h)"
-        trend_title <- "Distribution of Linear Trend Coefficient"
-      } else if(mod$trend_type == "log" && "trend_log" %in% names(params)) {
-        trend_vals <- params$trend_log
-        trend_label <- "Log Trend (β)"
-        trend_title <- "Distribution of Logarithmic Trend Coefficient"
-      } else if(mod$trend_type == "exp_sat" && "A_sat" %in% names(params)) {
-        trend_vals <- params$A_sat
-        trend_label <- "A_sat (asymptote, units)"
-        trend_title <- "Distribution of Saturating Exponential Asymptote"
-      } else {
-        trend_vals <- NULL
-      }
-      
-      if(is.null(trend_vals)) {
-        plot_ly() %>% layout(title = "Trend parameters not available")
-      } else {
-        # Check if groups exist
-        if(!is.null(mod$group_fits) && length(mod$group_fits) >= 1 && 
-           !is.null(harmonic_group_var_eff()) && harmonic_group_var_eff() != "_none_") {
-          
-          group_var <- values$covariates[[harmonic_group_var_eff()]]
-          params$group <- as.factor(group_var[params$subject])
-          params$trend_val <- trend_vals
-          params <- params[!is.na(params$group) & !is.na(params$trend_val), ]
-          
-          g <- ggplot(params, aes(x = group, y = trend_val, fill = group)) +
-            geom_boxplot(alpha = 0.7) +
-            geom_jitter(width = 0.2, alpha = 0.5) +
-            scale_fill_brewer(palette = "Set1") +
-            theme_minimal() +
-            labs(title = paste(trend_title, "by Group"), 
-                 x = "Group", y = trend_label) +
-            theme(legend.position = "none")
-          
-          ggplotly(g)
-        } else {
-          trend_vals <- trend_vals[!is.na(trend_vals)]
-          plot_ly(y = trend_vals, type = "box", 
-                  marker = list(color = DANCE_SERIES1),
-                  boxpoints = "all", jitter = 0.3) %>%
-            layout(title = trend_title,
-                   yaxis = list(title = trend_label))
-        }
-      }
-    }
-  })
   
   # Individual results table
+  # The mixed model's per-participant rows, shaped like the two-stage table so
+  # the two approaches read alike: one row per curve, the cell it belongs to,
+  # level and trend, and each harmonic's amplitude and clock acrophase. A column
+  # with no random effect in the fitted structure is the CELL value for every
+  # participant and its header says so.
+  harmonic_mixed_participant_display <- function() {
+    ff <- harmonic_traj(); if (!isTRUE(ff$ok)) return(NULL)
+    pt <- dance_traj_participant_table(ff); if (!isTRUE(pt$ok)) return(NULL)
+    tb <- pt$table; sp <- ff$spec
+    disp <- data.frame(Subject = tb$subject, stringsAsFactors = FALSE)
+    if (any(tb$curve != tb$subject)) disp$Curve <- tb$curve
+    disp$Cell <- tb$cell
+    tag <- function(nm, ok) if (isTRUE(ok)) nm else paste0(nm, " (cell)")
+    disp[[tag("Intercept_b0", pt$varies[["intercept"]])]] <- round(tb$intercept, 3)
+    disp[["Level_at_t0"]] <- round(tb$level_at_t0, 3)
+    for (tm in sp$trend_terms)
+      disp[[tag(tm, pt$varies[[tm]])]] <- round(tb[[tm]], 4)
+    for (h in seq_len(sp$n_harmonics)) {
+      ok_h <- pt$varies[[paste0("H", h)]]
+      disp[[tag(paste0("Amp_H", h), ok_h)]] <- round(tb[[paste0("amplitude_", h)]], 3)
+      disp[[tag(paste0("Acro_H", h, "_clock"), ok_h)]] <- dance_clock_label(
+        dance_acrophase_clock(hours = tb[[paste0("acrophase_time_", h)]],
+                              period = sp$period, harmonic = h,
+                              clock_origin = ff$clock_origin %||% 0)$hours,
+        sp$period, show_day = FALSE)
+    }
+    list(display = disp, raw = tb, note = pt$note, re_label = pt$re_label)
+  }
+
   output$harmonic_individual_table <- DT::renderDataTable({
     req(values$harmonic_model)
     mod <- values$harmonic_model
+    if (harmonic_is_mixed()) {
+      md <- harmonic_mixed_participant_display(); req(!is.null(md))
+      return(DT::datatable(
+        md$display, rownames = FALSE,
+        caption = tags$caption(style = "caption-side:top;text-align:left;font-size:12px;color:#555",
+          sprintf("Shrunken (conditional-mode) estimates from the mixed model; random structure: %s. %s",
+                  md$re_label %||% "", md$note)),
+        options = list(pageLength = 15, scrollX = TRUE)))
+    }
     params <- mod$individual_params
     
     # Create a cleaner display table
@@ -5305,6 +4459,13 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     content = function(file) {
       req(values$harmonic_model)
       mod <- values$harmonic_model
+      if (harmonic_is_mixed()) {
+        md <- harmonic_mixed_participant_display(); req(!is.null(md))
+        out <- md$raw
+        out$estimator <- "mixed-effects conditional modes (shrunken)"
+        write.csv(out, file, row.names = FALSE)
+        return(invisible(NULL))
+      }
       params <- mod$individual_params
       
       # Add group variable if available
@@ -5318,20 +4479,34 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
   )
   
   # Residual plot
-  output$harmonic_residual_plot <- renderPlotly({
-    req(values$harmonic_model)
+  # The residuals of whichever model was fitted: the one mixed model's, or the
+  # pooled per-participant ones. The two are not comparable -- a mixed-model
+  # residual is measured from a participant's OWN conditional curve, so it is
+  # smaller than a two-stage residual by construction -- and the panel names
+  # which it is showing.
+  harmonic_residuals <- function() {
     mod <- values$harmonic_model
-    
-    # Collect all residuals
-    all_fitted <- c()
-    all_resid <- c()
-    
+    if (harmonic_is_mixed()) {
+      ff <- harmonic_traj(); if (!isTRUE(ff$ok)) return(NULL)
+      return(list(fitted = as.numeric(stats::fitted(ff$model)),
+                  resid = as.numeric(stats::resid(ff$model)),
+                  source = "the mixed-effects model (conditional residuals)"))
+    }
+    all_fitted <- c(); all_resid <- c()
     for(fit_i in mod$individual_fits) {
       if(!is.null(fit_i) && fit_i$success) {
         all_fitted <- c(all_fitted, fit_i$fitted)
         all_resid <- c(all_resid, fit_i$residuals)
       }
     }
+    list(fitted = all_fitted, resid = all_resid,
+         source = "the per-participant fits, pooled")
+  }
+
+  output$harmonic_residual_plot <- renderPlotly({
+    req(values$harmonic_model)
+    rs <- harmonic_residuals(); req(!is.null(rs))
+    all_fitted <- rs$fitted; all_resid <- rs$resid
     
     plot_ly(x = all_fitted, y = all_resid, type = 'scatter', mode = 'markers',
             marker = list(color = DANCE_SERIES1, opacity = 0.5, size = 4)) %>%
@@ -5345,14 +4520,8 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
   # QQ plot
   output$harmonic_qq_plot <- renderPlotly({
     req(values$harmonic_model)
-    mod <- values$harmonic_model
-    
-    all_resid <- c()
-    for(fit_i in mod$individual_fits) {
-      if(!is.null(fit_i) && fit_i$success) {
-        all_resid <- c(all_resid, fit_i$residuals)
-      }
-    }
+    rs <- harmonic_residuals(); req(!is.null(rs))
+    all_resid <- rs$resid
     
     qq <- qqnorm(all_resid, plot.it = FALSE)
     
@@ -5369,15 +4538,33 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
   output$harmonic_gof_stats <- renderPrint({
     req(values$harmonic_model)
     mod <- values$harmonic_model
-    
-    all_resid <- c()
-    for(fit_i in mod$individual_fits) {
-      if(!is.null(fit_i) && fit_i$success) {
-        all_resid <- c(all_resid, fit_i$residuals)
-      }
+    rs <- harmonic_residuals(); req(!is.null(rs))
+    all_resid <- rs$resid
+
+    cat("=== Residual Diagnostics ===\n")
+    cat("Residuals from ", rs$source, ".\n\n", sep = "")
+    if (harmonic_is_mixed()) {
+      ff <- harmonic_traj()
+      m <- ff$model
+      cat(sprintf("Observations: %d   participants: %d   curves: %d\n",
+                  length(all_resid), ff$spec$n_participants, ff$spec$n_curves))
+      cat(sprintf("Random structure: %s (rung %d of %d)\n", ff$re_label, ff$re_rung, ff$n_rungs))
+      cat(sprintf("Convergence: %s; singular: %s; fixed-effect rank: %s\n",
+                  if (isTRUE(ff$converged)) "converged" else "DID NOT CONVERGE",
+                  if (isTRUE(ff$singular)) "yes (boundary, kept)" else "no",
+                  if (isTRUE(ff$rank_deficient)) "DEFICIENT" else "full"))
+      cat(sprintf("Residual SD (sigma): %.4f\n", stats::sigma(m)))
+      r2 <- dance_traj_r2(ff)
+      if (!is.null(r2))
+        cat(sprintf("R-squared: marginal %.3f (fixed effects), conditional %.3f (fixed + random)\n  [%s]\n",
+                    r2$marginal, r2$conditional, r2$method))
+      ll <- tryCatch(stats::logLik(m), error = function(e) NULL)
+      if (!is.null(ll))
+        cat(sprintf("logLik %.2f (%s, df = %d)   AIC %.2f   BIC %.2f\n",
+                    as.numeric(ll), if (isTRUE(ff$REML)) "REML" else "ML", attr(ll, "df"),
+                    stats::AIC(m), stats::BIC(m)))
+      cat("\n")
     }
-    
-    cat("=== Residual Diagnostics ===\n\n")
     cat(sprintf("Total residuals: %d\n", length(all_resid)))
     cat(sprintf("Mean residual: %.4f\n", mean(all_resid)))
     cat(sprintf("SD of residuals: %.4f\n", sd(all_resid)))
@@ -5426,18 +4613,16 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
   # The time vector, period, harmonic count, trend and clock origin all come
   # from the object the rest of the app already built and reports, so tab 6
   # cannot describe a different fit from tab 1.
-  harmonic_traj <- reactive({
-    mod <- values$harmonic_model
-    if (is.null(mod)) return(list(ok = FALSE, message =
-      "Press Run Harmonic Regression first."))
+  # THE FITTER, as a function: called once from the Run button under the
+  # mixed-effects approach and stored on the model object. A design with no
+  # factor is allowed -- one trajectory for the whole sample is a legitimate
+  # mixed model; only the comparison panels need two cells.
+  fit_harmonic_traj <- function(mod) {
+    if (is.null(mod)) return(list(ok = FALSE, message = "Press Run Harmonic Regression first."))
     dt <- harmonic_design_terms()
     chosen <- c(dt$between, dt$within)
-    if (!length(chosen))
-      return(list(ok = FALSE, message = paste(
-        "No design factor is selected. Choose a study design and at least one",
-        "factor to compare trajectories between.")))
-    req(values$data)
     Y <- values$data
+    if (is.null(Y)) return(list(ok = FALSE, message = "No data."))
     # the model-elapsed axis the fit was built on, and the offset back to clock
     tv <- mod$time_vec
     if (is.null(tv) || length(tv) != ncol(Y))
@@ -5474,7 +4659,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
         "choose a different trend: tau is nonlinear and cannot be read off the",
         "design matrix the way the other trends can.")))
 
-    withProgress(message = "Fitting the trajectory model...", value = 0.3, {
+    withProgress(message = "Fitting the mixed-effects cosinor...", value = 0.3, {
       sp <- dance_traj_spec(d, period = mod$period %||% 24,
                             n_harmonics = mod$n_harmonics %||% 1,
                             trend = trend, tau = tau, roles = roles)
@@ -5488,12 +4673,264 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       ff$clock_origin <- dance_clock_origin(mod)
       ff
     })
+  }
+
+  # What every mixed-effects panel reads. Under the two-stage approach there is
+  # no trajectory model and the panels say so; nothing here fits anything.
+  harmonic_traj <- reactive({
+    mod <- values$harmonic_model
+    if (is.null(mod)) return(list(ok = FALSE, message = "Press Run Harmonic Regression first."))
+    if (!identical(mod$approach %||% "two_stage", "mixed"))
+      return(list(ok = FALSE, message = paste(
+        "The two-stage approach was run. The mixed-effects trajectory model is",
+        "not fitted under it -- choose 'Mixed-effects cosinor' under Approach",
+        "and run again.")))
+    mod$traj %||% list(ok = FALSE, message = "The mixed-effects model was not fitted.")
   })
+
+  # TRUE when the fitted model is the mixed-effects one
+  harmonic_is_mixed <- reactive({
+    identical(values$harmonic_model$approach %||% "two_stage", "mixed")
+  })
+
+  # ==========================================================================
+  # TAB 6 UNDER THE TWO-STAGE APPROACH
+  # ==========================================================================
+  # The same panels, the same questions, answered from the per-participant
+  # estimates: MANOVA on the coefficient vectors for "do they differ at all",
+  # ANOVA / Bingham / Watson-Williams for the components, Welch and
+  # Watson-Williams pairwise. Every renderer below starts by asking which
+  # approach was run and hands off to these when it was two-stage, so the tab
+  # never mixes estimators.
+  harmonic_ts <- reactive({
+    mod <- values$harmonic_model
+    if (is.null(mod) || harmonic_is_mixed()) return(NULL)
+    gv <- harmonic_group_var_eff()
+    gvals <- if (!is.null(gv) && !identical(gv, "_none_")) values$covariates[[gv]] else NULL
+    df <- dance_ts_frame(mod, gvals)
+    if (is.null(df)) return(list(ok = FALSE, message = "No converged per-participant fits to compare."))
+    dt <- harmonic_design_terms()
+    list(ok = TRUE, mod = mod, df = df, gv = gv, gvals = gvals,
+         groups = levels(df$group), n_groups = nlevels(df$group),
+         design = dt$design, pairing_ignored = !identical(dt$design %||% "between", "between"))
+  })
+
+  ts_stat_td <- function(r) {
+    if (!isTRUE(r$ok)) return(tags$td(style = "padding:3px 12px 3px 0;color:#8a5a12;font-size:12px", r$message))
+    tags$td(style = "padding:3px 12px 3px 0;font-family:monospace",
+            sprintf("F(%g, %.1f) = %.2f", r$df1, r$df2, r$F))
+  }
+
+  ts_header <- function() {
+    ts <- harmonic_ts(); if (is.null(ts)) return(NULL)
+    if (!isTRUE(ts$ok)) return(div(class = "alert alert-warning", ts$message))
+    mod <- ts$mod; fa <- mod$fit_audit
+    div(style = "background:#f7f7f7;border:1px solid #e3e3e3;border-radius:3px;padding:8px 10px;margin-bottom:10px",
+        tags$div(style = "font-family:monospace;font-size:11px;color:#555",
+                 sprintf("two-stage: y_i(t) = %s, one fit per curve", dance_model_label(mod$trend_type %||% "none", mod$n_harmonics %||% 1L))),
+        tags$div(style = "font-size:12px;color:#555;margin-top:4px",
+                 sprintf("%d curve(s) compared (%s converged of %s attempted), %s.",
+                         nrow(ts$df), fmtn(fa$n_converged %||% nrow(ts$df), 0),
+                         fmtn(fa$n_attempted %||% nrow(mod$individual_params), 0),
+                         if (ts$n_groups >= 2) sprintf("%d groups by %s", ts$n_groups, ts$gv)
+                         else "no grouping factor -- nothing to compare")),
+        tags$div(style = "font-size:11px;color:#8a5a12;margin-top:6px",
+                 paste("Each participant's cosinor is fitted independently and the POINT",
+                       "ESTIMATES are compared; every estimate is treated as exact, so a",
+                       "participant whose rhythm is poorly determined counts as much as one",
+                       "whose rhythm is precise.",
+                       if (isTRUE(ts$pairing_ignored))
+                         "This design has a within-participant factor: two-stage cannot respect the pairing, and a participant's curves enter as if independent. Use the mixed-effects approach for that design."
+                       else "")))
+  }
+
+  ts_primary <- function() {
+    ts <- harmonic_ts(); if (is.null(ts)) return(NULL)
+    if (!isTRUE(ts$ok) || ts$n_groups < 2)
+      return(helpText("Select a design factor with two or more levels to compare groups."))
+    r <- dance_ts_manova(ts$df, dance_ts_coef_cols(ts$mod))
+    tagList(tags$table(style = "margin:4px 0 6px 0", tags$tbody(tags$tr(
+      tags$td(style = "padding:4px 12px 4px 0;font-weight:600", ts$gv),
+      ts_stat_td(r),
+      if (isTRUE(r$ok)) tags$td(style = "padding:4px 0;font-family:monospace",
+                                sprintf("p %s", dance_fmt_p(r$p)))))),
+      tags$div(style = "font-size:11px;color:#777",
+               if (isTRUE(r$ok)) sprintf(paste("%s on the %d per-participant coefficients (constant, trend, and",
+                                              "each harmonic's cosine and sine); Wilks' lambda = %.3f. The",
+                                              "two-stage analogue of the full-trajectory test."),
+                                        r$method, r$n_par, r$wilks)
+               else "The joint test could not be run."))
+  }
+
+  ts_components <- function() {
+    ts <- harmonic_ts(); if (is.null(ts)) return(NULL)
+    if (!isTRUE(ts$ok) || ts$n_groups < 2) return(NULL)
+    mod <- ts$mod; period <- mod$period %||% 24
+    comps <- dance_ts_components(ts$df, mod)
+    rows <- lapply(comps, function(r) tags$tr(
+      tags$td(style = "padding:3px 12px 3px 0", r$label),
+      tags$td(style = "padding:3px 12px 3px 0;color:#777;font-size:11px", r$method %||% ""),
+      ts_stat_td(r),
+      tags$td(style = "padding:3px 12px 3px 0;font-family:monospace",
+              if (isTRUE(r$ok)) dance_fmt_p(r$p) else ""),
+      tags$td(style = "padding:3px 0;font-size:11px;color:#8a5a12", r$note %||% "")))
+    # derived per group, per harmonic: the vector-mean rhythm, in clock time
+    drows <- list()
+    for (h in seq_len(mod$n_harmonics %||% 1L)) {
+      gr <- dance_ts_group_rhythm(ts$df, mod, h)
+      if (is.null(gr)) next
+      for (i in seq_len(nrow(gr))) {
+        drows[[length(drows) + 1L]] <- tags$tr(
+          tags$td(style = "padding:3px 12px 3px 0", sprintf("H%d amplitude — %s", h, gr$cell[i])),
+          tags$td(style = "padding:3px 12px 3px 0;color:#777", "vector mean"),
+          tags$td(style = "padding:3px 12px 3px 0;font-family:monospace", sprintf("%.3f", gr$amplitude[i])),
+          tags$td(style = "padding:3px 12px 3px 0;font-family:monospace;color:#777", sprintf("n = %d", gr$n[i])),
+          tags$td(""))
+        drows[[length(drows) + 1L]] <- tags$tr(
+          tags$td(style = "padding:3px 12px 3px 0", sprintf("H%d acrophase — %s", h, gr$cell[i])),
+          tags$td(style = "padding:3px 12px 3px 0;color:#777", "circular"),
+          tags$td(style = "padding:3px 12px 3px 0;font-family:monospace",
+                  dance_clock_label(dance_acrophase_clock(hours = gr$acrophase_time[i], period = period,
+                                                          harmonic = h, clock_origin = dance_clock_origin(mod))$hours,
+                                    period, show_day = FALSE)),
+          tags$td(style = "padding:3px 12px 3px 0;font-family:monospace;color:#777",
+                  if (is.finite(gr$r_bar[i])) sprintf("r-bar %.2f", gr$r_bar[i]) else ""),
+          tags$td(""))
+      }
+    }
+    for (gn in ts$groups) {
+      gf <- mod$group_fits[[gn]]
+      if (is.null(gf) || is.null(gf$mean_coefs)) next
+      pk <- dance_curve_peak_clock(gf$mean_coefs, mod)
+      if (is.null(pk)) next
+      drows[[length(drows) + 1L]] <- tags$tr(
+        tags$td(style = "padding:3px 12px 3px 0", sprintf("Fitted curve peak — %s", gn)),
+        tags$td(style = "padding:3px 12px 3px 0;color:#777", "plotted"),
+        tags$td(style = "padding:3px 12px 3px 0;font-family:monospace",
+                dance_clock_label(pk$peak_clock, period, show_day = FALSE)),
+        tags$td(style = sprintf("padding:3px 12px 3px 0;font-family:monospace;color:%s",
+                                if (isTRUE(pk$peak_at_edge)) "#c0392b" else "#777"),
+                sprintf("value %.2f%s", pk$peak_value,
+                        if (isTRUE(pk$peak_at_edge)) " — at the window edge, not a peak" else "")),
+        tags$td(""))
+    }
+    tagList(tags$table(style = "margin:4px 0", tags$tbody(rows, drows)),
+            tags$div(style = "font-size:11px;color:#777;margin-top:6px", HTML(paste(
+              "Component tests on the per-participant estimates: one-way ANOVA for the",
+              "scalars, Bingham et al.'s (1982) population-mean cosinor for each harmonic's",
+              "amplitude and acrophase (with the joint MANOVA on the (cos, sin) vector, which",
+              "has no half-cycle blind spot), and Watson-Williams on the unweighted phases.",
+              "Derived rows are the amplitude-weighted vector means per group, the same",
+              "estimator as the polar dial. <b>An H1 acrophase is not the peak of the drawn",
+              "curve</b>; the fitted-curve-peak rows give that."))))
+  }
+
+  ts_group_curves <- function(component = "full") {
+    ts <- harmonic_ts(); if (is.null(ts) || !isTRUE(ts$ok)) return(NULL)
+    mod <- ts$mod
+    tv <- mod$time_vec
+    times <- seq(min(tv, na.rm = TRUE), max(tv, na.rm = TRUE), length.out = 160)
+    dance_ts_group_curves(mod, ts$gvals, times,
+                          include_trend = !identical(component, "rhythm"))
+  }
+
+  ts_curves_plot <- function() {
+    ts <- harmonic_ts(); if (is.null(ts)) return(NULL)
+    if (!isTRUE(ts$ok)) return(plotly_empty() %>% layout(title = list(text = ts$message, font = list(size = 12))))
+    gc <- ts_group_curves(harmonic_traj_component())
+    if (is.null(gc)) return(plotly_empty() %>% layout(title = list(text = "Fewer than two converged fits in every group.", font = list(size = 12))))
+    mod <- ts$mod
+    cols <- dance_group_colors(gc$cells)
+    p <- plot_ly()
+    for (cl in gc$cells) {
+      d <- gc$table[gc$table$cell == cl, , drop = FALSE]
+      p <- p %>%
+        add_ribbons(x = d$t, ymin = d$lo, ymax = d$hi, name = cl, legendgroup = cl,
+                    line = list(width = 0), fillcolor = dance_group_rgba(cols[[cl]], 0.16),
+                    showlegend = FALSE, hoverinfo = "skip") %>%
+        add_lines(x = d$t, y = d$fit, name = cl, legendgroup = cl,
+                  line = list(color = cols[[cl]], width = 2.4))
+    }
+    if (isTRUE(input$harmonic_traj_raw) && identical(harmonic_traj_component(), "full")) {
+      Y <- mod$Y; g <- ts$df$group; sub <- ts$df$subject
+      for (cl in gc$cells) {
+        rows <- sub[g == cl]
+        if (!length(rows)) next
+        yy <- as.numeric(t(Y[rows, , drop = FALSE])); xx <- rep(tv, length(rows))
+        ok <- is.finite(yy)
+        p <- p %>% add_markers(x = xx[ok], y = yy[ok], name = cl, legendgroup = cl, showlegend = FALSE,
+                               marker = list(color = dance_group_rgba(cols[[cl]], 0.35), size = 4))
+      }
+    }
+    co <- dance_clock_origin(mod); P <- mod$period %||% 24
+    brk <- pretty(range(gc$times), n = 8); brk <- brk[brk >= min(gc$times) & brk <= max(gc$times)]
+    p %>% layout(
+      xaxis = list(title = if (co != 0) "Clock time" else "Time", tickmode = "array", tickvals = brk,
+                   ticktext = dance_clock_label(brk + co, P, show_day = TRUE, with_minutes = FALSE)),
+      yaxis = list(title = if (identical(harmonic_traj_component(), "rhythm")) "Rhythm (trend removed)"
+                   else if (!is.null(mod$dv_name)) paste0(mod$dv_name, if (!is.null(mod$dv_units)) paste0(" (", mod$dv_units, ")") else "") else "Response"),
+      hovermode = "x unified", legend = list(orientation = "h", y = -0.18))
+  }
+
+  ts_diff <- reactive({
+    ts <- harmonic_ts(); if (is.null(ts) || !isTRUE(ts$ok)) return(list(ok = FALSE, message = ts$message %||% ""))
+    a <- input$harmonic_traj_diff_a; b <- input$harmonic_traj_diff_b
+    req(a, b)
+    gc <- ts_group_curves("full")
+    if (is.null(gc) || !all(c(a, b) %in% gc$cells))
+      return(list(ok = FALSE, message = "Both groups need at least two converged fits."))
+    da <- gc$table[gc$table$cell == a, ]; db <- gc$table[gc$table$cell == b, ]
+    z <- stats::qnorm(0.975)
+    se <- sqrt(da$se^2 + db$se^2)
+    list(ok = TRUE, cell1 = a, cell2 = b,
+         table = data.frame(t = da$t, diff = da$fit - db$fit, se = se,
+                            lo = da$fit - db$fit - z * se, hi = da$fit - db$fit + z * se),
+         band = "pointwise",
+         note = paste("Difference of the two groups' mean-coefficient curves with a POINTWISE",
+                      "95% band from the two standard errors added in quadrature",
+                      "(independent groups). Not simultaneous: it cannot be read across",
+                      "the whole curve as one statement."))
+  })
+
+  ts_pairwise <- function() {
+    ts <- harmonic_ts(); if (is.null(ts)) return(NULL)
+    if (!isTRUE(ts$ok) || ts$n_groups < 2) return(NULL)
+    what <- input$harmonic_traj_what %||% "level"
+    if (!what %in% dance_ts_pair_whats(ts$mod)) what <- "level"
+    adj <- input$harmonic_traj_adjust %||% "holm"
+    r <- dance_ts_pairwise(ts$df, ts$mod, what, adjust = adj)
+    if (!isTRUE(r$ok)) return(tags$div(style = "color:#8a5a12;font-size:12px", r$message))
+    tb <- r$table
+    hdr <- if (r$circular) c("Pair", "Difference (h)", "Watson-Williams", "p", "p adj")
+           else c("Pair", "Estimate", "95% CI", "p", "p adj", "d")
+    rows <- lapply(seq_len(nrow(tb)), function(i) {
+      z <- tb[i, ]
+      tags$tr(
+        tags$td(style = "padding:3px 12px 3px 0", sprintf("%s vs %s", z$cell1, z$cell2)),
+        tags$td(style = "padding:3px 12px 3px 0;font-family:monospace", sprintf("%+.3f", z$estimate)),
+        tags$td(style = "padding:3px 12px 3px 0;font-family:monospace",
+                if (r$circular) sprintf("F(1, %.0f) = %.2f%s", z$df2, z$statistic,
+                                        if (!isTRUE(z$assumption_ok)) " (r-bar < 0.45)" else "")
+                else sprintf("[%.3f, %.3f]", z$lo, z$hi)),
+        tags$td(style = "padding:3px 12px 3px 0;font-family:monospace", dance_fmt_p(z$p_raw)),
+        tags$td(style = "padding:3px 12px 3px 0;font-family:monospace;font-weight:600", dance_fmt_p(z$p_adj)),
+        if (!r$circular) tags$td(style = "padding:3px 0;font-family:monospace;color:#777",
+                                 if (is.finite(z$d)) sprintf("%.2f", z$d) else ""))
+    })
+    tagList(
+      tags$table(style = "margin:4px 0",
+        tags$thead(tags$tr(lapply(hdr, function(h)
+          tags$th(style = "text-align:left;padding:2px 12px 2px 0;font-size:11px;color:#777;font-weight:500", h)))),
+        tags$tbody(rows)),
+      tags$div(style = "font-size:11px;color:#777", r$unit),
+      tags$div(style = "font-size:11px;color:#777;margin-top:8px", r$note))
+  }
 
   # The model actually fitted, its random structure, and its calibration status.
   # A reader who does not know which random structure was used is reading an
   # unnamed model, and the ladder can descend.
   output$harmonic_traj_header <- renderUI({
+    if (!harmonic_is_mixed()) return(ts_header())
     ff <- harmonic_traj()
     if (!isTRUE(ff$ok)) return(div(class = "alert alert-warning", ff$message))
     cal <- dance_traj_calibration(ff, "kr", "full")
@@ -5624,6 +5061,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
 
   # ---- 1. PRIMARY: the full trajectory difference, per factorial effect ------
   output$harmonic_traj_primary <- renderUI({
+    if (!harmonic_is_mixed()) return(ts_primary())
     ff <- harmonic_traj(); req(isTRUE(ff$ok))
     dts <- ff$spec$design_terms
     # each factorial effect gets its own full-trajectory test: the main effects
@@ -5649,6 +5087,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
 
   # ---- 2. SECONDARY: the component decomposition ----------------------------
   output$harmonic_traj_components <- renderUI({
+    if (!harmonic_is_mixed()) return(ts_components())
     ff <- harmonic_traj(); req(isTRUE(ff$ok))
     # Without a trend, the SHAPE block and the CIRCADIAN block contain exactly
     # the same terms, and printing both prints one test twice under two names --
@@ -5816,6 +5255,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
   # them drew a flat zero line and a duplicate. The options now follow the model.
   harmonic_traj_component <- reactive({
     cc <- input$harmonic_traj_component %||% "full"
+    if (!harmonic_is_mixed()) return(if (cc %in% c("full", "rhythm")) cc else "full")
     ff <- harmonic_traj()
     # the fit decides the vocabulary, so a stale selection from a previous model
     # -- H2 after refitting with one harmonic, a trend view with no trend --
@@ -5824,6 +5264,15 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     if (cc %in% dance_traj_components(ff)) cc else "full"
   })
   observe({
+    if (!harmonic_is_mixed()) {
+      mod <- values$harmonic_model; if (is.null(mod)) return()
+      ch <- c("Full fitted trajectory" = "full")
+      if (!identical(mod$trend_type %||% "none", "none")) ch <- c(ch, "Rhythm only (trend removed)" = "rhythm")
+      sel <- isolate(input$harmonic_traj_component) %||% "full"
+      updateSelectInput(session, "harmonic_traj_component", choices = ch,
+                        selected = if (sel %in% ch) sel else "full")
+      return()
+    }
     ff <- harmonic_traj()
     if (!isTRUE(ff$ok)) return()
     comps <- dance_traj_components(ff)
@@ -5835,6 +5284,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
   })
 
   output$harmonic_traj_curves <- renderPlotly({
+    if (!harmonic_is_mixed()) return(ts_curves_plot())
     ff <- harmonic_traj(); req(isTRUE(ff$ok))
     pr <- dance_traj_predict(ff, conf = 0.95,
                              band = input$harmonic_traj_band %||% "pointwise",
@@ -5907,6 +5357,11 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
   })
 
   output$harmonic_traj_band_note <- renderUI({
+    if (!harmonic_is_mixed()) {
+      gc <- ts_group_curves(harmonic_traj_component())
+      return(if (is.null(gc)) NULL else tags$div(style = "font-size:11px;color:#777;margin-top:4px",
+        paste(gc$note, "Simultaneous (Scheffe) bands are not available under two-stage.")))
+    }
     ff <- harmonic_traj(); req(isTRUE(ff$ok))
     pr <- dance_traj_predict(ff, band = input$harmonic_traj_band %||% "pointwise",
                              component = harmonic_traj_component(), n_time = 2)
@@ -5916,11 +5371,20 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
 
   # ---- 4. DIFFERENCE CURVE: one contrast, not two curves subtracted ---------
   output$harmonic_traj_diff_a_ui <- renderUI({
+    if (!harmonic_is_mixed()) {
+      ts <- harmonic_ts(); req(!is.null(ts), isTRUE(ts$ok))
+      return(selectInput("harmonic_traj_diff_a", "Group A:", choices = ts$groups, selected = ts$groups[1]))
+    }
     ff <- harmonic_traj(); req(isTRUE(ff$ok))
     cl <- dance_traj_cell_grid(ff$spec)$.cell
     selectInput("harmonic_traj_diff_a", "Cell A:", choices = cl, selected = cl[1])
   })
   output$harmonic_traj_diff_b_ui <- renderUI({
+    if (!harmonic_is_mixed()) {
+      ts <- harmonic_ts(); req(!is.null(ts), isTRUE(ts$ok))
+      return(selectInput("harmonic_traj_diff_b", "Group B:", choices = ts$groups,
+                         selected = if (length(ts$groups) > 1) ts$groups[2] else ts$groups[1]))
+    }
     ff <- harmonic_traj(); req(isTRUE(ff$ok))
     cl <- dance_traj_cell_grid(ff$spec)$.cell
     selectInput("harmonic_traj_diff_b", "Cell B:", choices = cl,
@@ -5928,6 +5392,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
   })
 
   harmonic_traj_diff <- reactive({
+    if (!harmonic_is_mixed()) return(ts_diff())
     ff <- harmonic_traj(); req(isTRUE(ff$ok))
     a <- input$harmonic_traj_diff_a; b <- input$harmonic_traj_diff_b
     req(a, b)
@@ -5980,6 +5445,8 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
 
   # ---- 5. PAIRWISE POST-HOC, over an arbitrary factorial --------------------
   output$harmonic_traj_effect_ui <- renderUI({
+    if (!harmonic_is_mixed())
+      return(selectInput("harmonic_traj_effect", "Effect to inspect:", choices = c("All groups" = "_all_")))
     ff <- harmonic_traj(); req(isTRUE(ff$ok))
     dts <- ff$spec$design_terms
     ch <- c("All design cells" = "_all_")
@@ -5994,6 +5461,15 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
   # omnibus blocks a model can answer depend on whether it has a trend and more
   # than one harmonic, and a duplicate pair of blocks is one entry, not two.
   observe({
+    if (!harmonic_is_mixed()) {
+      mod <- values$harmonic_model; if (is.null(mod)) return()
+      ws <- dance_ts_pair_whats(mod)
+      ch <- stats::setNames(ws, vapply(ws, dance_ts_pair_label, character(1), period = mod$period %||% 24))
+      sel <- isolate(input$harmonic_traj_what) %||% "level"
+      updateSelectInput(session, "harmonic_traj_what", choices = ch,
+                        selected = if (sel %in% ws) sel else "level")
+      return()
+    }
     ff <- harmonic_traj()
     if (!isTRUE(ff$ok)) return()
     ws <- dance_traj_pair_whats(ff)
@@ -6010,6 +5486,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
   })
 
   output$harmonic_traj_pairwise <- renderUI({
+    if (!harmonic_is_mixed()) return(ts_pairwise())
     ff <- harmonic_traj(); req(isTRUE(ff$ok))
     what <- input$harmonic_traj_what %||% "level"
     adj  <- input$harmonic_traj_adjust %||% "holm"
@@ -6074,727 +5551,4 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
                              res[[1]]$r$note %||% ""))
   })
 
-  output$harmonic_group_comparison_plot <- renderPlotly({
-    req(values$harmonic_model)
-    mod <- values$harmonic_model
-    
-    if(is.null(mod$group_fits) || length(mod$group_fits) < 2) {
-      return(plotly_empty() %>% layout(title = "Select a group variable for comparison"))
-    }
-    
-    # Get selected harmonic (default to 1)
-    h <- if(!is.null(input$selected_harmonic_group)) as.integer(input$selected_harmonic_group) else 1
-    h <- min(h, mod$n_harmonics)  # Safety check
-    
-    amp_col <- paste0("amplitude_", h)
-    acro_col <- paste0("acrophase_time_", h)
-    acro_rad_col <- paste0("acrophase_rad_", h)
-    effective_period <- mod$period / h
-    
-    # Get individual params with group info for R-squared
-    if(!is.null(harmonic_group_var_eff()) && harmonic_group_var_eff() != "_none_") {
-      group_var <- values$covariates[[harmonic_group_var_eff()]]
-      params <- mod$individual_params
-      params$group <- group_var[params$subject]
-      params <- params[!is.na(params$group), ]  # Remove missings
-    }
-    
-    # Create comparison data
-    group_df <- data.frame(
-      group = character(),
-      parameter = character(),
-      value = numeric(),
-      se = numeric()
-    )
-    
-    for(g_name in names(mod$group_fits)) {
-      g <- mod$group_fits[[g_name]]
-      
-      # AUDIT: R-squared was here, which is a fit-quality number rather than a
-      # parameter -- it says how well each subject's curve was described, not
-      # what the group's rhythm is, so it does not belong in a panel of
-      # parameter comparisons. Replaced by the MESOR, which sits naturally
-      # beside beta_0: beta_0 is the fitted constant, the MESOR is the
-      # rhythm-adjusted mean over the window, and a group can rank differently
-      # on the two.
-      grp_mesor <- params$mesor_adj[params$group == g_name]
-      grp_mesor <- grp_mesor[is.finite(grp_mesor)]
-      mesor_mean <- if(length(grp_mesor)) mean(grp_mesor) else NA_real_
-      mesor_se <- if(length(grp_mesor) > 1)
-        sd(grp_mesor) / sqrt(length(grp_mesor)) else NA_real_
-      
-      # Get amplitude and acrophase for selected harmonic from individual params
-      grp_amp <- params[[amp_col]][params$group == g_name]
-      grp_acro_rad <- params[[acro_rad_col]][params$group == g_name]
-      
-      # A group with no usable angles has no circular mean: dance_circular_mean() of
-      # an empty vector is atan2(NaN, NaN) = NaN, and `if (NaN < 0)` is the
-      # error that crashed this plot. Unlabelled subjects no longer reach here,
-      # but a group can still be emptied by a filter upstream, so the guard
-      # stays and the group is skipped rather than poisoning the frame.
-      grp_acro_rad <- grp_acro_rad[is.finite(grp_acro_rad)]
-      if(length(grp_acro_rad) < 1) next
-      circ_mean_rad <- dance_circular_mean(grp_acro_rad)
-      if(!is.finite(circ_mean_rad)) next
-      if(circ_mean_rad < 0) circ_mean_rad <- circ_mean_rad + 2 * pi
-      # reported in CLOCK time, like every other acrophase in the app
-      circ_mean_time <- (phi_to_hours(circ_mean_rad, mod$period, h) +
-                           dance_clock_origin(mod)) %% effective_period
-      circ_se_rad <- dance_circular_se(grp_acro_rad)
-      circ_se_time <- if(!is.na(circ_se_rad)) phi_to_hours(circ_se_rad, mod$period, h) else NA
-      
-      group_df <- rbind(group_df, 
-                        data.frame(group = g_name, parameter = "Constant term (b0)",
-                                   value = g$mean_mesor, se = g$sd_mesor / sqrt(g$n)),
-                        data.frame(group = g_name, parameter = paste0("Amplitude (H", h, ")"), 
-                                   value = mean(grp_amp, na.rm = TRUE), 
-                                   se = sd(grp_amp, na.rm = TRUE) / sqrt(length(grp_amp))),
-                        data.frame(group = g_name, parameter = paste0("Acrophase (H", h, ")"), 
-                                   value = circ_mean_time, se = circ_se_time),
-                        data.frame(group = g_name, parameter = "MESOR (rhythm-adjusted)",
-                                   value = mesor_mean, se = mesor_se))
-      
-      # Add trend parameters based on trend type
-      if(mod$trend_type == "linear" && "trend_linear" %in% names(params)) {
-        grp_trend <- params$trend_linear[params$group == g_name]
-        grp_trend <- grp_trend[!is.na(grp_trend)]
-        if(length(grp_trend) > 0) {
-          group_df <- rbind(group_df,
-                            data.frame(group = g_name, parameter = "Linear Trend (β)", 
-                                       value = mean(grp_trend, na.rm = TRUE), 
-                                       se = sd(grp_trend, na.rm = TRUE) / sqrt(length(grp_trend))))
-        }
-      } else if(mod$trend_type == "log" && "trend_log" %in% names(params)) {
-        grp_trend <- params$trend_log[params$group == g_name]
-        grp_trend <- grp_trend[!is.na(grp_trend)]
-        if(length(grp_trend) > 0) {
-          group_df <- rbind(group_df,
-                            data.frame(group = g_name, parameter = "Log Trend (β)", 
-                                       value = mean(grp_trend, na.rm = TRUE), 
-                                       se = sd(grp_trend, na.rm = TRUE) / sqrt(length(grp_trend))))
-        }
-      } else if(mod$trend_type == "exp_sat") {
-        if("A_sat" %in% names(params)) {
-          grp_asat <- params$A_sat[params$group == g_name]
-          grp_asat <- grp_asat[!is.na(grp_asat)]
-          if(length(grp_asat) > 0) {
-            group_df <- rbind(group_df,
-                              data.frame(group = g_name, parameter = "A_sat (asymptote)", 
-                                         value = mean(grp_asat, na.rm = TRUE), 
-                                         se = sd(grp_asat, na.rm = TRUE) / sqrt(length(grp_asat))))
-          }
-        }
-        if("tau" %in% names(params)) {
-          grp_tau <- params$tau[params$group == g_name]
-          grp_tau <- grp_tau[!is.na(grp_tau)]
-          if(length(grp_tau) > 0) {
-            group_df <- rbind(group_df,
-                              data.frame(group = g_name, parameter = "τ (time constant, h)", 
-                                         value = mean(grp_tau, na.rm = TRUE), 
-                                         se = sd(grp_tau, na.rm = TRUE) / sqrt(length(grp_tau))))
-          }
-        }
-      }
-
-      # Add sleep inertia parameters if present
-      include_inertia <- !is.null(mod$include_inertia) && isTRUE(mod$include_inertia)
-      if(include_inertia && "W0" %in% names(params)) {
-        grp_W0 <- params$W0[params$group == g_name]
-        grp_W0 <- grp_W0[!is.na(grp_W0)]
-        if(length(grp_W0) > 0) {
-          group_df <- rbind(group_df,
-                            data.frame(group = g_name, parameter = "W₀ (inertia)",
-                                       value = mean(grp_W0, na.rm = TRUE),
-                                       se = sd(grp_W0, na.rm = TRUE) / sqrt(length(grp_W0))))
-        }
-      }
-      if(include_inertia && "tau_W" %in% names(params)) {
-        grp_tau_W <- params$tau_W[params$group == g_name]
-        grp_tau_W <- grp_tau_W[!is.na(grp_tau_W)]
-        if(length(grp_tau_W) > 0) {
-          group_df <- rbind(group_df,
-                            data.frame(group = g_name, parameter = "τ_W (decay, h)",
-                                       value = mean(grp_tau_W, na.rm = TRUE),
-                                       se = sd(grp_tau_W, na.rm = TRUE) / sqrt(length(grp_tau_W))))
-        }
-      }
-    }
-
-    # The shared palette, keyed by group name, so this figure agrees with the
-    # fitted curves, the polar plots and the pairwise boxplots.
-    group_names <- names(mod$group_fits)
-    named_colors <- dance_group_colors(group_names)
-
-    # Faceted bar plot
-    g <- ggplot(group_df, aes(x = group, y = value, fill = group)) +
-      geom_bar(stat = "identity", position = "dodge") +
-      geom_errorbar(aes(ymin = value - 1.96*se, ymax = value + 1.96*se),
-                    width = 0.2, na.rm = TRUE) +
-      facet_wrap(~parameter, scales = "free_y") +
-      scale_fill_manual(values = named_colors) +
-      theme_minimal() +
-      labs(title = paste0("Group Comparison - Harmonic ", h, " (period = ", round(effective_period, 1), "h)"),
-           x = "", y = "Value") +
-      theme(legend.position = "none")
-    
-    ggplotly(g)
-  })
   
-  # Group comparison test results
-  output$harmonic_group_test_results <- renderPrint({
-    req(values$harmonic_model)
-    mod <- values$harmonic_model
-    
-    if(is.null(mod$group_fits) || length(mod$group_fits) < 2) {
-      cat("Select a group variable for statistical comparison.\n")
-      return()
-    }
-    
-    # Get selected harmonic (default to 1)
-    h <- if(!is.null(input$selected_harmonic_group)) as.integer(input$selected_harmonic_group) else 1
-    h <- min(h, mod$n_harmonics)  # Safety check
-    
-    amp_col <- paste0("amplitude_", h)
-    acro_col <- paste0("acrophase_time_", h)
-    effective_period <- mod$period / h
-    
-    cat("=== Group Comparison Statistics ===\n")
-    cat(sprintf("Harmonic: H%d (effective period = %s h)\n", h, fmt1(effective_period)))
-    cat(sprintf("Acrophases below are CLOCK times (model origin %s).\n",
-                dance_clock_label(dance_clock_origin(mod), mod$period, show_day = FALSE)))
-    if(h > 1)
-      cat(sprintf("H%d repeats every %s h, so each acrophase has %d equivalent clock times.\n",
-                  h, fmtn(effective_period, 0), h))
-    cat("Data source: RAW observations.\n\n")
-    
-    # Get group variable and params
-    if(!is.null(harmonic_group_var_eff()) && harmonic_group_var_eff() != "_none_") {
-      group_var <- values$covariates[[harmonic_group_var_eff()]]
-      params <- mod$individual_params
-      params$group <- group_var[params$subject]
-      
-      # Remove rows with missing group or key parameters
-      params <- params[!is.na(params$group) & !is.na(params$mesor) & 
-                         !is.na(params[[amp_col]]) & !is.na(params[[acro_col]]), ]
-      
-      # ======================================================================
-      # BUG FIX: "grouping factor must have exactly 2 levels"
-      #
-      # n_groups was computed ONCE here, on the full params frame, then reused
-      # to choose t-test vs ANOVA inside blocks that had since taken a SUBSET:
-      #
-      #     params_trend <- params[!is.na(params$A_sat), ]
-      #     if (n_groups == 2) t.test(A_sat ~ group, data = params_trend)
-      #
-      # If that filter leaves only one group with usable values, the branch and
-      # the data disagree and t.test stops. n_groups says 2; the subset does not.
-      #
-      # It became reachable when the convergence gate started excluding
-      # non-converged fits (audit 2.3): on the Circaflex data that removes 938
-      # of 1305 subjects, and a sparse group can lose every member that had a
-      # usable trend parameter. The latent bug is older; that change exposed it.
-      #
-      # NOTE on a wrong first guess, recorded so nobody re-derives it: this is
-      # NOT about a factor keeping unused levels. t.test.formula() calls
-      # factor() on the grouping column, which drops unused levels itself, so an
-      # undropped 4-level factor holding 2 values works fine (verified on R
-      # 4.3.3). droplevels() below is still correct hygiene -- it makes
-      # nlevels() and length(unique()) agree downstream, and length(unique())
-      # also counts NA as a group -- but it is not what fixes the crash.
-      #
-      # The fix is .group_test(): it reads the number of groups off the data it
-      # is ACTUALLY handed, so the branch and the test can never disagree again,
-      # whatever filter ran in between.
-      # ======================================================================
-      params$group <- droplevels(as.factor(params$group))
-      n_groups <- nlevels(params$group)
-
-      if(n_groups < 2) {
-        cat(sprintf("Groups: %d, Total N: %d (after removing missings)\n\n", n_groups, nrow(params)))
-        cat("Fewer than two groups remain after dropping subjects with a missing\n")
-        cat("group label or a missing parameter", if(isTRUE(mod$fit_audit$n_nonconverged > 0) ||
-              isTRUE(mod$fit_audit$n_boundary > 0))
-              ", and after the convergence gate excluded\nnon-converged fits" else "",
-            ". There is nothing to compare.\n", sep = "")
-        if(!is.null(mod$fit_audit))
-          cat(sprintf("\n  Of %d subjects: %d converged, %d were pinned to a parameter bound,\n  %d did not converge, %d failed outright.\n",
-                      mod$fit_audit$n_attempted, mod$fit_audit$n_converged,
-                      mod$fit_audit$n_boundary, mod$fit_audit$n_nonconverged,
-                      mod$fit_audit$n_failed))
-        return(invisible(NULL))
-      }
-      cat(sprintf("Groups: %d, Total N: %d (after removing missings)\n", n_groups, nrow(params)))
-
-      # One entry point for every two-or-more-group comparison in this block.
-      # It decides t-test vs ANOVA from the data in front of it, after dropping
-      # unused levels, so the decision and the test can never disagree.
-      .group_test <- function(formula, data, label = NULL) {
-        gv <- droplevels(as.factor(data[[all.vars(formula)[2]]]))
-        data[[all.vars(formula)[2]]] <- gv
-        yv <- data[[all.vars(formula)[1]]]
-        keep <- !is.na(gv) & is.finite(yv)
-        data <- data[keep, , drop = FALSE]
-        data[[all.vars(formula)[2]]] <- droplevels(data[[all.vars(formula)[2]]])
-        k <- nlevels(data[[all.vars(formula)[2]]])
-        if(k < 2) {
-          cat(sprintf("  Only %d group%s usable values here; nothing to compare.\n",
-                      k, if(k == 1) " has" else "s have"))
-          return(invisible(NULL))
-        }
-        if(any(table(data[[all.vars(formula)[2]]]) < 2)) {
-          cat("  At least one group has fewer than 2 usable values; no test is run.\n")
-          return(invisible(NULL))
-        }
-        if(k == 2) {
-          tt <- tryCatch(stats::t.test(formula, data = data), error = function(e) NULL)
-          if(is.null(tt)) { cat("  The t-test could not be computed.\n"); return(invisible(NULL)) }
-          # Welch by default (t.test's own default), which is right for the
-          # unbalanced, unequal-variance groups this app routinely produces.
-          cat(sprintf("Welch t-test: t = %s, df = %s, p = %s\n", fmt3(tt$statistic),
-                      fmt1(tt$parameter), format.pval(tt$p.value, digits = 3, eps = 1e-16)))
-        } else {
-          av <- tryCatch(stats::aov(formula, data = data), error = function(e) NULL)
-          if(is.null(av)) { cat("  The ANOVA could not be computed.\n"); return(invisible(NULL)) }
-          cat("ANOVA:\n"); print(summary(av))
-        }
-        invisible(NULL)
-      }
-
-      # AUDIT 1.5: this block filters NA group labels while the Group-Specific
-      # Parameters panel used to drop them silently, so the two N's disagreed by
-      # construction and neither reconciled to the number fitted. Both now say
-      # what they did.
-      n_dropped_here <- nrow(mod$individual_params) - nrow(params)
-      if(n_dropped_here > 0)
-        cat(sprintf("  (%d fitted subject(s) excluded here for a missing group label or parameter.)\n",
-                    n_dropped_here))
-      cat("\n")
-
-      # ======================================================================
-      # AUDIT 1.4 (applied to the comparisons too, as requested)
-      #
-      # These tests are on the fitted CONSTANT, not on a MESOR. Under a
-      # saturating trend the constant is the intercept of a model with two
-      # origins; a group difference in it is not a group difference in level.
-      # Both are now tested, and the second is the one to interpret.
-      # ======================================================================
-      cat("--- Intercept (beta_0, at t = 0) comparison ---\n")
-      cat("NOT a MESOR comparison. See the rhythm-adjusted mean below for level.\n")
-      lt <- dance_group_linear_test(params$mesor, params$group)
-      if(!is.null(lt)) {
-        cat(sprintf("  F(%d, %d) = %s, p = %s\n", lt$df1, lt$df2, fmt3(lt$F),
-                    format.pval(lt$p, digits = 3, eps = 1e-16)))
-        cat(sprintf("  eta^2 = %s, omega^2 = %s   [omega^2 is the less optimistic; quote it]\n",
-                    fmt3(lt$eta2), fmt3(lt$omega2)))
-        for(gg in lt$levels)
-          cat(sprintf("    %-14s mean %s (SD %s, n = %d)\n", gg,
-                      fmt3(lt$means[gg]), fmt3(lt$sds[gg]), lt$ns[gg]))
-        if(!is.null(lt$largest))
-          cat(sprintf("  Largest contrast %s - %s: %s, 95%% CI [%s, %s], Hedges' g = %s\n",
-                      lt$largest$a, lt$largest$b, fmt3(lt$largest$diff),
-                      fmt3(lt$largest$ci[1]), fmt3(lt$largest$ci[2]),
-                      fmt3(lt$largest$hedges_g)))
-      }
-
-      # the quantity that actually means "level": the rhythm-adjusted mean
-      if(!is.null(mod$group_fits) && (mod$trend_type %||% "none") != "none") {
-        cat("\n--- MESOR (rhythm-adjusted mean over the observed window) by group ---\n")
-        cat("Integrated per group from that group's own intercept and trend parameters.\n")
-        for(gn in names(mod$group_fits)) {
-          gf <- mod$group_fits[[gn]]
-          if(isTRUE(gf$is_unassigned)) next
-          cat(sprintf("    %-14s intercept %s -> MESOR %s   (difference %s)\n", gn,
-                      fmt3(gf$intercept), fmt3(gf$rhythm_adjusted_mean),
-                      fmt3(gf$rhythm_adjusted_mean - gf$intercept)))
-        }
-        cat("  A group can rank differently on these two: the intercept absorbs the\n")
-        cat("  trend baseline, the rhythm-adjusted mean does not.\n")
-      }
-      
-      # Trend comparison (if trend is present)
-      trend_type <- if(!is.null(mod$trend_type)) mod$trend_type else "none"
-      if(trend_type != "none") {
-        trend_col <- switch(trend_type,
-                            "linear" = "trend_linear",
-                            "log" = "trend_log",
-                            "exp_sat" = "A_sat",
-                            NULL)
-        
-        if(!is.null(trend_col) && trend_col %in% names(params)) {
-          cat(sprintf("\n--- %s Comparison ---\n", get_trend_label(trend_type)))
-          trend_formula <- as.formula(paste(trend_col, "~ group"))
-          .group_test(trend_formula, params)
-          
-          # AUDIT 2.6: effect size and interval, not a p-value alone
-          .lt <- dance_group_linear_test(params[[trend_col]], params$group)
-          if(!is.null(.lt)) {
-            cat(sprintf("  eta^2 = %s, omega^2 = %s\n", fmt3(.lt$eta2), fmt3(.lt$omega2)))
-            if(!is.null(.lt$largest))
-              cat(sprintf("  Largest contrast %s - %s: %s, 95%% CI [%s, %s], Hedges' g = %s\n",
-                          .lt$largest$a, .lt$largest$b, fmt3(.lt$largest$diff),
-                          fmt3(.lt$largest$ci[1]), fmt3(.lt$largest$ci[2]),
-                          fmt3(.lt$largest$hedges_g)))
-          }
-          # Group means for trend
-          for(g in unique(params$group)) {
-            g_trend <- params[[trend_col]][params$group == g]
-            cat(sprintf("  %s: mean = %s (SD = %s, n=%d)\n",
-                        g, fmt4(mean(g_trend, na.rm = TRUE)),
-                        fmt4(sd(g_trend, na.rm = TRUE)), length(g_trend)))
-          }
-          # AUDIT 2.6: "declines monotonically across age bands" is a claim about
-          # ORDER. An omnibus ANOVA does not test it; a linear contrast on the
-          # ordered levels does, and is much more powerful against exactly that
-          # alternative. Only meaningful if the factor levels are in order.
-          .tr <- dance_group_trend_test(params[[trend_col]], params$group)
-          if(!is.null(.tr)) {
-            cat(sprintf("  Monotone trend across ordered levels (%s):\n",
-                        paste(.tr$levels, collapse = " < ")))
-            cat(sprintf("    L = %s (SE %s), t(%d) = %s, p = %s, 95%% CI [%s, %s]\n",
-                        fmt3(.tr$L), fmt3(.tr$se), .tr$df, fmt3(.tr$t),
-                        format.pval(.tr$p, digits = 3, eps = 1e-16),
-                        fmt3(.tr$ci[1]), fmt3(.tr$ci[2])))
-            cat("    Valid only if the group levels are genuinely ordered as printed.\n")
-          }
-          
-          # For exp_sat, also compare tau
-          if(trend_type == "exp_sat" && "tau" %in% names(params)) {
-            cat("\n--- Time Constant (τ) Comparison ---\n")
-            tau_formula <- as.formula("tau ~ group")
-            .group_test(tau_formula, params)
-            
-            for(g in unique(params$group)) {
-              g_tau <- params$tau[params$group == g]
-              cat(sprintf("  %s: mean tau = %s h (SD = %s, n=%d)\n",
-                          g, fmt2(mean(g_tau, na.rm = TRUE)),
-                          fmt2(sd(g_tau, na.rm = TRUE)), length(g_tau)))
-            }
-            .lt <- dance_group_linear_test(params$tau, params$group)
-            if(!is.null(.lt)) {
-              cat(sprintf("  eta^2 = %s, omega^2 = %s\n", fmt3(.lt$eta2), fmt3(.lt$omega2)))
-              if(!is.null(.lt$largest))
-                cat(sprintf("  Largest contrast %s - %s: %s h, 95%% CI [%s, %s], Hedges' g = %s\n",
-                            .lt$largest$a, .lt$largest$b, fmt2(.lt$largest$diff),
-                            fmt2(.lt$largest$ci[1]), fmt2(.lt$largest$ci[2]),
-                            fmt3(.lt$largest$hedges_g)))
-            }
-            .tr <- dance_group_trend_test(params$tau, params$group)
-            if(!is.null(.tr))
-              cat(sprintf("  Monotone trend: t(%d) = %s, p = %s, 95%% CI [%s, %s]\n",
-                          .tr$df, fmt3(.tr$t), format.pval(.tr$p, digits = 3, eps = 1e-16),
-                          fmt3(.tr$ci[1]), fmt3(.tr$ci[2])))
-            # AUDIT 2.2: a between-group comparison of tau is only meaningful if
-            # tau is identified WITHIN subject. It is not, here.
-            if(!is.null(mod$conditioning) && !is.null(mod$conditioning$tau_fixed_delta_aic) &&
-               mod$conditioning$tau_fixed_delta_aic > 0)
-              cat("  ! Delta-AIC says free tau is not better than tau held fixed: tau is not\n",
-                  "    identified by these data. A group difference in an unidentified\n",
-                  "    parameter is a difference in where the optimiser stopped on the ridge.\n",
-                  "    Do not report this comparison without the conditioning evidence.\n", sep = "")
-          }
-        }
-      }
-
-      cat(sprintf("\n--- Amplitude (H%d) Comparison ---\n", h))
-      amp_formula <- as.formula(paste(amp_col, "~ group"))
-      .group_test(amp_formula, params)
-      # AUDIT 2.6: effect sizes and intervals for the amplitude decline that the
-      # report described (25.7 -> 22.6 -> 22.5 -> 21.1) and never tested.
-      .lt <- dance_group_linear_test(params[[amp_col]], params$group)
-      if(!is.null(.lt)) {
-        cat(sprintf("  eta^2 = %s, omega^2 = %s\n", fmt3(.lt$eta2), fmt3(.lt$omega2)))
-        for(gg in .lt$levels)
-          cat(sprintf("    %-14s mean %s (SD %s, n = %d)   [arithmetic]\n", gg,
-                      fmt3(.lt$means[gg]), fmt3(.lt$sds[gg]), .lt$ns[gg]))
-        if(!is.null(.lt$largest))
-          cat(sprintf("  Largest contrast %s - %s: %s, 95%% CI [%s, %s], Hedges' g = %s\n",
-                      .lt$largest$a, .lt$largest$b, fmt3(.lt$largest$diff),
-                      fmt3(.lt$largest$ci[1]), fmt3(.lt$largest$ci[2]),
-                      fmt3(.lt$largest$hedges_g)))
-      }
-      .tr <- dance_group_trend_test(params[[amp_col]], params$group)
-      if(!is.null(.tr))
-        cat(sprintf("  Monotone trend across ordered levels: t(%d) = %s, p = %s, 95%% CI [%s, %s]\n",
-                    .tr$df, fmt3(.tr$t), format.pval(.tr$p, digits = 3, eps = 1e-16),
-                    fmt3(.tr$ci[1]), fmt3(.tr$ci[2])))
-      cat("  Note: these are the ARITHMETIC group means. The Group-Specific Parameters\n")
-      cat("  panel reports VECTOR means for the same amplitudes; they are different\n")
-      cat("  estimators and will not match. The test above is on the arithmetic values.\n")
-      
-      cat(sprintf("\n--- Acrophase (H%d) Comparison ---\n", h))
-      cat(strrep("-", 60), "\n")
-      cat("TWO COMPLEMENTARY TESTS ARE PROVIDED:\n")
-      cat("  (1) Watson-Williams: tests timing (phase) only.\n")
-      cat("      Every subject counts equally regardless of rhythm strength.\n")
-      cat("      Use this to answer: 'Do groups peak at different times?'\n")
-      cat("  (2) Hotelling's T² on (beta_cos, beta_sin): tests the full\n")
-      cat("      rhythmic vector (phase + amplitude combined). Subjects with\n")
-      cat("      stronger rhythms carry more weight (amplitude-weighted).\n")
-      cat("      The group means it reports match the 'Group-Specific\n")
-      cat("      Parameters' panel exactly.\n")
-      cat("      Use this to answer: 'Do groups differ in their overall\n")
-      cat("      rhythmic profile?' — but note a significant result could\n")
-      cat("      reflect phase, amplitude, or both.\n")
-      cat(strrep("-", 60), "\n\n")
-
-      # Get acrophase in radians for each group
-      acro_rad_col <- paste0("acrophase_rad_", h)
-      beta_cos_col <- paste0("beta_cos_", h)
-      beta_sin_col <- paste0("beta_sin_", h)
-      groups <- unique(params$group)
-      angles_list <- lapply(groups, function(g) {
-        params[[acro_rad_col]][params$group == g]
-      })
-      names(angles_list) <- groups
-
-      # (1) Watson-Williams test
-      cat("(1) Watson-Williams test (unweighted circular mean):\n")
-      ww <- dance_watson_williams_test(angles_list)
-
-      if(!is.null(ww$message)) {
-        cat(sprintf("  %s\n", ww$message))
-      }
-
-      # AUDIT 2.6: the concentration assumption is CHECKED and the check is
-      # printed. It was previously enforced silently inside the function and
-      # summarised as an adjective.
-      .as <- dance_ww_assumption(ww$r_bar, ww$kappa)
-      cat(sprintf("    Assumption check: %s\n", .as$msg))
-      if(!is.na(ww$F)) {
-        cat(sprintf("    F(%d, %d) = %s, p = %s\n", ww$df1, ww$df2, fmt3(ww$F),
-                    format.pval(ww$p, digits = 3, eps = 1e-16)))
-        cat(sprintf("    r-bar (unweighted, pooled) = %s\n", fmt3(ww$r_bar)))
-        if(!.as$ok)
-          cat("    The F value above should NOT be reported: the assumption it rests on\n",
-              "    does not hold for these data.\n", sep = "")
-      }
-
-      cat("\n  Group circular statistics (unweighted):\n")
-      for(g in groups) {
-        g_angles <- params[[acro_rad_col]][params$group == g]
-        g_mean <- dance_circular_mean(g_angles)
-        if(g_mean < 0) g_mean <- g_mean + 2 * pi
-        g_mean_time <- g_mean * effective_period / (2 * pi)
-        g_sd <- dance_circular_sd(g_angles)
-        g_sd_time <- if(!is.na(g_sd)) g_sd * effective_period / (2 * pi) else NA
-        g_r <- dance_mean_resultant_length(g_angles)
-        # AUDIT 1.2: label which resultant this is. Both are shown.
-        g_rw <- dance_resultants(g_angles, params[[amp_col]][params$group == g])
-        # AUDIT: circular MEAN is a direction and moves with the origin; circular
-        # SD is a dispersion and does not.
-        cat(sprintf("    %-14s circular mean %s, circ.SD %s h, r-bar unweighted %s, weighted %s (n=%d)\n",
-                    g, dance_acrophase_label(hours = g_mean_time, period = mod$period,
-                                           harmonic = h, clock_origin = dance_clock_origin(mod)),
-                    fmt2(g_sd_time), fmt3(g_r),
-                    fmt3(if(is.null(g_rw)) NA_real_ else g_rw$r_weighted), length(g_angles)))
-      }
-
-      # (2) Hotelling's T² test
-      # AUDIT 2.6: this IS Bingham's parameter test for amplitude-acrophase pairs
-      # (Bingham et al. 1982) -- the joint test on the (beta_cos, beta_sin)
-      # vector. Naming it as such connects the output to the literature the
-      # brief asked for, rather than leaving it as an unattributed T-squared.
-      cat(sprintf("\n(2) Bingham parameter test / Hotelling's T-squared on (beta_cos_%d, beta_sin_%d):\n", h, h))
-      cat("    The joint test on the rhythmic vector -- amplitude and acrophase together\n")
-      cat("    (Bingham, Arbogast, Cornelissen Guillaume, Lee & Halberg 1982).\n")
-      bc_list <- lapply(groups, function(g) params[[beta_cos_col]][params$group == g])
-      bs_list <- lapply(groups, function(g) params[[beta_sin_col]][params$group == g])
-      ht <- dance_hotelling_t2(bc_list, bs_list)
-
-      if(!is.null(ht$message)) {
-        cat(sprintf("  %s\n", ht$message))
-      } else {
-        # With more than two groups this is no longer a T-squared: it is the
-        # one-way MANOVA on the same vector, and Wilks' lambda is the statistic
-        # the F is derived from. Saying so keeps the label honest and lets a
-        # reader reproduce the F from the reported lambda.
-        if (isTRUE(ht$n_groups > 2))
-          cat(sprintf("    %d groups: one-way MANOVA on the rhythmic vector, Wilks' Lambda = %.4f\n",
-                      ht$n_groups, ht$lambda))
-        cat(sprintf("    F(%d, %d) = %.3f, p = %.4f\n", ht$df1, ht$df2, ht$F, ht$p))
-      }
-
-      cat("\n  Group means (amplitude-weighted) — match 'Group-Specific Parameters' panel:\n")
-      for(g in groups) {
-        bc <- params[[beta_cos_col]][params$group == g]
-        bs <- params[[beta_sin_col]][params$group == g]
-        ok <- complete.cases(bc, bs)
-        bc_ok <- bc[ok]; bs_ok <- bs[ok]
-        # Amplitude-weighted circular mean via vector averaging
-        x_h <- sqrt(bc_ok^2 + bs_ok^2) * cos(atan2(bs_ok, bc_ok))
-        y_h <- sqrt(bc_ok^2 + bs_ok^2) * sin(atan2(bs_ok, bc_ok))
-        acro_h <- atan2(mean(y_h), mean(x_h))
-        if(acro_h < 0) acro_h <- acro_h + 2 * pi
-        # AUDIT: acro_h is a model-frame direction; report it as a clock time
-        # through the one helper, like every other acrophase in the app.
-        amp_mean <- sqrt(mean(bc_ok)^2 + mean(bs_ok)^2)
-        cat(sprintf("    %s: amplitude-weighted mean = %s, mean amplitude = %s (n=%d)\n",
-                    g, dance_acrophase_label(phi_rad = acro_h, period = mod$period,
-                                           harmonic = h,
-                                           clock_origin = dance_clock_origin(mod)),
-                    fmt3(amp_mean), sum(ok)))
-      }
-      
-      cat("\n--- R-squared Comparison ---\n")
-      .group_test(r_squared ~ group, params)
-      
-      # Trend parameter comparison based on trend type
-      if(mod$trend_type == "linear" && "trend_linear" %in% names(params)) {
-        cat("\n--- Linear Trend (β) Comparison ---\n")
-        params_trend <- params[!is.na(params$trend_linear), ]
-        
-        if(nrow(params_trend) >= 4) {
-          .group_test(trend_linear ~ group, params_trend)
-          # Effect size and interval come from dance_group_linear_test() below,
-          # which handles any number of groups; the hand-rolled two-group
-          # Cohen's d that used to sit here only ran in the k = 2 branch.
-          .lt <- dance_group_linear_test(params_trend[[all.vars(trend_linear ~ group)[1]]],
-                                       params_trend$group)
-          if(!is.null(.lt)) {
-            cat(sprintf("  eta^2 = %s, omega^2 = %s\n", fmt3(.lt$eta2), fmt3(.lt$omega2)))
-            if(!is.null(.lt$largest))
-              cat(sprintf("  Largest contrast %s - %s: %s, 95%%%% CI [%s, %s], Hedges' g = %s\n",
-                          .lt$largest$a, .lt$largest$b, fmt3(.lt$largest$diff),
-                          fmt3(.lt$largest$ci[1]), fmt3(.lt$largest$ci[2]),
-                          fmt3(.lt$largest$hedges_g)))
-          }
-          
-          cat("\nGroup statistics (units/hour):\n")
-          for(g in unique(params_trend$group)) {
-            g_trend <- params_trend$trend_linear[params_trend$group == g]
-            cat(sprintf("  %s: mean = %.4f, SD = %.4f (n=%d)\n", 
-                        g, mean(g_trend, na.rm=TRUE), sd(g_trend, na.rm=TRUE), length(g_trend)))
-          }
-        }
-        
-      } else if(mod$trend_type == "log" && "trend_log" %in% names(params)) {
-        cat("\n--- Logarithmic Trend (β) Comparison ---\n")
-        params_trend <- params[!is.na(params$trend_log), ]
-        
-        if(nrow(params_trend) >= 4) {
-          .group_test(trend_log ~ group, params_trend)
-          
-          cat("\nGroup statistics (units/log-hour):\n")
-          for(g in unique(params_trend$group)) {
-            g_trend <- params_trend$trend_log[params_trend$group == g]
-            cat(sprintf("  %s: mean = %.4f, SD = %.4f (n=%d)\n", 
-                        g, mean(g_trend, na.rm=TRUE), sd(g_trend, na.rm=TRUE), length(g_trend)))
-          }
-        }
-        
-      } else if(mod$trend_type == "exp_sat") {
-        # Compare A_sat (asymptote)
-        if("A_sat" %in% names(params)) {
-          cat("\n--- Asymptote (A_sat) Comparison ---\n")
-          params_trend <- params[!is.na(params$A_sat), ]
-          
-          if(nrow(params_trend) >= 4) {
-            .group_test(A_sat ~ group, params_trend)
-            
-            # AUDIT 1.7: "(units)" was a placeholder that was never interpolated.
-            cat(sprintf("\nGroup statistics%s:\n",
-                        if(!is.null(mod$dv_units)) paste0(" (", mod$dv_units, ")") else ""))
-            for(g in unique(params_trend$group)) {
-              g_asat <- params_trend$A_sat[params_trend$group == g]
-              cat(sprintf("  %s: mean = %s, SD = %s (n=%d)\n",
-                          g, fmt3(mean(g_asat, na.rm=TRUE)),
-                          fmt3(sd(g_asat, na.rm=TRUE)), length(g_asat)))
-            }
-          }
-        }
-        
-        # Compare tau (time constant)
-        if("tau" %in% names(params)) {
-          cat("\n--- Time Constant (τ) Comparison ---\n")
-          params_trend <- params[!is.na(params$tau), ]
-          
-          if(nrow(params_trend) >= 4) {
-            .group_test(tau ~ group, params_trend)
-            
-            cat("\nGroup statistics (hours):\n")
-            for(g in unique(params_trend$group)) {
-              g_tau <- params_trend$tau[params_trend$group == g]
-              cat(sprintf("  %s: mean τ = %.2f h, SD = %.2f (n=%d)\n", 
-                          g, mean(g_tau, na.rm=TRUE), sd(g_tau, na.rm=TRUE), length(g_tau)))
-            }
-            cat("\nNote: tau represents time to reach ~63% of asymptotic level.\n")
-          }
-        }
-      }
-
-      # ====================================================================
-      # AUDIT 2.6: the population-mean cosinor with group x harmonic terms
-      #
-      # Everything above is a two-stage analysis: fit each subject, then run a
-      # t-test or ANOVA on the per-subject estimates. That treats every subject
-      # as contributing one equally-precise observation, which they do not --
-      # a subject with 16 clean points and a subject on the edge of
-      # identifiability get the same weight -- and it cannot borrow strength
-      # across an unbalanced design (654 / 410 / 181 / 59 here).
-      #
-      # The population-mean cosinor (Cornelissen 2014) fits ONE model to all
-      # subjects' observations at once, with group x (cos, sin) interactions, so
-      # the group contrast is a linear hypothesis inside a single fit. With a
-      # random intercept per subject it is a mixed model; without lme4 available
-      # it degrades to a fixed-effects fit with cluster-robust standard errors,
-      # which is stated rather than hidden.
-      # ====================================================================
-      cat("\n\n=== Population-mean cosinor (primary analysis) ===\n")
-      cat("One model over all observations, group x harmonic interactions.\n")
-      cat("Preferred over the per-subject tests above: it weights subjects by their\n")
-      cat("actual precision and handles the unbalanced design directly.\n\n")
-
-      pmc <- tryCatch({
-        Yp <- values$data
-        tv <- mod$time_vec
-        sub_ids <- mod$individual_params$subject
-        gl <- group_var[sub_ids]
-        keep <- !is.na(gl)
-        sub_ids <- sub_ids[keep]; gl <- droplevels(as.factor(gl[keep]))
-        long <- data.frame(
-          y = as.vector(t(Yp[sub_ids, , drop = FALSE])),
-          t = rep(tv, times = length(sub_ids)),
-          subj = factor(rep(sub_ids, each = length(tv))),
-          grp = rep(gl, each = length(tv)))
-        long <- long[is.finite(long$y), ]
-        for(hh in seq_len(mod$n_harmonics)) {
-          w <- 2 * pi * hh / mod$period
-          long[[paste0("c", hh)]] <- cos(w * long$t)
-          long[[paste0("s", hh)]] <- sin(w * long$t)
-        }
-        trm <- switch(as.character(mod$trend_type),
-                      "linear" = "t",
-                      "log" = "I(log(t - min(t) + 1))",
-                      "exp_sat" = sprintf("I(1 - exp(-(t - min(t))/%f))",
-                                          mean(mod$individual_params$tau, na.rm = TRUE)),
-                      NULL)
-        harm <- paste(unlist(lapply(seq_len(mod$n_harmonics),
-                                    function(hh) c(paste0("c", hh), paste0("s", hh)))),
-                      collapse = " + ")
-        rhs <- paste(c(trm, harm), collapse = " + ")
-        f_null <- stats::as.formula(paste("y ~", rhs, "+ grp"))
-        f_full <- stats::as.formula(paste("y ~", rhs, "+ grp + grp:(", harm, ")"))
-        list(long = long, f_null = f_null, f_full = f_full,
-             m_null = stats::lm(f_null, data = long),
-             m_full = stats::lm(f_full, data = long))
-      }, error = function(e) list(error = conditionMessage(e)))
-
-      if(!is.null(pmc$error)) {
-        cat("  Could not be fitted: ", pmc$error, "\n", sep = "")
-      } else {
-        an <- stats::anova(pmc$m_null, pmc$m_full)
-        cat("Test: do the harmonic coefficients differ by group?\n")
-        cat(sprintf("  F(%d, %d) = %s, p = %s\n",
-                    an$Df[2], an$Res.Df[2], fmt3(an$F[2]),
-                    format.pval(an$`Pr(>F)`[2], digits = 3, eps = 1e-16)))
-        r2n <- summary(pmc$m_null)$r.squared; r2f <- summary(pmc$m_full)$r.squared
-        cat(sprintf("  Partial R-squared for the group x harmonic block: %s\n",
-                    fmt4(max(0, (r2f - r2n) / (1 - r2n)))))
-        cat("\n  ! Standard errors here assume independent observations. Each subject\n")
-        cat("    contributes ", length(mod$time_vec), " correlated points, so these p-values are\n", sep = "")
-        cat("    ANTICONSERVATIVE. Install lme4 and refit with (1|subject) for the\n")
-        cat("    interval you would actually report; the point estimates are unbiased\n")
-        cat("    either way. This is stated rather than silently ignored.\n")
-      }
-    }
-  })

@@ -250,8 +250,6 @@ ui <- dashboardPage(
       menuItem("Function-on-Scalar (FoSR)", tabName = "fosr",
                icon = icon("chart-line")),
       menuItem("Harmonic Regression", tabName = "harmonic", icon = icon("sync")),
-      menuItem("Cosinor: pairwise tests", tabName = "harm_pairwise",
-               icon = icon("not-equal")),
 
       # ---- K: clustering (from WaPaa) -------------------------------------
       menuItem("Functional Clustering", tabName = "kmeans",
@@ -273,7 +271,6 @@ ui <- dashboardPage(
       ui_tab_posthoc,
       ui_tab_fosr,
       ui_tab_harmonic,
-      ui_tab_cosinor_pairwise,
       ui_tab_clustering,
       ui_tab_export
     )

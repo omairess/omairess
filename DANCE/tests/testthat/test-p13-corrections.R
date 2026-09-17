@@ -61,26 +61,38 @@ mk_posthoc <- function() {
          list(n1 = 30, n2 = 20, L2_stat = 2 + i, p_value_L2 = 0.01 * i,
               p_value_L2_adjusted = 0.03 * i, sig_global = i == 1)), nm))
 }
-# cosinor pairwise object, a plain data frame with none of those fields
-mk_cos_pw <- function() {
-  data.frame(comparison = "A vs B", group1 = "A", group2 = "B",
-             mean1 = 8, sd1 = 1, n1 = 30, mean2 = 9, sd2 = 1, n2 = 20,
-             mean_diff = -1, t_stat = -2.3, df = 40, p_value = .02,
-             cohens_d = -.6, ci_lower = NA, ci_upper = NA, p_adjusted = .02,
-             stringsAsFactors = FALSE)
+# a two-stage cosinor result with a grouping variable, so the report's cosinor
+# comparison table renders next to the fANOVA post-hoc one
+ts_env <- function() {
+  e <- new.env(parent = globalenv())
+  for (f in c("server/08_helpers_cosinor.R", "server/08b_helpers_popcosinor.R",
+              "server/08c_helpers_circstat.R", "server/08h_helpers_twostage.R",
+              "server/93_apa_report.R"))
+    source(file.path(app_dir, f), local = e)
+  e
+}
+mk_cos_model <- function() {
+  set.seed(13); n <- c(A = 30, B = 20); g <- rep(names(n), n)
+  phi <- 2 * pi * (c(A = 16, B = 18)[g] + rnorm(sum(n), 0, 0.4)) / 24
+  A <- c(A = 8, B = 9)[g] + rnorm(sum(n), 0, 0.8)
+  list(covariates = data.frame(AGE = factor(g)),
+       harmonic_model = list(approach = "two_stage", period = 24, n_harmonics = 1,
+                             trend_type = "none", individual_fits = list(),
+                             group_var_name = "AGE", time_vec = 0:23, origin_shift = 0,
+                             individual_params = data.frame(
+                               subject = seq_len(sum(n)), mesor = 50 + rnorm(sum(n), 0, 2),
+                               beta_cos_1 = A * cos(phi), beta_sin_1 = A * sin(phi),
+                               amplitude_1 = A, acrophase_rad_1 = phi %% (2 * pi),
+                               acrophase_time_1 = (phi %% (2 * pi)) * 24 / (2 * pi),
+                               r_squared = runif(sum(n), .7, .95), p_value = 1e-4)))
 }
 
 # ================================================ P13.1 the shadowed name =====
-test_that("P13.1: a cosinor pairwise result does not erase the fANOVA post-hoc", {
-  e <- rep_env()
-  vals <- base_vals(
-    pairwise_results = mk_posthoc(),
-    harmonic_model = list(period = 24, n_harmonics = 1, trend_type = "none",
-                          individual_fits = list(), group_var_name = "AGE"),
-    hp_pairwise_results = mk_cos_pw(),
-    hp_pairwise_param = "amplitude_1", hp_pairwise_correction = "holm",
-    hp_pairwise_all = list(list(results = mk_cos_pw(), param = "amplitude_1",
-                                correction = "holm")))
+test_that("P13.1: a cosinor comparison result does not erase the fANOVA post-hoc", {
+  e <- ts_env()
+  cm <- mk_cos_model()
+  vals <- base_vals(pairwise_results = mk_posthoc(),
+                    covariates = cm$covariates, harmonic_model = cm$harmonic_model)
   txt <- paste(e$dance_apa_report(vals, list(), "T"), collapse = "\n")
 
   # the exact sentence the defect produced
@@ -92,7 +104,8 @@ test_that("P13.1: a cosinor pairwise result does not erase the fANOVA post-hoc",
                     txt, fixed = TRUE))
   # both post-hoc tables are present and distinct
   expect_true(grepl("Post-hoc pairwise comparisons", txt, fixed = TRUE))
-  expect_true(grepl("Group differences in the amplitude of harmonic 1", txt, fixed = TRUE))
+  expect_true(grepl("**Group differences (AGE).**", txt, fixed = TRUE))
+  expect_true(grepl("Complete coefficient vector", txt, fixed = TRUE))
 })
 
 test_that("P13.1: the fANOVA post-hoc name is not rebound anywhere", {

@@ -168,21 +168,28 @@ if any of these were missing):
     Fitted Curves tab (same coefficients, same band), a von Mises kernel density
     of the acrophases (so a distribution straddling midnight reads as one peak,
     not two), or the signal itself averaged over the clock.
-10. **Cosinor: group comparisons** — three approaches to the same question:
+10. **Cosinor: group / condition comparison** — one tab, two approaches,
+    chosen before the model specification and carried through every panel
+    (fitted curves, polar plots, individual table, diagnostics, comparison,
+    summary, report):
 
-    - **Two-stage** (the original): fit a cosinor per participant, compare the
-      point estimates pairwise, with corrections, effect sizes and intervals.
-    - **Population-mean cosinor** (Bingham et al., 1982): the (cosine, sine)
-      pairs are averaged as *vectors*, their within-group covariance pooled, and
-      MESOR, amplitude and acrophase tested as *F* ratios — amplitude against
-      the variance along the pooled mean phase direction, acrophase against the
-      variance perpendicular to it. All groups at once, so no pairwise family to
-      correct. It carries Bingham's own caution: an amplitude difference cannot
-      be interpreted when the acrophases also differ, and the readout checks the
-      acrophase test and says so.
-    - **Mixed model**: one cosinor over all observations with a random rhythm
-      per participant, for when a factor is repeated within participants and the
-      pairing must be respected.
+    - **Mixed-effects** (default): one linear mixed model over every
+      observation, the cosinor basis crossed with the design factors and a
+      random rhythm per participant (`lme4`). Design effects are marginal
+      contrasts on the fixed effects with Kenward-Roger or Satterthwaite
+      degrees of freedom; amplitude and acrophase per cell are read off the
+      cell's (cosine, sine) coefficients. The curves on the Fitted Curves tab
+      are the curves on the comparison tab: the same fixed effects, read once.
+      Participant-level estimates are conditional modes (shrunken) and are
+      never re-tested.
+    - **Two-stage**: a cosinor per participant, then the point estimates
+      compared — a one-way MANOVA (Wilks) on the coefficient vector, one-way
+      ANOVAs on the scalars, the **Population-mean cosinor** of Bingham et al.
+      (1982) per harmonic (with its amplitude caution checked, not recited),
+      Watson-Williams on the acrophases, and Welch / Watson-Williams pairwise
+      tests with a Holm family. Every estimate is treated as exact, and a
+      within-participant factor cannot be respected; the panels say so.
+
 **K — clustering**
 
 11. **Functional Clustering** — k-means (`fda.usc::kmeans.fd`), hierarchical and
@@ -234,7 +241,7 @@ DANCE/
     10_import.R  20_smoothing.R           <- hand-merged shared steps
     11_import_views.R  21_smoothing_views.R  30_diagnostics.R
     40_fpca.R  50_fanova.R  60_clustering.R
-    70_fosr.R  72_harmonic.R  73_cosinor_pairwise.R
+    70_fosr.R  72_harmonic.R  74_polar_density.R
     90_export.R            exports + the reproducible-code generator
     91_session.R           save / restore a whole session
   tests/                   see "Checking it still assembles" below
@@ -479,10 +486,10 @@ Two analyses, answering different questions:
 - **Functional** — a penalised spline of time in each cell of the design plus a
   random curve per participant (`mgcv`). The interaction is judged by refitting
   without it and comparing on AIC.
-- **Cosinor** — one mixed model with the cosine/sine pair crossed with both
-  factors and a random rhythm per participant (`lme4`), giving a MESOR,
-  amplitude and acrophase per cell. Differences are tested by dropping a
-  cosine/sine *pair*, so each test is a 2-df question about amplitude or phase.
+- **Cosinor** — lives on the Harmonic Regression tab under its mixed-effects
+  approach: one mixed model with the cosinor basis crossed with the design
+  factors and a random rhythm per participant (`lme4`), with marginal
+  contrasts for the design effects.
 
 Neither is a permutation test, and the readout says so: the smoothing parameters
 and variance components were estimated from the same data, so the *p* values are
@@ -528,19 +535,21 @@ its origin), what the zero-amplitude *F* test does and does not test, and the
 joint confidence region for amplitude and acrophase read off the error ellipse
 of the (cosine, sine) pair — together with how many series had an *identified*
 acrophase, since an ellipse containing the origin means no phase is estimable at
-all. With a grouping variable it gives a per-group table and a pairwise table for
-every parameter you compared, each with exact *df*, an adjusted *p*, and an
-effect that matches its test: Cohen's *d* for a mean difference, and for the
-circular comparison the angular difference in hours rather than a difference in
-concentration.
+all. The section follows the approach you chose. Under the mixed-effects
+approach it describes the one model (basis, design, random structure reached,
+singular or simplified fits stated), tabulates the fitted level, amplitude and
+acrophase per design cell, and reports the design-effect tests with their
+degrees-of-freedom method and calibration status. Under the two-stage approach
+it gives the per-group table and one group-differences table — MANOVA on the
+coefficient vector, the scalar ANOVAs, Bingham's population-mean cosinor per
+harmonic and Watson-Williams — with exact *df* and an adjusted *p*.
 
 It also carries Bingham's caution that an amplitude difference cannot be
-interpreted when the groups also differ in acrophase — **checked, not recited**.
-If you ran the acrophase comparison, the report says whether it was significant
-and what that means for your amplitude result; if you did not, it says to run it.
-And it states plainly that these are two-stage tests on per-participant point
-estimates, not the population-mean cosinor, so a participant whose own rhythm is
-poorly determined counts as much as one whose rhythm is precise.
+interpreted when the groups also differ in acrophase — **checked, not recited**,
+per harmonic, from the population-mean cosinor's own acrophase test. And it
+states plainly that two-stage tests are on per-participant point estimates, so
+a participant whose own rhythm is poorly determined counts as much as one whose
+rhythm is precise.
 
 Each caveat is matched to the estimator that produced the numbers above it, not
 to the family in general — the pointwise-OLS warning about non-simultaneous bands

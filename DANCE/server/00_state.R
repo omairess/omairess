@@ -11,12 +11,10 @@
 #   gam_reml_result              gam_reml_fit
 #   reml_profile_result          reml_profile
 #   cv_result                    cv_results
-#   pairwise_results (cosinor)   hp_pairwise_results
 #
-# The first three are smoothing diagnostics: the merged app runs WaPaa's
-# version of that section (a strict superset), so CIRCAREG's names disappear
-# with its duplicate code.  The fourth moves because WaPaa's post-hoc tests
-# already own `pairwise_results`.
+# These are smoothing diagnostics: the merged app runs WaPaa's version of that
+# section (a strict superset), so CIRCAREG's names disappear with its duplicate
+# code.
 #
 # THE DATA CONTRACT every analysis tab reads:
 #   values$data         numeric matrix, subjects x time points, as selected
@@ -87,28 +85,7 @@ values <- reactiveValues(
   # ---- C: functional / circadian regression (from CIRCAREG) ----------------
   reg_model             = NULL,   # function-on-scalar
   harmonic_model        = NULL,   # cosinor
-  hp_pairwise_results   = NULL,   # pairwise tests on cosinor parameters
-  hp_pairwise_param     = NULL,
-  hp_pairwise_correction = NULL,
-  # P20/R6: the immutable specification the stored pairwise result was computed
-  # under -- parameter, harmonic, effective period, groups, correction, family.
-  # Readouts and exports read this instead of the live inputs, which may have
-  # moved since the run.
-  hp_pairwise_spec      = NULL,
-  # AUDIT (P18.1). These were created dynamically by their modules and never
-  # declared here, which is how they came to be missed by the reset below.
-  # hp_pairwise_all and hp_acrophase_differs are the worse pair: the publication
-  # report READS both, so a stale one could put the previous dataset's cosinor
-  # comparisons into a report about the current one.
-  hp_pairwise_all       = NULL,   # every parameter compared, not just the last
-  hp_acrophase_param    = NULL,
-  hp_acrophase_differs  = NULL,   # the Bingham amplitude caution's evidence
-  # P20/R4: whether the acrophase verdict above comes from a test with power at
-  # the observed angular separation. A null verdict from a blind test is not a
-  # licence for the amplitude comparison.
-  hp_acrophase_supported = NULL,
   mixed_results         = NULL,   # mixed (between x within) model
-  pop_cosinor           = NULL,   # population-mean cosinor (Bingham 1982)
   pca_anova             = NULL,   # component-score ANOVA -- also read by the report
   fanova_selected_groups = NULL,
   gam_reml_fit          = NULL,
@@ -119,12 +96,10 @@ values <- reactiveValues(
 # data step re-runs.  Both source apps did this partially and for their own
 # analyses only; here it is one list so a new selection cannot leave a stale
 # cosinor fit sitting next to a fresh fPCA.
-# AUDIT (P18.1). Four slots were being written by their modules and never
-# cleared here, so a result computed on one dataset could survive into the next.
-# A reviewer found the mixed one; the cosinor ones are older, mine, and worse,
-# because server/93_apa_report.R reads hp_pairwise_all and hp_acrophase_differs
-# directly -- a stale pair could put dataset A's group comparisons, and the
-# Bingham caution derived from them, into a publication report about dataset B.
+# AUDIT (P18.1). Slots were being written by their modules and never cleared
+# here, so a result computed on one dataset could survive into the next -- and
+# server/93_apa_report.R reads results directly, so a stale slot could put
+# dataset A's comparisons into a publication report about dataset B.
 #
 # The rule this function now follows, and which
 # tests/testthat/test-p18-corrections.R enforces structurally rather than by
@@ -164,15 +139,5 @@ dance_reset_analyses <- function(values, keep_smoothing = FALSE) {
   # analysis results too, and pca_anova is a third one the report reads.
   values$pca_anova <- NULL
   values$fanova_selected_groups <- NULL
-  # everything derived from harmonic_model goes when it does
-  values$hp_pairwise_results <- NULL
-  values$hp_pairwise_all <- NULL
-  values$hp_pairwise_param <- NULL
-  values$hp_pairwise_correction <- NULL
-  values$hp_pairwise_spec <- NULL
-  values$hp_acrophase_param <- NULL
-  values$hp_acrophase_differs <- NULL
-  values$hp_acrophase_supported <- NULL
-  values$pop_cosinor <- NULL
   invisible(NULL)
 }

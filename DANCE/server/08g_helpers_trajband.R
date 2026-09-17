@@ -974,29 +974,77 @@ dance_traj_participant_curves <- function(fit, harmonic = 1, conf = 0.95) {
   grp <- spec$subject %||% "subject"
   if (!grp %in% names(re))
     return(list(ok = FALSE, message = sprintf("The fitted model has no '%s' random effect.", grp)))
-  R <- as.data.frame(re[[grp]])
   ck <- paste0("c", harmonic); sk <- paste0("s", harmonic)
-  if (!all(c(ck, sk) %in% names(R)))
+  R_subj <- as.data.frame(re[[grp]])
+  cv <- spec$curve_var %||% "curve"
+  R_curve <- if (cv %in% names(re)) as.data.frame(re[[cv]]) else NULL
+  has_subj  <- all(c(ck, sk) %in% names(R_subj))
+  has_curve <- !is.null(R_curve) && all(c(ck, sk) %in% names(R_curve))
+  if (!has_subj && !has_curve)
     return(list(ok = FALSE, message = paste(
       "The fitted random structure carries no participant-specific harmonic terms,",
       sprintf("so there are no per-participant rhythms to report (rung used: %s).",
               fit$re_label %||% "unknown"))))
-  # the population (fixed-effect) rhythm each participant deviates from
-  co <- dance_traj_cell_coefs(fit, harmonic)
-  pop_a <- if (isTRUE(co$ok)) mean(co$a) else NA_real_
-  pop_b <- if (isTRUE(co$ok)) mean(co$b) else NA_real_
-  a <- pop_a + R[[ck]]; b <- pop_b + R[[sk]]
+
+  # EACH PARTICIPANT DEVIATES FROM THEIR OWN CELL, not from the grand mean.
+  # The first version added every conditional mode to mean(co$a), the average
+  # over all design cells -- so with groups that genuinely differ, every
+  # individual rhythm was pulled toward the overall average and the
+  # per-participant amplitudes of a high-amplitude group all read low. A
+  # conditional mode is a deviation from the fixed-effect prediction FOR THAT
+  # OBSERVATION'S CELL, and that is what it is added to here.
+  d <- spec$data
+  dts <- spec$design_terms
+  if (length(dts)) {
+    co <- dance_traj_cell_coefs(fit, harmonic)
+    if (!isTRUE(co$ok)) return(list(ok = FALSE, message = co$message))
+  } else {
+    # no design: one cell, whose rhythm is the fixed-effect pair itself
+    bv <- dance_traj_beta(fit)
+    if (!all(c(ck, sk) %in% names(bv$beta)))
+      return(list(ok = FALSE, message = sprintf("Harmonic %d was not fitted.", harmonic)))
+    co <- list(ok = TRUE, cells = "(all)", a = unname(bv$beta[[ck]]), b = unname(bv$beta[[sk]]))
+  }
+  cell_of <- if (length(dts))
+    do.call(paste, c(lapply(dts, function(f) as.character(d[[f]])), list(sep = " x ")))
+    else rep(co$cells[1], nrow(d))
+  # one row per CURVE (participant x within-cell): that is the unit that carries
+  # its own conditional modes, and a participant measured in two conditions has
+  # two rhythms, not one averaged over both
+  key <- data.frame(subject = as.character(d[[grp]]),
+                    curve = if (cv %in% names(d)) as.character(d[[cv]]) else as.character(d[[grp]]),
+                    cell = cell_of, stringsAsFactors = FALSE)
+  key <- key[!duplicated(key$curve), , drop = FALSE]
+  ci <- match(key$cell, co$cells)
+  if (anyNA(ci))
+    return(list(ok = FALSE, message = "A curve's design cell is not among the fitted cells."))
+  a <- co$a[ci]; b <- co$b[ci]
+  if (has_subj) {
+    si <- match(key$subject, rownames(R_subj))
+    a <- a + ifelse(is.na(si), 0, R_subj[[ck]][si])
+    b <- b + ifelse(is.na(si), 0, R_subj[[sk]][si])
+  }
+  if (has_curve) {
+    qi <- match(key$curve, rownames(R_curve))
+    a <- a + ifelse(is.na(qi), 0, R_curve[[ck]][qi])
+    b <- b + ifelse(is.na(qi), 0, R_curve[[sk]][qi])
+  }
   k <- (spec$period / harmonic) / (2 * pi)
   vc <- tryCatch(as.matrix(lme4::VarCorr(fit$model)[[grp]]), error = function(e) NULL)
-  tab <- data.frame(subject = rownames(R), beta_cos = a, beta_sin = b,
+  tab <- data.frame(subject = key$subject, curve = key$curve, cell = key$cell,
+                    beta_cos = a, beta_sin = b,
                     amplitude = sqrt(a^2 + b^2),
                     acrophase_rad = atan2(b, a) %% (2 * pi),
                     acrophase_time = (atan2(b, a) %% (2 * pi)) * k,
                     stringsAsFactors = FALSE)
   rownames(tab) <- NULL
+  # the population direction, for the between-participant SD of amplitude: the
+  # mean of the CELL vectors, which is a summary and is labelled as one
+  pop_a <- mean(co$a); pop_b <- mean(co$b)
   list(ok = TRUE, table = tab, harmonic = harmonic, shrunken = TRUE,
        effective_period = spec$period / harmonic,
        re_label = fit$re_label,
+       per_curve = has_curve,
        sd_blup_amplitude = stats::sd(tab$amplitude),
        sd_population_amplitude = if (!is.null(vc) && all(c(ck, sk) %in% rownames(vc))) {
          A <- sqrt(pop_a^2 + pop_b^2)
@@ -1005,11 +1053,11 @@ dance_traj_participant_curves <- function(fit, harmonic = 1, conf = 0.95) {
        } else NA_real_,
        label = "model-based shrunken participant estimates (conditional modes / BLUPs)",
        note = paste(
-         "THESE ARE SHRUNKEN. A conditional mode is pulled toward the population",
-         "mean by an amount that depends on how much data that participant",
-         "contributed and how large the random-effect variance is. They are better",
-         "PREDICTIONS of each individual than independent per-participant fits, but",
-         "they are not the same quantity.",
+         "THESE ARE SHRUNKEN. A conditional mode is pulled toward its CELL's",
+         "fixed-effect rhythm by an amount that depends on how much data that",
+         "participant contributed and how large the random-effect variance is.",
+         "They are better PREDICTIONS of each individual than independent",
+         "per-participant fits, but they are not the same quantity.",
          "In particular the spread of these values UNDERSTATES the spread of true",
          "participant parameters: compare sd_blup_amplitude with",
          "sd_population_amplitude, which is the model's estimate of the real",
@@ -1084,4 +1132,226 @@ dance_traj_curve_peaks <- function(fit, component = "full", n_time = 1441L,
        window = c(spec$t0, t_hi), clock_origin = co,
        window_clock = to_clock(c(spec$t0, t_hi)),
        resolution_min = 60 * (t_hi - spec$t0) / (length(times) - 1))
+}
+
+# ==============================================================================
+# PER-PARTICIPANT VIEWS OF THE ONE MIXED MODEL
+# ==============================================================================
+# The two-stage approach has a fit per participant and derives everything else
+# from those. The mixed approach has ONE fit and derives each participant from
+# it: the cell's fixed effects plus that participant's conditional modes. These
+# two helpers give tab 1 a curve per participant and tab 4 a row per
+# participant, both SHRUNKEN and both labelled as such -- see
+# dance_traj_participant_curves() for what shrinkage does to the spread.
+
+# The conditional (participant-level) prediction on a time grid, one curve per
+# CURVE -- a participant measured in two conditions has two -- through the
+# model's own predict(), so the random-effects terms enter exactly as fitted.
+dance_traj_participant_predict <- function(fit, times = NULL, n_time = 120) {
+  if (!isTRUE(fit$ok)) return(list(ok = FALSE, message = fit$message))
+  spec <- fit$spec; d <- spec$data
+  if (is.null(times)) times <- seq(min(d$t, na.rm = TRUE), max(d$t, na.rm = TRUE),
+                                   length.out = n_time)
+  cv <- spec$curve_var %||% "curve"; grp <- spec$subject %||% "subject"
+  cv <- if (cv %in% names(d)) cv else grp
+  dts <- spec$design_terms
+  curves <- unique(as.character(d[[cv]]))
+  tt <- times - spec$t0
+  rows <- lapply(curves, function(cl) {
+    tmpl <- d[match(cl, as.character(d[[cv]])), , drop = FALSE]
+    nd <- tmpl[rep(1L, length(times)), , drop = FALSE]
+    nd$t <- times
+    for (nm in spec$trend_terms) nd[[nm]] <- switch(nm,
+      trend_lin = tt, trend_log = log1p(pmax(0, tt)),
+      trend_sat = 1 - exp(-tt / spec$tau), stop(sprintf("unknown trend column '%s'", nm)))
+    for (h in seq_len(spec$n_harmonics)) {
+      w <- 2 * pi * h * tt / spec$period
+      nd[[paste0("c", h)]] <- cos(w); nd[[paste0("s", h)]] <- sin(w)
+    }
+    pred <- tryCatch(as.numeric(stats::predict(fit$model, newdata = nd, re.form = NULL)),
+                     error = function(e) rep(NA_real_, length(times)))
+    data.frame(curve = cl, subject = as.character(tmpl[[grp]]),
+               cell = if (length(dts))
+                 paste(vapply(dts, function(f) as.character(tmpl[[f]]), character(1)),
+                       collapse = " x ") else "(all)",
+               t = times, fit = pred, stringsAsFactors = FALSE)
+  })
+  out <- do.call(rbind, rows); rownames(out) <- NULL
+  list(ok = TRUE, table = out, times = times, shrunken = TRUE,
+       n_curves = length(curves),
+       note = paste("Conditional predictions: each curve is its cell's fixed-effect",
+                    "trajectory plus that participant's conditional modes (BLUPs),",
+                    "so it is SHRUNKEN toward the cell curve by an amount that depends",
+                    "on how much data the participant contributed."))
+}
+
+# One row per curve: the cell, the shrunken level and trend, and each
+# harmonic's shrunken amplitude and acrophase, with the model's own
+# between-participant SD beside them so the spread of the rows is not read as
+# the spread of the population.
+dance_traj_participant_table <- function(fit) {
+  if (!isTRUE(fit$ok)) return(list(ok = FALSE, message = fit$message))
+  spec <- fit$spec; d <- spec$data
+  re <- tryCatch(lme4::ranef(fit$model, condVar = FALSE), error = function(e) NULL)
+  if (is.null(re)) return(list(ok = FALSE, message = "Conditional modes are unavailable for this fit."))
+  grp <- spec$subject %||% "subject"
+  cv <- spec$curve_var %||% "curve"; cv <- if (cv %in% names(d)) cv else grp
+  R_subj  <- if (grp %in% names(re)) as.data.frame(re[[grp]]) else NULL
+  R_curve <- if (cv %in% names(re) && !identical(cv, grp)) as.data.frame(re[[cv]]) else NULL
+  fx <- dance_traj_cell_functionals(fit)
+  bv <- dance_traj_beta(fit)
+  beta <- bv$beta[!is.na(bv$beta)]
+  dot <- function(row) { nm <- intersect(names(row), names(beta)); sum(row[nm] * beta[nm]) }
+  dts <- spec$design_terms
+  key <- data.frame(subject = as.character(d[[grp]]), curve = as.character(d[[cv]]),
+                    cell = if (length(dts))
+                      do.call(paste, c(lapply(dts, function(f) as.character(d[[f]])),
+                                       list(sep = " x "))) else "(all)",
+                    stringsAsFactors = FALSE)
+  key <- key[!duplicated(key$curve), , drop = FALSE]
+  ci <- match(key$cell, fx$grid$.cell)
+  if (anyNA(ci)) return(list(ok = FALSE, message = "A curve's design cell is not among the fitted cells."))
+  # a term's conditional mode for this curve, summed over the levels it lives at
+  mode_of <- function(term, k) {
+    v <- 0
+    if (!is.null(R_subj) && term %in% names(R_subj)) {
+      si <- match(key$subject[k], rownames(R_subj)); if (!is.na(si)) v <- v + R_subj[[term]][si] }
+    if (!is.null(R_curve) && term %in% names(R_curve)) {
+      qi <- match(key$curve[k], rownames(R_curve)); if (!is.na(qi)) v <- v + R_curve[[term]][qi] }
+    v
+  }
+  random_terms <- unique(c(names(R_subj), names(R_curve)))
+  rows <- lapply(seq_len(nrow(key)), function(k) {
+    cell <- fx$cells[[ci[k]]]
+    out <- list(subject = key$subject[k], curve = key$curve[k], cell = key$cell[k])
+    out$intercept <- dot(cell$intercept) + mode_of("(Intercept)", k)
+    out$level_at_t0 <- dot(cell$level0) + mode_of("(Intercept)", k) +
+      sum(vapply(spec$harm_terms[grepl("^c", spec$harm_terms)],
+                 function(tm) mode_of(tm, k), numeric(1)))
+    for (tm in spec$trend_terms) out[[tm]] <- dot(cell$coef[[tm]]) + mode_of(tm, k)
+    for (h in seq_len(spec$n_harmonics)) {
+      ck <- paste0("c", h); sk <- paste0("s", h)
+      a <- dot(cell$coef[[ck]]) + mode_of(ck, k); b <- dot(cell$coef[[sk]]) + mode_of(sk, k)
+      kk <- (spec$period / h) / (2 * pi)
+      out[[paste0("beta_cos_", h)]] <- a; out[[paste0("beta_sin_", h)]] <- b
+      out[[paste0("amplitude_", h)]] <- sqrt(a^2 + b^2)
+      out[[paste0("acrophase_rad_", h)]] <- atan2(b, a) %% (2 * pi)
+      out[[paste0("acrophase_time_", h)]] <- (atan2(b, a) %% (2 * pi)) * kk
+    }
+    as.data.frame(out, stringsAsFactors = FALSE)
+  })
+  tab <- do.call(rbind, rows); rownames(tab) <- NULL
+  # which of these actually vary per participant: a term with no random effect
+  # is the cell value for everyone, and the column must say so
+  varies <- c(intercept = "(Intercept)" %in% random_terms,
+              stats::setNames(spec$trend_terms %in% random_terms, spec$trend_terms),
+              stats::setNames(vapply(seq_len(spec$n_harmonics), function(h)
+                any(paste0(c("c", "s"), h) %in% random_terms), logical(1)),
+                paste0("H", seq_len(spec$n_harmonics))))
+  list(ok = TRUE, table = tab, shrunken = TRUE, varies = varies,
+       re_label = fit$re_label, random_terms = random_terms,
+       note = paste(
+         "Shrunken (conditional-mode) estimates from the ONE mixed model: each row",
+         "is its cell's fixed effects plus that participant's deviation. A quantity",
+         "with no random effect in the fitted structure does not vary per",
+         "participant here -- it is the cell value for everyone -- and is marked.",
+         "Do not run a second-stage test on these rows; the model's own contrasts",
+         "in tab 6 are the group comparison."))
+}
+
+# ------------------------------------------------------------------------------
+# VARIANCE EXPLAINED BY THE ONE MODEL
+# ------------------------------------------------------------------------------
+# Nakagawa & Schielzeth (2013) R-squared for a Gaussian mixed model, with the
+# random-slope extension of Johnson (2014): the random-effect variance is the
+# MEAN over observations of z_i' Sigma z_i, not the sum of the diagonal of Sigma,
+# which is wrong as soon as a slope is in the random part -- and every rung of
+# this app's ladder has one.
+#
+#   marginal    = var(X beta) / (var(X beta) + sigma2_random + sigma2_e)
+#   conditional = (var(X beta) + sigma2_random) / (same denominator)
+#
+# Implemented here rather than through the performance / MuMIn packages
+# because neither is a declared dependency; the formula is the published one
+# and tests/testthat/test-traj-r2.R checks it against a hand computation.
+dance_traj_r2 <- function(fit) {
+  if (!isTRUE(fit$ok)) return(NULL)
+  m <- fit$model
+  if (!inherits(m, "merMod")) return(NULL)
+  Xb <- tryCatch(as.numeric(stats::predict(m, re.form = NA)), error = function(e) NULL)
+  if (is.null(Xb)) return(NULL)
+  var_f <- stats::var(Xb)
+  Z <- tryCatch(as.matrix(lme4::getME(m, "Z")), error = function(e) NULL)
+  vc <- tryCatch(lme4::VarCorr(m), error = function(e) NULL)
+  if (is.null(Z) || is.null(vc)) return(NULL)
+  # the full random-effect covariance, block-diagonal over grouping levels, in
+  # the column order of Z: lme4 orders Z by grouping factor then level then term
+  flist <- lme4::getME(m, "flist"); cnms <- lme4::getME(m, "cnms")
+  blocks <- list()
+  for (g in names(cnms)) {
+    Sg <- as.matrix(vc[[g]])[cnms[[g]], cnms[[g]], drop = FALSE]
+    nl <- nlevels(flist[[g]])
+    blocks[[g]] <- list(S = Sg, nl = nl)
+  }
+  # z_i' Sigma z_i for every observation, block by block
+  var_r <- 0; col <- 0L
+  for (g in names(cnms)) {
+    b <- blocks[[g]]; q <- ncol(b$S)
+    for (l in seq_len(b$nl)) {
+      Zl <- Z[, col + seq_len(q), drop = FALSE]
+      var_r <- var_r + rowSums((Zl %*% b$S) * Zl)
+      col <- col + q
+    }
+  }
+  var_r <- mean(var_r)
+  var_e <- stats::sigma(m)^2
+  den <- var_f + var_r + var_e
+  list(marginal = var_f / den, conditional = (var_f + var_r) / den,
+       var_fixed = var_f, var_random = var_r, var_resid = var_e,
+       method = "Nakagawa & Schielzeth (2013) with Johnson's (2014) random-slope extension")
+}
+
+# ------------------------------------------------------------------------------
+# THE FITTED EQUATION OF EVERY DESIGN CELL, from the fixed effects
+# ------------------------------------------------------------------------------
+# One row per cell: the constant, the trend coefficient(s), and each harmonic's
+# (cos, sin) pair with the amplitude and acrophase read off it -- the numbers
+# the summary panel and the publication report print under the symbolic
+# equation. They are computed from dance_traj_cell_functionals(), i.e. from the
+# same beta map dance_traj_predict() draws the curves from, so the printed
+# equation and the drawn curve cannot disagree. Acrophase is in model-elapsed
+# hours here (t = 0 at the first observation); callers convert to clock time.
+dance_traj_cell_equations <- function(fit) {
+  if (!isTRUE(fit$ok)) return(NULL)
+  spec <- fit$spec
+  fx <- dance_traj_cell_functionals(fit)
+  bv <- dance_traj_beta(fit); beta <- bv$beta; beta[is.na(beta)] <- 0
+  dotb <- function(row) { nm <- intersect(names(row), names(beta)); sum(row[nm] * beta[nm]) }
+  cells_n <- spec$cells
+  rows <- lapply(seq_len(nrow(fx$grid)), function(i) {
+    cl <- fx$cells[[i]]; cname <- fx$grid$.cell[i]
+    co <- vapply(fx$basis, function(j) dotb(cl$coef[[j]]), numeric(1)); names(co) <- fx$basis
+    ni <- if (!is.null(cells_n)) match(cname, cells_n$cell) else NA_integer_
+    out <- list(cell = cname,
+                n_participants = if (!is.na(ni)) cells_n$n_participants[ni] else NA_integer_,
+                n_obs = if (!is.na(ni)) cells_n$n_obs[ni] else NA_integer_,
+                intercept = dotb(cl$intercept), level_at_t0 = dotb(cl$level0))
+    for (tm in spec$trend_terms) out[[tm]] <- unname(co[[tm]])
+    for (h in seq_len(spec$n_harmonics)) {
+      a <- unname(co[[paste0("c", h)]]); b <- unname(co[[paste0("s", h)]])
+      out[[paste0("beta_cos_", h)]] <- a; out[[paste0("beta_sin_", h)]] <- b
+      out[[paste0("amplitude_", h)]] <- sqrt(a^2 + b^2)
+      out[[paste0("acrophase_rad_", h)]] <- atan2(b, a) %% (2 * pi)
+      out[[paste0("acrophase_time_", h)]] <- (atan2(b, a) %% (2 * pi)) * (spec$period / h) / (2 * pi)
+    }
+    as.data.frame(out, stringsAsFactors = FALSE)
+  })
+  tab <- do.call(rbind, rows); rownames(tab) <- NULL
+  # the trend coefficients in the order dance_format_equation() takes them
+  trend_coefs <- lapply(seq_len(nrow(tab)), function(i) switch(spec$trend %||% "none",
+    linear = tab$trend_lin[i], log = tab$trend_log[i],
+    exp_sat = c(tab$trend_sat[i], spec$tau), NULL))
+  list(ok = TRUE, table = tab, trend_coefs = trend_coefs,
+       trend = spec$trend %||% "none", period = spec$period,
+       n_harmonics = spec$n_harmonics, tau = spec$tau)
 }

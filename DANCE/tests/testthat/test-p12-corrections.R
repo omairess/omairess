@@ -40,6 +40,36 @@ rep_env <- function() {
   source(file.path(app_dir, "server/93_apa_report.R"), local = e)
   e
 }
+# The report's two-stage comparison calls the same kernels the comparison tab
+# does (server/08h), so a test of that section needs them in scope.
+ts_env <- function() {
+  e <- new.env(parent = globalenv())
+  for (f in c("server/08_helpers_cosinor.R", "server/08b_helpers_popcosinor.R",
+              "server/08c_helpers_circstat.R", "server/08h_helpers_twostage.R",
+              "server/93_apa_report.R"))
+    source(file.path(app_dir, f), local = e)
+  e
+}
+# A two-stage cosinor result with two groups: 30 vs 20 participants, H1 with a
+# planted acrophase (hours) and amplitude per group, as the run button stores it.
+mk_ts_vals <- function(acro = c(A = 16, B = 19), amp = c(A = 8, B = 9), seed = 12) {
+  set.seed(seed)
+  n <- c(A = 30, B = 20); g <- rep(names(n), n)
+  phi <- 2 * pi * (acro[g] + rnorm(sum(n), 0, 0.4)) / 24
+  A <- amp[g] + rnorm(sum(n), 0, 0.8)
+  ip <- data.frame(subject = seq_len(sum(n)), mesor = 50 + rnorm(sum(n), 0, 2),
+                   beta_cos_1 = A * cos(phi), beta_sin_1 = A * sin(phi),
+                   amplitude_1 = A, acrophase_rad_1 = phi %% (2 * pi),
+                   acrophase_time_1 = (phi %% (2 * pi)) * 24 / (2 * pi),
+                   r_squared = runif(sum(n), .7, .95), p_value = 1e-4,
+                   stringsAsFactors = FALSE)
+  list(data = matrix(rnorm(50 * 24), 50, 24),
+       covariates = data.frame(AGE = factor(g), stringsAsFactors = FALSE),
+       harmonic_model = list(approach = "two_stage", period = 24, n_harmonics = 1,
+                             trend_type = "none", individual_fits = list(),
+                             individual_params = ip, group_var_name = "AGE",
+                             time_vec = 0:23, origin_shift = 0))
+}
 
 # ============================================ P12.1 the lambda claim ==========
 test_that("P12.1: the GCV search uses every scorable subject", {
@@ -111,92 +141,39 @@ test_that("P12.2c: dance_apa_M honours the no-leading-zero rule when bounded", {
                     code_of("server/93_apa_report.R"), fixed = TRUE))
 })
 
-test_that("P12.2: internal parameter ids never reach report prose", {
-  e <- rep_env()
-  expect_equal(e$dance_cosinor_param_label("amplitude_1"), "the amplitude of harmonic 1")
-  expect_equal(e$dance_cosinor_param_label("acrophase_time_2"), "the acrophase of harmonic 2")
-  expect_equal(e$dance_cosinor_param_label("mesor_adj"), "the MESOR (rhythm-adjusted mean)")
-  expect_equal(e$dance_cosinor_origin_label("first_observation"),
-               "the first observation in each series")
+test_that("P12.2: the legacy pairwise module has left the report", {
+  src <- code_of("server/93_apa_report.R")
+  for (bad in c("hp_pairwise", "hp_acrophase", "dance_cosinor_param_label",
+                "dance_cosinor_origin_label", "using_smoothed"))
+    expect_false(grepl(bad, src, fixed = TRUE), info = bad)
 })
 
-test_that("P12.2b: the circular effect is a difference of MEANS, not concentration", {
-  e <- rep_env()
-  pw <- data.frame(comparison = "A vs B", group1 = "A", group2 = "B",
-                   mean1 = 16.0, sd1 = 1, n1 = 30, mean2 = 19.0, sd2 = 1, n2 = 20,
-                   mean_diff = -3.0, t_stat = 750.9, df = 48,
-                   p_value = 1e-9, cohens_d = -0.0001,
-                   ci_lower = NA, ci_upper = NA, p_adjusted = 1e-9,
-                   stringsAsFactors = FALSE)
-  vals <- list(
-    data = matrix(rnorm(20 * 24), 20, 24),
-    harmonic_model = list(period = 24, n_harmonics = 1, trend_type = "none",
-                          individual_fits = list(), group_var_name = "AGE",
-                          time_origin = "first_observation"),
-    hp_pairwise_all = list(list(results = pw, param = "acrophase_time_1",
-                                correction = "holm")))
-  txt <- paste(e$dance_apa_report(vals, list(), "T"), collapse = "\n")
-  # the angular difference, in hours -- what the test is about
-  expect_true(grepl("-3.00 h", txt, fixed = TRUE))
-  # NOT the near-zero concentration difference that used to fill this column
-  expect_false(grepl("| -0.00 |", txt, fixed = TRUE))
-  expect_true(grepl("difference between the group circular means", txt, fixed = TRUE))
-  # and the Watson-Williams assumptions are stated
+test_that("P12.2: the two-stage group comparison reaches the report, as one table", {
+  e <- ts_env()
+  txt <- paste(e$dance_apa_report(mk_ts_vals(), list(), "T"), collapse = "\n")
+  expect_true(grepl("Cosinor regression (two-stage)", txt, fixed = TRUE))
+  expect_true(grepl("**Group differences (AGE).**", txt, fixed = TRUE))
+  # the primary (MANOVA on the coefficient vector) and every component test
+  for (row in c("Complete coefficient vector", "Constant term (beta_0)",
+                "H1 rhythm vector (cos, sin) jointly", "H1 amplitude", "H1 acrophase",
+                "Watson-Williams"))
+    expect_true(grepl(row, txt, fixed = TRUE), info = row)
+  # the two-stage caveats a chronobiology reviewer will raise
+  expect_true(grepl("treated as exact", txt, fixed = TRUE))
   expect_true(grepl("von Mises", txt, fixed = TRUE))
+  # and the Methods paragraph names the tests
+  expect_true(grepl("one-way MANOVA (Wilks' lambda)", txt, fixed = TRUE))
 })
 
 test_that("P12.2: Bingham's amplitude/acrophase caution is CHECKED, not recited", {
-  e <- rep_env()
-  mk <- function(param, acro_verdict) {
-    pw <- data.frame(comparison = "A vs B", group1 = "A", group2 = "B",
-                     mean1 = 8, sd1 = 1, n1 = 30, mean2 = 9, sd2 = 1, n2 = 20,
-                     mean_diff = -1, t_stat = -2.3, df = 40,
-                     p_value = .02, cohens_d = -.6,
-                     ci_lower = NA, ci_upper = NA, p_adjusted = .02,
-                     stringsAsFactors = FALSE)
-    list(data = matrix(rnorm(20 * 24), 20, 24),
-         harmonic_model = list(period = 24, n_harmonics = 1, trend_type = "none",
-                               individual_fits = list(), group_var_name = "AGE"),
-         hp_pairwise_all = list(list(results = pw, param = param, correction = "holm")),
-         hp_acrophase_differs = acro_verdict)
-  }
-  hit  <- paste(e$dance_apa_report(mk("amplitude_1", TRUE),  list(), "T"), collapse = "\n")
-  miss <- paste(e$dance_apa_report(mk("amplitude_1", FALSE), list(), "T"), collapse = "\n")
-  unk  <- paste(e$dance_apa_report(mk("amplitude_1", NULL),  list(), "T"), collapse = "\n")
-  expect_true(grepl("acrophase comparison WAS significant", hit, fixed = TRUE))
-  expect_true(grepl("was not significant", miss, fixed = TRUE))
-  expect_true(grepl("Run the same comparison on acrophase", unk, fixed = TRUE))
-  # and it is not raised when no amplitude comparison was run
-  none <- paste(e$dance_apa_report(mk("mesor_adj", TRUE), list(), "T"), collapse = "\n")
-  expect_false(grepl("should not be read as a difference in rhythm strength",
-                     none, fixed = TRUE))
-})
-
-test_that("P12.2: every comparison the user ran reaches the report", {
-  e <- rep_env()
-  mk1 <- function(param) {
-    pw <- data.frame(comparison = "A vs B", group1 = "A", group2 = "B",
-                     mean1 = 8, sd1 = 1, n1 = 30, mean2 = 9, sd2 = 1, n2 = 20,
-                     mean_diff = -1, t_stat = -2.3, df = 40, p_value = .02,
-                     cohens_d = -.6, ci_lower = NA, ci_upper = NA,
-                     p_adjusted = .02, stringsAsFactors = FALSE)
-    list(results = pw, param = param, correction = "holm")
-  }
-  vals <- list(
-    data = matrix(rnorm(20 * 24), 20, 24),
-    harmonic_model = list(period = 24, n_harmonics = 1, trend_type = "none",
-                          individual_fits = list(), group_var_name = "AGE"),
-    hp_pairwise_all = list(mk1("mesor_adj"), mk1("amplitude_1"),
-                           mk1("acrophase_time_1")))
-  txt <- paste(e$dance_apa_report(vals, list(), "T"), collapse = "\n")
-  for (lab in c("the MESOR (rhythm-adjusted mean)", "the amplitude of harmonic 1",
-                "the acrophase of harmonic 1"))
-    expect_true(grepl(paste0("Group differences in ", lab), txt, fixed = TRUE), info = lab)
-  # and the multiplicity statement says what family was controlled
-  expect_true(grepl("within each parameter, not across parameters", txt, fixed = TRUE))
-  # the pairwise module keeps them rather than overwriting
-  expect_true(grepl("all_pw[[param]] <- list(results = results",
-                    code_of("server/73_cosinor_pairwise.R"), fixed = TRUE))
+  e <- ts_env()
+  # acrophases three hours apart: the amplitude comparison is not interpretable
+  hit  <- paste(e$dance_apa_report(mk_ts_vals(acro = c(A = 16, B = 19)), list(), "T"), collapse = "\n")
+  # same acrophase: the acrophase test had power and did not reject, so it clears
+  miss <- paste(e$dance_apa_report(mk_ts_vals(acro = c(A = 16, B = 16)), list(), "T"), collapse = "\n")
+  expect_true(grepl("should NOT be read as a difference in rhythm strength", hit, fixed = TRUE))
+  expect_false(grepl("should NOT be read as a difference in rhythm strength", miss, fixed = TRUE))
+  expect_true(grepl("the caution does not apply", miss, fixed = TRUE))
 })
 
 test_that("P12.2: the methods paragraph carries what a cosinor paper needs", {

@@ -143,10 +143,6 @@ test_that("the per-subject columns the pairwise picker offers are declared", {
                collapse = "\n")
   for (col in c("mesor", "mesor_adj", "value_at_start"))
     expect_true(grepl(sprintf('"%s"', col), src, fixed = TRUE), info = col)
-  ui <- paste(readLines(file.path(app_dir, "ui/73_cosinor_pairwise.R"), warn = FALSE),
-              collapse = "\n")
-  for (col in c("mesor_adj", "value_at_start"))
-    expect_true(grepl(col, ui, fixed = TRUE), info = col)
 })
 
 test_that("no UNASSIGNED pseudo-group survives anywhere in the server", {

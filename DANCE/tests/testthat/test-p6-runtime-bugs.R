@@ -199,14 +199,16 @@ test_that("P6.6: the summary reports the smallest attainable p", {
 # ============================================ P6.7 defaults ==================
 test_that("P6.7: the harmonic tab's defaults are the ones you would want", {
   ui <- code_of("ui/72_harmonic.R")
-  expect_true(grepl('selected = "first_observation")', ui, fixed = TRUE))
   expect_true(grepl('checkboxInput("harmonic_show_data", "Show Raw Data Points", FALSE)',
                     ui, fixed = TRUE))
   # the server fallbacks must agree, or a session that never touched the control
   # runs a different model from the one the UI shows
   srv <- code_of("server/72_harmonic.R")
-  expect_true(grepl('input$harmonic_time_origin %||% "first_observation"', srv, fixed = TRUE))
-  expect_false(grepl('input$harmonic_time_origin %||% "midnight"', srv, fixed = TRUE))
+  # the time origin is no longer a control at all: t = 0 is the first
+  # observation, hard-set, and nothing reads an input for it
+  expect_false(grepl("harmonic_time_origin", srv, fixed = TRUE))
+  expect_true(grepl('time_origin <- "first_observation"', srv, fixed = TRUE))
+  expect_false(grepl("harmonic_time_origin", ui, fixed = TRUE))
 })
 
 test_that("the data-source choice is GONE, not merely defaulted to raw", {

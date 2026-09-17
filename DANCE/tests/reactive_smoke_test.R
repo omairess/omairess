@@ -333,7 +333,7 @@ server <- function(input, output, session) {
   # when the app had computed them. Same shape of gap as P11.2 -- the machinery
   # existed and nothing pressed the button.
   cat("\n-- cosinor regression, with a grouping variable -------------------------\n")
-  session$setInputs(harmonic_data_source = "raw", harmonic_period = 24,
+  session$setInputs(harmonic_approach = "two_stage", harmonic_period = 24,
                     n_harmonics = 1, harmonic_trend_type = "none",
                     harmonic_model_selection = FALSE,
                     harmonic_time_var = "_columns_",
@@ -363,25 +363,7 @@ server <- function(input, output, session) {
     else ok(sprintf("Bingham regions computed for %d series, %d with an identified acrophase",
                     hm$bingham_summary[[1]]$n, hm$bingham_summary[[1]]$n_identified))
 
-    # the pairwise comparison the report needs, on BOTH an amplitude and the
-    # acrophase -- the acrophase run is what lets the report CHECK Bingham's
-    # caveat instead of reciting it
-    for (prm in c("acrophase_time_1", "amplitude_1")) {
-      session$setInputs(hp_param = prm, hp_correction = "holm",
-                        hp_show_ci = TRUE, hp_show_effect_size = TRUE,
-                        hp_run = which(c("acrophase_time_1", "amplitude_1") == prm))
-      session$flushReact()
-      pr <- values$hp_pairwise_results
-      if (is.null(pr) || !nrow(pr)) fail(sprintf("pairwise on '%s' produced nothing", prm))
-      else ok(sprintf("pairwise on '%s': %d comparison(s), correction '%s'",
-                      prm, nrow(pr), values$hp_pairwise_correction))
-    }
-    if (is.null(values$hp_acrophase_differs))
-      fail("the acrophase verdict was not recorded for the Bingham caveat")
-    else ok(sprintf("acrophase verdict recorded: groups differ = %s",
-                    values$hp_acrophase_differs))
   }
-  render("pairwise cosinor results render", output$hp_results)
 
   # ---- the diagnostics panel's own text and the tau check (P15) -------------
   cat("\n-- harmonic diagnostics: help text and the free-vs-fixed tau check ------\n")

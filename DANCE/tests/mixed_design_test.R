@@ -101,42 +101,6 @@ if (isTRUE(r$ok)) {
       "the fitted cell curves could not be produced")
 }
 
-# ---- mixed cosinor ----------------------------------------------------------
-cat("\n-- mixed cosinor -------------------------------------------------------\n")
-t0 <- Sys.time(); rc <- e$dance_mixed_cosinor(long, period = 24); el <- as.numeric(Sys.time()-t0, units="secs")
-chk(isTRUE(rc$ok), sprintf("fitted in %.1f s (random rhythm: %s)", el, rc$random_rhythm),
-    paste("the mixed cosinor failed:", rc$message))
-if (isTRUE(rc$ok)) {
-  chk(nrow(rc$cells) == nlevels(long$cell),
-      sprintf("MESOR, amplitude and acrophase for each of the %d cells", nrow(rc$cells)),
-      "not every cell got rhythm parameters")
-  chk(all(is.finite(rc$cells$amplitude_1)) && all(rc$cells$amplitude_1 >= 0),
-      "amplitudes are finite and non-negative",
-      "an amplitude is non-finite or negative, which a norm cannot be")
-  chk(all(rc$cells$acrophase_1 >= 0 & rc$cells$acrophase_1 < 24),
-      "acrophases lie inside one period",
-      "an acrophase falls outside the period")
-  chk(!is.null(rc$tests) && nrow(rc$tests) == 3,
-      "all three likelihood-ratio tests were computed",
-      "the likelihood-ratio tests did not run")
-  if (!is.null(rc$tests)) {
-    chk(all(rc$tests$df %% 2 == 0),
-        "each test drops a cosine/sine PAIR, so its df is even",
-        "a test has odd df, which means a lone cosine or sine was dropped")
-    ix <- grep("interaction", rc$tests$term)
-    chk(length(ix) == 1 && rc$tests$p[ix] < 0.05,
-        sprintf("the planted rhythm interaction is detected: chi2(%d) = %.2f, p = %.4g",
-                rc$tests$df[ix], rc$tests$chisq[ix], rc$tests$p[ix]),
-        "the planted rhythm interaction was not detected")
-  }
-  # amplitude should be larger where it was planted larger (A, and more so in g2)
-  a_g2A <- rc$cells$amplitude_1[rc$cells$within == "A" & rc$cells$between == "g2"]
-  a_g2B <- rc$cells$amplitude_1[rc$cells$within == "B" & rc$cells$between == "g2"]
-  chk(a_g2A > a_g2B,
-      sprintf("recovers the planted amplitude ordering in g2 (%.1f > %.1f)", a_g2A, a_g2B),
-      sprintf("the planted amplitude ordering is not recovered (%.1f vs %.1f)", a_g2A, a_g2B))
-}
-
 # ---- the TAB, driven through its own controls -------------------------------
 # The kernels above are pure and were called directly. That is exactly the shape
 # of test that let P11.2 ship: a direct call supplies the scope the app does not.
@@ -183,37 +147,12 @@ suppressWarnings(shiny::testServer(server_fn, {
         paste0(o, " errored: ", if (inherits(v, "error")) conditionMessage(v) else ""))
   }
 
-  # the mixed COSINOR now lives in the Cosinor tab, as a third approach
-  session$setInputs(harmonic_data_source = "raw", harmonic_period = 24,
-                    n_harmonics = 1, harmonic_trend_type = "none",
-                    harmonic_time_var = "_columns_", harmonic_model_selection = FALSE,
-                    run_harmonic = 1)
-  session$flushReact()
-  session$setInputs(hp_approach = "mixed", hp_mixed_between = "Group",
-                    hp_mixed_within = "Condition", hp_mixed_real_time = FALSE,
-                    hp_run = 1)
-  session$flushReact()
-  chk(!is.null(values$mixed_results) && identical(values$mixed_results$kind, "cosinor"),
-      "the Cosinor tab runs the mixed cosinor",
-      "the mixed cosinor did not run from the Cosinor tab")
-  v <- tryCatch(force(output$hp_results), error = function(e) e)
-  chk(!inherits(v, "error"), "hp_results renders the mixed cosinor",
-      paste0("hp_results errored: ", if (inherits(v, "error")) conditionMessage(v) else ""))
-
-  # the readout must not silently look like a one-factor result
-  txt <- paste(capture.output(print(force(output$mixed_results))), collapse = " ")
-  chk(grepl("Mixed cosinor", txt, fixed = TRUE),
-      "the readout names the model it fitted",
-      "the readout does not say which model produced these numbers")
-
   # the publication report must carry it, for both kinds
-  for (kind in c("cosinor", "fanova")) {
-    if (kind == "fanova") {
-      session$setInputs(fanova_design = "mixed", fanova_mixed_estimator = "model",
-                        run_fanova = 10)
-    } else {
-      session$setInputs(hp_approach = "mixed", hp_run = 10)
-    }
+  # (the mixed COSINOR is now the harmonic tab's own mixed-effects approach and
+  #  is covered by tests/traj_tab6_test.R; the standalone module is gone)
+  for (kind in c("fanova")) {
+    session$setInputs(fanova_design = "mixed", fanova_mixed_estimator = "model",
+                      run_fanova = 10)
     session$flushReact()
     md <- tryCatch(dance_apa_report(values, input, "Mixed design"),
                    error = function(e) e)
@@ -222,7 +161,7 @@ suppressWarnings(shiny::testServer(server_fn, {
       next
     }
     rt <- paste(md, collapse = "\n")
-    head <- if (kind == "fanova") "Mixed functional model" else "Mixed cosinor"
+    head <- "Mixed functional model"
     chk(grepl(head, rt, fixed = TRUE),
         paste("the report carries the", kind, "results section"),
         paste("the report has a", kind, "result but no section for it"))
@@ -292,18 +231,16 @@ suppressWarnings(shiny::testServer(server_fn, {
 # session and its numbers compared against the app's.
 cat("\n-- the exported script, executed ---------------------------------------\n")
 suppressWarnings(shiny::testServer(server_fn, {
-  session$setInputs(harmonic_data_source = "raw", harmonic_period = 24,
-                    n_harmonics = 1, harmonic_trend_type = "none",
-                    harmonic_time_var = "_columns_", harmonic_model_selection = FALSE,
-                    run_harmonic = 1)
+  session$setInputs(fanova_design = "mixed",
+                    fanova_mixed_between = "Group", fanova_mixed_within = "Condition",
+                    fanova_mixed_real_time = FALSE,
+                    fanova_mixed_k_time = 8, fanova_mixed_k_subject = 4,
+                    n_permutations = 199, alpha_level = 0.05, pairwise_correction = "BH",
+                    fanova_mixed_estimator = "model", run_fanova = 1)
   session$flushReact()
-  session$setInputs(hp_approach = "mixed", hp_mixed_between = "Group",
-                    hp_mixed_within = "Condition", hp_mixed_real_time = FALSE,
-                    hp_run = 1)
-  session$flushReact()
-  chk(!is.null(values$mixed_results) && identical(values$mixed_results$kind, "cosinor"),
-      "a mixed cosinor result exists to export",
-      "no mixed cosinor result to export")
+  chk(!is.null(values$mixed_results) && identical(values$mixed_results$kind, "model"),
+      "a mixed model result exists to export",
+      "no mixed model result to export")
 
   code <- tryCatch(generate_analysis_code(full = TRUE), error = function(e) e)
   if (inherits(code, "error")) {
@@ -312,7 +249,7 @@ suppressWarnings(shiny::testServer(server_fn, {
     chk(grepl("12. MIXED DESIGN", code, fixed = TRUE),
         "the script carries a mixed-design section",
         "the exported script has no mixed-design section")
-    for (fn in c("dance_mixed_long", "dance_mixed_check", "dance_mixed_cosinor"))
+    for (fn in c("dance_mixed_long", "dance_mixed_check", "dance_mixed_fanova"))
       chk(grepl(paste0(fn, " <- function"), code, fixed = TRUE),
           paste("the script defines", fn, "from the live function"),
           paste("the script calls", fn, "but never defines it"))
@@ -339,21 +276,20 @@ suppressWarnings(shiny::testServer(server_fn, {
     runner <- tempfile(fileext = ".R")
     writeLines(c(
       '.libPaths(c("~/Rlib", .libPaths()))',
-      'suppressMessages(library(lme4))',
+      'suppressMessages({library(lme4); library(mgcv)})',
       sprintf('raw_data <- as.matrix(readRDS("%s"))', rf),
       lines[i0:(i1 - 1)],
-      'cat(sprintf("%.10f", mixed_fit$cells$amplitude_1), sep="\n")'), runner)
+      'cat(sprintf("AICFULL %.10f", mixed_fit$aic_full), sep="\n")'), runner)
     out <- suppressWarnings(system2("Rscript", runner, stdout = TRUE, stderr = FALSE))
-    got <- suppressWarnings(as.numeric(out[grepl("^[0-9.]+$", out)]))
-    chk(length(got) == nrow(live$cells),
-        sprintf("the exported script runs and returns %d cell amplitudes", length(got)),
-        sprintf("the exported script returned %d values, expected %d",
-                length(got), nrow(live$cells)))
-    if (length(got) == nrow(live$cells)) {
-      d <- max(abs(got - live$cells$amplitude_1))
+    got <- suppressWarnings(as.numeric(sub("^AICFULL ", "", out[grepl("^AICFULL ", out)])))
+    chk(length(got) == 1L && is.finite(got),
+        "the exported script runs and returns the full model's AIC",
+        sprintf("the exported script returned %d AIC values", length(got)))
+    if (length(got) == 1L && is.finite(got) && is.finite(live$aic_full)) {
+      d <- abs(got - live$aic_full)
       chk(d < 1e-6,
-          sprintf("exported amplitudes match the app (max diff %.2e)", d),
-          sprintf("exported amplitudes differ from the app by %.6f", d))
+          sprintf("the exported AIC matches the app (diff %.2e)", d),
+          sprintf("the exported AIC differs from the app by %.6f", d))
     }
   }
 }))

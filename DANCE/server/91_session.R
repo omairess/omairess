@@ -36,19 +36,18 @@ RESTORE_INPUTS <- list(
                "mixed_k_time", "mixed_k_subject", "mixed_period",
                "mixed_harmonics",
                # P19: the mixed analyses moved into the fANOVA and Cosinor tabs
-               "fanova_mixed_k_time", "fanova_mixed_k_subject", "hp_pop_harmonic"),
+               "fanova_mixed_k_time", "fanova_mixed_k_subject"),
   checkbox = c("is_cyclic", "use_real_time", "constrain_bounds",
                "use_bootstrap", "cv_stratified", "mixed_real_time",
                "harmonic_model_selection",
-               "fanova_mixed_real_time", "hp_mixed_real_time"),
+               "fanova_mixed_real_time"),
   select   = c("smooth_method", "pca_type", "fanova_design", "fanova_test_type",
                "fanova_data_source", "fanova_group_var", "harmonic_time_var",
                "harmonic_trend_type", "harmonic_group_var", "reg_method",
-               "cluster_method", "pairwise_correction", "hp_param",
-               "hp_correction", "data_format",
+               "cluster_method", "pairwise_correction", "data_format",
                "mixed_between", "mixed_within", "mixed_analysis",
                "fanova_mixed_between", "fanova_mixed_within", "fanova_mixed_estimator",
-               "hp_approach", "hp_mixed_between", "hp_mixed_within"),
+               "harmonic_approach"),
   text     = c("harmonic_manual_times")
 )
 
@@ -139,7 +138,7 @@ observeEvent(input$load_session, {
   # tryCatch below caught it and returned NULL. So none of the 24 select
   # settings was ever restored, and nothing said so: a reloaded session came
   # back with its results but with fanova_design, fanova_group_var,
-  # harmonic_trend_type, hp_approach and the mixed factor choices all sitting at
+  # harmonic_trend_type, harmonic_approach and the mixed factor choices all sitting at
   # their defaults, describing an analysis that was not the one on screen. The
   # only visible trace was the "settings restored: N of M" line quietly reading
   # 24 short.

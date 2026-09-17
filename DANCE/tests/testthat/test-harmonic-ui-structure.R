@@ -74,8 +74,11 @@ test_that("model selection is available but does not gate an ordinary run", {
 test_that("the tab set is unchanged apart from the one rename", {
   tabs <- regmatches(ui, gregexpr('tabPanel\\("[^"]+"', ui))[[1]]
   tabs <- sub('tabPanel\\("', "", sub('"$', "", tabs))
+  # "3. Parameter Distribution" was removed in the approach overhaul: its four
+  # histograms were per-participant two-stage summaries with no mixed-effects
+  # analogue, and the individual table carries the same numbers.
   expect_equal(tabs, c("1. Fitted Curves", "2. Polar Plot (Acrophase)",
-                       "2b. Polar Density", "3. Parameter Distribution",
+                       "2b. Polar Density",
                        "4. Individual Results", "5. Residual Diagnostics",
                        "6. Group / Condition Comparison"))
 })

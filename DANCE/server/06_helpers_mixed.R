@@ -22,14 +22,8 @@
 #                          mgcv. The repeated measurement is IN the model rather
 #                          than permuted around.
 #
-#   dance_mixed_cosinor()  the rhythm parameters. One linear mixed model over
-#                          all observations, with the cosine/sine pair crossed
-#                          with both factors and a random MESOR and random
-#                          (cos, sin) per subject. This is a genuine mixed
-#                          cosinor, NOT the app's two-stage route (fit per
-#                          subject, then compare the estimates), which cannot
-#                          respect pairing and treats every subject's estimate
-#                          as if it were measured without error.
+# The rhythm parameters have their own mixed model on the Cosinor tab (the
+# trajectory model in server/08d-08g), so no cosinor lives here any more.
 #
 # Both are PURE: data frame in, list out. No `input`, no `values`, no
 # notifications -- so they can be unit-tested, and emitted into the exported
@@ -264,142 +258,6 @@ dance_mixed_fanova_curves <- function(res, n_grid = 100) {
   nd
 }
 
-# ================================================================ mixed cosinor
-# y ~ (cos + sin) * within * between + (1 + cos + sin | subject)
-#
-# The cosinor is linear in the (cos, sin) pair once the period is fixed, so a
-# linear mixed model fits it directly: the fixed part gives a MESOR, amplitude
-# and acrophase per cell of the design, and the random part lets each subject
-# have their own MESOR and their own rhythm.
-#
-# Amplitude and acrophase are recovered from the cell's (cos, sin) coefficients.
-# Their standard errors are NOT propagated here: amplitude is a norm and
-# acrophase an angle, both nonlinear in the coefficients, and a delta-method SE
-# on a phase near the boundary is misleading. What is tested instead is what the
-# model can test exactly -- whether the (cos, sin) pair differs between cells,
-# which is the rhythm differing, on 2 degrees of freedom.
-dance_mixed_cosinor <- function(d, period = 24, n_harmonics = 1) {
-  if (!requireNamespace("lme4", quietly = TRUE))
-    return(list(ok = FALSE, message = "lme4 is required for the mixed cosinor."))
-  bad <- dance_mixed_check(d)
-  if (length(bad)) return(list(ok = FALSE, message = paste(bad, collapse = " ")))
-  n_harmonics <- max(1L, as.integer(n_harmonics))
-
-  dd <- d
-  harm <- character(0)
-  for (h in seq_len(n_harmonics)) {
-    w <- 2 * pi * h / period
-    dd[[paste0("c", h)]] <- cos(w * dd$t)
-    dd[[paste0("s", h)]] <- sin(w * dd$t)
-    harm <- c(harm, paste0("c", h), paste0("s", h))
-  }
-  hterms <- paste0("(", paste(harm, collapse = " + "), ")")
-  f <- stats::as.formula(sprintf("y ~ %s * within * between + (1 + %s | subject)",
-                                 hterms, paste(harm, collapse = " + ")))
-
-  m <- tryCatch(
-    lme4::lmer(f, data = dd, REML = TRUE,
-               control = lme4::lmerControl(optimizer = "bobyqa",
-                                           optCtrl = list(maxfun = 2e5))),
-    error = function(e) NULL)
-  # A full random rhythm can be too much for a small sample. Fall back to a
-  # random MESOR only, and SAY which was fitted -- the two are different models
-  # and a reader cannot tell them apart from the coefficients.
-  simplified <- FALSE
-  if (is.null(m)) {
-    f2 <- stats::as.formula(sprintf("y ~ %s * within * between + (1 | subject)", hterms))
-    m <- tryCatch(lme4::lmer(f2, data = dd, REML = TRUE,
-                             control = lme4::lmerControl(optimizer = "bobyqa")),
-                  error = function(e) NULL)
-    simplified <- !is.null(m)
-    f <- f2
-  }
-  if (is.null(m)) return(list(ok = FALSE, message = "The mixed cosinor did not converge."))
-
-  fe <- lme4::fixef(m)
-  cells <- expand.grid(within = levels(dd$within), between = levels(dd$between),
-                       stringsAsFactors = FALSE)
-  ref_w <- levels(dd$within)[1]; ref_b <- levels(dd$between)[1]
-  getc <- function(nm) if (nm %in% names(fe)) unname(fe[[nm]]) else 0
-
-  # Sum the terms that are active in a cell. Written out rather than taken from
-  # predict(), because the amplitude and acrophase need the (cos, sin) PAIR for
-  # that cell, not a fitted value.
-  coef_in_cell <- function(base, w, b) {
-    v <- getc(base)
-    if (w != ref_w) v <- v + getc(paste0(base, ":within", w))
-    if (b != ref_b) v <- v + getc(paste0(base, ":between", b))
-    if (w != ref_w && b != ref_b)
-      v <- v + getc(paste0(base, ":within", w, ":between", b))
-    v
-  }
-  mesor_in_cell <- function(w, b) {
-    v <- getc("(Intercept)")
-    if (w != ref_w) v <- v + getc(paste0("within", w))
-    if (b != ref_b) v <- v + getc(paste0("between", b))
-    if (w != ref_w && b != ref_b) v <- v + getc(paste0("within", w, ":between", b))
-    v
-  }
-
-  rows <- do.call(rbind, lapply(seq_len(nrow(cells)), function(i) {
-    w <- cells$within[i]; b <- cells$between[i]
-    out <- data.frame(within = w, between = b, mesor = mesor_in_cell(w, b),
-                      stringsAsFactors = FALSE)
-    for (h in seq_len(n_harmonics)) {
-      bc <- coef_in_cell(paste0("c", h), w, b)
-      bs <- coef_in_cell(paste0("s", h), w, b)
-      amp <- sqrt(bc^2 + bs^2)
-      # acrophase in TIME units, on the effective period of harmonic h
-      acro <- ((atan2(bs, bc)) %% (2 * pi)) / (2 * pi * h / period)
-      out[[paste0("amplitude_", h)]] <- amp
-      out[[paste0("acrophase_", h)]] <- acro
-    }
-    out
-  }))
-
-  # Does the rhythm differ? A likelihood-ratio test on the (cos, sin) pair,
-  # which is the 2-df question "is there any difference in amplitude OR phase",
-  # refitted by ML because REML likelihoods are not comparable across fixed
-  # effects.
-  # Terms are dropped with update(), not rebuilt with reformulate(): the random
-  # part appears in term.labels as the string "1 + c1 + s1 | subject", and
-  # reformulate() parses text, so putting that back through it produces a
-  # different model. update(m, . ~ . - <terms>) leaves the random part alone.
-  #
-  # Marginality is respected: a test of the within factor on the rhythm drops
-  # its higher-order terms too, so it asks "does the within factor affect the
-  # rhythm AT ALL", not "does it affect it after allowing it to affect it".
-  hx <- function(suffix) paste0(harm, ":", suffix)     # c1:within, s1:within, ...
-  m_ml <- tryCatch(stats::update(m, REML = FALSE), error = function(e) NULL)
-
-  lrt <- function(drop_terms, label) {
-    if (is.null(m_ml)) return(NULL)
-    drop_terms <- intersect(drop_terms, attr(stats::terms(f), "term.labels"))
-    if (!length(drop_terms)) return(NULL)
-    delta <- stats::as.formula(paste(". ~ . -", paste(drop_terms, collapse = " - ")))
-    m0 <- tryCatch(stats::update(m_ml, delta), error = function(e) NULL)
-    if (is.null(m0)) return(NULL)
-    a <- tryCatch(stats::anova(m0, m_ml), error = function(e) NULL)
-    if (is.null(a) || nrow(a) < 2) return(NULL)
-    data.frame(term = label, df = a$Df[2], chisq = a$Chisq[2],
-               p = a$`Pr(>Chisq)`[2], stringsAsFactors = FALSE)
-  }
-  three <- hx("within:between")
-  tests <- do.call(rbind, Filter(Negate(is.null), list(
-    lrt(three, "rhythm: within x between interaction"),
-    lrt(c(hx("within"), three), "rhythm differs by the within factor"),
-    lrt(c(hx("between"), three), "rhythm differs by the between factor")
-  )))
-
-  list(
-    ok = TRUE, model = m, formula = deparse1(f),
-    period = period, n_harmonics = n_harmonics,
-    cells = rows, tests = tests,
-    random_rhythm = !simplified,
-    n_obs = nrow(dd), balance = dance_mixed_balance(d),
-    singular = tryCatch(lme4::isSingular(m), error = function(e) NA)
-  )
-}
 # AUDIT (P19). One description of a fitted mixed model, used by every place that
 # shows one -- the Functional ANOVA tab and the Cosinor tab both reach this
 # module now, and two entry points writing their own readout is how the same fit
@@ -537,41 +395,6 @@ if (identical(res$kind, "permutation")) {
   cat("  p-value tests whether that cell's curve is flat, NOT whether two cells\n")
   cat("  differ -- the interaction comparison above is what addresses that.\n")
 
-} else {
-  cat("Mixed cosinor\n=============\n")
-  cat("  ", res$formula, "\n", sep = "")
-  cat(sprintf("  period %s, %d harmonic(s); random rhythm per subject: %s\n\n",
-              format(res$period), res$n_harmonics,
-              if (isTRUE(res$random_rhythm)) "yes" else
-                "NO -- the full model did not converge, so only a random MESOR was fitted"))
-  cl <- res$cells
-  cat(sprintf("  %-14s %-10s %8s %10s %10s\n", res$within_name, res$between_name,
-              "MESOR", "amplitude", "acrophase"))
-  for (i in seq_len(nrow(cl)))
-    cat(sprintf("  %-14s %-10s %8s %10s %10s\n", cl$within[i], cl$between[i],
-                f2(cl$mesor[i]), f2(cl$amplitude_1[i]), f2(cl$acrophase_1[i])))
-  cat("\n  Acrophase is in time units from the start of the observation window.\n")
-  if (!is.null(res$tests)) {
-    cat("\nLikelihood-ratio tests on the (cosine, sine) pair\n")
-    for (i in seq_len(nrow(res$tests)))
-      cat(sprintf("  %-40s chi2(%d) = %s, p %s\n", res$tests$term[i],
-                  res$tests$df[i], f2(res$tests$chisq[i]), pf(res$tests$p[i])))
-    cat("\n  Each test drops a cosine/sine pair, so it asks whether the rhythm\n")
-    cat("  differs in amplitude OR phase -- a 2-df question per harmonic. A test\n")
-    cat("  of one factor also drops its higher-order terms, so it is the effect\n")
-    cat("  of that factor overall, not conditional on the interaction.\n")
-  }
-  if (isTRUE(res$singular))
-    cat("\n  WARNING: the random-effects fit is SINGULAR. A variance component is\n",
-        "  estimated at zero; the rhythm parameters are still usable but the\n",
-        "  random structure is not supported by this sample.\n", sep = "")
-  cat("\nWhat this does not establish\n----------------------------\n")
-  cat("  No standard errors are quoted for amplitude or acrophase. Amplitude is\n")
-  cat("  a norm and acrophase an angle, both nonlinear in the coefficients, and\n")
-  cat("  a delta-method interval on a phase near the period boundary misleads.\n")
-  cat("  The tests above are on the coefficient pair, which is what the model\n")
-  cat("  can test exactly. The period was FIXED, not estimated, so everything\n")
-  cat("  here is conditional on that choice.\n")
 }
 
   invisible(NULL)

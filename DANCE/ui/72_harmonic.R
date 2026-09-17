@@ -39,24 +39,33 @@ ui_tab_harmonic <- tabItem(
                            structurally impossible for a non-negative scale.")),
 
             hr(),
+            # ================================================================
+            # THE APPROACH. One model over every observation, or one fit per
+            # participant summarised afterwards. The same questions are asked
+            # either way and every tab answers them from whichever was chosen,
+            # so nothing on screen mixes the two estimators without saying so.
+            # ================================================================
+            h4("Approach"),
+            radioButtons("harmonic_approach", NULL,
+                         choices = c("Mixed-effects cosinor (one model, all participants)" = "mixed",
+                                     "Two-stage cosinor (one fit per participant, then compared)" = "two_stage"),
+                         selected = "mixed"),
+            helpText(HTML("<b>Mixed-effects</b>: participants share a group-level rhythm and
+                           each carries their own deviation from it, estimated jointly;
+                           group comparisons come from the model's own contrasts and respect
+                           a repeated-measures design. Individual results are the model's
+                           <i>shrunken</i> predictions for each participant.<br>
+                           <b>Two-stage</b>: an independent cosinor per participant, then the
+                           point estimates are compared. Simple and classical; it treats
+                           every estimate as exact and cannot express a within-participant
+                           factor.")),
+
+            hr(),
             h4("Model Specification"),
-            radioButtons("harmonic_time_origin", "Time origin (t = 0 at):",
-                         choices = c("First observation" = "first_observation",
-                                     "Midnight" = "midnight"),
-                         # P6.7: the first observation is the default. With a
-                         # saturating trend, anchoring S(t) at the first
-                         # observation while the harmonics sit at midnight gives
-                         # an intercept that is the value at neither origin;
-                         # one origin makes it interpretable and conditions the
-                         # A_sat/tau pair better. Midnight remains available for
-                         # continuity with earlier runs.
-                         selected = "first_observation"),
-            helpText(HTML("With a saturating trend the fitter anchors <i>S(t)</i> at the
-                           first observation while the harmonics stay anchored at
-                           midnight \u2014 two origins, one constant, so the intercept is
-                           the value at neither. Re-anchoring both makes the intercept
-                           interpretable and improves the conditioning of the
-                           <i>A_sat</i>/<i>\u03c4</i> pair.")),
+            # The time origin is not a choice any more: t = 0 is the first
+            # observation, always. Both the trend and the harmonics are anchored
+            # there, so the intercept is the model value at the start of the
+            # recording; axes and every acrophase still read in clock time.
             numericInput("harmonic_period", "Fundamental Period (τ):", value = 24, min = 1, max = 168, step = 1),
             helpText("Period in the same units as your time variable (e.g., 24 for circadian)."),
             sliderInput("n_harmonics", "Number of Harmonics:", min = 1, max = 8, value = 1, step = 1),
@@ -132,12 +141,15 @@ ui_tab_harmonic <- tabItem(
               helpText("Any size: 2 x 2, 2 x 3, 3 x 4 \u2014 nothing is hard-coded.")
             ),
             uiOutput("harmonic_design_readout"),
-            hr(),
-            h4("Uncertainty"),
-            checkboxInput("harmonic_bootstrap", "Compute Bootstrap CIs", FALSE),
             conditionalPanel(
-              condition = "input.harmonic_bootstrap == true",
-              numericInput("harmonic_n_boot", "Bootstrap Iterations (B):", value = 500, min = 100, max = 2000)
+              condition = "input.harmonic_approach == 'two_stage'",
+              hr(),
+              h4("Uncertainty"),
+              checkboxInput("harmonic_bootstrap", "Compute Bootstrap CIs", FALSE),
+              conditionalPanel(
+                condition = "input.harmonic_bootstrap == true",
+                numericInput("harmonic_n_boot", "Bootstrap Iterations (B):", value = 500, min = 100, max = 2000)
+              )
             ),
             hr(),
             # ================================================================
@@ -154,6 +166,8 @@ ui_tab_harmonic <- tabItem(
               tags$summary(tags$b("Advanced"),
                            style = "cursor:pointer; padding:6px 0; color:#555"),
               div(style = "border-left:2px solid #e3e3e3; padding-left:10px; margin-top:6px",
+              conditionalPanel(
+              condition = "input.harmonic_approach == 'two_stage'",
               hr(),
               h5("Which fits enter the summaries"),
               checkboxInput("harmonic_include_boundary",
@@ -168,8 +182,11 @@ ui_tab_harmonic <- tabItem(
                              fit hit and <b>which fits hit more than one</b> \u2014 two
                              pinned parameters usually means a ridge.<br><br>
                              Non-converged fits are always excluded: there is no
-                             solution to average.")),
+                             solution to average."))
+              ),
 
+              conditionalPanel(
+              condition = "input.harmonic_approach == 'mixed'",
               hr(),
               # ============================================================
                 # DEGREES OF FREEDOM (P21 amendment 5)
@@ -196,8 +213,11 @@ ui_tab_harmonic <- tabItem(
                              participants with two harmonics it takes about 19 s per block
                              against under 0.1 s for Satterthwaite. Choose Satterthwaite to
                              explore quickly; switch back before you report. The method that
-                             ran is always named in the output.")),
+                             ran is always named in the output."))
+              ),
 
+              conditionalPanel(
+              condition = "input.harmonic_approach == 'two_stage'",
               hr(),
               h5("Model comparison and diagnostics"),
               # AUDIT (P15.2). These are TWO INDEPENDENT diagnostics that sat under
@@ -254,7 +274,8 @@ ui_tab_harmonic <- tabItem(
                   helpText(HTML("<small>τ controls how fast saturation is reached. Smaller τ = faster saturation.</small>"))
                 ),
                 helpText(HTML("<small>Leave blank (NA) for no bound. Defaults based on data range shown in hints above.</small>"))
-              ),
+              )
+              ),   # end of the two-stage advanced block
               )
             ),
             hr(),
@@ -298,7 +319,21 @@ ui_tab_harmonic <- tabItem(
                               # the points bury the fitted curve they are there
                               # to support.
                               checkboxInput("harmonic_show_data", "Show Raw Data Points", FALSE),
-                              checkboxInput("harmonic_show_components", "Show Harmonic Components", FALSE)
+                              conditionalPanel(
+                                condition = "input.harmonic_approach == 'two_stage'",
+                                checkboxInput("harmonic_show_components", "Show Harmonic Components", FALSE),
+                                helpText(HTML("<small>Two-stage bands: the group's mean-coefficient
+                                               curve &plusmn; z&middot;SE(t), where SE(t) is the standard
+                                               error across participants of their own fitted curves.
+                                               Pointwise, not simultaneous, and the SAME band
+                                               <b>6. Group / Condition Comparison</b> draws.</small>"))),
+                              conditionalPanel(
+                                condition = "input.harmonic_approach == 'mixed'",
+                                helpText(HTML("<small>The cell curves here are the SAME curves as
+                                               <b>6. Group / Condition Comparison</b> draws:
+                                               one model, one set of trajectories. Choose
+                                               <i>All participants</i> above to overlay each
+                                               participant's shrunken prediction.</small>")))
                        )
                      )
             ),
@@ -313,24 +348,6 @@ ui_tab_harmonic <- tabItem(
                               h4("Polar Plot Settings"),
                               uiOutput("harmonic_selector_polar"),
                               helpText("Acrophase displayed in polar coordinates. Radius = Amplitude, Angle = Acrophase."),
-                              # WHICH ESTIMATOR THE GROUP VECTORS COME FROM.
-                              # The dial used to draw group means of the
-                              # PER-PARTICIPANT cosinor fits, with nothing on
-                              # screen saying so -- while tab 6 reported the
-                              # mixed-effects cell estimates for the same
-                              # groups. Two numbers under one name is how a
-                              # figure and its table come to disagree.
-                              radioButtons("polar_vector_source", "Group vectors from:",
-                                           choices = c(
-                                             "Mixed-effects model (tab 6)" = "mixed",
-                                             "Two-stage (mean of participants)" = "two_stage"),
-                                           selected = "mixed"),
-                              helpText(HTML(paste(
-                                "The faint point cloud is always the",
-                                "<b>per-participant</b> fits; only the bold group",
-                                "vectors follow this choice. Mixed-effects needs",
-                                "the tab 6 model, and will fit it if it has not",
-                                "been fitted yet."))),
                               checkboxInput("polar_show_mean", "Show Population Mean Vector", TRUE),
                               checkboxInput("polar_show_ellipse", "Show Confidence Ellipse", TRUE)
                        )
@@ -361,22 +378,6 @@ ui_tab_harmonic <- tabItem(
                                  clockwise.")),
                               uiOutput("density_controls_ui")
                        )
-                     )
-            ),
-            tabPanel("3. Parameter Distribution", icon = icon("chart-bar"),
-                     fluidRow(
-                       column(12, 
-                              uiOutput("harmonic_selector_dist"),
-                              hr()
-                       )
-                     ),
-                     fluidRow(
-                       column(6, plotlyOutput("harmonic_amplitude_hist", height = "400px")),
-                       column(6, plotlyOutput("harmonic_acrophase_hist", height = "400px"))
-                     ),
-                     fluidRow(
-                       column(6, plotlyOutput("harmonic_mesor_plot", height = "300px")),
-                       column(6, plotlyOutput("harmonic_trend_hist", height = "300px"))
                      )
             ),
             tabPanel("4. Individual Results", icon = icon("table"),
@@ -470,26 +471,6 @@ ui_tab_harmonic <- tabItem(
                      ),
                      uiOutput("harmonic_traj_pairwise"),
 
-                     hr(),
-                     # The two-stage output is KEPT, below and labelled. It is a
-                     # different estimator answering a related question, and
-                     # phase 5 decides its fate -- deleting it now would remove a
-                     # comparison a reader may want while the new path is still
-                     # provisionally calibrated.
-                     tags$details(
-                       tags$summary(tags$b("Legacy two-stage comparison"),
-                                    style = "cursor:pointer; padding:6px 0; color:#555"),
-                       helpText(HTML("Fits one model per participant and compares the point
-                                      estimates. It cannot express a repeated-measures design
-                                      and discards each participant's precision, which is why
-                                      it is no longer the primary result \u2014 but it is kept
-                                      so the two can be compared on real data.")),
-                       uiOutput("harmonic_selector_group"),
-                       helpText("Uses the factor chosen in Study Design above."),
-                       plotlyOutput("harmonic_group_comparison_plot", height = "500px"),
-                       hr(),
-                       verbatimTextOutput("harmonic_group_test_results")
-                     )
             )
           )
         )

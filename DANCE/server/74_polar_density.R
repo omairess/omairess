@@ -27,12 +27,31 @@ DANCE_DENSITY_DASH   <- DANCE_GROUP_DASH
 # The acrophases to plot, plus the weights and grouping that go with them.
 dance_density_data <- function(input, values) {
   mod <- values$harmonic_model
-  if (is.null(mod) || is.null(mod$individual_params)) return(NULL)
-  params <- mod$individual_params
+  if (is.null(mod)) return(NULL)
   period <- if (!is.null(mod$period)) mod$period else 24
 
   h <- if (!is.null(input$density_harmonic)) as.integer(input$density_harmonic) else 1L
   h <- max(1L, min(h, mod$n_harmonics %||% 1L))
+
+  # MIXED-EFFECTS: the acrophases on the dial are each participant's SHRUNKEN
+  # rhythm from the one model, and the grouping is the model's own cells.
+  if (identical(mod$approach %||% "two_stage", "mixed")) {
+    ff <- mod$traj
+    if (is.null(ff) || !isTRUE(ff$ok)) return(NULL)
+    pc <- dance_traj_participant_curves(ff, h)
+    if (!isTRUE(pc$ok)) return(NULL)
+    hours <- (pc$table$acrophase_time + (ff$clock_origin %||% 0)) %% (period / h)
+    grp <- if (length(ff$spec$design_terms)) droplevels(as.factor(pc$table$cell)) else NULL
+    keep <- is.finite(hours)
+    return(list(hours = hours[keep], amps = pc$table$amplitude[keep],
+                group = if (is.null(grp)) NULL else grp[keep],
+                period = period, harmonic = h,
+                group_var = paste(ff$spec$design_terms, collapse = " x "),
+                shrunken = TRUE))
+  }
+
+  if (is.null(mod$individual_params)) return(NULL)
+  params <- mod$individual_params
 
   acro_col <- paste0("acrophase_time_", h)
   amp_col  <- paste0("amplitude_", h)
@@ -275,56 +294,71 @@ dance_fit_rings <- function(input, values) {
   }
   t <- t_abs
 
-  band <- function(pred, mesor, amp_mean, amp_sd, n) {
-    if (!isTRUE(input$harmonic_show_ci)) return(NULL)
-    if (!is.finite(amp_mean) || amp_mean == 0 || !is.finite(amp_sd) || !is.finite(n) || n < 2)
-      return(NULL)
-    amp_se <- amp_sd / sqrt(n)
-    up <- 1 + 1.96 * amp_se / amp_mean
-    lo <- max(0, 1 - 1.96 * amp_se / amp_mean)
-    list(lower = mesor + (pred - mesor) * lo,
-         upper = mesor + (pred - mesor) * up)
-  }
 
   out <- list()
-  if (!is.null(mod$group_fits) && length(mod$group_fits) >= 1) {
-    for (g in names(mod$group_fits)) {
-      gf <- mod$group_fits[[g]]
-      if (is.null(gf$mean_coefs)) next
-      pred <- dance_rhythm_from_coefs(gf$mean_coefs, t, period, nh, trend,
-                                    include_trend = with_trend,
-                                    t_offset = mod$t_offset %||% 0)
-      if (!any(is.finite(pred))) next
-      b <- band(pred, gf$mean_mesor, gf$mean_amplitudes[1], gf$sd_amplitudes[1], gf$n)
-      out[[g]] <- list(hours = t_clock, pred = pred, lower = b$lower, upper = b$upper,
-                       n = gf$n)
+  is_mixed <- identical(mod$approach %||% "two_stage", "mixed") && isTRUE(mod$traj$ok)
+  if (is_mixed) {
+    # THE SAME CURVES AS TAB 1 AND TAB 6: dance_traj_predict() on the one fit,
+    # evaluated on this dial's own time grid. With the trend removed the view is
+    # baseline + harmonics, which is what closes into a ring.
+    ff <- mod$traj
+    comp <- if (with_trend || identical(ff$spec$trend %||% "none", "none")) "full" else "baseline_harm"
+    pr <- dance_traj_predict(ff, times = t, conf = 0.95, band = "pointwise", component = comp)
+    if (isTRUE(pr$ok)) {
+      for (cl in pr$cells) {
+        dcl <- pr$table[pr$table$cell == cl, , drop = FALSE]
+        if (!nrow(dcl) || !any(is.finite(dcl$fit))) next
+        out[[cl]] <- list(hours = t_clock, pred = dcl$fit,
+                          lower = if (isTRUE(input$harmonic_show_ci)) dcl$lo else NULL,
+                          upper = if (isTRUE(input$harmonic_show_ci)) dcl$hi else NULL,
+                          n = ff$spec$n_participants)
+      }
     }
-  }
-  if (!length(out)) {
-    coefs <- mod$pop_mean_fit$mean_coefs
-    params <- mod$individual_params
-    if (is.null(coefs) && !is.null(params)) {
-      # Same population cosinor the app forms elsewhere: mean of the
-      # coefficients, never a mean of acrophases (those are circular).
-      coefs <- c(mean(params$mesor, na.rm = TRUE),
-                 rep(NA_real_, switch(as.character(trend), "none" = 0, "linear" = 1,
-                                      "log" = 1, "exp_sat" = 2, 0)),
-                 unlist(lapply(seq_len(nh), function(h) c(
-                   mean(params[[paste0("beta_cos_", h)]], na.rm = TRUE),
-                   mean(params[[paste0("beta_sin_", h)]], na.rm = TRUE)))))
+  } else {
+    # TWO-STAGE: the group (or pooled) lines and bands are dance_ts_group_curves()
+    # -- the same call the Fitted Curves tab and the comparison tab make, on this
+    # dial's own time grid -- so the three views cannot disagree. The band is
+    # the mean-coefficient curve +/- z * SE(t) across participants' own curves.
+    gv <- mod$group_var_name
+    gvals <- if (!is.null(gv) && !is.null(mod$group_fits) && length(mod$group_fits) >= 1)
+      values$covariates[[gv]] else NULL
+    gc <- tryCatch(dance_ts_group_curves(mod, gvals, t, include_trend = with_trend, conf = 0.95),
+                   error = function(e) NULL)
+    if (!is.null(gc) && isTRUE(gc$ok)) {
+      for (g in gc$cells) {
+        d <- gc$table[gc$table$cell == g, , drop = FALSE]
+        if (!nrow(d) || !any(is.finite(d$fit))) next
+        nm <- if (identical(g, "(all)")) "Population mean" else g
+        out[[nm]] <- list(hours = t_clock, pred = d$fit,
+                          lower = if (isTRUE(input$harmonic_show_ci)) d$lo else NULL,
+                          upper = if (isTRUE(input$harmonic_show_ci)) d$hi else NULL,
+                          n = d$n[1])
+      }
     }
-    if (is.null(coefs)) return(NULL)
-    pred <- dance_rhythm_from_coefs(coefs, t, period, nh, trend,
-                                  include_trend = with_trend,
-                                  t_offset = mod$t_offset %||% 0)
-    if (!any(is.finite(pred))) return(NULL)
-    b <- if (!is.null(params)) band(pred, coefs[1],
-                                    mean(params$amplitude_1, na.rm = TRUE),
-                                    stats::sd(params$amplitude_1, na.rm = TRUE),
-                                    sum(!is.na(params$amplitude_1))) else NULL
-    out[["Population mean"]] <- list(hours = t_clock, pred = pred,
-                                     lower = b$lower, upper = b$upper,
-                                     n = if (!is.null(params)) nrow(params) else NA_integer_)
+    if (!length(out) && !is.null(mod$group_fits) && length(mod$group_fits) >= 1) {
+      # no per-participant fits to spread (a restored session without them):
+      # the group mean-coefficient lines, no band
+      for (g in names(mod$group_fits)) {
+        gf <- mod$group_fits[[g]]
+        if (is.null(gf$mean_coefs)) next
+        pred <- dance_rhythm_from_coefs(gf$mean_coefs, t, period, nh, trend,
+                                        include_trend = with_trend,
+                                        t_offset = mod$t_offset %||% 0)
+        if (!any(is.finite(pred))) next
+        out[[g]] <- list(hours = t_clock, pred = pred, lower = NULL, upper = NULL, n = gf$n)
+      }
+    }
+    if (!length(out)) {
+      # no per-participant fits to spread: the pooled coefficients, no band
+      coefs <- mod$pop_mean_fit$mean_coefs
+      if (is.null(coefs)) return(NULL)
+      pred <- dance_rhythm_from_coefs(coefs, t, period, nh, trend,
+                                      include_trend = with_trend,
+                                      t_offset = mod$t_offset %||% 0)
+      if (!any(is.finite(pred))) return(NULL)
+      out[["Population mean"]] <- list(hours = t_clock, pred = pred, lower = NULL, upper = NULL,
+                                       n = if (!is.null(mod$individual_params)) nrow(mod$individual_params) else NA_integer_)
+    }
   }
   if (!length(out)) return(NULL)
 
@@ -355,7 +389,19 @@ dance_fit_rings <- function(input, values) {
   # is checkable, so it is checked here and the result is printed in the note:
   # the same coefficients evaluated the same way must give the same number.
   agreement <- NA_real_
-  if (with_trend && !is.null(mod$group_fits) && length(mod$group_fits)) {
+  if (is_mixed && with_trend && length(out)) {
+    # the rings ARE dance_traj_predict(); the check re-evaluates the first cell
+    # on the same grid and reports the largest difference, which should be zero
+    ff <- mod$traj
+    ref <- out[[1]]
+    pr2 <- dance_traj_predict(ff, times = t_abs, component = "full")
+    if (isTRUE(pr2$ok)) {
+      cl1 <- if (!is.null(ref$parent)) ref$parent else names(out)[1]
+      base_pred <- if (!is.null(ref$parent)) pr2$table$fit[pr2$table$cell == cl1] else ref$pred
+      chk <- pr2$table$fit[pr2$table$cell == cl1]
+      if (length(base_pred) == length(chk)) agreement <- max(abs(base_pred - chk))
+    }
+  } else if (with_trend && !is.null(mod$group_fits) && length(mod$group_fits)) {
     g1 <- mod$group_fits[[1]]
     if (!is.null(g1$mean_coefs)) {
       chk <- dance_rhythm_from_coefs(g1$mean_coefs, t_abs, period, nh, trend,

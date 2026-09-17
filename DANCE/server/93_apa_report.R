@@ -85,31 +85,6 @@ dance_apa_M <- function(x, digits = 2, bounded = FALSE) {
           dance_apa_num(stats::sd(x), digits, bounded))
 }
 
-# AUDIT (P12.2): the pairwise controls carry internal ids (amplitude_1,
-# acrophase_time_1, mesor_adj). Those were being printed into report prose --
-# "Group differences in amplitude_1" -- which is not something that can go into
-# a paper. One mapping, used by every sentence that names a parameter.
-dance_cosinor_param_label <- function(p) {
-  if (is.null(p) || !nzchar(p)) return("the selected parameter")
-  if (grepl("^amplitude_([0-9]+)$", p))
-    return(sprintf("the amplitude of harmonic %s", sub("^amplitude_", "", p)))
-  if (grepl("^acrophase_time_([0-9]+)$", p))
-    return(sprintf("the acrophase of harmonic %s", sub("^acrophase_time_", "", p)))
-  switch(p,
-    mesor          = "the constant term",
-    mesor_adj      = "the MESOR (rhythm-adjusted mean)",
-    value_at_start = "the predicted value at the first observation",
-    p)
-}
-
-dance_cosinor_origin_label <- function(x) {
-  if (is.null(x) || !nzchar(x)) return(NULL)
-  switch(x,
-    first_observation = "the first observation in each series",
-    midnight          = "midnight",
-    x)
-}
-
 # `bounded` propagates the no-leading-zero rule to both ends of a range: an
 # eta-squared range printed as "0.007 to 0.241" is an APA error in the same way
 # a single "0.007" would be.
@@ -522,95 +497,104 @@ dance_apa_report <- function(values, input, title = NULL) {
 
   hm <- values$harmonic_model
   if (!is.null(hm)) {
-    add("**Cosinor (harmonic) regression.** Each participant's series was ",
-        "fitted with a cosinor model of period ", format(hm$period), " and ",
-        hm$n_harmonics, " harmonic", if (hm$n_harmonics == 1) "" else "s",
-        if (!identical(hm$trend_type, "none"))
-          paste0(", with a ", switch(hm$trend_type,
-                 exp_sat = "saturating-exponential", linear = "linear",
-                 log = "logarithmic", hm$trend_type), " trend term") else "",
-        ", fitted to the ",
-        if (isTRUE(hm$using_smoothed)) "smoothed curves" else "raw observations", ". ",
-        if (isTRUE(hm$using_smoothed))
-          "Fitting on smoothed rather than raw data removes independent noise and induces residual autocorrelation: *R*-squared is inflated, leave-one-out cross-validation is optimistic, and the zero-amplitude *F* test is anticonservative. Consider re-running on the raw series and reporting the difference."
-        else
-          "Cosinor is a regression on the observations and handles missing time points natively, so no smoothing was required.")
-    # AUDIT (P12.2). Everything below was missing, and each item is something a
-    # chronobiology reviewer expects to see. Cornelissen (2014) and the
-    # CosinorOnline reporting convention ask for the period, the reference time
-    # the acrophase is measured from, MESOR/amplitude/acrophase with intervals,
-    # the zero-amplitude test, and the percentage rhythm. The app computes all
-    # of them; the report simply did not print them.
-    if (!is.null(hm$dv_name))
-      add(" The dependent variable was ", hm$dv_name,
-          if (!is.null(hm$dv_units)) paste0(" (", hm$dv_units, ")") else "", ".")
-    add(" The period was FIXED at ", format(hm$period),
-        " rather than estimated, so the acrophase and amplitude are conditional ",
-        "on that choice.")
-    if (!is.null(dance_cosinor_origin_label(hm$time_origin)))
-      add(" Acrophase is reported in clock time, measured from ",
-          dance_cosinor_origin_label(hm$time_origin), "; a phase has no meaning ",
-          "without the origin it is measured from.")
-    add(" Rhythm detection used the zero-amplitude *F* test, which compares the ",
-        "full model against a refit containing the trend but no harmonics; it ",
-        "tests whether the rhythmic amplitude is distinguishable from zero, ",
-        "not whether the cosinor is the correct functional form.")
-    add(" Joint confidence regions for amplitude and acrophase were obtained ",
-        "from the error ellipse of the (cosine, sine) coefficient pair rather ",
-        "than by treating the two as independent, following Bingham et al. ",
-        "(1982); where the ellipse contains the origin the acrophase is not ",
-        "identified at that level and is reported as such rather than as a ",
-        "point estimate.")
-    # AUDIT (P14). The model-selection diagnostic contributed NOTHING to this
-    # document. "Which specification did you report, and how did you choose it"
-    # is a Methods question a reviewer will ask of any cosinor paper that fits
-    # more than one harmonic or any trend at all, and the app was computing the
-    # answer and then dropping it.
-    ms <- hm$model_selection
-    if (!is.null(ms) && nrow(ms) > 0) {
-      kmax <- attr(ms, "n_harmonics_max") %|% hm$n_harmonics
-      add(" The reported specification was chosen from a nested set of ",
-          nrow(ms), " candidates: every trend the app offers (none, linear, ",
-          "logarithmic and saturating exponential) crossed with the cumulative ",
-          "harmonic sets up to the ", kmax, " selected (H1",
-          if (kmax > 1) paste0(" through H1-H", kmax) else "",
-          "). Harmonics are cumulative, so a higher harmonic is never fitted ",
-          "without the ones below it. Candidates were ranked by AICc, ",
-          "corrected for the small ratio of observations to parameters that a ",
-          "single participant's series gives, averaged per participant over ",
-          "the same participants in every cell, with Akaike weights.")
-    }
-    if (!is.null(hm$group_var_name)) {
-      # AUDIT (P13.1). This was `pw <- ...`, which REBOUND the name the fANOVA
-      # post-hoc object is held in (assigned once near the top of the function
-      # and read much further down, in Results). The cosinor Methods paragraph
-      # runs in between, so the post-hoc Results block was reading a cosinor
-      # data frame: it printed "0 of 0 comparisons remained significant after
-      # the -- correction at alpha = --" on a run whose Methods paragraph, four
-      # lines above, correctly described 6 comparisons at B = 777. Introduced by
-      # me at P12 and shipped. The name is scoped to the cosinor block now, and
-      # tests/testthat/test-p13-corrections.R generates a report with BOTH kinds
-      # of pairwise result present, which is the only arrangement that shows it.
-      hp_pw <- values$hp_pairwise_results
-      add(" Participants were grouped by ", hm$group_var_name, ".")
-      if (!is.null(hp_pw) && nrow(hp_pw) > 0) {
-        prm  <- dance_cosinor_param_label(values$hp_pairwise_param %|% "")
-        circ <- grepl("acro", values$hp_pairwise_param %|% "")
-        add(" Group differences in ", prm, " were tested pairwise on the ",
-            "per-participant estimates",
-            if (circ)
-              paste0(", using the Watson-Williams *F* test for circular means, ",
-                     "which assumes a von Mises distribution with a common and ",
-                     "sufficiently high concentration in each group")
-            else ", using Welch's *t* test, which does not assume equal variances",
-            ". ",
-            local({
-              cr <- values$hp_pairwise_correction %|% "none"
-              if (identical(cr, "none"))
-                "No correction was applied for the number of comparisons, so the pairwise *p*-values are nominal."
-              else paste0("*p*-values were adjusted for the ", nrow(hp_pw),
-                          " comparisons by the ", dance_apa_method(cr), " method.")
-            }))
+    hm_mixed <- identical(hm$approach %|% "two_stage", "mixed") && isTRUE(hm$traj$ok)
+    trend_txt <- if (!identical(hm$trend_type %|% "none", "none"))
+      paste0(", with a ", switch(hm$trend_type,
+             exp_sat = "saturating-exponential", linear = "linear",
+             log = "logarithmic", hm$trend_type), " trend term") else ""
+    harm_txt <- paste0("a cosinor basis of period ", format(hm$period), " with ",
+                       hm$n_harmonics, " harmonic", if (hm$n_harmonics == 1) "" else "s",
+                       trend_txt)
+    if (hm_mixed) {
+      # ONE model, described as one model: what was regressed on what, the
+      # random structure actually reached, how the design effects were tested,
+      # and what happened to the fit -- singular and simplified are stated, not
+      # hidden behind "converged".
+      ff <- hm$traj
+      dts <- ff$spec$design_terms; cls <- ff$spec$classification
+      des_txt <- if (length(dts)) paste0(", crossed with ", paste(vapply(dts, function(f) {
+        r <- cls[cls$factor == f, ][1, ]
+        sprintf("%s (%s-participant, %d levels)", f, r$role, r$n_levels)
+      }, character(1)), collapse = " and ")) else ""
+      dfm <- input$harmonic_df_method %|% "kr"
+      add("**Cosinor (harmonic) regression, mixed-effects.** One linear mixed ",
+          "model was fitted by ", if (isTRUE(ff$REML)) "REML" else "maximum likelihood",
+          " (lme4) to the raw observations of all ", ff$spec$n_participants,
+          " participants (", ff$spec$n_obs, " observations): the response was ",
+          "regressed on ", harm_txt, des_txt, ", with random effects for each ",
+          "participant on the same basis (", ff$re_label, ").")
+      if (!is.null(hm$dv_name))
+        add(" The dependent variable was ", hm$dv_name,
+            if (!is.null(hm$dv_units)) paste0(" (", hm$dv_units, ")") else "", ".")
+      add(" Time was measured from the first observation, and the period was ",
+          "FIXED rather than estimated, so amplitude and acrophase are conditional ",
+          "on that choice; acrophases are reported in clock time.")
+      add(" Effects of the design factors were tested as marginal contrasts on the ",
+          "fixed effects (difference contrasts on the factors in the effect, equal ",
+          "weights over the others) with ",
+          switch(dfm, kr = "Kenward-Roger", satterthwaite = "Satterthwaite", "approximate"),
+          " denominator degrees of freedom. Each cell's amplitude and acrophase ",
+          "were read off its (cosine, sine) coefficients, with uncertainty from ",
+          "joint draws of the fixed-effect vector; no second-stage test was run ",
+          "on participant-level estimates.")
+      if (isTRUE(ff$singular))
+        add(" The random-effects fit was singular (", ff$boundary_dims %|% 1L,
+            " variance dimension", if (identical(as.integer(ff$boundary_dims %|% 1L), 1L)) "" else "s",
+            " at zero); the term was retained and the fixed-effect tests are unaffected.")
+      if (isTRUE(ff$simplified))
+        add(" The requested random structure did not converge; the structure used ",
+            "is rung ", ff$re_rung, " of ", ff$n_rungs, " (", ff$re_label, ").")
+    } else {
+      add("**Cosinor (harmonic) regression, two-stage.** Each participant's ",
+          "series was fitted separately, by least squares, with ", harm_txt,
+          ", to the raw observations; the cosinor is a regression on the ",
+          "observations and handles missing time points natively, so no ",
+          "smoothing was required.")
+      if (!is.null(hm$dv_name))
+        add(" The dependent variable was ", hm$dv_name,
+            if (!is.null(hm$dv_units)) paste0(" (", hm$dv_units, ")") else "", ".")
+      add(" The period was FIXED at ", format(hm$period),
+          " rather than estimated, so the acrophase and amplitude are conditional ",
+          "on that choice.")
+      add(" Acrophase is reported in clock time, measured from the first ",
+          "observation in each series; a phase has no meaning without the origin ",
+          "it is measured from.")
+      add(" Rhythm detection used the zero-amplitude *F* test, which compares the ",
+          "full model against a refit containing the trend but no harmonics; it ",
+          "tests whether the rhythmic amplitude is distinguishable from zero, ",
+          "not whether the cosinor is the correct functional form.")
+      add(" Joint confidence regions for amplitude and acrophase were obtained ",
+          "from the error ellipse of the (cosine, sine) coefficient pair rather ",
+          "than by treating the two as independent, following Bingham et al. ",
+          "(1982); where the ellipse contains the origin the acrophase is not ",
+          "identified at that level and is reported as such rather than as a ",
+          "point estimate.")
+      ms <- hm$model_selection
+      if (!is.null(ms) && nrow(ms) > 0) {
+        kmax <- attr(ms, "n_harmonics_max") %|% hm$n_harmonics
+        add(" The reported specification was chosen from a nested set of ",
+            nrow(ms), " candidates: every trend the app offers (none, linear, ",
+            "logarithmic and saturating exponential) crossed with the cumulative ",
+            "harmonic sets up to the ", kmax, " selected (H1",
+            if (kmax > 1) paste0(" through H1-H", kmax) else "",
+            "). Harmonics are cumulative, so a higher harmonic is never fitted ",
+            "without the ones below it. Candidates were ranked by AICc, ",
+            "corrected for the small ratio of observations to parameters that a ",
+            "single participant's series gives, averaged per participant over ",
+            "the same participants in every cell, with Akaike weights.")
+      }
+      if (!is.null(hm$group_var_name)) {
+        add(" Participants were grouped by ", hm$group_var_name, ". Group ",
+            "differences were tested on the per-participant point estimates: a ",
+            "one-way MANOVA (Wilks' lambda) on the complete coefficient vector, ",
+            "one-way ANOVAs on the scalar parameters, the population-mean ",
+            "cosinor of Bingham et al. (1982) for each harmonic's amplitude and ",
+            "acrophase, and the Watson-Williams *F* test on the per-participant ",
+            "acrophases, which assumes von Mises distributions with a common and ",
+            "sufficiently high concentration in each group. This is a two-stage ",
+            "procedure: every participant's estimate is treated as exact, so a ",
+            "participant whose rhythm is poorly determined counts as much as one ",
+            "whose rhythm is precise.")
       }
     }
     blank()
@@ -812,9 +796,86 @@ dance_apa_report <- function(values, input, title = NULL) {
         "order reflects variance, not relevance.")
   }
 
-  if (!is.null(hm) && !is.null(hm$individual_fits)) {
+  if (!is.null(hm) && (!is.null(hm$individual_fits) || isTRUE(hm$traj$ok))) {
     any_result <- TRUE
-    h(3, "Cosinor regression")
+    hm_mixed <- identical(hm$approach %|% "two_stage", "mixed") && isTRUE(hm$traj$ok)
+    clock_o <- tryCatch(dance_clock_origin(hm), error = function(e) 0)
+    acro_txt <- function(hours, k) tryCatch(
+      dance_acrophase_label(hours = hours, period = hm$period, harmonic = k,
+                            clock_origin = clock_o, all = FALSE),
+      error = function(e) dance_apa_num(hours, 2))
+    stat_txt <- function(r) if (is.finite(r$df2 %|% NA_real_))
+      sprintf("*F*(%s, %s) = %s", format(r$df1), dance_apa_num(r$df2, 1),
+              dance_apa_num(r$statistic %|% r$F, 2))
+      else sprintf("χ²(%s) = %s", format(r$df1), dance_apa_num(r$statistic %|% r$F, 2))
+    if (hm_mixed) {
+      h(3, "Cosinor regression (mixed-effects)")
+      ff <- hm$traj
+      add("The model comprised ", ff$spec$n_participants, " participants, ",
+          ff$spec$n_curves, " curves and ", ff$spec$n_obs, " observations in ",
+          nrow(ff$spec$cells), " design cell", if (nrow(ff$spec$cells) == 1) "" else "s",
+          ". Random structure: ", ff$re_label,
+          if (isTRUE(ff$singular)) " (singular fit, retained)" else "", ".")
+      r2 <- tryCatch(dance_traj_r2(ff), error = function(e) NULL)
+      if (!is.null(r2))
+        add(" Marginal *R*<sup>2</sup> = ", dance_apa_num(r2$marginal, 3, bounded = TRUE),
+            " (fixed effects), conditional *R*<sup>2</sup> = ",
+            dance_apa_num(r2$conditional, 3, bounded = TRUE),
+            " (fixed and random effects; Nakagawa & Schielzeth, 2013, with ",
+            "Johnson's 2014 random-slope extension).")
+      blank()
+      ce <- tryCatch(dance_traj_cell_equations(ff), error = function(e) NULL)
+      if (!is.null(ce)) {
+        tb <- ce$table
+        rows <- data.frame(Cell = tb$cell, n = tb$n_participants,
+                           `Level at t0` = dance_apa_num(tb$level_at_t0, 2),
+                           check.names = FALSE, stringsAsFactors = FALSE)
+        for (k in seq_len(ce$n_harmonics)) {
+          rows[[paste0("H", k, " amplitude")]] <- dance_apa_num(tb[[paste0("amplitude_", k)]], 2)
+          rows[[paste0("H", k, " acrophase")]] <- vapply(tb[[paste0("acrophase_time_", k)]],
+                                                          acro_txt, character(1), k = k)
+        }
+        L <- c(L, dance_md_table(rows)); blank()
+        add("Cell values are the fixed effects of the one model: the level is the ",
+            "fitted value at the first observation, amplitudes and acrophases are ",
+            "read off each cell's (cosine, sine) coefficients, and acrophases are ",
+            "clock times. Participant-level values are conditional modes and are ",
+            "not compared here.")
+        blank()
+      }
+      # the omnibus tests the comparison tab computed, from its own cache: a
+      # reactive, so this works inside the app and is skipped when the report is
+      # generated outside a reactive context
+      tests <- tryCatch(harmonic_traj_tests(), error = function(e) NULL)
+      if (!is.null(tests)) {
+        trow <- function(nm, r, label) {
+          if (is.null(r) || !isTRUE(r$ok)) return(NULL)
+          data.frame(Effect = label, Statistic = stat_txt(r), p = dance_apa_pval(r$p),
+                     Method = r$method %|% "", check.names = FALSE, stringsAsFactors = FALSE)
+        }
+        ers <- do.call(rbind, c(
+          lapply(names(tests$effects), function(nm)
+            trow(nm, tests$effects[[nm]], paste0(nm, ": whole trajectory"))),
+          lapply(names(tests$blocks), function(nm)
+            trow(nm, tests$blocks[[nm]],
+                 paste0("Any cell difference in the ",
+                        tolower(DANCE_TRAJ_BLOCK_LABEL[[nm]] %|% nm), " block")))))
+        if (!is.null(ers) && nrow(ers)) {
+          add("**Design effects.**"); blank()
+          L <- c(L, dance_md_table(ers)); blank()
+        }
+      }
+      cal <- tryCatch(dance_traj_calibration(ff, input$harmonic_df_method %|% "kr", "full"),
+                      error = function(e) NULL)
+      add("*What these numbers do not establish.* The *p* values are approximate: ",
+          "the denominator degrees of freedom are an approximation and the random ",
+          "structure was chosen from the same data. ",
+          if (!is.null(cal)) cal$calibration else "",
+          " The period was fixed, so nothing here tests whether ", format(hm$period),
+          " is the right period, and the cosinor family contains no competing ",
+          "shape, so nothing here tests whether a sinusoid is the right form.")
+    } else {
+    h(3, "Cosinor regression (two-stage)")
     fits <- hm$individual_fits
     ok <- vapply(fits, function(f) isTRUE(f$success), logical(1))
     g1 <- function(nm) vapply(fits[ok], function(f) {
@@ -921,68 +982,31 @@ dance_apa_report <- function(values, input, title = NULL) {
       blank()
     }
 
-    # ---- pairwise group comparisons ------------------------------------------
-    # P12.2: every comparison the user ran, not just the last one. A cosinor
-    # paper reports MESOR, amplitude AND acrophase; the app kept only the most
-    # recent, so the report showed one of the three.
-    pw_all <- values$hp_pairwise_all
-    if (is.null(pw_all) && !is.null(values$hp_pairwise_results))
-      pw_all <- list(list(results = values$hp_pairwise_results,
-                          param = values$hp_pairwise_param %|% "",
-                          correction = values$hp_pairwise_correction %|% "none"))
-    for (entry in pw_all) {
-      # P13.1: named for the loop it belongs to, not `hp_pw` -- see the note in the
-      # Methods block above for what reusing that name cost.
-      hp_pw <- entry$results
-      if (is.null(hp_pw) || !nrow(hp_pw)) next
-      prm  <- dance_cosinor_param_label(entry$param %|% "")
-      circ <- grepl("acro", entry$param %|% "")
-      cr   <- entry$correction %|% "none"
-      add("**Group differences in ", prm, ".**")
-      blank()
-      prows <- do.call(rbind, lapply(seq_len(nrow(hp_pw)), function(i) {
-        r <- hp_pw[i, ]
-        data.frame(
-          Comparison = r$comparison,
-          `Group 1`  = sprintf("%s (%.2f, n = %d)", r$group1, r$mean1, as.integer(r$n1)),
-          `Group 2`  = sprintf("%s (%.2f, n = %d)", r$group2, r$mean2, as.integer(r$n2)),
-          Statistic  = if (circ)
-                         sprintf("*F*(1, %d) = %s", as.integer(r$df),
-                                 dance_apa_num(r$t_stat, 2))
-                       else
-                         sprintf("*t*(%s) = %s", dance_apa_num(r$df, 1),
-                                 dance_apa_num(r$t_stat, 2)),
-          `p`        = dance_apa_pval(r$p_adjusted),
-          # AUDIT (P12.2): for the circular comparison this column used to print
-          # r$cohens_d, which in that branch holds the difference in MEAN
-          # RESULTANT LENGTHS -- a difference in concentration. Watson-Williams
-          # tests a difference in MEANS, so the reported "effect" answered a
-          # different question from the test beside it, and on concentrated data
-          # (the usual case for acrophase) it printed -0.00 for every row while
-          # the means differed by hours. The effect for a difference of circular
-          # means is the angular difference itself, which the app already
-          # computes on the shortest arc and which is what a chronobiology paper
-          # reports. Delta-r is still described in the note below, as what it is.
-          `Effect`   = if (circ) paste0(dance_apa_num(r$mean_diff, 2), " h")
-                       else dance_apa_num(r$cohens_d, 2),
-          check.names = FALSE, stringsAsFactors = FALSE)
-      }))
-      L <- c(L, dance_md_table(prows)); blank()
-      add("*p* is ", if (identical(cr, "none")) "unadjusted"
-          else paste0("adjusted by the ", dance_apa_method(cr), " method"),
-          " across the ", nrow(hp_pw), " comparisons of this parameter",
-          if (length(pw_all) > 1)
-            "; the correction was applied within each parameter, not across parameters, so the family being controlled is the set of pairwise contrasts for one parameter"
-          else "",
-          ". The effect column is ",
-          if (circ)
-            paste0("the difference between the group circular means, on the ",
-                   "shortest arc, in hours -- the quantity the test above is ",
-                   "about. (The app also reports the difference in mean ",
-                   "resultant length on screen; that measures a difference in ",
-                   "CONCENTRATION, not in mean phase, and is not an effect size ",
-                   "for this test.)")
-          else "Cohen's *d*.")
+    # ---- group comparison: the same tests the comparison tab shows ----------
+    gv <- hm$group_var_name
+    gvals <- if (!is.null(gv)) values$covariates[[gv]] else NULL
+    ts_df <- if (!is.null(gvals)) tryCatch(dance_ts_frame(hm, gvals), error = function(e) NULL) else NULL
+    ts_comp <- NULL
+    if (!is.null(ts_df) && nlevels(ts_df$group) >= 2) {
+      add("**Group differences (", gv, ").**"); blank()
+      mv <- tryCatch(dance_ts_manova(ts_df, dance_ts_coef_cols(hm)), error = function(e) NULL)
+      ts_comp <- tryCatch(dance_ts_components(ts_df, hm), error = function(e) NULL)
+      trow <- function(label, r) {
+        if (is.null(r) || !isTRUE(r$ok)) return(NULL)
+        data.frame(Test = label, Statistic = stat_txt(r), p = dance_apa_pval(r$p),
+                   Method = r$method %|% "", check.names = FALSE, stringsAsFactors = FALSE)
+      }
+      rows <- do.call(rbind, c(list(trow("Complete coefficient vector", mv)),
+                               lapply(ts_comp, function(r) trow(r$label, r))))
+      if (!is.null(rows) && nrow(rows)) { L <- c(L, dance_md_table(rows)); blank() }
+      notes <- Filter(function(r) isTRUE(r$ok) && !is.null(r$note), ts_comp)
+      for (r in notes) add("*Note.* ", r$label, ": ", r$note, " ")
+      if (length(notes)) blank()
+      add("Group comparisons are on the per-participant point estimates, each ",
+          "treated as exact. The Watson-Williams test assumes von Mises ",
+          "distributions with a common, sufficiently high concentration; it is ",
+          "unreliable when the phases are widely dispersed. Pairwise comparisons ",
+          "are on the comparison tab.")
       blank()
     }
 
@@ -990,53 +1014,26 @@ dance_apa_report <- function(values, input, title = NULL) {
         "quantity. The mean quoted above is arithmetic and is interpretable ",
         "only when the acrophases do not straddle the period boundary; use the ",
         "circular summary on the polar-plot tab for a directional mean and its ",
-        "concentration.",
-        if (isTRUE(hm$using_smoothed))
-          " Because the fits were computed on smoothed curves, the *R*-squared and the proportion of detectable rhythms are both optimistic."
-        else "")
-    if (length(pw_all) > 0) {
-      params_run <- vapply(pw_all, function(e) e$param %|% "", character(1))
-      circ <- any(grepl("acro", params_run))
-      # AUDIT (P12.2). Two limitations that a chronobiology reviewer WILL raise,
-      # and which the app was silent about.
-      add(" These comparisons are a two-stage procedure: a cosinor is fitted ",
-          "per participant and the resulting point estimates are then compared ",
-          "between groups. That is not the population-mean cosinor of Bingham ",
-          "et al. (1982), and it treats each participant's estimate as if it ",
-          "were measured without error, so a participant whose own rhythm is ",
-          "poorly determined counts as much as one whose rhythm is precise.")
-      if (circ)
-        add(" The Watson-Williams test additionally assumes von Mises ",
-            "distributions with a common, sufficiently high concentration; it ",
-            "is unreliable when the phases are widely dispersed, and the ",
-            "concentration is reported with the circular summary.")
-      # Bingham's own caveat, checked rather than merely recited.
-      if (any(grepl("amp", params_run))) {
-        ac <- values$hp_acrophase_differs
-        sup <- values$hp_acrophase_supported
-        add(" Bingham et al. (1982) note that a difference in amplitude cannot ",
-            "be interpreted when the groups also differ in acrophase, because ",
-            "the amplitude is then estimated about different phases",
-            if (isTRUE(ac))
-              ": in these data the acrophase comparison WAS significant, so the amplitude result above should not be read as a difference in rhythm strength."
-            # P20/R4: a null acrophase verdict clears the amplitude comparison
-            # only if it came from a test that could have detected a difference.
-            # Bingham's marginal is half-cycle periodic and has no power past a
-            # quarter cycle, so at a large angular separation "not significant"
-            # carries no information and must not be reported as reassurance.
-            else if (identical(ac, FALSE) && identical(sup, FALSE))
-              ": the acrophase comparison on these data was not significant, but the groups' acrophases are more than a quarter cycle apart, where that test has no power. The null result is uninformative and the amplitude comparison is NOT cleared by it."
-            else if (identical(ac, FALSE))
-              ": the acrophase comparison on these data was not significant, and the groups' acrophases are close enough together for that test to have had power, so the caution does not apply here."
-            else ". Run the same comparison on acrophase to check whether it applies here.")
-      }
+        "concentration.")
+    if (!is.null(ts_comp)) {
+      # Bingham's own caveat, checked rather than merely recited: an amplitude
+      # difference is uninterpretable when the acrophases differ, and the
+      # population-mean cosinor says so per harmonic.
+      amp_rows <- Filter(function(r) identical(r$kind, "amplitude") && isTRUE(r$ok), ts_comp)
+      for (r in amp_rows)
+        add(" Bingham et al. (1982) note that a difference in amplitude cannot be ",
+            "interpreted when the groups also differ in acrophase, because the ",
+            "amplitude is then estimated about different phases: ",
+            if (!is.null(r$note))
+              paste0("for harmonic ", r$harmonic, " the amplitude comparison should NOT be read as a difference in rhythm strength (", r$note, ").")
+            else paste0("for harmonic ", r$harmonic, " the acrophase test had power and was not significant, so the caution does not apply."))
+    }
     }
   }
 
   if (!is.null(mx) && isTRUE(mx$ok)) {
     any_result <- TRUE
     h(3, if (identical(mx$kind, "permutation")) "Mixed functional ANOVA (permutation)"
-         else if (identical(mx$kind, "cosinor")) "Mixed cosinor"
          else "Mixed functional model")
     b <- mx$balance
     add("The design had ", b$n_subjects, " participants",

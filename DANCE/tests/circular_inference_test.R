@@ -100,17 +100,12 @@ chk(near(h2$F, (N - 3) / ((N - 2) * 2) * T2, 1e-9) && h2$df1 == 2 && h2$df2 == N
 cat("\n-- the extraction itself ---------------------------------------------\n")
 h72 <- paste(readLines(file.path(app_dir, "server/72_harmonic.R"), warn = FALSE),
              collapse = "\n")
-h73 <- paste(readLines(file.path(app_dir, "server/73_cosinor_pairwise.R"), warn = FALSE),
-             collapse = "\n")
 chk(!any(vapply(c("circular_mean", "circular_sd", "circular_se",
                   "mean_resultant_length", "watson_williams_test", "hotelling_t2"),
                 function(fn) grepl(sprintf("\n  %s <- function", fn), h72, fixed = TRUE),
                 logical(1))),
     "no circular helper is defined inside the observer file any more",
     "a circular helper is still defined inside server/72_harmonic.R")
-chk(grepl("dance_watson_williams_test(", h73, fixed = TRUE),
-    "the pairwise tab calls the prefixed helper, not a cross-file free name",
-    "server/73_cosinor_pairwise.R still calls an unprefixed helper")
 
 cat("\n")
 if (bad) { cat(sprintf("Circular inference tests FAILED  (%d passed, %d failed)\n", ok_n, bad)); quit(status = 1) }

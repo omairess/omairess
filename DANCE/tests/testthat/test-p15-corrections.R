@@ -104,7 +104,7 @@ test_that("P15.3: a cleared tau field is recorded, not silently dropped", {
   # the bug: `%||%` cannot rescue NA, which is what a cleared numericInput gives
   expect_false(grepl("as.numeric(input$harmonic_tau_fixed %||% 18)", src, fixed = TRUE))
   expect_true(grepl("conditioning$tau_fixed_skipped <- TRUE", src, fixed = TRUE))
-  expect_true(grepl("Free-tau vs fixed-tau: NOT RUN", src, fixed = TRUE))
+  expect_true(grepl("Free-tau vs fixed-tau check: NOT RUN", src, fixed = TRUE))
 
   # and the arithmetic of the guard itself
   for (v in list(NULL, NA, NA_real_, "", "abc", 0, -3)) {
@@ -119,22 +119,22 @@ test_that("P15.3: a cleared tau field is recorded, not silently dropped", {
 
 test_that("P15.3: the readout says what the Delta-AIC is a difference of", {
   src <- raw_of("server/72_harmonic.R")
-  expect_true(grepl("Delta-AIC = AIC(free tau) - AIC(tau fixed)", src, fixed = TRUE))
-  expect_true(grepl("separate check from the Delta-AICc", src, fixed = TRUE))
+  expect_true(grepl("AIC(free) - AIC(fixed)", src, fixed = TRUE))
+  expect_true(grepl("scorable in both fits", src, fixed = TRUE))
 })
 
 # ==================================== P15.4 criteria for the fitted model ======
 test_that("P15.4: the fitted model's own AIC/AICc/BIC are reported", {
   src <- raw_of("server/72_harmonic.R")
-  expect_true(grepl("Information criteria for the fitted model", src, fixed = TRUE))
+  expect_true(grepl("Information criteria of the fitted model", src, fixed = TRUE))
   # all three, from the per-subject values the fitters already return
-  expect_true(grepl('for(nmi in c("aic", "aicc", "bic"))', src, fixed = TRUE))
+  expect_true(grepl('for (nmi in c("aic", "aicc", "bic"))', src, fixed = TRUE))
   # with n and k stated, so the reader can check the correction themselves
   expect_true(grepl("dance_model_npar(trend_type, nh) + 1L", src, fixed = TRUE))
   # and the part of the old argument that is still true is kept
-  expect_true(grepl("they separate models, not subjects", src, fixed = TRUE))
+  expect_true(grepl("not the criterion of one", src, fixed = TRUE))
   # tau is flagged as freely estimated, which is what the user asked about
-  expect_true(grepl("tau estimated freely", src, fixed = TRUE))
+  expect_true(grepl("Free tau vs tau held at", src, fixed = TRUE))
 })
 
 test_that("P15.4: parameter counts used by the readout are the shared rule", {
