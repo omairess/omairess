@@ -24,6 +24,13 @@ on:
       - '.github/workflows/build-bsrt-desktop.yml'
   workflow_dispatch:        # the "Run workflow" button, for a build on demand
 
+# Creating a release and attaching installers to it needs write access to
+# contents. Repositories default the workflow token to read-only, in which case
+# the build would succeed and only the release step would fail — stated here so
+# it does not depend on a repository setting.
+permissions:
+  contents: write
+
 defaults:
   run:
     working-directory: BSRT-desktop
@@ -84,7 +91,20 @@ jobs:
           gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" \
             --notes "BSRT desktop builds. These are unsigned, so macOS asks you to right-click and choose Open on first launch, and Windows asks you to click More info then Run anyway." \
             || true
-          gh release upload "$GITHUB_REF_NAME" dist/* --clobber
+          # Only the installers, never the whole dist directory: electron-builder
+          # also leaves the UNPACKED apps there (dist/mac, dist/win-unpacked),
+          # and `gh release upload` fails on a directory — which would fail this
+          # step after the build had already succeeded. nullglob drops the
+          # patterns that do not match on this runner, so the same line works
+          # on both operating systems.
+          shopt -s nullglob
+          files=(dist/*.dmg dist/*.exe dist/*.zip)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "no installers found in dist/ — nothing to attach" >&2
+            exit 1
+          fi
+          printf 'attaching: %s\n' "${files[@]}"
+          gh release upload "$GITHUB_REF_NAME" "${files[@]}" --clobber
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
