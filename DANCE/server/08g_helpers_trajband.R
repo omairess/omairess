@@ -349,6 +349,35 @@ dance_traj_diff_curve <- function(fit, cell1, cell2, times = NULL, conf = 0.95,
 # which amplitude and phase contrasts are not.
 DANCE_TRAJ_PAIR_WHAT <- c("level", "amplitude", "phase", DANCE_TRAJ_BLOCKS)
 
+# WHICH HARMONIC. "Amplitude" and "Acrophase" are properties of ONE harmonic,
+# and the panel took harmonic = 1 from a default argument that the UI never set
+# -- so with two harmonics fitted it silently compared the 24 h component and
+# said only "Amplitude". The 12 h component could not be compared at all.
+#
+# The harmonic is now part of the name: "amplitude2" is H2's amplitude. Bare
+# "amplitude" and "phase" still mean H1, so every existing caller keeps working,
+# but nothing the UI offers is bare -- each entry carries its harmonic and that
+# harmonic's period, because a table of amplitudes that does not say which
+# rhythm it is about is a table of unidentified numbers.
+dance_traj_pair_parse <- function(what) {
+  m <- regmatches(what, regexec("^(amplitude|phase)([0-9]*)$", what))[[1]]
+  if (!length(m)) return(list(base = what, harmonic = NA_integer_))
+  h <- if (nzchar(m[3])) as.integer(m[3]) else 1L
+  list(base = m[2], harmonic = h)
+}
+
+dance_traj_pair_label <- function(what, period = 24, n_harmonics = 1L) {
+  pp <- dance_traj_pair_parse(what)
+  if (!is.na(pp$harmonic)) {
+    nm <- if (identical(pp$base, "amplitude")) "Amplitude" else "Acrophase"
+    # with a single harmonic there is nothing to disambiguate, but the period is
+    # still worth stating: it is the number the reader needs to interpret it
+    return(sprintf("%s — H%d (%s h)", nm, pp$harmonic,
+                   format(round(period / pp$harmonic, 2), trim = TRUE)))
+  }
+  unname(DANCE_TRAJ_PAIR_LABEL[what]) %||% what
+}
+
 # Which comparisons this fit can actually answer. The scalar three always; the
 # omnibus blocks only where they have terms and are not duplicates of each other
 # -- with no trend, "shape" and "circadian" are the same set of columns, and
@@ -358,7 +387,10 @@ DANCE_TRAJ_PAIR_WHAT <- c("level", "amplitude", "phase", DANCE_TRAJ_BLOCKS)
 dance_traj_pair_whats <- function(fit) {
   if (!isTRUE(fit$ok)) return(c("level", "amplitude", "phase"))
   spec <- fit$spec
-  out <- c("level", "amplitude", "phase")
+  K <- max(1L, as.integer(spec$n_harmonics %||% 1L))
+  # every fitted harmonic gets its own amplitude and acrophase entry
+  out <- c("level",
+           sprintf("amplitude%d", seq_len(K)), sprintf("phase%d", seq_len(K)))
   seen <- list()
   for (b in c("full", "shape", "circadian", "trend")) {
     cp <- DANCE_TRAJ_BLOCK_COMPONENTS(spec, b)
@@ -387,12 +419,26 @@ dance_traj_contrasts <- function(fit, what = "level",
                                  df_method = c("auto", "kr", "satterthwaite")) {
   adjust <- match.arg(adjust); method <- match.arg(method)
   df_method <- match.arg(df_method)
-  if (!identical(length(what), 1L) || !what %in% DANCE_TRAJ_PAIR_WHAT)
-    return(list(ok = FALSE, message = sprintf(
-      "'%s' is not a comparable quantity. Available: %s.",
-      paste(what, collapse = ", "), paste(DANCE_TRAJ_PAIR_WHAT, collapse = ", "))))
   if (!isTRUE(fit$ok)) return(list(ok = FALSE, message = fit$message))
   spec <- fit$spec
+  pp <- dance_traj_pair_parse(what)
+  ok_what <- dance_traj_pair_whats(fit)
+  # the harmonic named by the quantity wins over the argument default, which is
+  # what the UI was silently relying on. Checked FIRST, so asking for a harmonic
+  # the model does not fit says so, rather than reporting the name as unknown.
+  if (identical(length(what), 1L) && !is.na(pp$harmonic)) {
+    if (pp$harmonic > (spec$n_harmonics %||% 1L))
+      return(list(ok = FALSE, message = sprintf(
+        "This model fits %d harmonic(s), so there is no H%d to compare.",
+        spec$n_harmonics %||% 1L, pp$harmonic)))
+    harmonic <- pp$harmonic
+    what <- pp$base
+  } else if (!identical(length(what), 1L) ||
+             !(what %in% ok_what || what %in% DANCE_TRAJ_PAIR_WHAT)) {
+    return(list(ok = FALSE, message = sprintf(
+      "'%s' is not a comparable quantity. Available: %s.",
+      paste(what, collapse = ", "), paste(ok_what, collapse = ", "))))
+  }
   if (!length(spec$design_terms))
     return(list(ok = FALSE, message = "No design factors: there are no cells to contrast."))
   grid <- dance_traj_cell_grid(spec)
@@ -436,7 +482,7 @@ dance_traj_contrasts <- function(fit, what = "level",
     return(list(ok = TRUE, what = what, harmonic = harmonic, method = tab$method[1],
                 block = what, joint = joint, table = tab, conf = conf, adjust = adjust,
                 n_cells = m, n_contrasts = nrow(tab),
-                label = unname(DANCE_TRAJ_PAIR_LABEL[what]),
+                label = dance_traj_pair_label(what, spec$period, spec$n_harmonics),
                 unit = if (joint)
                   sprintf("joint test over %d component(s); no single effect size -- read the difference curve for the size",
                           max(tab$df1))
@@ -535,10 +581,14 @@ dance_traj_contrasts <- function(fit, what = "level",
     rows <- Filter(Negate(is.null), rows)
     if (!length(rows)) return(list(ok = FALSE, message = "No contrast could be formed."))
     tab <- do.call(rbind, rows)
+    # NAME THE HARMONIC. A column of amplitude differences that does not say
+    # which rhythm it is about is a column of unidentified numbers, and this
+    # panel showed H1 under a bare "Amplitude" for as long as it existed.
     unit <- if (identical(what, "phase"))
-      sprintf("acrophase difference in %s on an effective period of %.4g",
-              spec$time_units %||% "time units", co$effective_period)
-    else "amplitude difference in the response's own units"
+      sprintf("H%d acrophase difference in %s, on an effective period of %.4g h",
+              harmonic, spec$time_units %||% "time units", co$effective_period)
+    else sprintf("H%d amplitude difference in the response's own units (period %.4g h)",
+                 harmonic, co$effective_period)
   }
 
   tab$p_raw <- ifelse(tab$defined, 2 * stats::pnorm(-abs(tab$statistic)), NA_real_)
@@ -547,6 +597,11 @@ dance_traj_contrasts <- function(fit, what = "level",
     tab$p_adj[tab$defined] <- stats::p.adjust(tab$p_raw[tab$defined], method = adjust)
   rownames(tab) <- NULL
   list(ok = TRUE, what = what, harmonic = harmonic, unit = unit, method = method,
+       # the label the panel shows, carried on the result so the table and its
+       # heading cannot name different harmonics
+       label = dance_traj_pair_label(
+         if (what %in% c("amplitude", "phase")) paste0(what, harmonic) else what,
+         spec$period, spec$n_harmonics),
        table = tab, conf = conf, adjust = adjust, n_cells = m,
        n_contrasts = nrow(tab),
        note = paste(
@@ -800,11 +855,12 @@ dance_traj_simple_effects <- function(fit, effect, at, what = "level",
   adjust <- match.arg(adjust); df_method <- match.arg(df_method)
   # the same vocabulary as the whole-design table: a slice of the design can be
   # asked every question the design can
-  if (!identical(length(what), 1L) || !what %in% DANCE_TRAJ_PAIR_WHAT)
+  if (!isTRUE(fit$ok)) return(list(ok = FALSE, message = fit$message))
+  if (!identical(length(what), 1L) ||
+      !(what %in% dance_traj_pair_whats(fit) || what %in% DANCE_TRAJ_PAIR_WHAT))
     return(list(ok = FALSE, message = sprintf(
       "'%s' is not a comparable quantity. Available: %s.",
-      paste(what, collapse = ", "), paste(DANCE_TRAJ_PAIR_WHAT, collapse = ", "))))
-  if (!isTRUE(fit$ok)) return(list(ok = FALSE, message = fit$message))
+      paste(what, collapse = ", "), paste(dance_traj_pair_whats(fit), collapse = ", "))))
   spec <- fit$spec
   dt <- spec$design_terms
   if (!effect %in% dt)

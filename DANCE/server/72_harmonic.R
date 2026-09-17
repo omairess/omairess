@@ -6011,8 +6011,14 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     ff <- harmonic_traj()
     if (!isTRUE(ff$ok)) return()
     ws <- dance_traj_pair_whats(ff)
-    ch <- stats::setNames(ws, unname(DANCE_TRAJ_PAIR_LABEL[ws]))
+    ch <- stats::setNames(ws, vapply(ws, dance_traj_pair_label, character(1),
+                                     period = ff$spec$period,
+                                     n_harmonics = ff$spec$n_harmonics))
+    # "amplitude" from an earlier model means H1 here, so a stale selection maps
+    # forward instead of silently resetting to Level
     sel <- isolate(input$harmonic_traj_what) %||% "level"
+    if (identical(sel, "amplitude")) sel <- "amplitude1"
+    if (identical(sel, "phase")) sel <- "phase1"
     updateSelectInput(session, "harmonic_traj_what", choices = ch,
                       selected = if (sel %in% ws) sel else "level")
   })
@@ -6024,6 +6030,8 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     eff  <- input$harmonic_traj_effect %||% "_all_"
     dfm  <- input$harmonic_df_method %||% "kr"
     dts  <- ff$spec$design_terms
+    if (identical(what, "amplitude")) what <- "amplitude1"
+    if (identical(what, "phase")) what <- "phase1"
     if (!what %in% dance_traj_pair_whats(ff)) what <- "level"
 
     res <- if (identical(eff, "_all_") || !(eff %in% dts)) {

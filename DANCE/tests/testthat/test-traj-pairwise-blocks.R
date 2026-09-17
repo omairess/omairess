@@ -39,7 +39,8 @@ test_that("the pairwise vocabulary follows the fit, with no duplicate blocks", {
   skip_if_not_installed("lme4")
   f2 <- mk(); skip_if_not(isTRUE(f2$ok))
   ws <- e$dance_traj_pair_whats(f2)
-  expect_true(all(c("level", "amplitude", "phase", "full", "shape", "circadian",
+  # amplitude and phase are now per harmonic -- see the harmonic block below
+  expect_true(all(c("level", "amplitude1", "phase1", "full", "shape", "circadian",
                     "trend") %in% ws))
   f1 <- mk(K = 1, trend = "none"); skip_if_not(isTRUE(f1$ok))
   w1 <- e$dance_traj_pair_whats(f1)
@@ -47,7 +48,11 @@ test_that("the pairwise vocabulary follows the fit, with no duplicate blocks", {
   # with no trend, shape and circadian are the SAME columns: one entry, not two
   expect_equal(sum(c("shape", "circadian") %in% w1), 1L)
   expect_true("full" %in% w1)
-  expect_true(all(ws %in% names(e$DANCE_TRAJ_PAIR_LABEL)))
+  # every entry has a label, block or harmonic alike, and none is empty
+  labs <- vapply(ws, e$dance_traj_pair_label, character(1),
+                 period = f2$spec$period, n_harmonics = f2$spec$n_harmonics)
+  expect_true(all(nzchar(labs)))
+  expect_false(any(labs %in% ws))          # a label, not the raw key echoed back
 })
 
 test_that("a pair contrast uses the same components as the omnibus it follows", {
@@ -176,4 +181,117 @@ test_that("simple effects answer the same questions as the whole design", {
   expect_equal(nrow(se$table), 1L)
   expect_gt(se$table$df1[1], 1)
   expect_true(isTRUE(se$joint))
+})
+
+# ==============================================================================
+# WHICH HARMONIC. "Amplitude" and "Acrophase" are properties of ONE harmonic, and
+# the panel took harmonic = 1 from a default argument the UI never set -- so a
+# two-harmonic model silently compared the 24 h component under a bare label, and
+# the 12 h component could not be compared at all. The harmonic is now part of
+# the name and of every label.
+# ==============================================================================
+
+mk_h2 <- function(nper = 10, seed = 9) {
+  # H1 amplitude differs A vs B; H2 amplitude differs A vs C. If the panel can
+  # only ever show H1 these two planted effects are indistinguishable.
+  set.seed(seed)
+  tp <- seq(0, 22, length.out = 12)
+  grp <- rep(c("A", "B", "C"), each = nper)
+  Y <- t(sapply(seq_along(grp), function(i) {
+    g <- grp[i]
+    20 + rnorm(1, 0, 3) + (8 + 4 * (g == "B")) * cos(2*pi*(tp - 2)/24) +
+      (2 + 4 * (g == "C")) * cos(2*pi*2*(tp - 5)/24) + rnorm(length(tp), 0, 2)
+  }))
+  sp <- e$dance_traj_spec(e$dance_traj_long(
+    Y, tp, sprintf("S%03d", seq_along(grp)), list(Group = grp)), 24, 2, "none")
+  ff <- e$dance_traj_fit(sp); ff$clock_origin <- 8; ff
+}
+
+test_that("every fitted harmonic gets its own amplitude and acrophase entry", {
+  skip_if_not_installed("lme4")
+  ff <- mk_h2(); skip_if_not(isTRUE(ff$ok))
+  ws <- e$dance_traj_pair_whats(ff)
+  expect_true(all(c("amplitude1", "amplitude2", "phase1", "phase2") %in% ws))
+  expect_false("amplitude" %in% ws)          # nothing offered is bare
+  expect_false("phase" %in% ws)
+  # and each label names the harmonic AND its period, which is what makes the
+  # number interpretable
+  expect_match(e$dance_traj_pair_label("amplitude1", 24, 2), "^Amplitude .* H1 \\(24 h\\)$")
+  expect_match(e$dance_traj_pair_label("phase2", 24, 2), "^Acrophase .* H2 \\(12 h\\)$")
+  expect_match(e$dance_traj_pair_label("phase1", 12, 3), "H1 \\(12 h\\)")
+  expect_match(e$dance_traj_pair_label("amplitude3", 24, 3), "H3 \\(8 h\\)")
+  expect_equal(e$dance_traj_pair_label("level", 24, 2), "Level (at t = 0)")
+})
+
+test_that("the harmonic in the name is the harmonic compared", {
+  skip_if_not_installed("lme4"); skip_if_not_installed("emmeans")
+  ff <- mk_h2(); skip_if_not(isTRUE(ff$ok))
+  a1 <- e$dance_traj_contrasts(ff, "amplitude1", adjust = "none")
+  a2 <- e$dance_traj_contrasts(ff, "amplitude2", adjust = "none")
+  expect_true(isTRUE(a1$ok) && isTRUE(a2$ok))
+  expect_false(isTRUE(all.equal(a1$table$estimate, a2$table$estimate)))
+  g <- function(ct, c1, c2) ct$table$estimate[ct$table$cell1 == c1 & ct$table$cell2 == c2]
+  # H1 separates A from B and not A from C; H2 does the opposite. Planted at 4.
+  expect_gt(g(a1, "A", "B"), 3); expect_lt(abs(g(a1, "A", "C")), 1.5)
+  expect_gt(g(a2, "A", "C"), 3); expect_lt(abs(g(a2, "A", "B")), 1.5)
+  # the unit line names the harmonic and its period, so a printed table cannot
+  # be read as being about the wrong rhythm
+  expect_match(a1$unit, "H1"); expect_match(a1$unit, "24")
+  expect_match(a2$unit, "H2"); expect_match(a2$unit, "12")
+  p2 <- e$dance_traj_contrasts(ff, "phase2", adjust = "none")
+  expect_match(p2$unit, "H2 acrophase")
+  expect_match(p2$label, "Acrophase .* H2")
+})
+
+test_that("a bare name still means H1, so existing callers are unaffected", {
+  skip_if_not_installed("lme4"); skip_if_not_installed("emmeans")
+  ff <- mk_h2(); skip_if_not(isTRUE(ff$ok))
+  for (nm in c("amplitude", "phase")) {
+    bare <- e$dance_traj_contrasts(ff, nm, adjust = "none")
+    one  <- e$dance_traj_contrasts(ff, paste0(nm, "1"), adjust = "none")
+    expect_true(isTRUE(bare$ok), info = nm)
+    expect_equal(bare$table$estimate, one$table$estimate, info = nm)
+    expect_equal(bare$table$p_raw, one$table$p_raw, info = nm)
+  }
+  expect_equal(e$dance_traj_pair_parse("amplitude")$harmonic, 1L)
+  expect_equal(e$dance_traj_pair_parse("phase3")$harmonic, 3L)
+  expect_true(is.na(e$dance_traj_pair_parse("circadian")$harmonic))
+})
+
+test_that("a harmonic the model does not fit is refused by number, not by name", {
+  skip_if_not_installed("lme4")
+  ff <- mk_h2(); skip_if_not(isTRUE(ff$ok))
+  bad <- e$dance_traj_contrasts(ff, "amplitude5")
+  expect_false(isTRUE(bad$ok))
+  expect_match(bad$message, "fits 2 harmonic\\(s\\)")
+  expect_match(bad$message, "no H5")
+  # an unknown name still lists what IS available
+  other <- e$dance_traj_contrasts(ff, "nonsense")
+  expect_match(other$message, "not a comparable quantity")
+  expect_match(other$message, "amplitude2")
+})
+
+test_that("simple effects take the harmonic too", {
+  skip_if_not_installed("lme4"); skip_if_not_installed("emmeans")
+  set.seed(4)
+  tp <- seq(0, 22, length.out = 12); nper <- 8
+  sub <- sprintf("S%03d", seq_len(nper * 2)); sg <- rep(c("g1", "g2"), each = nper)
+  rows <- list(); meta <- list(subject = character(), Group = character(), Cond = character())
+  k <- 1L
+  for (i in seq_along(sub)) for (cc in c("p", "q")) {
+    rows[[k]] <- 20 + rnorm(1, 0, 3) + 8 * cos(2*pi*(tp - 2)/24) +
+      (2 + 3 * (sg[i] == "g2")) * cos(2*pi*2*tp/24) + rnorm(length(tp), 0, 2)
+    meta$subject <- c(meta$subject, sub[i]); meta$Group <- c(meta$Group, sg[i])
+    meta$Cond <- c(meta$Cond, cc); k <- k + 1L
+  }
+  sp <- e$dance_traj_spec(e$dance_traj_long(do.call(rbind, rows), tp, meta$subject,
+                            list(Group = meta$Group, Cond = meta$Cond)), 24, 2, "none")
+  ff <- e$dance_traj_fit(sp); skip_if_not(isTRUE(ff$ok))
+  se1 <- e$dance_traj_simple_effects(ff, "Group", at = list(Cond = "p"), what = "amplitude1")
+  se2 <- e$dance_traj_simple_effects(ff, "Group", at = list(Cond = "p"), what = "amplitude2")
+  expect_true(isTRUE(se1$ok) && isTRUE(se2$ok))
+  expect_false(isTRUE(all.equal(se1$table$estimate, se2$table$estimate)))
+  expect_match(se2$unit, "H2")
+  # the H2 difference is the planted one
+  expect_gt(abs(se2$table$estimate[1]), abs(se1$table$estimate[1]))
 })

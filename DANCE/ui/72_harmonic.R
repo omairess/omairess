@@ -478,8 +478,8 @@ ui_tab_harmonic <- tabItem(
                        # no trend is the same mistake the component selector had.
                        column(4, selectInput("harmonic_traj_what", "Compare:",
                                              choices = c("Level (at t = 0)" = "level",
-                                                         "Amplitude" = "amplitude",
-                                                         "Acrophase" = "phase"),
+                                                         "Amplitude — H1" = "amplitude1",
+                                                         "Acrophase — H1" = "phase1"),
                                              selected = "level")),
                        column(4, selectInput("harmonic_traj_adjust", "Multiplicity:",
                                              choices = c("Holm" = "holm",
