@@ -336,8 +336,9 @@
   output$harmonic_bounds_hints <- renderUI({
     req(values$data)
 
-    # Get data (use smoothed if available)
-    Y <- if(!is.null(values$smooth_data)) values$smooth_data else values$data
+    # The raw observations, which is what the fit will use: a bounds hint read
+    # off a smoothed copy describes a different range from the one being fitted
+    Y <- values$data
 
     # Calculate data statistics
     y_min <- min(Y, na.rm = TRUE)
@@ -1974,17 +1975,18 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       # anticonservative. The "95.3% significant rhythms" figure is an upper
       # bound, not an estimate.
       #
-      # Cosinor handles missing and unequally spaced data natively, so raw is a
-      # legitimate choice. data_source now selects it; "both" fits twice and the
-      # report prints the two side by side so the inflation is visible rather
-      # than argued about.
+      # THE CHOICE IS GONE, AND IT ALWAYS RUNS ON RAW OBSERVATIONS.
+      #
+      # Cosinor is a regression on the observations: it handles missing and
+      # unequally spaced data natively, so smoothing first buys nothing here and
+      # costs a great deal. Interpolating removes independent noise and induces
+      # residual autocorrelation, so R-squared is inflated, LOOCV is optimistic
+      # (a held-out point is partly rebuilt from its neighbours) and the
+      # zero-amplitude F test is anticonservative. The option existed with a
+      # warning attached, which makes a reader responsible for not choosing the
+      # wrong one; removing it is the honest version of that warning.
       # ======================================================================
-      data_source <- input$harmonic_data_source %||% "raw"        # P6.7: matches the UI default
-      if(identical(data_source, "smoothed") && is.null(values$smooth_data)) {
-        data_source <- "raw"
-      }
-      using_smoothed <- identical(data_source, "smoothed")
-      Y <- if(using_smoothed) values$smooth_data else values$data
+      Y <- values$data
       n_subjects <- nrow(Y)
       n_time <- ncol(Y)
       period <- input$harmonic_period
@@ -1996,8 +1998,8 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
                                "none" = 0, "linear" = 1, "log" = 1, "exp_sat" = 2, 0)
       
       # Diagnostic: Check data type and dimensions
-      cat(sprintf("Data diagnostics: %d subjects × %d time points, type=%s, smoothed=%s, trend=%s\n", 
-                  n_subjects, n_time, typeof(Y), using_smoothed, trend_type))
+      cat(sprintf("Data diagnostics: %d subjects × %d time points, type=%s, trend=%s\n", 
+                  n_subjects, n_time, typeof(Y), trend_type))
       
       # Check for NAs in the data
       na_counts <- apply(Y, 1, function(row) sum(is.na(row)))
@@ -2019,17 +2021,13 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
                       all_na_subjects[1], 
                       paste(head(Y[all_na_subjects[1], ], 10), collapse=", ")))
         }
-      } else if(subjects_with_nas > 0 && !using_smoothed) {
+      } else if(subjects_with_nas > 0) {
+        # NOT a reason to smooth first: the cosinor uses the observations that
+        # are present, which is what makes interpolation unnecessary here.
         showNotification(
-          sprintf("%d subjects have missing values. Consider applying smoothing first to interpolate missing data.", 
+          sprintf("%d subjects have missing values. The cosinor uses the observations present for each subject.", 
                   subjects_with_nas),
-          type = "warning", duration = 8)
-      } else if(subjects_with_nas > 0 && using_smoothed) {
-        # This shouldn't happen if smoothing worked correctly
-        showNotification(
-          sprintf("Warning: %d subjects still have NAs after smoothing. Some fits may fail.", 
-                  subjects_with_nas),
-          type = "warning", duration = 8)
+          type = "message", duration = 8)
       }
       
       # Check if we have enough data points for the requested harmonics
@@ -3217,7 +3215,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
         dv_units = if(nzchar(input$harmonic_dv_units %||% "")) input$harmonic_dv_units else NULL,
         dv_min   = suppressWarnings(as.numeric(input$harmonic_dv_min %||% NA)),
         dv_max   = suppressWarnings(as.numeric(input$harmonic_dv_max %||% NA)),
-        data_source = data_source,
+        data_source = "raw",
         time_origin = time_origin,
         origin_shift = origin_shift,
         time_vec_clock = time_vec,           # display axis, always clock-linearised
@@ -3241,7 +3239,6 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
           tau_min = tau_min, tau_max = tau_max),
         t_offset = t_offset_global,
         t_center = t_center_global,
-        using_smoothed = using_smoothed,
         subjects_with_nas = subjects_with_nas,
         Y = Y
       )
@@ -3340,17 +3337,9 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     cat("Period: ", fmtn(period, 0), " h\n", sep = "")
     cat("Number of harmonics: ", nh, "\n", sep = "")
 
-    # ---- AUDIT 2.1: data source, stated as a choice with its consequences ---
-    if(isTRUE(mod$using_smoothed)) {
-      cat("Data: SMOOTHED (missing values interpolated by FDA)\n")
-      cat("  ! Smoothing removes independent noise and induces residual autocorrelation.\n")
-      cat("    R-squared is inflated, LOOCV is optimistic (a held-out point is partly\n")
-      cat("    reconstructed from its neighbours), and the zero-amplitude F test is\n")
-      cat("    anticonservative. Rhythm-significance rates below are UPPER BOUNDS.\n")
-      cat("    Cosinor handles missing and unequally spaced data natively: re-run with\n")
-      cat("    Data source = raw to see the difference.\n")
-    } else {
-      cat("Data: RAW (no smoothing applied)\n")
+    # ---- the data source is no longer a choice: always the raw observations ---
+    {
+      cat("Data: RAW observations (the only option; the cosinor needs no interpolation)\n")
       if(!is.null(mod$subjects_with_nas) && mod$subjects_with_nas > 0) {
         cat("  ", mod$subjects_with_nas, " subjects have missing values; the cosinor uses",
             " the observations present.\n", sep = "")
@@ -3710,8 +3699,6 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     cat("    The zero-amplitude test is now the harmonics GIVEN the trend (full vs\n")
     cat("    trend-only F test). It previously charged the rhythm with the whole\n")
     cat("    model's sum of squares, including everything Process S explained.\n")
-    if(isTRUE(mod$using_smoothed))
-      cat("    ! On smoothed data this rate is an UPPER BOUND (see the note at the top).\n")
 
     # ========================================================================
     # AUDIT 2.5: confidence intervals
@@ -5450,8 +5437,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
         "No design factor is selected. Choose a study design and at least one",
         "factor to compare trajectories between.")))
     req(values$data)
-    Y <- if (identical(mod$data_source %||% "raw", "smoothed") && !is.null(values$smooth_data))
-      values$smooth_data else values$data
+    Y <- values$data
     # the model-elapsed axis the fit was built on, and the offset back to clock
     tv <- mod$time_vec
     if (is.null(tv) || length(tv) != ncol(Y))
@@ -6279,11 +6265,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     if(h > 1)
       cat(sprintf("H%d repeats every %s h, so each acrophase has %d equivalent clock times.\n",
                   h, fmtn(effective_period, 0), h))
-    cat(sprintf("Data source: %s.%s\n\n",
-                if(isTRUE(mod$using_smoothed)) "SMOOTHED" else "RAW",
-                if(isTRUE(mod$using_smoothed))
-                  " Between-group differences are less affected by smoothing than the within-subject fit statistics, but the per-subject parameters entering these tests are still smoothed-data estimates."
-                else ""))
+    cat("Data source: RAW observations.\n\n")
     
     # Get group variable and params
     if(!is.null(harmonic_group_var_eff()) && harmonic_group_var_eff() != "_none_") {
@@ -6763,7 +6745,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       cat("actual precision and handles the unbalanced design directly.\n\n")
 
       pmc <- tryCatch({
-        Yp <- if(isTRUE(mod$using_smoothed)) values$smooth_data else values$data
+        Yp <- values$data
         tv <- mod$time_vec
         sub_ids <- mod$individual_params$subject
         gl <- group_var[sub_ids]
@@ -6813,8 +6795,6 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
         cat("    ANTICONSERVATIVE. Install lme4 and refit with (1|subject) for the\n")
         cat("    interval you would actually report; the point estimates are unbiased\n")
         cat("    either way. This is stated rather than silently ignored.\n")
-        if(isTRUE(mod$using_smoothed))
-          cat("    On smoothed data the dependence is worse still (see the data-source note).\n")
       }
     }
   })

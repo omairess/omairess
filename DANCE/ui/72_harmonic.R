@@ -39,25 +39,6 @@ ui_tab_harmonic <- tabItem(
                            structurally impossible for a non-negative scale.")),
 
             hr(),
-            h4("Data source"),
-            radioButtons("harmonic_data_source", NULL,
-                         choices = c("Raw (cosinor handles gaps natively)" = "raw",
-                                     "Smoothed (FDA-interpolated)" = "smoothed"),
-                         # P6.7: raw is the default. Cosinor is a regression on
-                         # the observations and handles gaps natively; smoothing
-                         # first buys nothing here and costs the inflation the
-                         # note below describes. Defaulting to the option that
-                         # inflates R2 and anticonservatively biases the
-                         # zero-amplitude test was the wrong way round.
-                         selected = "raw"),
-            helpText(HTML("Fitting on smoothed data removes independent noise and
-                           induces residual autocorrelation: R\u00b2 is inflated, LOOCV is
-                           optimistic because a held-out point is partly rebuilt from
-                           its neighbours, and the zero-amplitude F test is
-                           anticonservative. <b>Run both</b> and compare \u2014 the gap is
-                           the inflation.")),
-
-            hr(),
             h4("Model Specification"),
             radioButtons("harmonic_time_origin", "Time origin (t = 0 at):",
                          choices = c("First observation" = "first_observation",

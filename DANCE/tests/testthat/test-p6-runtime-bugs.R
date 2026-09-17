@@ -199,17 +199,31 @@ test_that("P6.6: the summary reports the smallest attainable p", {
 # ============================================ P6.7 defaults ==================
 test_that("P6.7: the harmonic tab's defaults are the ones you would want", {
   ui <- code_of("ui/72_harmonic.R")
-  expect_true(grepl('selected = "raw")', ui, fixed = TRUE))
   expect_true(grepl('selected = "first_observation")', ui, fixed = TRUE))
   expect_true(grepl('checkboxInput("harmonic_show_data", "Show Raw Data Points", FALSE)',
                     ui, fixed = TRUE))
   # the server fallbacks must agree, or a session that never touched the control
   # runs a different model from the one the UI shows
   srv <- code_of("server/72_harmonic.R")
-  expect_true(grepl('input$harmonic_data_source %||% "raw"', srv, fixed = TRUE))
   expect_true(grepl('input$harmonic_time_origin %||% "first_observation"', srv, fixed = TRUE))
-  expect_false(grepl('input$harmonic_data_source %||% "smoothed"', srv, fixed = TRUE))
   expect_false(grepl('input$harmonic_time_origin %||% "midnight"', srv, fixed = TRUE))
+})
+
+test_that("the data-source choice is GONE, not merely defaulted to raw", {
+  # P6.7 made "raw" the default and left "smoothed" selectable behind a warning,
+  # which puts the reader in charge of not picking the option that inflates
+  # R-squared, makes LOOCV optimistic and turns the zero-amplitude F test
+  # anticonservative. The control is removed instead: the cosinor is a
+  # regression on the observations and handles gaps natively, so there was never
+  # anything for smoothing to buy here.
+  ui <- code_of("ui/72_harmonic.R")
+  srv <- code_of("server/72_harmonic.R")
+  expect_false(grepl("harmonic_data_source", ui, fixed = TRUE))
+  expect_false(grepl("harmonic_data_source", srv, fixed = TRUE))
+  expect_false(grepl("using_smoothed", srv, fixed = TRUE))
+  # and the fit reads the raw matrix, with nothing to branch on
+  expect_false(grepl("values$smooth_data", srv, fixed = TRUE))
+  expect_true(grepl("Y <- values$data", srv, fixed = TRUE))
 })
 
 # ============================================ P7.1 the dead control ==========
