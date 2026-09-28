@@ -136,8 +136,11 @@ dance_posthoc_spec <- function(input, values) {
 #
 # values$covariates is rebuilt and row-filtered alongside values$data, so it is
 # aligned by construction. Prefer it; fall back to the raw frame only when the
-# column was never selected as a scalar variable, and then check the length
-# rather than trusting it.
+# column was never selected as a scalar variable. The import step records, in
+# values$row_index, which row of the raw frame each curve came from -- through
+# the rows it drops AND the participants or groups excluded on the Data Import
+# tab -- so the raw column is read at exactly those rows. Without that record
+# the length is checked rather than trusted.
 # ==============================================================================
 dance_rm_column <- function(values, varname, n_expected = NULL) {
   if (is.null(varname) || !nzchar(varname)) return(NULL)
@@ -149,6 +152,10 @@ dance_rm_column <- function(values, varname, n_expected = NULL) {
   }
   if (!is.null(values$uploaded_data) && varname %in% names(values$uploaded_data)) {
     v <- values$uploaded_data[[varname]]
+    ri <- values$row_index
+    if (!is.null(ri) && (is.null(n_expected) || length(ri) == n_expected) &&
+        length(ri) && all(ri >= 1L & ri <= length(v)))
+      return(v[ri])
     if (!is.null(n_expected) && length(v) != n_expected) {
       stop(sprintf(
         paste("'%s' has %d values but there are %d curves. Rows were dropped at import",

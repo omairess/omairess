@@ -131,6 +131,22 @@ observeEvent(input$load_session, {
 
   for (nm in names(saved$values)) values[[nm]] <- saved$values[[nm]]
 
+  # A session saved before the Participants & Groups box existed carries the
+  # analysed rows but not the frame they were taken from. The rows it carries
+  # ARE the whole frame as far as this session knows, so they become it: the
+  # box then works on them, and nothing already analysed changes. Whether the
+  # positions are also rows of the uploaded file is only known when no row was
+  # dropped at import; otherwise the frame says it cannot vouch for that.
+  if (is.null(values$import_full) && !is.null(values$data)) {
+    same_rows <- !is.null(values$row_index) ||
+      (!is.null(values$uploaded_data) && nrow(values$uploaded_data) == nrow(values$data)) ||
+      is.null(values$uploaded_data)
+    values$import_full <- dance_import_frame(
+      values$data, values$subject_ids, values$covariates, values$group_variables,
+      values$group_labels, values$row_index, values$time_labels,
+      values$time_numeric, values$time_clock, file_rows = same_rows)
+  }
+
   # AUDIT (P20/R10). Every one of these went through
   #     fn(session, nm, value = saved$settings[[nm]])
   # and updateSelectInput() HAS NO `value` ARGUMENT -- its selection parameter is
@@ -206,6 +222,16 @@ observeEvent(input$load_session, {
     sprintf("  data:        %s",
             if (is.null(values$data)) "none"
             else sprintf("%d subjects x %d time points", nrow(values$data), ncol(values$data))),
+    # the participant/group selection comes back with the frame it was made on,
+    # so it can still be changed or undone on the Data Import tab
+    if (!is.null(values$import_full) && !dance_filter_is_empty(values$row_filter))
+      sprintf("  selection:   %s",
+              dance_filter_describe(values$import_full,
+                                    dance_filter_keep(values$import_full,
+                                                      values$row_filter$excluded_ids %||% character(0),
+                                                      values$row_filter$excluded_levels %||% list()),
+                                    values$row_filter)[1])
+    else NULL,
     sprintf("  results:     %s", if (length(ran)) paste(ran, collapse = ", ") else "none"),
     sprintf("  settings restored: %d of %d",
             length(restored), length(unlist(RESTORE_INPUTS, use.names = FALSE))),

@@ -58,6 +58,9 @@ owned_by_data_step <- c(
   "cv_results", "nbasis_gcv", "reml_profile",
   # the import step's own bookkeeping
   "uploaded_data", "selected_group_vars", "time_numeric", "time_clock",
+  # the participant/group selection: the full frame, the exclusions, and the
+  # raw row of each analysed curve (server/02d_helpers_rowfilter.R)
+  "import_full", "row_filter", "row_index",
   # UI-only: which curve the viewer is looking at, not a result
   "selected_curve",
   "current_tab", "last_error", "status_message"

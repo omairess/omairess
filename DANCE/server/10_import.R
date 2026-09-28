@@ -22,6 +22,10 @@
 #   * time values: WaPaa's extract_time_values() runs here for every dataset,
 #     so values$time_numeric is available to all tabs (the cosinor tab can now
 #     reuse it instead of re-detecting times from the same column names).
+#   * participants and groups: neither app could leave anybody out short of
+#     editing the file. Section 2b keeps the whole imported frame and applies a
+#     keyed selection to it (server/02d_helpers_rowfilter.R), for uploaded and
+#     sample data alike.
 #   * sample data: the two generators produced different datasets (WaPaa: 100
 #     points on 0-1 with groups; CIRCAREG: 24 hourly points with covariates and
 #     a binary outcome). One dataset has to serve every tab, so the merged
@@ -115,14 +119,20 @@ observeEvent(input$load_data, {
     values$raw_df <- raw_data
     values$uploaded_data <- raw_data   # RM-ANOVA pickers read this one
 
-    # A new file voids everything downstream, in every family.
+    # A new file voids everything downstream, in every family -- including the
+    # participant/group selection, which named people in the OLD file.
     values$data <- NULL
     values$covariates <- NULL
     values$group_labels <- NULL
     values$group_variables <- NULL
     values$selected_group_vars <- NULL
+    values$subject_ids <- NULL
     values$time_numeric <- NULL
     values$time_clock <- NULL
+    values$import_full <- NULL
+    values$row_filter <- NULL
+    values$row_index <- NULL
+    values$fill_status <- NULL
     dance_reset_analyses(values)
 
     showNotification("File loaded. Please select variables below.",
@@ -254,6 +264,10 @@ observeEvent(input$apply_selection, {
     }
 
     values$data <- temp_data_mat
+    # which row of the raw frame each curve is, carried through every row drop
+    # below: it keys a participant when the file has no identifier, and keeps
+    # the modules that read the raw frame aligned (server/02d_helpers_rowfilter.R)
+    row_index <- seq_len(nrow(temp_data_mat))
 
     # ---- participant identifier, if the file carries one --------------------
     # Scores and per-subject parameters are one row per CURVE. When the same
@@ -310,6 +324,7 @@ observeEvent(input$apply_selection, {
       na_rows <- apply(is.na(values$data), 1, all)
       if(any(na_rows)) {
         values$data <- values$data[!na_rows, , drop = FALSE]
+        row_index <- row_index[!na_rows]
         if(!is.null(values$subject_ids))
           values$subject_ids <- values$subject_ids[!na_rows]
         if(!is.null(values$group_labels))
@@ -329,6 +344,7 @@ observeEvent(input$apply_selection, {
         too_few <- n_obs_row < min_obs
         if (any(too_few)) {
           values$data <- values$data[!too_few, , drop = FALSE]
+          row_index <- row_index[!too_few]
           if(!is.null(values$subject_ids))
             values$subject_ids <- values$subject_ids[!too_few]
           if(!is.null(values$group_labels))
@@ -355,12 +371,235 @@ observeEvent(input$apply_selection, {
       }
     }
 
+    # ---- which participants and groups (server/02d_helpers_rowfilter.R) -----
+    # Everything above built the FULL frame. It is kept whole, so the selection
+    # in box 3 can be changed or undone without reading the file again, and the
+    # exclusions already made on it are re-applied BY PARTICIPANT AND LEVEL: a
+    # re-confirm (another covariate, another time column) must not quietly bring
+    # back the people who had been taken out, nor take out somebody else.
+    values$import_full <- dance_import_frame(
+      values$data, values$subject_ids, values$covariates, values$group_variables,
+      values$group_labels, row_index, values$time_labels, values$time_numeric,
+      values$time_clock)
+    had_selection <- !dance_filter_is_empty(values$row_filter)
+    sel <- .import_apply_rows()
+
+    values$fill_status <- NULL
     dance_reset_analyses(values)
-    showNotification("Data processed successfully!", type = "message")
+    showNotification(
+      if (!had_selection) "Data processed successfully!"
+      else if (isTRUE(sel$reset))
+        paste("Data processed. The participant/group selection made earlier would leave",
+              "fewer than two curves on this selection, so it was cleared: every curve is included.")
+      else paste0("Data processed. Your participant/group selection was re-applied: ",
+                  sel$lines[1],
+                  if (sel$n_stale) sprintf(" %d exclusion%s no longer matched anything and %s dropped.",
+                                           sel$n_stale, if (sel$n_stale == 1) "" else "s",
+                                           if (sel$n_stale == 1) "was" else "were") else ""),
+      type = if (isTRUE(sel$reset)) "warning" else "message",
+      duration = if (had_selection) 12 else 5)
 
   }, error = function(e) {
     showNotification(paste("Error processing selection:", e$message), type = "error")
   })
+})
+
+# --- 2b. Participants & groups -----------------------------------------------
+# The analysed rows are the imported frame (values$import_full) minus the
+# exclusions in values$row_filter. This is the ONE place values$data and its
+# parallel vectors are rebuilt from that pair; the confirm step, the sample
+# generator and the two buttons below all come through here, so they cannot
+# disagree about what a selection means.
+.import_apply_rows <- function() {
+  fr <- values$import_full
+  if (is.null(fr)) return(NULL)
+  rf <- values$row_filter
+  fk <- dance_filter_keep(fr, rf$excluded_ids %||% character(0),
+                          rf$excluded_levels %||% list())
+  res <- dance_filter_apply(fr, fk$keep)
+  reset <- FALSE
+  if (!isTRUE(res$ok)) {
+    # a stored selection that leaves nothing to analyse on a rebuilt frame is
+    # dropped rather than applied; the caller says so
+    rf <- NULL
+    fk <- dance_filter_keep(fr)
+    res <- dance_filter_apply(fr, fk$keep)
+    reset <- TRUE
+  }
+  n_stale <- dance_filter_n_stale(fk)
+  rf <- dance_filter_prune(rf, fk)
+  values$row_filter      <- rf
+  values$data            <- res$data
+  values$subject_ids     <- res$subject_ids
+  values$covariates      <- res$covariates
+  values$group_variables <- res$group_variables
+  values$group_labels    <- res$group_labels
+  # only a record of real file rows is handed on (see dance_import_frame)
+  values$row_index       <- if (isFALSE(fr$file_rows)) NULL else res$row_index
+  values$time_labels     <- res$time_labels
+  values$time_numeric    <- res$time_numeric
+  values$time_clock      <- if (isTRUE(res$cols_dropped)) dance_clock_hours(res$time_labels)
+                            else fr$time_clock
+  lines <- dance_filter_describe(fr, fk, rf)
+  cat("Participant selection:", paste(lines, collapse = "\n  "), "\n")
+  list(fk = fk, rf = rf, reset = reset, n_stale = n_stale, lines = lines,
+       cols_dropped = isTRUE(res$cols_dropped))
+}
+
+output$row_filter_ui <- renderUI({
+  fr <- values$import_full
+  if (is.null(fr))
+    return(helpText(HTML(
+      "Confirm a variable selection above (or generate the sample data) first.",
+      "Every participant and every group is then listed here, all included; untick",
+      "what should not be analysed and press <b>Apply selection</b>.")))
+  rf <- values$row_filter
+  ex_ids <- rf$excluded_ids %||% character(0)
+  ex_lv  <- rf$excluded_levels %||% list()
+  vars  <- dance_filter_vars(fr)
+  parts <- dance_filter_participants(fr)
+  has_ids <- !is.null(fr$subject_ids)
+
+  level_ui <- if (length(vars)) {
+    choices <- lapply(names(vars), function(nm) {
+      v <- vars[[nm]]
+      stats::setNames(dance_filter_code(nm, v$level), sprintf("%s  (n = %d)", v$level, v$n))
+    })
+    names(choices) <- names(vars)
+    selected <- unlist(lapply(names(vars), function(nm) {
+      lv <- vars[[nm]]$level
+      dance_filter_code(nm, lv[!lv %in% ex_lv[[nm]]])
+    }), use.names = FALSE)
+    tagList(
+      pickerInput("filter_levels", "Groups to include:",
+                  choices = choices, selected = selected, multiple = TRUE,
+                  options = list(`actions-box` = TRUE, `live-search` = TRUE,
+                                 `selected-text-format` = "count > 4",
+                                 `count-selected-text` = "{0} of {1} levels included",
+                                 `none-selected-text` = "No level included")),
+      helpText(HTML(
+        "Listed per categorical scalar variable, with the number of curves at each",
+        "level. Untick a level to leave out every curve that carries it;",
+        "<i>(missing)</i> is a curve with no value for that variable. A curve is",
+        "analysed only when all of its levels are ticked.")))
+  } else {
+    helpText(paste(
+      "No categorical scalar variable is selected, so there are no groups to choose",
+      "from. Select one under 2. Variable Selection to filter by group."))
+  }
+
+  part_ui <- tagList(
+    pickerInput("filter_participants",
+                if (has_ids) "Participants to include:" else "Curves (rows) to include:",
+                choices = stats::setNames(parts$key, dance_filter_participant_text(parts)),
+                selected = parts$key[!parts$key %in% ex_ids], multiple = TRUE,
+                options = list(`actions-box` = TRUE, `live-search` = TRUE,
+                               `selected-text-format` = "count > 4",
+                               `count-selected-text` = "{0} of {1} included",
+                               `none-selected-text` = "Nobody included")),
+    helpText(if (has_ids)
+      "Search by identifier. Unticking a participant removes every curve they contribute."
+      else paste("The file has no participant identifier (set one under 2. Variable",
+                 "Selection), so each curve is listed by its row in the file.")))
+
+  fluidRow(
+    column(5, level_ui),
+    column(5, part_ui),
+    column(2,
+           actionButton("apply_row_filter", "Apply selection", class = "btn-success",
+                        icon = icon("filter"), width = "100%"),
+           br(), br(),
+           actionButton("reset_row_filter", "Include everyone", icon = icon("undo"),
+                        width = "100%"),
+           br(), br(),
+           helpText("Applying clears every result, smoothing included: each analysis",
+                    "is re-run on the curves that are left."))
+  )
+})
+
+# What is applied, and -- when the ticks differ from it -- what pressing Apply
+# would give, so the consequence is visible before any result is cleared.
+output$row_filter_preview <- renderText({
+  fr <- values$import_full
+  if (is.null(fr)) return("Nothing imported yet.")
+  rf <- values$row_filter
+  applied <- dance_filter_keep(fr, rf$excluded_ids %||% character(0),
+                               rf$excluded_levels %||% list())
+  out <- c("Applied:", paste0("  ", dance_filter_describe(fr, applied, rf)))
+  if (!is.null(input$filter_participants) || !is.null(input$filter_levels)) {
+    pend_rf <- dance_filter_from_ticks(fr, input$filter_levels, input$filter_participants,
+                                       has_level_ui = length(dance_filter_vars(fr)) > 0)
+    pend <- dance_filter_keep(fr, pend_rf$excluded_ids, pend_rf$excluded_levels)
+    if (!identical(pend$keep, applied$keep)) {
+      out <- c(out, "", "With the ticks above (press Apply selection to use them):",
+               paste0("  ", sub(" analysed", " would be analysed",
+                                dance_filter_describe(fr, pend, pend_rf))))
+      if (pend$n_kept < 2)
+        out <- c(out, "  ! fewer than two curves: this selection cannot be applied")
+    }
+  }
+  paste(out, collapse = "\n")
+})
+
+observeEvent(input$apply_row_filter, {
+  fr <- values$import_full
+  if (is.null(fr)) {
+    showNotification("Nothing to select from yet: confirm a variable selection first.",
+                     type = "warning", duration = 6)
+    return()
+  }
+  rf <- dance_filter_from_ticks(fr, input$filter_levels, input$filter_participants,
+                                has_level_ui = length(dance_filter_vars(fr)) > 0)
+  fk <- dance_filter_keep(fr, rf$excluded_ids, rf$excluded_levels)
+  chk <- dance_filter_apply(fr, fk$keep)
+  if (!isTRUE(chk$ok)) {
+    showNotification(paste(chk$message, "Nothing was changed."), type = "error", duration = 10)
+    return()
+  }
+  cur <- values$row_filter
+  now <- dance_filter_keep(fr, cur$excluded_ids %||% character(0),
+                           cur$excluded_levels %||% list())
+  values$row_filter <- if (dance_filter_is_empty(rf)) NULL else rf
+  if (identical(now$keep, fk$keep)) {
+    # the same curves either way: record the ticks, keep every result
+    showNotification("That selection analyses the same curves as before; nothing was cleared.",
+                     type = "message", duration = 5)
+    return()
+  }
+  sel <- .import_apply_rows()
+  values$fill_status <- NULL
+  dance_reset_analyses(values)
+  showNotification(
+    paste0("Selection applied: ", sel$lines[1],
+           if (isTRUE(sel$cols_dropped))
+             " Time points none of them was measured at were dropped." else "",
+           " Every analysis was cleared; re-run smoothing and the analyses you need."),
+    type = "message", duration = 10)
+})
+
+observeEvent(input$reset_row_filter, {
+  fr <- values$import_full
+  if (is.null(fr)) return()
+  # put the ticks back as well, even when nothing was applied yet
+  vars <- dance_filter_vars(fr)
+  if (length(vars))
+    updatePickerInput(session, "filter_levels", selected = unlist(lapply(names(vars),
+      function(nm) dance_filter_code(nm, vars[[nm]]$level)), use.names = FALSE))
+  updatePickerInput(session, "filter_participants",
+                    selected = dance_filter_participants(fr)$key)
+  if (dance_filter_is_empty(values$row_filter)) {
+    showNotification("Every participant and group is already included.",
+                     type = "message", duration = 4)
+    return()
+  }
+  values$row_filter <- NULL
+  .import_apply_rows()
+  values$fill_status <- NULL
+  dance_reset_analyses(values)
+  showNotification(
+    sprintf("Every participant and group is included again (%d curves). Every analysis was cleared; re-run what you need.",
+            nrow(values$data)),
+    type = "message", duration = 8)
 })
 
 # --- 3. Sample data ----------------------------------------------------------
@@ -443,6 +682,17 @@ observeEvent(input$generate_sample, {
 
     values$raw_df <- NULL        # hide the selection UI: nothing to select
     values$uploaded_data <- NULL
+    values$subject_ids <- NULL   # a file's identifiers do not describe this set
+
+    # participants and groups are selectable here too: a new dataset, so a new
+    # frame and no exclusions carried over from whatever was loaded before
+    values$row_filter <- NULL
+    values$import_full <- dance_import_frame(
+      values$data, NULL, values$covariates, values$group_variables,
+      values$group_labels, seq_len(n_subjects), values$time_labels,
+      values$time_numeric, values$time_clock)
+    .import_apply_rows()
+    values$fill_status <- NULL
     dance_reset_analyses(values)
 
     showNotification(
@@ -468,6 +718,13 @@ output$data_status <- renderPrint({
   } else {
     cat("Analysis Data Ready!\n")
     cat("Dimensions:", nrow(values$data), "subjects x", ncol(values$data), "time points\n")
+    fr <- values$import_full
+    if (!is.null(fr) && !dance_filter_is_empty(values$row_filter)) {
+      fk <- dance_filter_keep(fr, values$row_filter$excluded_ids %||% character(0),
+                              values$row_filter$excluded_levels %||% list())
+      cat("Participant selection (box 3):\n")
+      cat(paste0("  ", dance_filter_describe(fr, fk, values$row_filter)), sep = "\n")
+    }
     if(!is.null(values$time_clock)) {
       cat("Clock times parsed from the column names:",
           paste(head(values$time_clock, 8), collapse = ", "),
@@ -532,7 +789,14 @@ output$data_preview <- renderDT({
       colnames(preview_data) <- paste0("T", 1:ncol(preview_data))
 
       preview_rows <- 1:n_rows
-      lead <- data.frame(Subject = preview_rows)
+      # the row of the imported file, so an excluded participant visibly leaves
+      # a gap rather than the rows below renumbering into its place
+      ri <- values$row_index
+      lead <- data.frame(Row = if (!is.null(ri) && length(ri) == n_total_rows)
+                                 ri[preview_rows] else preview_rows)
+      if(!is.null(values$subject_ids) && length(values$subject_ids) == n_total_rows) {
+        lead$ID <- values$subject_ids[preview_rows]
+      }
       if(!is.null(values$group_labels)) {
         lead <- cbind(Group = values$group_labels[preview_rows], lead)
       }

@@ -1108,8 +1108,18 @@
         return()
       }
       
-      subject_id_data <- values$uploaded_data[[subject_id_col]]
-      rm_factor_data <- values$uploaded_data[[rm_factor_col]]
+      # Read at the rows that are analysed -- the raw frame still holds rows the
+      # import step dropped and participants excluded on the Data Import tab,
+      # so its columns counted as-is would describe a different design.
+      rm_cols <- tryCatch(list(dance_rm_column(values, subject_id_col),
+                               dance_rm_column(values, rm_factor_col)),
+                          error = function(e) e)
+      if (inherits(rm_cols, "error")) {
+        showNotification(conditionMessage(rm_cols), type = "error", duration = 12)
+        return()
+      }
+      subject_id_data <- rm_cols[[1]]
+      rm_factor_data <- rm_cols[[2]]
       
       # Check that we have multiple levels of the RM factor
       if(length(unique(rm_factor_data)) < 2) {

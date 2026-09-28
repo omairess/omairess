@@ -78,7 +78,16 @@ if any of these were missing):
 
 1. **Data Import** — CSV/TXT/TSV/Excel (with sheet selection), wide or long,
    separator auto-detected or chosen. One variable-selection step defines the
-   curve columns *and* the scalar variables.
+   curve columns *and* the scalar variables. A **Participants & Groups** box
+   then chooses who is analysed: every level of every categorical scalar
+   variable (a missing label is a level too) and every participant — by
+   identifier, or by file row when there is none — listed with a live count of
+   what a change would leave, applied with one button and undone with another.
+   The whole imported frame is kept, so nothing has to be re-read; exclusions
+   are recorded by participant and level rather than by row position, so
+   re-confirming the variables re-applies them to the same people; excluded
+   groups leave no empty factor levels behind; and the publication report and
+   the exported script both state what was excluded.
 2. **Data Preprocessing/Smoothing** — B-spline or (for 24-hour data) Fourier
    basis, automatic GCV-selected lambda or manual lambda, per-subject smoothing that
    interpolates missing values, optional clamping to a range, per-subject
@@ -230,6 +239,7 @@ DANCE/
     00_state.R             the shared state bus
     01_helpers_time.R      WaPaa's time helpers (used by every plot)
     02_helpers_gam.R       GAM prediction helpers
+    02d_helpers_rowfilter.R which participants and groups are analysed
     03_helpers_clock.R     real clock times, when they can be trusted
     04_helpers_fd.R        the one rule for building an fd object
     05_helpers_warp.R      the registration kernels: pure, so the app,
@@ -260,6 +270,7 @@ Rscript tests/codegen_test.R
 Rscript tests/export_roundtrip_test.R
 Rscript tests/missing_status_test.R
 Rscript tests/posthoc_source_test.R
+Rscript tests/row_filter_app_test.R       # participant/group selection, through the import tab
 Rscript tests/circular_density_test.R
 Rscript tests/warping_test.R
 Rscript tests/warp_family_test.R

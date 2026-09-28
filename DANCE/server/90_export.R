@@ -627,6 +627,30 @@
       add("  data_matrix <- as.matrix(dance_input_data)")
       add("} else {")
       add("  data_matrix <- as.matrix(read.csv('your_data.csv', row.names = 1))")
+      # The participant/group selection made on the Data Import tab. The script
+      # carries the rows that were analysed, so a file holding every imported
+      # curve is cut down to the same set rather than analysed whole.
+      fr_x <- values$import_full
+      if (!is.null(fr_x) && !dance_filter_is_empty(values$row_filter) &&
+          !is.null(values$row_index)) {
+        # row_index numbers rows of the imported frame, which can hold rows the
+        # import step dropped (all missing), so the frame's size -- not the
+        # number of curves in it -- is what a whole file is recognised by
+        n_full <- if (!is.null(values$uploaded_data)) nrow(values$uploaded_data) else nrow(fr_x$data)
+        fk_x <- dance_filter_keep(fr_x, values$row_filter$excluded_ids %||% character(0),
+                                  values$row_filter$excluded_levels %||% list())
+        add("  # Participant/group selection made on the Data Import tab:")
+        for (ln in dance_filter_describe(fr_x, fk_x, values$row_filter))
+          add("  #   ", trimws(ln))
+        add("  # The rows analysed, numbered as rows of the imported (subjects-in-rows) data.")
+        add("  # If your file holds every imported curve, it is reduced to these:")
+        add("  analysed_rows <- c(")
+        ri <- as.integer(values$row_index)
+        for (ci in split(seq_along(ri), ceiling(seq_along(ri) / 20)))
+          add("    ", paste(ri[ci], collapse = ", "), if (max(ci) < length(ri)) "," else "")
+        add("  )")
+        add("  if (nrow(data_matrix) == ", n_full, ") data_matrix <- data_matrix[analysed_rows, , drop = FALSE]")
+      }
       add("}")
       add("")
       add("# Number of subjects and time points")

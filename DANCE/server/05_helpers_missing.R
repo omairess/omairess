@@ -110,7 +110,12 @@ dance_row_labels <- function(values) {
     # repeated measures: a bare participant code repeats, so number the repeats
     if (anyDuplicated(lab)) lab <- paste0(lab, " #", ave(seq_along(lab), lab, FUN = seq_along))
   }
-  if (is.null(lab) || length(lab) != n) lab <- paste("Row", seq_len(n))
+  # the row of the imported file, not the position in what is left of it: after
+  # participants are excluded on the Data Import tab, "Row 12" must still be the
+  # twelfth row of the file
+  ri <- values$row_index
+  if (is.null(lab) || length(lab) != n)
+    lab <- paste("Row", if (!is.null(ri) && length(ri) == n) ri else seq_len(n))
   lab
 }
 

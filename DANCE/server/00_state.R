@@ -27,6 +27,9 @@
 #   values$covariates   scalar variables, ORIGINAL types (predictors/response)
 #   values$group_variables / $selected_group_vars / $group_labels
 #                       the same scalar variables as factors, for grouping
+# All of these hold only the participants and groups selected on the Data
+# Import tab; the full frame and the selection live in $import_full and
+# $row_filter (server/02d_helpers_rowfilter.R).
 # ==============================================================================
 
 # shiny does not export %||%, and base R only gained it in 4.4. Defined here so
@@ -55,6 +58,16 @@ values <- reactiveValues(
   group_variables       = NULL,   # the same variables coerced to factors
   selected_group_vars   = NULL,   # their names
   group_labels          = NULL,   # primary grouping factor (first selected)
+  # ---- shared: which participants and groups are analysed (02d) ------------
+  # The fields above hold the rows the analyses SEE. The import step also keeps
+  # the whole frame it built, so a participant/group selection can be changed
+  # or undone without reading the file again, and the exclusions the analyst
+  # made, keyed by participant and by (variable, level) so they re-apply to the
+  # same people after a re-confirm. row_index is the raw-frame row of each
+  # analysed curve: it keeps the modules that read values$uploaded_data aligned.
+  import_full           = NULL,   # dance_import_frame(): every imported curve
+  row_filter            = NULL,   # list(excluded_ids, excluded_levels), or NULL
+  row_index             = NULL,   # raw-frame row of each row of $data
 
   # ---- shared: smoothing ----------------------------------------------------
   smooth_data           = NULL,

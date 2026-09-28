@@ -994,8 +994,13 @@
         return(NULL)
       }
 
-      # Check dimensions match
-      if(nrow(values$uploaded_data) != length(cluster_assignments)) {
+      # One membership per ROW of the uploaded file: the clustered curves are
+      # placed back on the rows they came from (values$row_index), and a row that
+      # was not analysed -- dropped at import, or excluded on the Data Import tab
+      # -- gets NA rather than somebody else's cluster.
+      membership <- dance_to_file_rows(cluster_assignments, values$row_index,
+                                       nrow(values$uploaded_data))
+      if(is.null(membership)) {
         showNotification(paste0("Data dimension mismatch. Uploaded data has ", nrow(values$uploaded_data),
                                " rows but clustering has ", length(cluster_assignments), " observations."),
                          type = "error", duration = 5)
@@ -1016,7 +1021,7 @@
       }
 
       # Add cluster membership to uploaded data
-      values$uploaded_data[[var_name]] <- as.factor(cluster_assignments)
+      values$uploaded_data[[var_name]] <- as.factor(membership)
 
       showNotification(paste0("✓ Variable '", var_name, "' added to in-memory dataset (",
                              values$clustering_results$k, " clusters). ",
@@ -1033,9 +1038,17 @@
   observeEvent(input$confirm_overwrite, {
     var_name <- trimws(input$cluster_var_name)
     cluster_assignments <- values$clustering_results$cluster_assignments
+    membership <- dance_to_file_rows(cluster_assignments, values$row_index,
+                                     nrow(values$uploaded_data))
+    if(is.null(membership)) {
+      showNotification("The clustered curves no longer line up with the uploaded rows; re-run the clustering.",
+                       type = "error", duration = 6)
+      removeModal()
+      return()
+    }
 
     # Overwrite the variable
-    values$uploaded_data[[var_name]] <- as.factor(cluster_assignments)
+    values$uploaded_data[[var_name]] <- as.factor(membership)
 
     showNotification(paste0("✓ Variable '", var_name, "' overwritten in in-memory dataset. ",
                            "Use 'Download Dataset' button to export to file."),
@@ -1083,8 +1096,10 @@
         if(!(var_name %in% colnames(data_to_export)) && var_name != "") {
           # Add cluster membership if it wasn't added yet
           cluster_assignments <- values$clustering_results$cluster_assignments
-          if(nrow(data_to_export) == length(cluster_assignments)) {
-            data_to_export[[var_name]] <- as.factor(cluster_assignments)
+          membership <- dance_to_file_rows(cluster_assignments, values$row_index,
+                                           nrow(data_to_export))
+          if(!is.null(membership)) {
+            data_to_export[[var_name]] <- as.factor(membership)
           }
         }
       }

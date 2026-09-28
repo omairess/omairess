@@ -15,6 +15,8 @@
 #                                     (fANOVA / clustering / group comparisons)
 # so a variable chosen once is available as a predictor AND as a grouping
 # factor, instead of being picked twice in two apps that could disagree.
+# A third box then chooses which participants and which groups of those rows
+# every analysis sees.
 # ==============================================================================
 
 ui_tab_import <- tabItem(
@@ -92,6 +94,23 @@ ui_tab_import <- tabItem(
       hr(),
       h4("Data Status:"),
       verbatimTextOutput("data_status")
+    )
+  ),
+
+  # Which participants and which groups the analyses see. Its own box, after the
+  # variable selection, because the choices it offers -- the participants and
+  # the levels of the grouping variables -- only exist once that selection has
+  # been confirmed (or the sample data generated). The pickers are built on the
+  # server from the imported frame; see server/02d_helpers_rowfilter.R.
+  fluidRow(
+    box(
+      title = "3. Participants & Groups",
+      collapsible = TRUE, collapsed = FALSE,
+      status = "info",
+      solidHeader = TRUE,
+      width = 12,
+      uiOutput("row_filter_ui"),
+      verbatimTextOutput("row_filter_preview")
     )
   ),
 

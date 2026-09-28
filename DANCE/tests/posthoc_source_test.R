@@ -116,5 +116,17 @@ err <- tryCatch({ dance_rm_column(v2, "Other"); NA_character_ },
 check("errors instead of mispairing when only the raw frame has it",
       !is.na(err) && grepl("no longer lines up", err))
 
+# the import step's record of which raw row each curve came from (rows dropped
+# at import, participants excluded on the Data Import tab) makes the raw column
+# usable, read at exactly those rows
+v3 <- v2; v3$row_index <- c(1L, 3L, 4L, 6L)
+check("reads the raw frame at the recorded rows when they are known",
+      identical(as.character(dance_rm_column(v3, "Other")), c("a", "c", "d", "f")))
+v4 <- v2; v4$row_index <- c(1L, 3L, 9L, 6L)
+err4 <- tryCatch({ dance_rm_column(v4, "Other"); NA_character_ },
+                 error = function(e) conditionMessage(e))
+check("a record that points past the raw frame is not trusted",
+      !is.na(err4) && grepl("no longer lines up", err4))
+
 if (failures) { cat("\n", failures, " failure(s).\n", sep = ""); quit(status = 1) }
 cat("\nPost-hoc source tests passed.\n")

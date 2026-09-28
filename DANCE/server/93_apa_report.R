@@ -165,6 +165,30 @@ dance_apa_report <- function(values, input, title = NULL) {
         paste0(", from ", values$time_labels[1], " to ",
                values$time_labels[length(values$time_labels)]) else "", ".")
 
+  # Exclusions made on the Data Import tab (server/02d_helpers_rowfilter.R).
+  # APA 7 asks for the number excluded and the criterion; the app knows both,
+  # but not the reason, so it asks for that rather than inventing one.
+  fr_imp <- values$import_full
+  rf_imp <- values$row_filter
+  if (!is.null(fr_imp) && !is.null(rf_imp) && exists("dance_filter_keep", mode = "function")) {
+    fk_imp <- tryCatch(dance_filter_keep(fr_imp, rf_imp$excluded_ids %|% character(0),
+                                         rf_imp$excluded_levels %|% list()),
+                       error = function(e) NULL)
+    if (!is.null(fk_imp) && fk_imp$n_kept < fk_imp$n_total) {
+      why <- character(0)
+      for (nm in names(fk_imp$level_hits))
+        why <- c(why, sprintf("%d with %s = %s", fk_imp$level_hits[[nm]], nm,
+                              paste(rf_imp$excluded_levels[[nm]], collapse = " or ")))
+      if (any(fk_imp$by_id))
+        why <- c(why, sprintf("%d excluded individually", sum(fk_imp$by_id)))
+      add(" Of the ", fk_imp$n_total, " curves imported, ", fk_imp$n_total - fk_imp$n_kept,
+          " were excluded by the analyst before any analysis (", paste(why, collapse = "; "),
+          if (any(fk_imp$by_id & fk_imp$by_level)) "; some met more than one criterion" else "",
+          "), and every result below is computed on the remaining ", fk_imp$n_kept,
+          ". State the reason for each exclusion: the app records what was excluded, not why.")
+    }
+  }
+
   if (!is.null(values$subject_ids)) {
     n_id <- length(unique(values$subject_ids))
     if (n_id < n_sub)
