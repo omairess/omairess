@@ -1,32 +1,36 @@
 ## =============================================================================
-##  restructure_saliva_hourly_wide.R
+##  restructure_saliva_wide.R
 ## -----------------------------------------------------------------------------
 ##  Salivary cortisol and melatonin (Halley 2015, Halley 2016, DDU 2017-2018,
 ##  DDU 2022): long format (one row per saliva sample) -> mixed format.
 ##
 ##    rows    : one per participant x sampling session (Campaign x ID x Code).
 ##              Between-subject factors (Location, Campaign, Sex) and
-##              within-subject factors (Season, Code) stay in LONG format.
-##    columns : 24 clock-hour bins per hormone (time of day is WIDE):
-##              Cortisol_H00 ... Cortisol_H23, Melatonin_H00 ... Melatonin_H23
+##              within-subject factors (Season, Code; Antarctic = austral
+##              seasons) stay in LONG format.
+##    columns : one column per clock-time bin and hormone (time of day is
+##              WIDE): Cortisol_00h00 ... Cortisol_23h30,
+##              Melatonin_00h00 ... Melatonin_23h30 (30-min bins by default)
 ##
-##  Bin rule    : a sample taken at hh:mm goes to bin Hhh (hh:00 to hh:59).
-##                24:00 is midnight -> H00. Times after midnight (bedtime
-##                samples) therefore sit in H00-H05, as on a 0-24 h axis.
-##  Aggregation : when more than one sample of the same session falls in one
-##                bin (e.g. the 06:30 samples of day 1 and day 2, or the
-##                wake+30 min and wake+60 min samples), the cell holds their
-##                arithmetic mean. Sheet "N_per_bin" gives the number of
-##                samples behind every cell.
+##  Bins        : bin_min sets the width (30 = half-hour bins, 60 = hourly).
+##                bin_rule "nearest" (default): column hh:mm holds the samples
+##                taken within +-bin_min/2 of hh:mm (06h30 = 06:15-06:44), so
+##                a sample taken a few minutes before or after a scheduled
+##                time stays with that time point. Midnight (24:00 = 00:00) is
+##                column 00h00 (23:45-00:14).
+##                bin_rule "floor": column hh:mm holds hh:mm to hh:mm+bin_min.
+##  Aggregation : several samples of one session in one bin (e.g. the 06:30
+##                samples of day 1 and day 2) -> arithmetic mean. Sheet
+##                "N_per_bin" gives the number of samples behind every cell.
 ##
 ##  Output sheets
-##    Wide_Hourly : analysis file (first sheet, one header row -> SPSS/R ready)
+##    Wide_30min  : analysis file (first sheet, one header row -> SPSS/R ready)
 ##    N_per_bin   : number of samples averaged in every bin
 ##    Long_Binned : every original sample with its clock time and bin
 ##    Data_Issues : entries that need checking, and how they were handled
 ##    Codebook    : variables and processing rules
 ##
-##  Usage    : Rscript restructure_saliva_hourly_wide.R [input.xlsx] [output.xlsx]
+##  Usage    : Rscript restructure_saliva_wide.R [input.xlsx] [output.xlsx]
 ##             or set in_file / out_file below and source() the script.
 ##  Packages : readxl, openxlsx (everything else is base R)
 ## =============================================================================
@@ -36,10 +40,25 @@ suppressPackageStartupMessages({
   library(openxlsx)
 })
 
+## ---- 0. Settings -------------------------------------------------------------------
+bin_min  <- 30          # bin width in minutes; must divide 1440 (60 = hourly bins)
+bin_rule <- "nearest"   # "nearest" or "floor" (see header)
+
 args     <- commandArgs(trailingOnly = TRUE)
 in_file  <- if (length(args) >= 1) args[1] else "Merged_Saliva_SPSSReady_1.xlsx"
-out_file <- if (length(args) >= 2) args[2] else "Merged_Saliva_Wide_HourlyBins.xlsx"
+out_file <- if (length(args) >= 2) args[2] else sprintf("Merged_Saliva_Wide_%dminBins.xlsx", bin_min)
 in_sheet <- "Sheet1"
+
+if (!(bin_min >= 1 && bin_min == round(bin_min) && 1440 %% bin_min == 0))
+  stop("bin_min must be a whole number of minutes that divides 1440 (e.g. 15, 30, 60)")
+if (!bin_rule %in% c("nearest", "floor")) stop("bin_rule must be \"nearest\" or \"floor\"")
+
+n_bins     <- 1440 %/% bin_min
+bin_start  <- (seq_len(n_bins) - 1) * bin_min                # minutes after midnight
+bin_labels <- sprintf("%02dh%02d", bin_start %/% 60, bin_start %% 60)
+bin_shift  <- if (bin_rule == "nearest") bin_min / 2 else 0
+bin_of     <- function(s) floor((s / 60 + bin_shift) / bin_min) %% n_bins   # s: seconds after midnight
+wide_sheet <- sprintf("Wide_%dmin", bin_min)
 
 ## ---- 1. Read ---------------------------------------------------------------------
 ## Time is read as the raw Excel serial (fraction of a day) so that cells typed
@@ -76,15 +95,16 @@ raw$DateNote <- ifelse(!is.na(raw$Date) & !is_serial, raw$Date, NA_character_)
 raw$Date     <- as.Date(ifelse(is_serial, floor(suppressWarnings(as.numeric(raw$Date))),
                                NA_real_), origin = "1899-12-30")
 
-## ---- 3. Clock time and hourly bin ------------------------------------------------
+## ---- 3. Clock time and time bin --------------------------------------------------
 ## A valid clock time is an Excel serial in [0, 1). Anything else is handled as:
-##   1               -> 24:00 typed as a time         -> 00:00, bin H00
+##   1               -> 24:00 typed as a time         -> 00:00
 ##   integer 2 to 24 -> hours typed without a colon   -> (value mod 24):00
 ##   other values    -> not a clock time (e.g. 999 = missing-value code) -> no bin
 tv          <- raw$Time
 sec         <- rep(NA_real_, length(tv))
 t_problem   <- rep(NA_character_, length(tv))
 t_handling  <- rep(NA_character_, length(tv))
+col_of      <- function(s) paste("column", bin_labels[bin_of(s) + 1])
 
 is_clock <- !is.na(tv) & tv >= 0 & tv < 1
 sec[is_clock] <- round(tv[is_clock] * 86400)
@@ -92,13 +112,13 @@ sec[is_clock] <- round(tv[is_clock] * 86400)
 is_one <- !is.na(tv) & tv == 1
 sec[is_one]        <- 0
 t_problem[is_one]  <- "Time cell holds 1 (Excel serial for 24:00)"
-t_handling[is_one] <- "Read as 24:00 = 00:00 (midnight) -> bin H00"
+t_handling[is_one] <- paste("Read as 24:00 = 00:00 (midnight) ->", col_of(0))
 
 is_hours <- !is.na(tv) & tv > 1 & tv <= 24 & tv == round(tv)
 sec[is_hours]        <- (tv[is_hours] %% 24) * 3600
 t_problem[is_hours]  <- sprintf("Time cell holds %g (hours typed without a colon)", tv[is_hours])
-t_handling[is_hours] <- sprintf("Read as %g:00 = %02d:00 -> bin H%02d", tv[is_hours],
-                                as.integer(tv[is_hours] %% 24), as.integer(tv[is_hours] %% 24))
+t_handling[is_hours] <- sprintf("Read as %g:00 = %02d:00 -> %s", tv[is_hours],
+                                as.integer(tv[is_hours] %% 24), col_of(sec[is_hours]))
 
 is_invalid <- !is.na(tv) & !(is_clock | is_one | is_hours)
 t_problem[is_invalid]  <- sprintf("Time cell holds %g: not a clock time (probably a missing-value code)",
@@ -111,7 +131,9 @@ t_handling[is.na(tv)] <- "Sample not assigned to a bin (values kept in Long_Binn
 sec             <- sec %% 86400                    # 24:00:00 after rounding -> 00:00:00
 raw$Time        <- sec / 86400                     # cleaned Excel time (fraction of a day)
 raw$ClockTime_h <- sec / 3600
-raw$HourBin     <- floor(sec / 3600)
+raw$Bin         <- bin_of(sec)                     # 0-based bin index, NA without time
+raw$BinLabel    <- bin_labels[raw$Bin + 1]
+raw$BinTime_h   <- bin_start[raw$Bin + 1] / 60
 raw$TimeNote    <- ifelse(is.na(t_problem), NA_character_,
                           paste0(t_problem, ". ", t_handling))
 
@@ -123,8 +145,8 @@ if (!all(raw$Location %in% c("Halley", "DDU")))
 raw$Location_Halley1_DDU2 <- ifelse(raw$Location == "Halley", 1, 2)
 raw$SessionID <- paste(raw$Campaign, raw$ID, raw$Code, sep = "_")
 
-raw$InBins_Cortisol  <- as.integer(!is.na(raw$Cortisol)  & !is.na(raw$HourBin))
-raw$InBins_Melatonin <- as.integer(!is.na(raw$Melatonin) & !is.na(raw$HourBin))
+raw$InBins_Cortisol  <- as.integer(!is.na(raw$Cortisol)  & !is.na(raw$Bin))
+raw$InBins_Melatonin <- as.integer(!is.na(raw$Melatonin) & !is.na(raw$Bin))
 
 ## ---- 5. One row per participant x session ----------------------------------------
 ## SessionDate = earliest recorded date in the session (day 1). Daylight is taken
@@ -167,18 +189,14 @@ sess    <- sess[order(sess$CampaignNumber, id_stem, id_num, sess$SessionDate, se
                       na.last = TRUE), ]
 rownames(sess) <- NULL
 
-## ---- 6. Hourly bins: means and counts --------------------------------------------
-bins       <- 0:23
-bin_labels <- sprintf("H%02d", bins)
-
+## ---- 6. Time bins: means and counts ----------------------------------------------
 bin_table <- function(value, FUN) {
-  use <- !is.na(value) & !is.na(raw$HourBin)
+  use <- !is.na(value) & !is.na(raw$Bin)
   m <- tapply(value[use],
               list(factor(raw$SessionID[use], levels = sess$SessionID),
-                   factor(raw$HourBin[use],   levels = bins)),
+                   factor(raw$Bin[use],       levels = seq_len(n_bins) - 1)),
               FUN)
-  m <- matrix(as.numeric(m), nrow = nrow(sess))   # rows follow sess, cols H00..H23
-  m
+  matrix(as.numeric(m), nrow = nrow(sess))        # rows follow sess, columns follow bins
 }
 cort_mean <- bin_table(raw$Cortisol,  mean)
 mel_mean  <- bin_table(raw$Melatonin, mean)
@@ -209,18 +227,20 @@ for (r in which(!is.na(t_problem)))
             sprintf("Order %s: %s", ifelse(is.na(raw$Order[r]), "-", raw$Order[r]), t_problem[r]),
             t_handling[r])
 
-## (b) Season label vs photoperiod (more than / less than 12 h of daylight)
+## (b) Recorded (austral) Season vs the daylight recorded at the station on the
+##     sampling date: Summer with < 12 h or Winter with > 12 h of daylight
 mismatch <- which(!is.na(raw$MinutesOfDaylight) &
                   ((raw$Season == "Summer" & raw$MinutesOfDaylight < 720) |
                    (raw$Season == "Winter" & raw$MinutesOfDaylight > 720)))
 for (s in unique(raw$SessionID[mismatch])) {
   r <- mismatch[raw$SessionID[mismatch] == s]
+  summer_label <- raw$Season[r[1]] == "Summer"
   add_issue("Season vs photoperiod", s, fmt_rows(raw$SourceRow[r]),
-            sprintf("Code = %s, Season = %s, but %d of %d samples are dated %s with %s min of daylight (%s 12 h)",
+            sprintf("Code = %s, Season = %s, but %d of %d samples are dated %s, with %s min of daylight at the station (%s 12 h: austral %s half-year)",
                     raw$Code[r[1]], raw$Season[r[1]], length(r), sum(raw$SessionID == s),
                     paste(unique(format(raw$Date[r])), collapse = ", "),
                     paste(unique(raw$MinutesOfDaylight[r]), collapse = ", "),
-                    ifelse(raw$Season[r[1]] == "Summer", "<", ">")),
+                    ifelse(summer_label, "<", ">"), ifelse(summer_label, "winter", "summer")),
             "Not changed: check whether Code/Season or Date is wrong. The session is filed under the recorded Season.")
 }
 
@@ -246,9 +266,10 @@ for (st in unique(stamp[!is.na(stamp) & duplicated(stamp)])) {
   add_issue("Duplicate time", raw$SessionID[r[1]], fmt_rows(raw$SourceRow[r]),
             sprintf("Orders %s have the same recorded date and time (%s %s)",
                     paste(raw$Order[r], collapse = " and "), day_key[r[1]], fmt_hm(sec[r[1]])),
-            sprintf(paste("Binned as recorded (H%02d, mean of %d samples). If one is a next-morning",
-                          "sample whose date was not advanced, binning is unaffected; otherwise",
-                          "check the time entries"), raw$HourBin[r[1]], length(r)))
+            sprintf(paste("Binned as recorded (column %s, mean of %d samples). If one is a",
+                          "next-morning sample whose date was not advanced, binning is",
+                          "unaffected; otherwise check the time entries"),
+                    raw$BinLabel[r[1]], length(r)))
 }
 
 ## (e) DDU protocols (sheet "Timing" of the input file): fixed-clock samples
@@ -265,7 +286,7 @@ for (k in which(abs(dev_min) >= 90)) {
             sprintf("Order %s (protocol %02d:00) recorded at %s (%+d min)",
                     raw$Order[r], as.integer(sched_h[code_num[r]]), fmt_hm(sec[r]),
                     as.integer(round(dev_min[k]))),
-            sprintf("Binned as recorded (H%02d); check the time entry", raw$HourBin[r]))
+            sprintf("Binned as recorded (column %s); check the time entry", raw$BinLabel[r]))
 }
 
 ## (f) DDU protocols: wake sample (T0) later than the next sample (T1) on the same day
@@ -276,8 +297,8 @@ for (s in unique(raw$SessionID[raw$Location == "DDU"])) {
     add_issue("Protocol order", s, as.character(raw$SourceRow[r0]),
               sprintf("Wake sample %s recorded at %s, later than %s at %s on the same day",
                       raw$Order[r0], fmt_hm(sec[r0]), raw$Order[r1], fmt_hm(sec[r1])),
-              sprintf("Binned as recorded (H%02d); check whether the time or the Order label is wrong",
-                      raw$HourBin[r0]))
+              sprintf("Binned as recorded (column %s); check whether the time or the Order label is wrong",
+                      raw$BinLabel[r0]))
 }
 
 issues <- if (length(issue_rows)) do.call(rbind, issue_rows) else
@@ -301,7 +322,7 @@ counts <- data.frame(sess[, c("SessionID", "Campaign", "ID", "Code", "Season")],
 long   <- raw[, c("SourceRow", "SessionID", "Campaign", "CampaignNumber", "Location",
                   "Location_Halley1_DDU2", "ID", "Sex_1Male_2Female", "Code", "Season",
                   "Season_Summer1_Winter2", "Order", "Date", "DateNote", "Time",
-                  "ClockTime_h", "HourBin", "TimeNote", "MinutesOfDaylight",
+                  "ClockTime_h", "BinLabel", "BinTime_h", "TimeNote", "MinutesOfDaylight",
                   "HoursOfDaylight", "Cortisol", "Melatonin", "BadData", "BadDataReason",
                   "InBins_Cortisol", "InBins_Melatonin")]
 
@@ -321,25 +342,41 @@ code_txt  <- vapply(split(raw, raw$CampaignNumber), function(d) {
           paste(sort(unique(d$Code)), collapse = " / "), sum(per_id > 1), length(per_id))
 }, character(1))
 
+fmt_min  <- function(m) sprintf("%02d:%02d", (m %% 1440) %/% 60, (m %% 1440) %% 60)
+span_txt <- function(mark) {                          # clock times that go to column 'mark'
+  lo <- ceiling(mark - bin_shift); hi <- ceiling(mark - bin_shift + bin_min) - 1
+  paste0(fmt_min(lo), "-", fmt_min(hi))
+}
+ex_mark  <- 6 * 60 + 30 - (6 * 60 + 30) %% bin_min    # example column near 06:30
+bin_txt  <- sprintf(paste("%d columns of %d min per hormone, labelled hh'h'mm. Column %s holds the samples",
+                          "recorded %s%s. Midnight (24:00 = 00:00) is column %s (%s). Samples taken after",
+                          "midnight (bedtime) sit in the first columns, as on a 0-24 h time-of-day axis."),
+                    n_bins, bin_min, bin_labels[ex_mark / bin_min + 1], span_txt(ex_mark),
+                    if (bin_rule == "nearest")
+                      ", i.e. within half a bin of that time, so a sample taken a few minutes before or after a scheduled time stays with that time point"
+                    else ", i.e. from that time to the start of the next column",
+                    bin_labels[1], span_txt(0))
+bins_first_last <- function(prefix) paste0(prefix, bin_labels[1], " ... ", prefix, bin_labels[n_bins])
+
 codebook <- rbind(
   c("File", "Source", sprintf("%s, sheet '%s' (%d samples, %d columns)", basename(in_file),
                               in_sheet, nrow(raw), length(hdr))),
-  c("File", "Created", sprintf("%s by restructure_saliva_hourly_wide.R (R %s, readxl %s, openxlsx %s)",
-                               format(Sys.Date()), getRversion(), packageVersion("readxl"),
-                               packageVersion("openxlsx"))),
-  c("Structure", "Row unit (Wide_Hourly)", sprintf("One row per participant x sampling session (Campaign x ID x Code): %d rows. Between-subject (Location, Campaign, Sex) and within-subject (Season, Code) variables are in long format; time of day is in wide format.", nrow(wide))),
-  c("Structure", "Hour bins", "Hhh = clock hour hh:00-hh:59 of the recorded sampling time (e.g. 06:30 -> H06, 23:50 -> H23, 00:30 -> H00). 24:00 is midnight -> H00. Samples taken after midnight (bedtime) therefore sit in H00-H05, as on a 0-24 h time-of-day axis."),
-  c("Structure", "Several samples in one bin", "Cell = arithmetic mean of all samples of that session in that clock hour, regardless of day (e.g. the 06:30 samples of day 1 and day 2 in DDU 2017-2018, or the wake+30 min and wake+60 min samples in DDU 2022). Sheet N_per_bin gives the number of samples behind every cell (highlighted when >= 2)."),
-  c("Structure", "Empty cell", "No sample (or no assay value) in that clock hour for that session. Read as missing by SPSS (system-missing) and R (NA)."),
+  c("File", "Created", sprintf("%s by restructure_saliva_wide.R (bin_min = %d, bin_rule = '%s'; R %s, readxl %s, openxlsx %s)",
+                               format(Sys.Date()), bin_min, bin_rule, getRversion(),
+                               packageVersion("readxl"), packageVersion("openxlsx"))),
+  c("Structure", sprintf("Row unit (%s)", wide_sheet), sprintf("One row per participant x sampling session (Campaign x ID x Code): %d rows. Between-subject (Location, Campaign, Sex) and within-subject (Season, Code) variables are in long format; time of day is in wide format.", nrow(wide))),
+  c("Structure", "Time bins", bin_txt),
+  c("Structure", "Several samples in one bin", "Cell = arithmetic mean of all samples of that session in that bin, regardless of day (e.g. the 06:30 samples of day 1 and day 2 in DDU 2017-2018). Sheet N_per_bin gives the number of samples behind every cell (highlighted when >= 2)."),
+  c("Structure", "Empty cell", "No sample (or no assay value) in that bin for that session. Read as missing by SPSS (system-missing) and R (NA)."),
   c("Rules", "SessionDate", "Earliest recorded date of the session (day 1). Empty when no date was recorded."),
   c("Rules", "MinutesOfDaylight / HoursOfDaylight", paste0("Values recorded on SessionDate; sessions without a date: first non-missing value in the session. ",
     if (length(dl_varies)) paste0("Daylight differs within: ", paste(dl_varies, collapse = ", "), " (see Data_Issues).") else
       "Daylight is constant within every session.")),
   c("Rules", "BadData / BadDataReason", paste0("1 / reason if any sample of the session was flagged in the source file; empty otherwise. Hormone values of flagged samples are kept. Reasons in the source: ",
     if (length(reasons)) paste(reasons, collapse = "; ") else "none", ".")),
-  c("Rules", "Time cells that are not clock times", "Excel value 1 (= 24:00) is read as 00:00 -> H00; whole numbers 2-24 (hours typed without a colon) as that hour (24 -> 00:00); any other value (e.g. 999) as a missing time, and the sample is not binned. Each case is listed in Data_Issues."),
+  c("Rules", "Time cells that are not clock times", "Excel value 1 (= 24:00) is read as 00:00; whole numbers 2-24 (hours typed without a colon) as that hour (24 -> 00:00); any other value (e.g. 999) as a missing time, and the sample is not binned. Each case is listed in Data_Issues."),
   c("Rules", "Row order", "CampaignNumber, ID (natural order), SessionDate (unknown dates last), Code."),
-  c("Rules", "Data values", "Nothing in the source was corrected. Sessions whose labels or times look inconsistent are listed in Data_Issues and in the DataIssues column of Wide_Hourly."),
+  c("Rules", "Data values", sprintf("Nothing in the source was corrected. Sessions whose labels or times look inconsistent are listed in Data_Issues and in the DataIssues column of %s.", wide_sheet)),
   c("Variables", "SessionID", "Campaign_ID_Code; unique key of a session (row)."),
   c("Variables", "Campaign / CampaignNumber", paste0("As in source: ", paste(camp_map$Campaign, "=", camp_map$CampaignNumber, collapse = ", "), ". ",
     if (any(id_camps > 1)) paste("IDs in more than one campaign:", paste(names(id_camps)[id_camps > 1], collapse = ", ")) else
@@ -347,23 +384,23 @@ codebook <- rbind(
   c("Variables", "Location / Location_Halley1_DDU2", "Derived from Campaign: Halley (Halley VI) = 1, DDU (Dumont d'Urville) = 2. Between-subject."),
   c("Variables", "ID", "Participant code, as in source."),
   c("Variables", "Sex_1Male_2Female", "As in source (constant within ID)."),
-  c("Variables", "Code", paste0("Session label, as in source. ", paste(code_txt, collapse = "; "), ".")),
-  c("Variables", "Season / Season_Summer1_Winter2", "As in source (Summer = 1, Winter = 2)."),
+  c("Variables", "Code", paste0("Antarctic season of the participant's stay, as in source. ", paste(code_txt, collapse = "; "), ".")),
+  c("Variables", "Season / Season_Summer1_Winter2", "Antarctic (austral) season, as in source (Summer = 1, Winter = 2)."),
   c("Variables", "N_Samples", "Number of rows (saliva samples) of the session in the source file."),
   c("Variables", "N_Cortisol / N_Melatonin", "Number of non-missing values of the session that were assigned to a bin."),
   c("Variables", "DataIssues", "IssueIDs (sheet Data_Issues) that concern the session; empty when none."),
-  c("Variables", "Cortisol_H00 ... Cortisol_H23", "Mean salivary cortisol in that clock hour, same units as the source file."),
-  c("Variables", "Melatonin_H00 ... Melatonin_H23", "Mean salivary melatonin in that clock hour, same units as the source file."),
-  c("Other sheets", "N_per_bin", "Same rows as Wide_Hourly: number of cortisol and melatonin samples behind every bin (0 = empty cell)."),
-  c("Other sheets", "Long_Binned", "All source rows in source order (SourceRow = Excel row in the source sheet) with Time (cleaned), ClockTime_h (decimal hours), HourBin (0-23), TimeNote, and InBins_* = 1 when the value entered Wide_Hourly. Date text such as 'D+1' (next morning, date unknown) is in DateNote."),
-  c("Other sheets", "Data_Issues", "Rule-based checks: time cells that are not clock times; Season vs photoperiod (Summer with < 12 h or Winter with > 12 h of daylight); recorded dates > 1 day apart within a session; duplicate date+time within a session; DDU fixed-clock protocol samples (T6-T18, sheet Timing) recorded >= 90 min off; DDU wake sample later than the next sample.")
+  c("Variables", bins_first_last("Cortisol_"), "Mean salivary cortisol in that time bin, same units as the source file."),
+  c("Variables", bins_first_last("Melatonin_"), "Mean salivary melatonin in that time bin, same units as the source file."),
+  c("Other sheets", "N_per_bin", sprintf("Same rows as %s: number of cortisol and melatonin samples behind every bin (0 = empty cell).", wide_sheet)),
+  c("Other sheets", "Long_Binned", sprintf("All source rows in source order (SourceRow = Excel row in the source sheet) with Time (cleaned), ClockTime_h (decimal hours), BinLabel (column suffix in %s), BinTime_h (time of that column in decimal hours), TimeNote, and InBins_* = 1 when the value entered %s. Date text such as 'D+1' (next morning, date unknown) is in DateNote.", wide_sheet, wide_sheet)),
+  c("Other sheets", "Data_Issues", "Rule-based checks: time cells that are not clock times; recorded (austral) Season vs the daylight recorded at the station on the sampling date (Summer with < 12 h or Winter with > 12 h); recorded dates > 1 day apart within a session; duplicate date+time within a session; DDU fixed-clock protocol samples (T6-T18, sheet Timing) recorded >= 90 min off; DDU wake sample later than the next sample.")
 )
 codebook <- data.frame(Section = codebook[, 1], Item = codebook[, 2], Description = codebook[, 3],
                        stringsAsFactors = FALSE)
 
 ## ---- 9. Write workbook -----------------------------------------------------------
 options(openxlsx.dateFormat = "yyyy-mm-dd")
-wb <- createWorkbook(creator = "restructure_saliva_hourly_wide.R")
+wb <- createWorkbook(creator = "restructure_saliva_wide.R")
 modifyBaseFont(wb, fontSize = 10, fontColour = "#000000", fontName = "Arial")
 st_head  <- createStyle(textDecoration = "bold", fgFill = "#D9E1F2", border = "bottom")
 st_num3  <- createStyle(numFmt = "0.000")
@@ -392,22 +429,23 @@ style_cols <- function(name, df, cols, style)
     addStyle(wb, name, style, rows = seq_len(nrow(df)) + 1, cols = cols,
              gridExpand = TRUE, stack = TRUE)
 
-put_sheet("Wide_Hourly", wide)
-style_cols("Wide_Hourly", wide, grep("^(Cortisol|Melatonin)_H", names(wide)), st_num3)
-style_cols("Wide_Hourly", wide, match("HoursOfDaylight", names(wide)), st_num2)
-fit_widths("Wide_Hourly", wide, cols = seq_len(ncol(sess)))
-setColWidths(wb, "Wide_Hourly", cols = (ncol(sess) + 1):ncol(wide), widths = 15)
+put_sheet(wide_sheet, wide)
+bin_cols <- grep("^(Cortisol|Melatonin)_[0-9]{2}h[0-9]{2}$", names(wide))
+style_cols(wide_sheet, wide, bin_cols, st_num3)
+style_cols(wide_sheet, wide, match("HoursOfDaylight", names(wide)), st_num2)
+fit_widths(wide_sheet, wide, cols = seq_len(ncol(sess)))
+setColWidths(wb, wide_sheet, cols = bin_cols, widths = 17)
 
 put_sheet("N_per_bin", counts)
-n_cols <- grep("^N_(Cortisol|Melatonin)_H", names(counts))
+n_cols <- grep("^N_(Cortisol|Melatonin)_[0-9]{2}h[0-9]{2}$", names(counts))
 conditionalFormatting(wb, "N_per_bin", cols = n_cols, rows = seq_len(nrow(counts)) + 1,
                       rule = ">=2", style = st_multi)
 fit_widths("N_per_bin", counts, cols = 1:5)
-setColWidths(wb, "N_per_bin", cols = n_cols, widths = 17)
+setColWidths(wb, "N_per_bin", cols = n_cols, widths = 19)
 
 put_sheet("Long_Binned", long, freeze_col = 2)
 style_cols("Long_Binned", long, match("Time", names(long)), st_time)
-style_cols("Long_Binned", long, match(c("ClockTime_h", "HoursOfDaylight"), names(long)), st_num2)
+style_cols("Long_Binned", long, match(c("ClockTime_h", "BinTime_h", "HoursOfDaylight"), names(long)), st_num2)
 fit_widths("Long_Binned", long)
 setColWidths(wb, "Long_Binned", cols = match("TimeNote", names(long)), widths = 60)
 
@@ -459,14 +497,14 @@ drop_dangling_parts(out_file)
 
 ## ---- 10. Console summary ---------------------------------------------------------
 cat(sprintf("\nRead  : %s (%d samples)\nWrote : %s\n", in_file, nrow(raw), out_file))
-cat(sprintf("Wide_Hourly: %d sessions x %d columns (%d session variables + 2 x 24 bins)\n",
-            nrow(wide), ncol(wide), ncol(sess)))
+cat(sprintf("%s: %d sessions x %d columns (%d session variables + 2 x %d bins of %d min, rule '%s')\n",
+            wide_sheet, nrow(wide), ncol(wide), ncol(sess), n_bins, bin_min, bin_rule))
 print(table(Campaign = sess$Campaign, Code = sess$Code))
 cat(sprintf("\nFilled bins  : cortisol %d of %d (%.0f%%), melatonin %d of %d (%.0f%%)\n",
             sum(cort_n > 0), length(cort_n), 100 * mean(cort_n > 0),
             sum(mel_n > 0), length(mel_n), 100 * mean(mel_n > 0)))
 cat(sprintf("Bins = mean of >= 2 samples: cortisol %d, melatonin %d\n",
             sum(cort_n >= 2), sum(mel_n >= 2)))
-cat(sprintf("Samples not binned (no valid time): %d\n", sum(is.na(raw$HourBin))))
+cat(sprintf("Samples not binned (no valid time): %d\n", sum(is.na(raw$Bin))))
 cat(sprintf("Data issues listed: %d\n", nrow(issues)))
 print(table(issues$Check)[intersect(check_order, issues$Check)])
