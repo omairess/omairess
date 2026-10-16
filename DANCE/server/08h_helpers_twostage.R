@@ -31,6 +31,11 @@ dance_ts_frame <- function(mod, group_values) {
   # Stored at fit time; recomputed for a model saved before it was.
   if (!"trend_change" %in% names(p) || all(is.na(p$trend_change)))
     p$trend_change <- dance_ts_trend_change(mod, p)
+  # the initial slope A/tau of a saturating rise: how fast it starts, in
+  # response units per hour -- stored at fit time, derived for older models
+  if (identical(mod$trend_type, "exp_sat") && all(c("A_sat", "tau") %in% names(p)) &&
+      !"init_slope" %in% names(p))
+    p$init_slope <- p$A_sat / p$tau
   p
 }
 
@@ -66,6 +71,51 @@ dance_ts_level_summary <- function(df, mod, conf = 0.95) {
   has_trend <- !identical(mod$trend_type %||% "none", "none")
   qs <- c(intercept = "mesor")
   if (has_trend) qs <- c(qs, mesor = "mesor_adj", change = "trend_change")
+  out <- dance_ts_group_means(df, qs, conf)
+  if (isTRUE(out$ok)) out$has_trend <- has_trend
+  out
+}
+
+# The saturating trend's three parameters per group, as means of the
+# per-participant fits: the rise A, the time constant tau and the initial slope
+# A/tau. Each participant's fit estimates A and tau jointly, so these are the
+# two-stage answer to "do the groups differ in tau" -- with the caveat the
+# per-participant fits carry: over a short window A and tau trade off along a
+# ridge, and A/tau and the change are steadier than either alone.
+dance_ts_sat_summary <- function(df, mod, conf = 0.95) {
+  if (!identical(mod$trend_type, "exp_sat"))
+    return(list(ok = FALSE, message = "No saturating trend in this model."))
+  if (!"init_slope" %in% names(df) && all(c("A_sat", "tau") %in% names(df)))
+    df$init_slope <- df$A_sat / df$tau
+  dance_ts_group_means(df, c(A_sat = "A_sat", tau = "tau", init_slope = "init_slope"), conf)
+}
+
+# The saturating trend per group from the per-participant fits: each
+# participant's own A (1 - exp(-t/tau)) from the first observation, averaged
+# within the group, with a pointwise band from the spread across participants
+# -- the two-stage counterpart of the mixed model's per-cell trend curves.
+dance_ts_sat_curves <- function(df, mod, n_time = 160, conf = 0.95) {
+  tv <- mod$time_vec
+  if (is.null(tv) || !all(c("A_sat", "tau") %in% names(df))) return(NULL)
+  tt <- seq(0, diff(range(tv, na.rm = TRUE)), length.out = n_time)
+  g <- droplevels(factor(df$group))
+  q <- stats::qnorm(1 - (1 - conf) / 2)
+  out <- list()
+  for (lv in levels(g)) {
+    i <- which(g == lv & is.finite(df$A_sat) & is.finite(df$tau) & df$tau > 0)
+    if (length(i) < 2L) next
+    M <- t(vapply(i, function(r) df$A_sat[r] * (1 - exp(-tt / df$tau[r])), numeric(n_time)))
+    m <- colMeans(M); se <- apply(M, 2, stats::sd) / sqrt(nrow(M))
+    out[[lv]] <- data.frame(cell = lv, tt = tt, fit = m, se = se, lo = m - q * se,
+                            hi = m + q * se, stringsAsFactors = FALSE)
+  }
+  if (!length(out)) return(NULL)
+  tab <- do.call(rbind, out); rownames(tab) <- NULL
+  list(table = tab, cells = names(out), conf = conf)
+}
+
+# Group means of per-participant columns with a t interval on n - 1 df.
+dance_ts_group_means <- function(df, qs, conf = 0.95) {
   qs <- qs[qs %in% names(df)]
   g <- droplevels(factor(df$group))
   rows <- list()
@@ -80,9 +130,9 @@ dance_ts_level_summary <- function(df, mod, conf = 0.95) {
                                             lo = m - tq * se, hi = m + tq * se,
                                             stringsAsFactors = FALSE)
   }
-  if (!length(rows)) return(list(ok = FALSE, message = "No per-participant level estimates."))
+  if (!length(rows)) return(list(ok = FALSE, message = "No per-participant estimates to summarise."))
   tab <- do.call(rbind, rows); rownames(tab) <- NULL
-  list(ok = TRUE, table = tab, quantities = names(qs), conf = conf, has_trend = has_trend)
+  list(ok = TRUE, table = tab, quantities = names(qs), conf = conf)
 }
 
 # The coefficient columns a MANOVA compares: constant, trend, and every
@@ -147,6 +197,8 @@ dance_ts_components <- function(df, mod) {
     lt_row(lab("change"), df$trend_change)
   for (tc in setdiff(dance_ts_coef_cols(mod), c("mesor", grep("^beta_", dance_ts_coef_cols(mod), value = TRUE))))
     if (tc %in% names(df)) lt_row(lab(tc), df[[tc]])
+  if (identical(trend, "exp_sat") && "init_slope" %in% names(df))
+    lt_row(lab("init_slope"), df$init_slope)
   for (h in seq_len(K)) {
     bc <- paste0("beta_cos_", h); bs <- paste0("beta_sin_", h)
     if (!all(c(bc, bs) %in% names(df))) next
@@ -223,7 +275,7 @@ dance_ts_group_rhythm <- function(df, mod, h) {
 dance_ts_pair_whats <- function(mod) {
   K <- mod$n_harmonics %||% 1L
   tr <- switch(mod$trend_type %||% "none", linear = "trend_linear", log = "trend_log",
-               exp_sat = c("A_sat", "tau"), character(0))
+               exp_sat = c("A_sat", "tau", "init_slope"), character(0))
   out <- c("intercept", if (length(tr)) c("mesor", "change"), tr,
            sprintf("amplitude%d", seq_len(K)), sprintf("phase%d", seq_len(K)), "r_squared")
   out
@@ -246,6 +298,7 @@ dance_ts_pair_label <- function(what, period = 24, trend = NULL, units = NULL) {
     trend_log = sprintf("Log-trend beta (%s per unit of log(1 + hours))", u),
     A_sat = sprintf("Saturating rise A (%s above the intercept)", u),
     tau = "Time constant tau of the saturating rise (hours)",
+    init_slope = sprintf("Initial slope A/tau (%s per hour)", u),
     r_squared = "R-squared of the participant fit", what)
 }
 
@@ -318,7 +371,10 @@ dance_ts_pairwise <- function(df, mod, what, adjust = c("holm", "bonferroni", "n
                    if (!is.null(mod$dv_units) && nzchar(mod$dv_units) &&
                        (what %in% c("intercept", "level", "mesor", "change", "A_sat") ||
                         identical(pp$base, "amplitude"))) paste0(", in ", mod$dv_units)
-                   else if (identical(what, "tau")) ", in hours" else "",
+                   else if (identical(what, "tau")) ", in hours"
+                   else if (identical(what, "init_slope") && !is.null(mod$dv_units) &&
+                            nzchar(mod$dv_units)) paste0(", in ", mod$dv_units, " per hour")
+                   else "",
                    ", with Welch's interval and Cohen's d",
                    if (identical(what, "change"))
                      ". Each participant's change uses their own trend parameters" else ""),

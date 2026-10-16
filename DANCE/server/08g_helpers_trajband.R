@@ -438,15 +438,16 @@ dance_traj_level_unit <- function(fit, what) {
     dance_window_clock(tw$t0, tw$t_max, fit$clock_origin %||% 0, spec$period %||% 24)
   win <- wc$text %||% "the observed window"
   u <- if (is.null(fit$dv_units) || !nzchar(fit$dv_units)) "the response's own units" else fit$dv_units
-  coef_lab <- dance_traj_trend_coef_label(spec$trend %||% "none", spec$tau, fit$dv_units)
+  coef_lab <- dance_traj_trend_coef_label(spec$trend %||% "none", spec$tau, fit$dv_units,
+                                          estimated = isTRUE(fit$tau_estimated))
   switch(what,
     intercept = sprintf("difference in the intercept, in %s (the midline at the first observation%s)",
                         u, if (is.null(wc)) "" else paste0(", ", wc$start)),
     mesor     = sprintf("difference in the MESOR, in %s (the midline averaged over %s)", u, win),
     change    = if (!is.null(tw) && length(tw$end))
       sprintf(paste("difference in the non-periodic change from %s, in %s.",
-                    "The change is the %s times %.4g, so its test is the test of that coefficient."),
-              win, u, coef_lab, tw$end[[1]])
+                    "The change is the %s times %s, so its test is the test of that coefficient."),
+              win, u, coef_lab, dance_traj_change_factor_text(tw))
       else sprintf("difference in the non-periodic change over the recording, in %s", u),
     trend     = sprintf("difference in the %s", coef_lab),
     level     = sprintf("difference in the fitted curve value at the first observation, in %s", u),

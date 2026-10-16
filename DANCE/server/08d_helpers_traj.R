@@ -305,6 +305,20 @@ dance_traj_trend_window <- function(trend = "none", t0, t_max, tau = NULL) {
   c(out, list(t0 = t0, t_max = t_max, T = T, trend = as.character(trend), tau = tau))
 }
 
+# What the factor between the trend coefficient and the change IS, in words:
+# the change over the recording is the coefficient times the trend column's
+# value at the last observation, and that value has a plain meaning per trend.
+dance_traj_change_factor_text <- function(tw) {
+  if (is.null(tw) || !length(tw$end)) return("")
+  f <- tw$end[[1]]; T <- tw$T
+  switch(tw$trend,
+    linear  = sprintf("%.4g, the %.4g hours from the first to the last observation", f, T),
+    log     = sprintf("%.4g = log(1 + %.4g h)", f, T),
+    exp_sat = sprintf(paste("%.4g = 1 - e^(-%.4g h / %.4g h), the share of A the rise has",
+                            "reached by the last observation"), f, T, tw$tau),
+    sprintf("%.4g", f))
+}
+
 # The window's two ends on the clock, labelled together so that an end on the
 # next day carries its "(+1d)" -- dance_clock_label() only marks a day change
 # within the vector it is given, so labelling the ends one at a time loses it.
@@ -318,15 +332,17 @@ dance_window_clock <- function(t_lo, t_hi, clock_origin = 0, period = 24) {
 # called trend_lin / trend_log / trend_sat internally, and a reader shown
 # "trend_sat" has no way to know it is a rise in the response's own units with a
 # time constant held fixed.
-dance_traj_trend_coef_label <- function(trend, tau = NULL, units = NULL, short = FALSE) {
+dance_traj_trend_coef_label <- function(trend, tau = NULL, units = NULL, short = FALSE,
+                                        estimated = FALSE) {
   u <- if (is.null(units) || !nzchar(units)) "response units" else units
   switch(as.character(trend),
     linear  = if (short) "slope" else sprintf("slope beta (%s per hour)", u),
     log     = if (short) "log-trend beta" else
       sprintf("log-trend beta (%s per unit of log(1 + hours since the first observation))", u),
     exp_sat = if (short) "saturating rise A" else
-      sprintf("saturating rise A (%s above the intercept as t grows; tau held at %s h)",
-              u, if (is.null(tau)) "?" else format(signif(tau, 4))),
+      sprintf("saturating rise A (%s above the intercept as t grows; tau %s %s h)",
+              u, if (isTRUE(estimated)) "estimated at" else "held at",
+              if (is.null(tau)) "?" else format(signif(tau, 4))),
     "no trend")
 }
 

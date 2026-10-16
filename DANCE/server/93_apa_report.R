@@ -877,13 +877,48 @@ dance_apa_report <- function(values, input, title = NULL) {
               "it over the same window") else "; without a trend it is the MESOR",
             ". Amplitudes and acrophases are read off each cell's (cosine, sine) ",
             "coefficients, and acrophases are clock times.",
-            if (identical(ff$spec$trend, "exp_sat"))
-              paste0(" The saturating trend's time constant was held at ",
-                     dance_apa_num(ff$spec$tau, 1), " h, so the model estimates its ",
-                     "rise A per cell; the change is A times ",
-                     dance_apa_num(tw$end[[1]], 3), ".") else "",
+            if (identical(ff$spec$trend, "exp_sat")) paste0(
+              " The saturating trend's time constant was ",
+              switch(ff$tau_mode %|% "fixed",
+                profile = paste0("estimated for all cells by profile likelihood at ",
+                                 dance_apa_num(ff$spec$tau, 1), " h (95% profile interval ",
+                                 dance_apa_num(ff$tau_profile$ci[1], 1), " to ",
+                                 dance_apa_num(ff$tau_profile$ci[2], 1), " h); the tests are ",
+                                 "conditional on that value"),
+                fixed_after_flat = paste0("not identified by these data (the profile ",
+                                          "likelihood was flat), so it was held at ",
+                                          dance_apa_num(ff$spec$tau, 1), " h"),
+                paste0("held at ", dance_apa_num(ff$spec$tau, 1), " h")),
+              ", and the model estimates its rise A per cell; the change is A times ",
+              dance_apa_num(tw$end[[1]], 3), ", the share of A reached by the last ",
+              "observation.") else "",
             " Participant-level values are conditional modes and are not compared here.")
         blank()
+        # A, tau and A/tau per cell, from the nonlinear mixed model when it was fitted
+        sf <- ff$sat
+        if (identical(ff$spec$trend, "exp_sat") && isTRUE(sf$ok)) {
+          st <- sf$table
+          ci <- function(e, l, h, d = 2) paste0(dance_apa_num(e, d), " [", dance_apa_num(l, d),
+                                                ", ", dance_apa_num(h, d), "]")
+          add("**Saturating trend per cell.**"); blank()
+          L <- c(L, dance_md_table(data.frame(
+            Cell = st$cell,
+            `A [95% CI]` = ci(st$A, st$A_lo, st$A_hi),
+            `tau, h [95% CI]` = ci(st$tau, st$tau_lo, st$tau_hi, 1),
+            `A/tau [95% CI]` = ci(st$init_slope, st$init_slope_lo, st$init_slope_hi, 3),
+            check.names = FALSE, stringsAsFactors = FALSE))); blank()
+          add("A (the rise the trend approaches), tau (its time constant) and A/tau (the ",
+              "initial slope) were estimated in every cell by a nonlinear mixed-effects model ",
+              "(nlme; Pinheiro & Bates, 2000), with tau on the log scale and intervals on ",
+              sf$df, " degrees of freedom. Random structure: ", sf$re_label, ".",
+              if (isTRUE(sf$lrt$ok)) paste0(
+                " A model with one tau for all cells was compared against it by a ",
+                "likelihood-ratio test: chi-square(", sf$lrt$df, ") = ",
+                dance_apa_num(sf$lrt$statistic, 2), ", ", dance_apa_p(sf$lrt$p), ".")
+              else "")
+          for (f in dance_traj_sat_flags(sf)) add(" ", f)
+          blank()
+        }
       }
       # the omnibus tests the comparison tab computed, from its own cache: a
       # reactive, so this works inside the app and is skipped when the report is

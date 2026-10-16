@@ -117,19 +117,35 @@ ui_tab_harmonic <- tabItem(
                                nonlinear least squares. If fits are poor, try the log
                                trend.</em></small>"))
               ),
-              # The mixed model is linear in its coefficients, so tau cannot be
-              # estimated alongside them: it is held at this value and the model
-              # estimates A per cell. Visible here because it IS part of the
-              # model -- it used to be read from a hidden two-stage field.
+              # The mixed model is linear in its coefficients only for a given
+              # tau, so the trajectory model shares ONE tau across cells: held at
+              # a value, or estimated by profiling the likelihood. Estimating tau
+              # per cell is a nonlinear model of its own, offered below it.
+              # Visible here because tau IS part of the model -- it used to be
+              # read from a hidden two-stage field.
               conditionalPanel(
                 condition = "input.harmonic_approach == 'mixed'",
-                numericInput("harmonic_traj_tau", "\u03c4 held at (h):", value = 18,
-                             min = 0.5, max = 168, step = 0.5),
-                helpText(HTML("<small>The mixed model estimates the rise A per cell with
-                               τ <b>held</b> at this value, so every cell's trend has the
-                               same shape. Daan, Beersma &amp; Borb\u00e9ly (1984) give
-                               τ<sub>rise</sub> \u2248 18 h under extended
-                               wakefulness.</small>"))
+                radioButtons("harmonic_traj_tau_mode", "Time constant \u03c4:",
+                             choices = c("Hold \u03c4 at a value" = "fixed",
+                                         "Estimate one \u03c4 for all cells (profile likelihood)" = "profile"),
+                             selected = "fixed"),
+                conditionalPanel(
+                  condition = "input.harmonic_traj_tau_mode == 'fixed'",
+                  numericInput("harmonic_traj_tau", "\u03c4 held at (h):", value = 18,
+                               min = 0.5, max = 168, step = 0.5)),
+                helpText(HTML("<small>Every cell shares one τ and the model estimates
+                               the rise A per cell. Daan, Beersma &amp; Borb\u00e9ly
+                               (1984) give τ<sub>rise</sub> \u2248 18 h under extended
+                               wakefulness. Estimating τ refits the model at about 30
+                               values of τ, which takes roughly 15 to 20 times as long
+                               as one fit.</small>")),
+                checkboxInput("harmonic_traj_sat_cells",
+                              "Also estimate A and \u03c4 in every cell (nonlinear mixed model)",
+                              FALSE),
+                helpText(HTML("<small>Fits A, τ and the initial slope A/τ separately
+                               in each design cell (nlme), with intervals and tests,
+                               and tests whether one τ is enough. Shown on the
+                               comparison tab.</small>"))
               )
             ),
             conditionalPanel(
@@ -483,6 +499,23 @@ ui_tab_harmonic <- tabItem(
                                   selected = "cells", inline = TRUE),
                      plotlyOutput("harmonic_traj_levels_plot", height = "340px"),
                      uiOutput("harmonic_traj_levels_note"),
+
+                     # The saturating trend's own parameters per cell: the rise A,
+                     # the time constant tau and the initial slope A/tau -- from
+                     # the per-cell nonlinear model (mixed) or from the
+                     # per-participant fits (two-stage).
+                     conditionalPanel(
+                       condition = "input.harmonic_trend_type == 'exp_sat'",
+                       h5(tags$b("Saturating trend: A, \u03c4 and A/\u03c4"), style = "margin-top:14px"),
+                       uiOutput("harmonic_traj_sat_header"),
+                       radioButtons("harmonic_traj_sat_view", NULL,
+                                    choices = c("Estimates per cell" = "cells",
+                                                "Pairwise differences" = "pairs",
+                                                "Trend curves" = "curves",
+                                                "Profile of \u03c4" = "profile"),
+                                    selected = "cells", inline = TRUE),
+                       plotlyOutput("harmonic_traj_sat_plot", height = "340px"),
+                       uiOutput("harmonic_traj_sat_tests")),
 
                      hr(),
                      h4("Difference between two cells"),

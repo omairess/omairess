@@ -185,7 +185,7 @@ dance_traj_status <- function(m) {
 # ONE FIT at a given rung
 # ------------------------------------------------------------------------------
 dance_traj_fit_one <- function(spec, re_formula, engine = "lmer", REML = TRUE,
-                               cor_struct = NULL, fixed_formula = NULL) {
+                               cor_struct = NULL, fixed_formula = NULL, light = FALSE) {
   # fixed_formula overrides the spec's, so a REDUCED model can be built the same
   # way the full one was. stats::update() cannot do this job here: the recorded
   # call refers to `d` and `REML` by name, which exist only in this function's
@@ -225,7 +225,11 @@ dance_traj_fit_one <- function(spec, re_formula, engine = "lmer", REML = TRUE,
   }
   if (!requireNamespace("lme4", quietly = TRUE)) return(NULL)
   ctrl <- lme4::lmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 2e5))
-  fn <- if (requireNamespace("lmerTest", quietly = TRUE)) lmerTest::lmer else lme4::lmer
+  # `light` fits with lme4 alone: lmerTest's conversion computes what the
+  # Satterthwaite tests need, which a fit read only for its log-likelihood (a
+  # point of the tau profile) never uses -- same likelihood, half the time.
+  fn <- if (!isTRUE(light) && requireNamespace("lmerTest", quietly = TRUE)) lmerTest::lmer
+        else lme4::lmer
   tryCatch(fn(f, data = d, REML = REML, control = ctrl),
            error = function(e) NULL)
 }
@@ -253,7 +257,7 @@ dance_traj_fit_one <- function(spec, re_formula, engine = "lmer", REML = TRUE,
 # separate visits.
 dance_traj_fit <- function(spec, engine = c("lmer", "glmmTMB"), REML = TRUE,
                            residual_cor = c("none", "auto", "ar1", "ou"),
-                           ar1 = FALSE, max_rung = NULL) {
+                           ar1 = FALSE, max_rung = NULL, min_rung = 1L, light = FALSE) {
   engine <- match.arg(engine)
   residual_cor <- match.arg(residual_cor)
   if (isTRUE(ar1) && identical(residual_cor, "none")) residual_cor <- "ar1"
@@ -279,9 +283,14 @@ dance_traj_fit <- function(spec, engine = c("lmer", "glmmTMB"), REML = TRUE,
 
   ladder <- spec$re_ladder
   if (!is.null(max_rung)) ladder <- ladder[seq_len(min(max_rung, length(ladder)))]
+  # min_rung skips the richer structures already known not to converge -- the tau
+  # profile fits every grid point on ONE structure, so that the likelihoods it
+  # compares differ only in tau. The rungs keep their numbers in the full ladder.
+  min_rung <- max(1L, as.integer(min_rung %||% 1L))
   attempts <- list()
-  for (i in seq_along(ladder)) {
-    m <- dance_traj_fit_one(spec, ladder[[i]]$formula, engine, REML, cor_struct)
+  for (i in seq_along(ladder)[seq_along(ladder) >= min_rung]) {
+    m <- dance_traj_fit_one(spec, ladder[[i]]$formula, engine, REML, cor_struct,
+                            light = light)
     st <- dance_traj_status(m)
     attempts[[i]] <- c(list(rung = i, label = ladder[[i]]$label,
                             formula = ladder[[i]]$formula), st)
@@ -348,16 +357,36 @@ dance_traj_profile_tau <- function(d, period, n_harmonics, design_terms,
                                    covariates = character(0), t0 = NULL,
                                    tau_grid = NULL, engine = "lmer",
                                    REML = TRUE, interaction = "full",
-                                   flat_tol = 1.92) {
+                                   flat_tol = 1.92, roles = NULL, progress = NULL) {
   if (is.null(tau_grid)) {
     span <- diff(range(d$t, na.rm = TRUE))
     tau_grid <- exp(seq(log(max(span / 50, 1e-3)), log(span * 3), length.out = 24))
   }
-  rows <- lapply(tau_grid, function(tau) {
-    sp <- dance_traj_spec(d, period, n_harmonics, "exp_sat", design_terms,
-                          covariates, t0, tau, interaction = interaction)
+  spec_at <- function(tau) dance_traj_spec(d, period, n_harmonics, "exp_sat", design_terms,
+                                           covariates, t0, tau, interaction = interaction,
+                                           roles = roles)
+  # ONE RANDOM STRUCTURE FOR THE WHOLE PROFILE. Each grid point used to walk the
+  # random-effects ladder on its own, so a tau where the maximal structure failed
+  # was fitted with a simpler one -- and its log-likelihood, from a different
+  # model, was compared with its neighbours'. The structure is now chosen once,
+  # at the middle of the grid, and every grid point is fitted on it; a point
+  # where it does not converge is left out rather than refitted on another.
+  mid <- tau_grid[ceiling(length(tau_grid) / 2)]
+  sp_mid <- spec_at(mid)
+  ref <- if (isTRUE(sp_mid$ok)) dance_traj_fit(sp_mid, engine = engine, REML = FALSE,
+                                               light = TRUE) else NULL
+  if (is.null(ref) || !isTRUE(ref$ok))
+    return(list(ok = FALSE, message = paste(
+      "The model did not fit at the middle of the tau grid, so no random structure",
+      "could be chosen for the profile.", ref$message %||% sp_mid$message %||% "")))
+  rung <- ref$re_rung
+  rows <- lapply(seq_along(tau_grid), function(j) {
+    tau <- tau_grid[j]
+    if (is.function(progress)) progress(j, length(tau_grid))
+    sp <- spec_at(tau)
     if (!isTRUE(sp$ok)) return(NULL)
-    fit <- dance_traj_fit(sp, engine = engine, REML = FALSE)
+    fit <- dance_traj_fit(sp, engine = engine, REML = FALSE, min_rung = rung, max_rung = rung,
+                          light = TRUE)
     if (!isTRUE(fit$ok)) return(NULL)
     data.frame(tau = tau, logLik = as.numeric(stats::logLik(fit$model)),
                rung = fit$re_rung, stringsAsFactors = FALSE)
@@ -369,10 +398,57 @@ dance_traj_profile_tau <- function(d, period, n_harmonics, design_terms,
   best <- prof$tau[which.max(prof$logLik)]
   drop <- max(prof$logLik) - min(prof$logLik)
   flat <- drop < flat_tol
-  # profile interval: the tau whose log-likelihood is within 1.92 of the max
-  # (the usual chi-square(1)/2 cutoff)
-  inside <- prof$tau[prof$logLik >= max(prof$logLik) - flat_tol]
   at_edge <- best <= min(tau_grid) * 1.001 || best >= max(tau_grid) * 0.999
+
+  # REFINED BETWEEN THE GRID'S NEIGHBOURS. Adjacent grid points are about 24%
+  # apart, so the best grid point alone can miss the maximum by that much. A
+  # one-dimensional search on log tau between the best point's neighbours, on
+  # the same random structure, finds it to about 1%; the point is added to the
+  # profile, so what is reported is still a point of the profile.
+  ll_at <- function(tau) {
+    sp <- spec_at(tau)
+    if (!isTRUE(sp$ok)) return(NA_real_)
+    f <- dance_traj_fit(sp, engine = engine, REML = FALSE, min_rung = rung, max_rung = rung,
+                        light = TRUE)
+    if (isTRUE(f$ok)) as.numeric(stats::logLik(f$model)) else NA_real_
+  }
+  if (!flat && !at_edge) {
+    j <- match(best, prof$tau)
+    lo_t <- prof$tau[max(1L, j - 1L)]; hi_t <- prof$tau[min(nrow(prof), j + 1L)]
+    if (hi_t > lo_t) {
+      if (is.function(progress)) progress(length(tau_grid), length(tau_grid))
+      opt <- tryCatch(stats::optimize(function(lt) {
+        v <- ll_at(exp(lt)); if (is.finite(v)) -v else 1e100
+      }, interval = log(c(lo_t, hi_t)), tol = 0.01), error = function(e) NULL)
+      if (!is.null(opt) && is.finite(opt$objective) && -opt$objective > max(prof$logLik)) {
+        prof <- rbind(prof, data.frame(tau = exp(opt$minimum), logLik = -opt$objective,
+                                       rung = rung, stringsAsFactors = FALSE))
+        prof <- prof[order(prof$tau), , drop = FALSE]; rownames(prof) <- NULL
+        best <- exp(opt$minimum)
+      }
+    }
+  }
+  # profile interval: where the log-likelihood falls 1.92 below its maximum (the
+  # chi-square(1) 95% cutoff), interpolated linearly in log tau between the grid
+  # points either side of the crossing. A side that never falls that far within
+  # the grid is left open -- the interval is then a bound, and says so.
+  cut <- max(prof$logLik) - flat_tol
+  jb <- which.max(prof$logLik)
+  cross <- function(idx) {
+    for (j in idx) {
+      a <- j; b <- if (idx[1] < jb) j + 1L else j - 1L
+      if (prof$logLik[a] < cut && prof$logLik[b] >= cut) {
+        w <- (cut - prof$logLik[a]) / (prof$logLik[b] - prof$logLik[a])
+        return(exp(log(prof$tau[a]) + w * (log(prof$tau[b]) - log(prof$tau[a]))))
+      }
+    }
+    NA_real_
+  }
+  ci_lo <- if (jb > 1L) cross(rev(seq_len(jb - 1L))) else NA_real_
+  ci_hi <- if (jb < nrow(prof)) cross(seq.int(jb + 1L, nrow(prof))) else NA_real_
+  inside <- c(if (is.finite(ci_lo)) ci_lo else min(prof$tau),
+              if (is.finite(ci_hi)) ci_hi else max(prof$tau))
+  ci_open <- c(lower = !is.finite(ci_lo), upper = !is.finite(ci_hi))
 
   final <- NULL
   # A FLAT PROFILE SUPPRESSES THE FIT, it does not merely annotate it. If the
@@ -381,9 +457,12 @@ dance_traj_profile_tau <- function(d, period, n_harmonics, design_terms,
   # fitted model invites exactly the substantive inference the flatness rules
   # out. The profile itself is still returned, so the flatness is visible.
   if (!flat) {
-    sp <- dance_traj_spec(d, period, n_harmonics, "exp_sat", design_terms,
-                          covariates, t0, best, interaction = interaction)
-    if (isTRUE(sp$ok)) final <- dance_traj_fit(sp, engine = engine, REML = REML)
+    sp <- spec_at(best)
+    if (isTRUE(sp$ok)) {
+      final <- dance_traj_fit(sp, engine = engine, REML = REML, min_rung = rung)
+      # if the profile's structure does not converge by REML at the optimum, the
+      # ladder continues from there rather than reporting no fit
+    }
   }
 
   # TAU WAS ESTIMATED, AND THE FIT BELOW DOES NOT KNOW THAT.
@@ -423,6 +502,7 @@ dance_traj_profile_tau <- function(d, period, n_harmonics, design_terms,
   list(ok = TRUE, profile = prof, tau = best,
        ci = if (length(inside)) range(inside) else c(NA_real_, NA_real_),
        logLik_range = drop, flat = flat, at_edge = at_edge, fit = final,
+       rung = rung, grid = tau_grid, ci_open = ci_open,
        tau_estimated = TRUE,
        conditional_inference_warning = if (!is.null(final) && isTRUE(final$ok))
          final$tau_warning else NULL,

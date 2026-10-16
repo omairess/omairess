@@ -2280,6 +2280,10 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
                 row_data[[param_name]] <- fit_i$trend_params[[param_name]]$coef
                 row_data[[paste0(param_name, "_se")]] <- fit_i$trend_params[[param_name]]$se
               }
+              # the initial slope of a saturating rise, A/tau: how fast it starts
+              if (identical(as.character(trend_type), "exp_sat"))
+                row_data$init_slope <- (fit_i$trend_params$A_sat$coef %||% NA_real_) /
+                                       (fit_i$trend_params$tau$coef %||% NA_real_)
             }
 
             for(h in 1:n_harmonics) {
@@ -3345,8 +3349,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
          linear = "linear, beta*t",
          log = "logarithmic, beta*log(t + 1)",
          exp_sat = paste0("saturating exponential, A_sat*(1 - e^(-t/tau))",
-                          if (mixed && isTRUE(is.finite(ff$spec$tau)))
-                            sprintf("; tau held at %s h", fmt1(ff$spec$tau)) else ""),
+                          if (mixed && isTRUE(ff$ok)) paste0(". ", harmonic_tau_statement(ff)) else ""),
          trend_type))
     if (mixed && isTRUE(ff$ok)) {
       cls <- ff$spec$classification
@@ -3459,6 +3462,31 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
                   uu, if (mixed && isTRUE(is.finite(ff$spec$tau)))
                     sprintf("held at %s h", fmt1(ff$spec$tau)) else "in hours, estimated per participant"))
 
+    # The per-cell nonlinear model's block: A, tau and A/tau per cell with their
+    # intervals, whether one tau is enough, and where A and tau are not
+    # separately identified.
+    print_sat_block <- function(sf, dvu) {
+      if (is.null(sf)) return(invisible(NULL))
+      hdr("Saturating trend per cell (nonlinear mixed model)")
+      if (!isTRUE(sf$ok)) { cat("  Not available: ", sf$message, "\n", sep = ""); return(invisible(NULL)) }
+      un <- if (!is.null(dvu) && nzchar(dvu)) dvu else "response units"
+      cat(sprintf("  nlme, maximum likelihood; every parameter per cell, tau on the log scale.\n"))
+      cat(sprintf("  Random structure: %s. Intervals on %d df.\n", sf$re_label, sf$df))
+      for (i in seq_len(nrow(sf$table))) {
+        r <- sf$table[i, ]
+        cat(sprintf("  %-14s A %s [%s, %s] %s   tau %s [%s, %s] h   A/tau %s [%s, %s] %s/h   corr(A, log tau) %.2f\n",
+                    r$cell, fmt2(r$A), fmt2(r$A_lo), fmt2(r$A_hi), un,
+                    fmt2(r$tau), fmt2(r$tau_lo), fmt2(r$tau_hi),
+                    fmt3(r$init_slope), fmt3(r$init_slope_lo), fmt3(r$init_slope_hi), un,
+                    r$corr_A_logtau))
+      }
+      if (isTRUE(sf$lrt$ok))
+        cat(sprintf("  One tau for all cells? Likelihood-ratio chi2(%d) = %.2f, p %s (one tau = %s h).\n",
+                    sf$lrt$df, sf$lrt$statistic, dance_fmt_p(sf$lrt$p), fmt2(sf$lrt$tau_common)))
+      for (f in dance_traj_sat_flags(sf)) cat("  ! ", f, "\n", sep = "")
+      invisible(NULL)
+    }
+
     # ---- 5. the fitted equations ---------------------------------------------
     # The level of a curve, beside its harmonics: the intercept, the MESOR (one
     # midline per curve, which every harmonic oscillates about) and the change
@@ -3534,6 +3562,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       cat("\nAmplitude and acrophase are read off the cell's (cos, sin) fixed effects; their\n")
       cat("intervals and the between-cell tests are on the comparison tab. Participant-level\n")
       cat("(shrunken) estimates are in the individual table.\n")
+      if (identical(trend_type, "exp_sat")) print_sat_block(ff$sat, dvu)
     } else {
       if (is.null(pop)) return(invisible(NULL))
       hdr("Fitted equations (per-participant estimates, averaged)")
@@ -3581,6 +3610,27 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
         }
         cat("\nGroup differences are tested on the comparison tab, on the per-participant\n")
         cat("estimates (MANOVA, population-mean cosinor, Watson-Williams).\n")
+      }
+      if (identical(trend_type, "exp_sat")) {
+        gv <- harmonic_group_var_eff()
+        gvals <- if (!is.null(gv) && !identical(gv, "_none_")) values$covariates[[gv]] else NULL
+        tsf <- dance_ts_frame(mod, gvals)
+        sm <- if (!is.null(tsf)) dance_ts_sat_summary(tsf, mod) else NULL
+        if (isTRUE(sm$ok)) {
+          hdr("Saturating trend per group (means of the per-participant fits)")
+          un <- if (!is.null(dvu) && nzchar(dvu)) dvu else "response units"
+          for (cl in unique(sm$table$cell)) {
+            r <- function(q) sm$table[sm$table$quantity == q & sm$table$cell == cl, ]
+            a <- r("A_sat"); tq <- r("tau"); s0 <- r("init_slope")
+            cat(sprintf("  %-14s A %s [%s, %s] %s   tau %s [%s, %s] h   A/tau %s [%s, %s] %s/h  (n = %d)\n",
+                        cl, fmt2(a$estimate), fmt2(a$lo), fmt2(a$hi), un,
+                        fmt2(tq$estimate), fmt2(tq$lo), fmt2(tq$hi),
+                        fmt3(s0$estimate), fmt3(s0$lo), fmt3(s0$hi), un, as.integer(a$n)))
+          }
+          cat("  95% t intervals across participants. Each participant's fit estimates A and tau\n")
+          cat("  jointly; over a short recording they trade off, so A/tau and the change over the\n")
+          cat("  recording are steadier than A or tau alone.\n")
+        }
       }
     }
 
@@ -3749,7 +3799,8 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
         push("Non-periodic change over the recording", tb$change)
       }
       for (tm in ff$spec$trend_terms)
-        push(paste0("Trend: ", dance_traj_trend_coef_label(ff$spec$trend, ff$spec$tau, ff$dv_units)),
+        push(paste0("Trend: ", dance_traj_trend_coef_label(ff$spec$trend, ff$spec$tau, ff$dv_units,
+                                                 estimated = isTRUE(ff$tau_estimated))),
              tb[[tm]])
       for (h in seq_len(ff$spec$n_harmonics)) {
         push(paste0("Amplitude H", h), tb[[paste0("amplitude_", h)]])
@@ -3767,8 +3818,9 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
         push(lab2("change"), params$trend_change %||%
                dance_ts_trend_change(mod, params))
         for (tc in switch(tr2, linear = "trend_linear", log = "trend_log",
-                          exp_sat = c("A_sat", "tau"), character(0)))
-          push(paste0("Trend: ", lab2(tc)), params[[tc]])
+                          exp_sat = c("A_sat", "tau", "init_slope"), character(0)))
+          push(paste0("Trend: ", lab2(tc)),
+               params[[tc]] %||% if (identical(tc, "init_slope")) params$A_sat / params$tau)
       }
       for (h in seq_len(mod$n_harmonics)) {
         push(paste0("Amplitude H", h), params[[paste0("amplitude_", h)]])
@@ -4528,6 +4580,8 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       if("tau" %in% names(params)) {
         display_df$Tau_hrs <- round(params$tau, 2)
       }
+      if (all(c("A_sat", "tau") %in% names(params)))
+        display_df$Init_slope_A_per_tau <- round(params$init_slope %||% (params$A_sat / params$tau), 3)
     }
     
     # Add columns for each harmonic
@@ -4749,34 +4803,99 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       return(list(ok = FALSE, message = paste("Could not build the model frame:",
                                               conditionMessage(attr(d, "condition")))))
     trend <- mod$trend_type %||% "none"
-    # tau has its OWN input, shown beside the trend choice when the mixed model
-    # and the saturating trend are both selected. It used to be read from the
-    # two-stage free-vs-fixed check, an input that is hidden under the mixed
-    # approach -- so the mixed fit held tau at that field's default of 18 h and
-    # nothing on screen said where the number came from.
-    tau <- if (identical(trend, "exp_sat"))
-      suppressWarnings(as.numeric(input$harmonic_traj_tau %||% NA)) else NULL
-    if (identical(trend, "exp_sat") && (length(tau) != 1L || !is.finite(tau) || tau <= 0))
+    # TAU, the saturating trend's time constant. The model is linear in its
+    # coefficients only for a GIVEN tau, so tau is either held at the value the
+    # user sets or estimated once for all cells by profiling the likelihood.
+    # Its own inputs, shown beside the trend choice: it used to be read from the
+    # two-stage free-vs-fixed check, an input hidden under the mixed approach,
+    # so the fit held tau at that field's default of 18 h and nothing on screen
+    # said where the number came from.
+    sat <- identical(trend, "exp_sat")
+    tau_mode <- if (sat) (input$harmonic_traj_tau_mode %||% "fixed") else "none"
+    tau_user <- suppressWarnings(as.numeric(input$harmonic_traj_tau %||% NA))
+    tau_user_ok <- length(tau_user) == 1L && is.finite(tau_user) && tau_user > 0
+    if (sat && identical(tau_mode, "fixed") && !tau_user_ok)
       return(list(ok = FALSE, message = paste(
         "A saturating trend needs a time constant. Set tau under Model",
-        "Specification: the mixed model is linear in its coefficients, so tau is",
-        "held at the value given and the model estimates the rise A.")))
+        "Specification, or choose to estimate it: the mixed model is linear in its",
+        "coefficients only for a given tau.")))
+    period <- mod$period %||% 24
+    K <- mod$n_harmonics %||% 1
 
-    withProgress(message = "Fitting the mixed-effects cosinor...", value = 0.3, {
-      sp <- dance_traj_spec(d, period = mod$period %||% 24,
-                            n_harmonics = mod$n_harmonics %||% 1,
-                            trend = trend, tau = tau, roles = roles)
+    fit_at <- function(tau) {
+      sp <- dance_traj_spec(d, period = period, n_harmonics = K, trend = trend,
+                            tau = tau, roles = roles)
       if (!isTRUE(sp$ok)) return(list(ok = FALSE, message = sp$message))
-      incProgress(0.4)
-      ff <- dance_traj_fit(sp)
+      dance_traj_fit(sp)
+    }
+    if (identical(tau_mode, "profile")) {
+      pr <- withProgress(message = "Profiling the likelihood over tau...", value = 0, {
+        dance_traj_profile_tau(d, period, K, design_terms = NULL, roles = roles,
+                               progress = function(j, n) setProgress(
+                                 j / (n + 1), detail = sprintf("grid point %d of %d", j, n)))
+      })
+      if (!isTRUE(pr$ok)) return(list(ok = FALSE, message = pr$message))
+      # the profile without its fitted model, which IS ff below
+      prof <- pr[c("profile", "tau", "ci", "ci_open", "flat", "at_edge", "logLik_range",
+                   "message", "rung", "grid")]
+      if (!is.null(pr$fit) && isTRUE(pr$fit$ok)) {
+        ff <- pr$fit
+        ff$tau_mode <- "profile"
+      } else {
+        # A FLAT PROFILE: the data do not identify tau, so the profile helper
+        # returns no fit at its argmax. The model is fitted at the value the user
+        # set (18 h when there is none) and says so everywhere tau is reported.
+        ff <- withProgress(message = "Fitting the mixed-effects cosinor...", value = 0.5,
+                           fit_at(if (tau_user_ok) tau_user else 18))
+        if (!isTRUE(ff$ok)) return(list(ok = FALSE, message = ff$message))
+        ff$tau_mode <- "fixed_after_flat"
+      }
+      ff$tau_profile <- prof
+    } else {
+      ff <- withProgress(message = "Fitting the mixed-effects cosinor...", value = 0.5,
+                         fit_at(if (sat) tau_user else NULL))
       if (!isTRUE(ff$ok)) return(list(ok = FALSE, message = ff$message))
-      incProgress(0.3)
-      # the offset that turns this model's elapsed axis back into clock time,
-      # carried on the fit so every panel converts the same way
-      ff$clock_origin <- dance_clock_origin(mod)
-      ff$dv_units <- mod$dv_units
-      ff
-    })
+      ff$tau_mode <- tau_mode
+    }
+    # the offset that turns this model's elapsed axis back into clock time,
+    # carried on the fit so every panel converts the same way
+    ff$clock_origin <- dance_clock_origin(mod)
+    ff$dv_units <- mod$dv_units
+
+    # A AND TAU IN EVERY CELL, on request: a nonlinear mixed model (nlme), the
+    # only way to compare tau itself, and the initial slope A/tau, between cells.
+    # The trajectory model above keeps one tau, so its block tests compare curves
+    # on one basis.
+    if (sat && isTRUE(input$harmonic_traj_sat_cells)) {
+      ff$sat <- withProgress(
+        message = "Estimating A and tau in every cell (nonlinear mixed model)...", value = 0.1,
+        dance_traj_sat_fit(ff, progress = function(msg) incProgress(0.3, detail = msg)))
+    }
+    ff
+  }
+
+  # Where the trajectory model's tau came from, in one sentence: held at a value,
+  # estimated by profile likelihood (with its interval), or held because the
+  # profile was flat. Said wherever tau is reported, so no reader has to guess.
+  harmonic_tau_statement <- function(ff) {
+    sp <- ff$spec
+    if (!identical(sp$trend, "exp_sat")) return("")
+    pr <- ff$tau_profile
+    f3 <- function(x) format(signif(x, 3))
+    switch(ff$tau_mode %||% "fixed",
+      profile = {
+        lo <- if (isTRUE(pr$ci_open[["lower"]])) paste("below", f3(pr$ci[1])) else f3(pr$ci[1])
+        hi <- if (isTRUE(pr$ci_open[["upper"]])) paste("above", f3(pr$ci[2])) else f3(pr$ci[2])
+        sprintf(paste("The trajectory model's \u03c4 was estimated for all cells by profile",
+                      "likelihood: %s h (95%% profile interval %s to %s h)%s. Its tests are",
+                      "conditional on that value."), f3(sp$tau), lo, hi,
+                if (isTRUE(pr$at_edge)) "; the estimate sits at the edge of the search grid, so it is a bound" else "")
+      },
+      fixed_after_flat = sprintf(paste(
+        "\u03c4 is not identified by these data: the profile likelihood varies by only %.2f",
+        "over the search grid, so the trajectory model holds \u03c4 at %s h instead of",
+        "quoting an arbitrary point of a flat profile."), pr$logLik_range %||% NA_real_, f3(sp$tau)),
+      sprintf("The trajectory model holds \u03c4 at %s h, set under Model Specification.", f3(sp$tau)))
   }
 
   # What every mixed-effects panel reads. Under the two-stage approach there is
@@ -5066,6 +5185,8 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
                                  "the right choice while exploring; switch back before you report."),
                            format(ff$spec$n_obs, big.mark = ","), est))
         },
+        if (identical(ff$spec$trend, "exp_sat"))
+          tags$div(style = "font-size:12px;color:#555;margin-top:4px", harmonic_tau_statement(ff)),
         if (!isTRUE(cal$validated))
           tags$div(style = "font-size:11px;color:#8a5a12;margin-top:6px", cal$calibration)
         else tags$div(style = "font-size:11px;color:#8a5a12;margin-top:6px",
@@ -5230,7 +5351,8 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
              circadian = "Rhythmic block (all harmonics)",
              trend = paste0("Non-periodic trend: ",
                             dance_traj_trend_coef_label(ff$spec$trend, ff$spec$tau,
-                                                        ff$dv_units)),
+                                                        ff$dv_units,
+                                                        estimated = isTRUE(ff$tau_estimated))),
              intercept = if (no_trend) "Intercept = MESOR (no trend)"
                          else "Intercept (midline at the first observation)",
              mesor = "MESOR (midline averaged over the window)",
@@ -5515,7 +5637,8 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       " Each curve ends at its cell's non-periodic change over the recording, which is",
       " estimated and compared under <i>Intercept, MESOR and change</i> below. The model",
       " has one trend coefficient per cell (the ",
-      dance_traj_trend_coef_label(ff$spec$trend, ff$spec$tau, ff$dv_units),
+      dance_traj_trend_coef_label(ff$spec$trend, ff$spec$tau, ff$dv_units,
+                                                 estimated = isTRUE(ff$tau_estimated)),
       "), so every cell's curve has the same shape scaled by that coefficient: the curves",
       " differ anywhere exactly when they differ at the end, and the change's test is the",
       " coefficient's test.") else ""
@@ -5557,6 +5680,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     sp <- ff$spec
     c(ls, list(
       approach = "mixed", trend = sp$trend %||% "none", tau = sp$tau,
+      tau_estimated = isTRUE(ff$tau_estimated),
       units = ff$dv_units, n_cells = length(unique(ls$table$cell)),
       wc = dance_window_clock(sp$t0, max(sp$data$t, na.rm = TRUE),
                               ff$clock_origin %||% 0, sp$period %||% 24),
@@ -5573,87 +5697,118 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       q)
   }
 
+  # DOT-AND-WHISKER PANELS, one per quantity: per-cell estimates with their
+  # intervals, or the pairwise differences as a forest plot. Shared by the
+  # intercept / MESOR panel and the saturating-trend panel, so the two read the
+  # same way. `tab` has quantity, cell, estimate, lo, hi; `res` is one pairwise
+  # result per quantity (cell1, cell2, estimate, lo, hi, p_raw, p_adj), and a
+  # result flagged `ratio` is drawn on a log axis around 1 instead of 0.
+  dw_msg <- function(m) plotly_empty() %>% layout(title = list(text = m, font = list(size = 12)))
+  # readable ticks for a log axis: 1-2-5 steps inside the range, instead of
+  # plotly's default of labelling every minor tick
+  dw_log_ticks <- function(rng) {
+    v <- as.vector(outer(c(1, 2, 5), 10^(-3:3)))
+    v <- v[v >= rng[1] / 1.0001 & v <= rng[2] * 1.0001]
+    if (length(v) < 2L) return(list())
+    list(tickmode = "array", tickvals = v, ticktext = format(v, trim = TRUE, drop0trailing = TRUE))
+  }
+  dw_fmt <- function(x) formatC(x, digits = 3, format = "f")
+  dw_cells_plot <- function(tab, qs, axis_lab, ytitle, unit_of = function(q) NULL) {
+    cells <- unique(tab$cell)
+    cols <- dance_group_colors(cells)
+    xx <- seq_along(cells)
+    panels <- lapply(qs, function(q) {
+      d <- tab[tab$quantity == q, , drop = FALSE]
+      d <- d[match(cells, d$cell), , drop = FALSE]
+      u <- unit_of(q)
+      p <- plot_ly()
+      for (k in seq_along(cells)) {
+        cl <- cells[k]
+        if (!is.finite(d$estimate[k])) next
+        # no legend: the axis names each cell, in the trajectories' colours
+        p <- p %>% add_markers(
+          x = xx[k], y = d$estimate[k], name = cl, showlegend = FALSE,
+          error_y = list(type = "data", symmetric = FALSE,
+                         array = d$hi[k] - d$estimate[k], arrayminus = d$estimate[k] - d$lo[k],
+                         color = cols[[cl]], thickness = 1.5, width = 5),
+          marker = list(color = cols[[cl]], size = 10),
+          text = sprintf("%s<br>%s [%s, %s]%s", cl, dw_fmt(d$estimate[k]), dw_fmt(d$lo[k]),
+                         dw_fmt(d$hi[k]), if (is.null(u)) "" else paste0(" ", u)),
+          hoverinfo = "text")
+      }
+      p %>% layout(
+        xaxis = list(title = list(text = axis_lab(q), font = list(size = 11)),
+                     tickmode = "array", tickvals = xx, ticktext = cells,
+                     range = c(0.4, length(cells) + 0.6)),
+        yaxis = list(title = ytitle(q)))
+    })
+    p <- if (length(panels) == 1L) panels[[1]] else
+      subplot(panels, nrows = 1, shareY = FALSE, titleX = TRUE, titleY = TRUE, margin = 0.06)
+    p %>% layout(showlegend = FALSE, hovermode = "closest")
+  }
+  dw_pairs_plot <- function(res, qs, axis_lab, adj) {
+    ok <- vapply(res[qs], function(r) isTRUE(r$ok), logical(1))
+    if (!any(ok)) return(dw_msg(res[[qs[1]]]$message %||% "No pairwise difference could be formed."))
+    # one row per pair, in one order for every panel, so the panels share their
+    # y axis and the pair names are printed once, on the left
+    pair_lab <- function(tb) sprintf("%s - %s", tb$cell1, tb$cell2)
+    all_pairs <- unique(unlist(lapply(res[qs[ok]], function(r) pair_lab(r$table))))
+    n <- length(all_pairs)
+    panels <- lapply(qs[ok], function(q) {
+      tb <- res[[q]]$table
+      ratio <- isTRUE(res[[q]]$ratio)
+      lab <- pair_lab(tb)
+      yy <- n + 1 - match(lab, all_pairs)
+      ref <- if (ratio) 1 else 0
+      plot_ly() %>%
+        add_segments(x = ref, xend = ref, y = 0.5, yend = n + 0.5, showlegend = FALSE,
+                     hoverinfo = "skip", line = list(color = "#999", width = 1, dash = "dot")) %>%
+        add_markers(x = tb$estimate, y = yy, showlegend = FALSE,
+                    error_x = list(type = "data", symmetric = FALSE,
+                                   array = tb$hi - tb$estimate,
+                                   arrayminus = tb$estimate - tb$lo,
+                                   color = "#1F6B4A", thickness = 1.5, width = 4),
+                    marker = list(color = "#1F6B4A", size = 9),
+                    text = sprintf("%s<br>%s%s [%s, %s]<br>p %s, %s-adjusted %s",
+                                   if (ratio) sub(" - ", " / ", lab) else lab,
+                                   if (ratio) "ratio " else ifelse(tb$estimate >= 0, "+", ""),
+                                   dw_fmt(tb$estimate), dw_fmt(tb$lo), dw_fmt(tb$hi),
+                                   vapply(tb$p_raw, dance_fmt_p, character(1)),
+                                   res[[q]]$adjust %||% adj,
+                                   vapply(tb$p_adj, dance_fmt_p, character(1))),
+                    hoverinfo = "text") %>%
+        layout(xaxis = c(list(title = list(text = axis_lab(q), font = list(size = 11)),
+                              zeroline = FALSE),
+                         if (ratio) c(list(type = "log"),
+                                      dw_log_ticks(range(c(tb$lo, tb$hi), na.rm = TRUE)))
+                         else NULL),
+               yaxis = list(tickmode = "array", tickvals = rev(seq_len(n)), ticktext = all_pairs,
+                            range = c(0.4, n + 0.6), automargin = TRUE))
+    })
+    p <- if (length(panels) == 1L) panels[[1]] else
+      subplot(panels, nrows = 1, shareY = TRUE, titleX = TRUE, titleY = TRUE, margin = 0.02)
+    p %>% layout(showlegend = FALSE, hovermode = "closest")
+  }
+
   output$harmonic_traj_levels_plot <- renderPlotly({
     lv <- harmonic_traj_levels()
-    msg_plot <- function(m) plotly_empty() %>% layout(title = list(text = m, font = list(size = 12)))
-    if (!isTRUE(lv$ok)) return(msg_plot(lv$message %||% ""))
+    if (!isTRUE(lv$ok)) return(dw_msg(lv$message %||% ""))
     view <- input$harmonic_traj_level_view %||% "cells"
     qs <- lv$quantities
     u <- if (!is.null(lv$units) && nzchar(lv$units)) lv$units else NULL
-    fmt <- function(x) formatC(x, digits = 3, format = "f")
+    axis_lab <- function(q) harmonic_level_axis_label(lv, q)
     if (identical(view, "pairs")) {
-      if ((lv$n_cells %||% 1L) < 2) return(msg_plot("Only one cell: there is no difference to show."))
+      if ((lv$n_cells %||% 1L) < 2) return(dw_msg("Only one cell: there is no difference to show."))
       adj <- input$harmonic_traj_adjust %||% "holm"
       res <- withProgress(message = "Testing the pairwise differences...", value = 0, {
         lapply(qs, function(q) { incProgress(1 / length(qs)); lv$pair(q, adj) })
       })
       names(res) <- qs
-      ok <- vapply(res, function(r) isTRUE(r$ok), logical(1))
-      if (!any(ok)) return(msg_plot(res[[1]]$message %||% "No pairwise difference could be formed."))
-      # one row per pair, in one order for every panel, so the panels share
-      # their y axis and the pair names are printed once, on the left
-      pair_lab <- function(tb) sprintf("%s - %s", tb$cell1, tb$cell2)
-      all_pairs <- unique(unlist(lapply(res[ok], function(r) pair_lab(r$table))))
-      n <- length(all_pairs)
-      panels <- lapply(qs[ok], function(q) {
-        tb <- res[[q]]$table
-        lab <- pair_lab(tb)
-        yy <- n + 1 - match(lab, all_pairs)
-        plot_ly() %>%
-          add_segments(x = 0, xend = 0, y = 0.5, yend = n + 0.5, showlegend = FALSE,
-                       hoverinfo = "skip", line = list(color = "#999", width = 1, dash = "dot")) %>%
-          add_markers(x = tb$estimate, y = yy, showlegend = FALSE,
-                      error_x = list(type = "data", symmetric = FALSE,
-                                     array = tb$hi - tb$estimate,
-                                     arrayminus = tb$estimate - tb$lo,
-                                     color = "#1F6B4A", thickness = 1.5, width = 4),
-                      marker = list(color = "#1F6B4A", size = 9),
-                      text = sprintf("%s<br>%s%s [%s, %s]<br>p %s, %s-adjusted %s", lab,
-                                     ifelse(tb$estimate >= 0, "+", ""), fmt(tb$estimate),
-                                     fmt(tb$lo), fmt(tb$hi),
-                                     vapply(tb$p_raw, dance_fmt_p, character(1)),
-                                     res[[q]]$adjust %||% adj,
-                                     vapply(tb$p_adj, dance_fmt_p, character(1))),
-                      hoverinfo = "text") %>%
-          layout(xaxis = list(title = list(text = harmonic_level_axis_label(lv, q),
-                                           font = list(size = 11)), zeroline = FALSE),
-                 yaxis = list(tickmode = "array", tickvals = rev(seq_len(n)), ticktext = all_pairs,
-                              range = c(0.4, n + 0.6), automargin = TRUE))
-      })
-      shared_y <- TRUE
-    } else {
-      shared_y <- FALSE
-      cells <- unique(lv$table$cell)
-      cols <- dance_group_colors(cells)
-      xx <- seq_along(cells)
-      panels <- lapply(qs, function(q) {
-        d <- lv$table[lv$table$quantity == q, , drop = FALSE]
-        d <- d[match(cells, d$cell), , drop = FALSE]
-        p <- plot_ly()
-        for (k in seq_along(cells)) {
-          cl <- cells[k]
-          # no legend: the axis names each cell, in the trajectories' colours
-          p <- p %>% add_markers(
-            x = xx[k], y = d$estimate[k], name = cl, showlegend = FALSE,
-            error_y = list(type = "data", symmetric = FALSE,
-                           array = d$hi[k] - d$estimate[k], arrayminus = d$estimate[k] - d$lo[k],
-                           color = cols[[cl]], thickness = 1.5, width = 5),
-            marker = list(color = cols[[cl]], size = 10),
-            text = sprintf("%s<br>%s [%s, %s]%s", cl, fmt(d$estimate[k]), fmt(d$lo[k]),
-                           fmt(d$hi[k]), if (is.null(u)) "" else paste0(" ", u)),
-            hoverinfo = "text")
-        }
-        p %>% layout(
-          xaxis = list(title = list(text = harmonic_level_axis_label(lv, q), font = list(size = 11)),
-                       tickmode = "array", tickvals = xx, ticktext = cells,
-                       range = c(0.4, length(cells) + 0.6)),
-          yaxis = list(title = if (identical(q, qs[1])) (u %||% "Response units") else ""))
-      })
+      return(dw_pairs_plot(res, qs, axis_lab, adj))
     }
-    p <- if (length(panels) == 1L) panels[[1]] else
-      subplot(panels, nrows = 1, shareY = shared_y, titleX = TRUE, titleY = TRUE,
-              margin = if (shared_y) 0.02 else 0.06)
-    p %>% layout(showlegend = FALSE, hovermode = "closest")
+    dw_cells_plot(lv$table, qs, axis_lab,
+                  ytitle = function(q) if (identical(q, qs[1])) (u %||% "Response units") else "",
+                  unit_of = function(q) u)
   })
 
   output$harmonic_traj_levels_note <- renderUI({
@@ -5671,12 +5826,11 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       "<b>Change</b>: how far the trend moves the midline from ", win,
       " -- the end of the <i>non-periodic change from origin</i> view, in the response's units.")
     trend_txt <- if (!isTRUE(lv$has_trend)) NULL else if (mixed) {
-      tw <- lv$window
-      e <- if (!is.null(tw) && length(tw$end)) tw$end[[1]] else NA_real_
       sprintf(paste(" The model estimates one trend coefficient per cell, the %s, so the change is",
-                    "%s times it and testing the change <b>is</b> testing that coefficient."),
-              dance_traj_trend_coef_label(lv$trend, lv$tau, lv$units),
-              formatC(e, digits = 4, format = "g"))
+                    "that coefficient times %s, and testing the change <b>is</b> testing that",
+                    "coefficient."),
+              dance_traj_trend_coef_label(lv$trend, lv$tau, lv$units, estimated = isTRUE(lv$tau_estimated)),
+              dance_traj_change_factor_text(lv$window))
     } else if (identical(lv$trend, "exp_sat")) {
       paste(" Each participant's change uses their own rise A and time constant tau,",
             "so it summarises both saturating parameters in one number, in the response's units.")
@@ -5694,6 +5848,222 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     }
     tags$div(style = "font-size:11px;color:#777;margin-top:4px",
              HTML(paste0(what, trend_txt %||% "", " ", how)))
+  })
+
+  # ---- 3c. THE SATURATING TREND: A, TAU AND A/TAU ----------------------------
+  # Mixed: from the per-cell nonlinear model when it was requested (08i), and the
+  # tau profile when tau was estimated for all cells. Two-stage: group means of
+  # the per-participant A, tau and A/tau. Same plots either way.
+  harmonic_traj_satinfo <- reactive({
+    mod <- values$harmonic_model
+    if (is.null(mod)) return(list(ok = FALSE, message = "Press Run Harmonic Regression first."))
+    if (!identical(mod$trend_type %||% "none", "exp_sat"))
+      return(list(ok = FALSE, message = "The fitted model has no saturating trend."))
+    if (!harmonic_is_mixed()) {
+      ts <- harmonic_ts()
+      if (is.null(ts) || !isTRUE(ts$ok)) return(list(ok = FALSE, message = ts$message %||% ""))
+      sm <- dance_ts_sat_summary(ts$df, mod)
+      if (!isTRUE(sm$ok)) return(sm)
+      return(list(ok = TRUE, approach = "two_stage", table = sm$table, units = mod$dv_units,
+                  n_cells = ts$n_groups, mod = mod, df = ts$df,
+                  pair = function(q, adj) dance_ts_pairwise(ts$df, mod, q, adjust = adj),
+                  curves = function() dance_ts_sat_curves(ts$df, mod),
+                  clock_origin = dance_clock_origin(mod), t0 = min(mod$time_vec, na.rm = TRUE),
+                  period = mod$period %||% 24))
+    }
+    ff <- harmonic_traj()
+    if (!isTRUE(ff$ok)) return(list(ok = FALSE, message = ff$message))
+    sf <- ff$sat
+    have <- !is.null(sf) && isTRUE(sf$ok)
+    tab <- if (have) {
+      st <- sf$table
+      rbind(data.frame(quantity = "A_sat", cell = st$cell, estimate = st$A, lo = st$A_lo,
+                       hi = st$A_hi, stringsAsFactors = FALSE),
+            data.frame(quantity = "tau", cell = st$cell, estimate = st$tau, lo = st$tau_lo,
+                       hi = st$tau_hi, stringsAsFactors = FALSE),
+            data.frame(quantity = "init_slope", cell = st$cell, estimate = st$init_slope,
+                       lo = st$init_slope_lo, hi = st$init_slope_hi, stringsAsFactors = FALSE))
+    } else NULL
+    list(ok = TRUE, approach = "mixed", ff = ff, sf = sf, have = have, table = tab,
+         units = ff$dv_units, n_cells = if (have) sf$n_cells else nrow(dance_traj_cell_grid(ff$spec)),
+         pair = function(q, adj) if (have) dance_traj_sat_pairwise(sf, q, adjust = adj)
+                                 else list(ok = FALSE, message = "Not estimated per cell."),
+         curves = function() if (have) dance_traj_sat_curves(sf) else NULL,
+         clock_origin = ff$clock_origin %||% 0, t0 = ff$spec$t0, period = ff$spec$period %||% 24)
+  })
+
+  harmonic_sat_axis_label <- function(q, units) switch(q,
+    A_sat = "Rise A", tau = "Time constant \u03c4", init_slope = "Initial slope A/\u03c4", q)
+  harmonic_sat_ytitle <- function(q, units) {
+    u <- if (is.null(units) || !nzchar(units)) "response units" else units
+    switch(q, A_sat = u, tau = "hours", init_slope = paste(u, "per hour"), "")
+  }
+
+  output$harmonic_traj_sat_header <- renderUI({
+    si <- harmonic_traj_satinfo()
+    note <- function(...) tags$div(style = "font-size:11px;color:#777;margin:2px 0 6px 0", HTML(paste0(...)))
+    # a model's error message goes into HTML below, so it is escaped first
+    esc <- function(x) gsub(">", "&gt;", gsub("<", "&lt;", gsub("&", "&amp;", x, fixed = TRUE),
+                                              fixed = TRUE), fixed = TRUE)
+    if (!isTRUE(si$ok)) return(note(si$message %||% ""))
+    if (identical(si$approach, "two_stage"))
+      return(note("Group means of the per-participant fits, each of which estimates A and ",
+                  "\u03c4 jointly; A/\u03c4 is each participant's own ratio. Over a short ",
+                  "recording A and \u03c4 trade off along a ridge, so a participant's A and ",
+                  "\u03c4 are individually unstable: A/\u03c4 and the change over the ",
+                  "recording are the steadier numbers."))
+    ff <- si$ff
+    tau_txt <- harmonic_tau_statement(ff)
+    if (!isTRUE(si$have))
+      return(note(tau_txt, " With one \u03c4 for every cell, A/\u03c4 differs between ",
+                  "cells only through A, which the trend row and the change above already ",
+                  "test. To estimate and compare \u03c4 and A/\u03c4 per cell, tick <i>Also ",
+                  "estimate A and \u03c4 in every cell</i> under Model Specification and run ",
+                  "again.",
+                  if (!is.null(si$sf) && !isTRUE(si$sf$ok))
+                    paste0("<br><span style='color:#8a5a12'>The per-cell model was requested ",
+                           "and did not fit: ", esc(si$sf$message), "</span>")
+                  else ""))
+    sf <- si$sf
+    lrt <- sf$lrt
+    lrt_txt <- if (isTRUE(lrt$ok))
+      sprintf(paste("<b>Is one \u03c4 enough?</b> Likelihood-ratio test, a \u03c4 per cell",
+                    "against one \u03c4 (%.3g h): &chi;&sup2;(%d) = %.2f, p %s."),
+              lrt$tau_common, lrt$df, lrt$statistic, dance_fmt_p(lrt$p))
+      else esc(lrt$message %||% "")
+    flags <- dance_traj_sat_flags(sf)
+    tagList(
+      note(sprintf(paste("Nonlinear mixed model (nlme, maximum likelihood): every parameter per",
+                         "cell, \u03c4 on the log scale; random structure: %s (%d of %d tried).",
+                         "Intervals and tests on %d df (participants minus between-participant",
+                         "cells)."), sf$re_label, sf$rung, sf$n_rungs, sf$df),
+           "<br>", lrt_txt, "<br>", tau_txt),
+      if (length(flags)) tags$div(style = "font-size:11px;color:#8a5a12;margin:2px 0 6px 0",
+                                  HTML(paste(flags, collapse = "<br>"))))
+  })
+
+  output$harmonic_traj_sat_plot <- renderPlotly({
+    si <- harmonic_traj_satinfo()
+    if (!isTRUE(si$ok)) return(dw_msg(si$message %||% ""))
+    view <- input$harmonic_traj_sat_view %||% "cells"
+    qs <- DANCE_TRAJ_SAT_PARS
+    if (identical(view, "profile")) {
+      pr <- if (identical(si$approach, "mixed")) si$ff$tau_profile else NULL
+      if (is.null(pr)) return(dw_msg(if (identical(si$approach, "mixed"))
+        "Tau was held at a value, not profiled: choose to estimate it under Model Specification."
+        else "Under two-stage, tau is estimated per participant; there is no shared profile."))
+      pf <- pr$profile
+      top <- max(pf$logLik); cut <- top - 1.92
+      # the region that matters: the maximum and the 1.92 cutoff below it. Grid
+      # points far down the profile (tiny tau) would squash it flat.
+      ylo <- top - 12
+      lt <- dw_log_ticks(range(pf$tau))
+      p <- plot_ly() %>%
+        add_lines(x = pf$tau, y = pf$logLik, line = list(color = "#1F6B4A", width = 2),
+                  name = "profile", hoverinfo = "text",
+                  text = sprintf("tau %.2f h<br>log-likelihood %.2f", pf$tau, pf$logLik)) %>%
+        add_markers(x = pf$tau, y = pf$logLik, marker = list(color = "#1F6B4A", size = 5),
+                    showlegend = FALSE, hoverinfo = "skip") %>%
+        add_segments(x = min(pf$tau), xend = max(pf$tau), y = cut, yend = cut,
+                     line = list(color = "#999", dash = "dot", width = 1), hoverinfo = "skip",
+                     name = "95% cutoff (max - 1.92)")
+      if (!isTRUE(pr$flat)) {
+        p <- p %>% add_markers(x = pr$tau, y = max(pf$logLik[abs(pf$tau - pr$tau) < 1e-9], top),
+                               marker = list(color = "#c0392b", size = 10), name = "estimate",
+                               hoverinfo = "text", text = sprintf("tau = %.2f h", pr$tau))
+        for (b in pr$ci[is.finite(pr$ci)])
+          p <- p %>% add_segments(x = b, xend = b, y = ylo, yend = cut, hoverinfo = "text",
+                                  text = sprintf("95%% profile interval end: %.2f h", b),
+                                  line = list(color = "#c0392b", dash = "dot", width = 1))
+      }
+      return(p %>% layout(xaxis = c(list(title = "Time constant \u03c4 (h)", type = "log"), lt),
+                          yaxis = list(title = "Profile log-likelihood (ML)", range = c(ylo, top + 1)),
+                          showlegend = FALSE, hovermode = "closest"))
+    }
+    if (identical(si$approach, "mixed") && !isTRUE(si$have))
+      return(dw_msg("A and tau were not estimated per cell (see the note above)."))
+    if (identical(view, "curves")) {
+      cv <- si$curves()
+      if (is.null(cv)) return(dw_msg("No trend curves to draw."))
+      cols <- dance_group_colors(cv$cells)
+      p <- plot_ly()
+      for (cl in cv$cells) {
+        d <- cv$table[cv$table$cell == cl, , drop = FALSE]
+        p <- p %>%
+          add_ribbons(x = d$tt, ymin = d$lo, ymax = d$hi, legendgroup = cl, name = cl,
+                      line = list(width = 0), fillcolor = dance_group_rgba(cols[[cl]], 0.16),
+                      showlegend = FALSE, hoverinfo = "skip") %>%
+          add_lines(x = d$tt, y = d$fit, legendgroup = cl, name = cl,
+                    line = list(color = cols[[cl]], width = 2.4))
+      }
+      brk <- pretty(range(cv$table$tt), n = 8)
+      brk <- brk[brk >= min(cv$table$tt) & brk <= max(cv$table$tt)]
+      return(p %>% layout(
+        xaxis = list(title = "Clock time", tickmode = "array", tickvals = brk,
+                     ticktext = dance_clock_label(brk + si$t0 + si$clock_origin, si$period,
+                                                  show_day = TRUE, with_minutes = FALSE)),
+        yaxis = list(title = sprintf("Non-periodic change from the first observation (%s)",
+                                     si$units %||% "response units")),
+        hovermode = "x unified", legend = list(orientation = "h", y = -0.2)))
+    }
+    if (identical(view, "pairs")) {
+      if ((si$n_cells %||% 1L) < 2) return(dw_msg("Only one cell: there is no difference to show."))
+      adj <- input$harmonic_traj_adjust %||% "holm"
+      res <- lapply(qs, function(q) si$pair(q, adj)); names(res) <- qs
+      lab <- function(q) paste0(harmonic_sat_axis_label(q, si$units),
+                                if (isTRUE(res[[q]]$ratio)) " (ratio)" else " (difference)")
+      return(dw_pairs_plot(res, qs, lab, adj))
+    }
+    dw_cells_plot(si$table, qs, function(q) harmonic_sat_axis_label(q, si$units),
+                  ytitle = function(q) harmonic_sat_ytitle(q, si$units),
+                  unit_of = function(q) harmonic_sat_ytitle(q, si$units))
+  })
+
+  # the omnibus tests per parameter: every cell equal, and each factorial effect
+  output$harmonic_traj_sat_tests <- renderUI({
+    si <- harmonic_traj_satinfo()
+    if (!isTRUE(si$ok) || (si$n_cells %||% 1L) < 2) return(NULL)
+    lab <- function(q) dance_traj_sat_label(q, si$units)
+    td <- function(x, mono = FALSE) tags$td(style = paste0("padding:3px 12px 3px 0", if (mono) ";font-family:monospace" else ""), x)
+    if (identical(si$approach, "two_stage")) {
+      cols <- c(A_sat = "A_sat", tau = "tau", init_slope = "init_slope")
+      rows <- lapply(names(cols), function(q) {
+        r <- dance_group_linear_test(si$df[[cols[[q]]]], si$df$group)
+        if (is.null(r)) return(NULL)
+        tags$tr(td(lab(q)), td("one-way ANOVA"), td(sprintf("F(%g, %g) = %.2f", r$df1, r$df2, r$F), TRUE),
+                td(dance_fmt_p(r$p), TRUE))
+      })
+      return(tagList(tags$table(style = "margin:4px 0", tags$tbody(rows)),
+                     tags$div(style = "font-size:11px;color:#777",
+                              "Pairwise comparisons of A, tau and A/tau are in the pairwise table below.")))
+    }
+    if (!isTRUE(si$have)) return(NULL)
+    ff <- si$ff; sf <- si$sf
+    dts <- ff$spec$design_terms
+    effects <- c(list(character(0)),
+                 if (length(dts) > 1L) unlist(lapply(seq_along(dts), function(k)
+                   utils::combn(dts, k, simplify = FALSE)), recursive = FALSE) else NULL)
+    rows <- list()
+    for (q in DANCE_TRAJ_SAT_PARS) for (ef in effects) {
+      r <- dance_traj_sat_test(sf, ff, q, ef)
+      if (!isTRUE(r$ok)) next
+      rows[[length(rows) + 1L]] <- tags$tr(
+        td(paste0(lab(q), if (length(ef)) paste0(" \u2014 ", paste(ef, collapse = " \u00d7 ")) else " \u2014 all cells equal")),
+        td(r$method), td(sprintf("F(%g, %g) = %.2f", r$df1, r$df2, r$statistic), TRUE),
+        td(dance_fmt_p(r$p), TRUE))
+    }
+    if (isTRUE(sf$lrt$ok))
+      rows[[length(rows) + 1L]] <- tags$tr(
+        td(paste0(lab("tau"), " \u2014 one \u03c4 for all cells")), td("likelihood ratio"),
+        td(sprintf("\u03c7\u00b2(%d) = %.2f", sf$lrt$df, sf$lrt$statistic), TRUE),
+        td(dance_fmt_p(sf$lrt$p), TRUE))
+    tagList(tags$table(style = "margin:4px 0", tags$tbody(rows)),
+            tags$div(style = "font-size:11px;color:#777", HTML(paste(
+              "Wald tests on the per-cell estimates of the nonlinear model; \u03c4 is tested on",
+              "the log scale, and A/\u03c4 through the delta method. The likelihood-ratio test",
+              "for \u03c4 compares the model with a \u03c4 per cell against the same model with",
+              "one \u03c4, and is the better test of the two for \u03c4.",
+              "Pairwise comparisons are in the pairwise table below."))))
   })
 
   # ---- 4. DIFFERENCE CURVE: one contrast, not two curves subtracted ---------
@@ -5810,15 +6180,80 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     }
     ff <- harmonic_traj()
     if (!isTRUE(ff$ok)) return()
-    ws <- dance_traj_pair_whats(ff)
-    ch <- stats::setNames(ws, vapply(ws, dance_traj_pair_label, character(1),
-                                     period = ff$spec$period,
-                                     n_harmonics = ff$spec$n_harmonics,
-                                     trend = ff$spec$trend %||% "none"))
+    ws <- harmonic_traj_whats(ff)
+    ch <- stats::setNames(ws, vapply(ws, function(w)
+      if (w %in% DANCE_TRAJ_SAT_PARS) dance_traj_sat_label(w, ff$dv_units)
+      else dance_traj_pair_label(w, period = ff$spec$period, n_harmonics = ff$spec$n_harmonics,
+                                 trend = ff$spec$trend %||% "none"), character(1)))
     sel <- fwd(isolate(input$harmonic_traj_what) %||% "intercept")
     updateSelectInput(session, "harmonic_traj_what", choices = ch,
                       selected = if (sel %in% ws) sel else "intercept")
   })
+
+  # The pairwise vocabulary of the mixed model: the trajectory model's own, and,
+  # when the per-cell nonlinear model was fitted, A, tau and A/tau after the
+  # level quantities.
+  harmonic_traj_whats <- function(ff) {
+    ws <- dance_traj_pair_whats(ff)
+    if (!isTRUE(ff$sat$ok)) return(ws)
+    k <- max(c(0L, which(ws %in% DANCE_TRAJ_LEVEL_QUANTITIES)))
+    append(ws, DANCE_TRAJ_SAT_PARS, after = k)
+  }
+
+  # A, tau and A/tau pairwise, from the per-cell nonlinear model: over the whole
+  # design, or inside each slice of the other factors (the simple effects).
+  harmonic_sat_pairwise_ui <- function(ff, what, adj, eff) {
+    sf <- ff$sat
+    dts <- ff$spec$design_terms
+    grid <- sf$grid
+    slices <- if (identical(eff, "_all_") || !(eff %in% dts)) list(list(title = NULL, cells = NULL))
+      else {
+        others <- setdiff(dts, eff)
+        lv <- lapply(others, function(f) levels(ff$spec$data[[f]])); names(lv) <- others
+        g2 <- expand.grid(lv, stringsAsFactors = FALSE)
+        lapply(seq_len(nrow(g2)), function(i) {
+          keep <- rep(TRUE, nrow(grid))
+          for (f in others) keep <- keep & as.character(grid[[f]]) == as.character(g2[[f]][i])
+          list(title = paste(sprintf("%s = %s", others, unlist(g2[i, , drop = FALSE])), collapse = ", "),
+               cells = grid$.cell[keep])
+        })
+      }
+    ratio <- identical(what, "tau")
+    blocks <- lapply(slices, function(sl) {
+      r <- dance_traj_sat_pairwise(sf, what, adjust = adj, cells = sl$cells)
+      if (!isTRUE(r$ok)) return(tags$div(style = "color:#8a5a12;font-size:12px", r$message))
+      tb <- r$table
+      hdr <- c("Pair", if (ratio) "Ratio" else "Estimate", "95% CI", "p", "p adj")
+      rows <- lapply(seq_len(nrow(tb)), function(i) {
+        z <- tb[i, ]
+        tags$tr(
+          tags$td(style = "padding:3px 12px 3px 0",
+                  sprintf(if (ratio) "%s / %s" else "%s vs %s", z$cell1, z$cell2)),
+          tags$td(style = "padding:3px 12px 3px 0;font-family:monospace",
+                  if (ratio) sprintf("%.3f", z$estimate) else sprintf("%+.3f", z$estimate)),
+          tags$td(style = "padding:3px 12px 3px 0;font-family:monospace",
+                  sprintf("[%.3f, %.3f]", z$lo, z$hi)),
+          tags$td(style = "padding:3px 12px 3px 0;font-family:monospace", dance_fmt_p(z$p_raw)),
+          tags$td(style = "padding:3px 0;font-family:monospace;font-weight:600", dance_fmt_p(z$p_adj)))
+      })
+      tagList(
+        if (!is.null(sl$title)) tags$div(style = "font-weight:600;margin-top:10px;font-size:13px", sl$title),
+        tags$table(style = "margin:4px 0",
+          tags$thead(tags$tr(lapply(hdr, function(h)
+            tags$th(style = "text-align:left;padding:2px 12px 2px 0;font-size:11px;color:#777;font-weight:500", h)))),
+          tags$tbody(rows)))
+    })
+    u <- if (is.null(ff$dv_units) || !nzchar(ff$dv_units)) "response units" else ff$dv_units
+    tagList(blocks, tags$div(style = "font-size:11px;color:#777;margin-top:8px", paste(
+      switch(what,
+        A_sat = sprintf("Difference in the saturating rise A, in %s.", u),
+        tau = "Ratio of the time constants; tested on the log scale, so a ratio of 1 is no difference.",
+        init_slope = sprintf("Difference in the initial slope A/tau, in %s per hour (delta method).", u)),
+      sprintf(paste("Wald t on %d df (participants minus between-participant cells), from the",
+                    "per-cell nonlinear mixed model.%s"), sf$df,
+              if (identical(adj, "none")) " NO multiplicity adjustment."
+              else sprintf(" p adj is %s-adjusted within each table.", adj)))))
+  }
 
   output$harmonic_traj_pairwise <- renderUI({
     if (!harmonic_is_mixed()) return(ts_pairwise())
@@ -5830,7 +6265,8 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     dts  <- ff$spec$design_terms
     if (identical(what, "amplitude")) what <- "amplitude1"
     if (identical(what, "phase")) what <- "phase1"
-    if (!what %in% dance_traj_pair_whats(ff)) what <- "intercept"
+    if (!what %in% harmonic_traj_whats(ff)) what <- "intercept"
+    if (what %in% DANCE_TRAJ_SAT_PARS) return(harmonic_sat_pairwise_ui(ff, what, adj, eff))
 
     res <- if (identical(eff, "_all_") || !(eff %in% dts)) {
       list(list(title = NULL, r = harmonic_traj_ct(what, adj, dfm)))

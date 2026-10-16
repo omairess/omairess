@@ -213,3 +213,70 @@ Corrected in this change:
 - The Export tab's cosinor summary was a separate text that printed β₀ as
   "MESOR" and ignored the mixed approach; it now writes the on-screen
   summary.
+
+
+## 6. tau: profiled for all cells, or estimated per cell with A and A/tau
+
+**The trajectory model's tau** (mixed approach, saturating trend) is either held
+at the value set under Model Specification or estimated once for all cells by
+profile likelihood (`dance_traj_profile_tau`, `server/08e`):
+
+- ML refits of the conditionally linear model on a 24-point log grid of tau
+  (span/50 to 3 x span), **all on one random structure** -- the one that
+  converges at the middle of the grid. Each grid point used to walk the
+  random-effects ladder on its own, so a point fitted on a simpler structure
+  had its log-likelihood compared with its neighbours' from a different model.
+- The maximum is refined between the best point's neighbours by a
+  one-dimensional search on log tau (`stats::optimize`, ~1% resolution); the
+  refined point is added to the profile.
+- The 95% profile interval is where the log-likelihood falls 1.92 below its
+  maximum (chi-square(1)), interpolated linearly in log tau between grid points;
+  a side that never falls that far is reported as open.
+- A flat profile (log-likelihood range < 1.92) means tau is not identified: the
+  helper returns no fit at its argmax, and the app holds tau at the value on
+  screen and says so.
+- The grid fits use `lme4::lmer` directly (`light = TRUE`): same likelihood as
+  `lmerTest::lmer`, half the time; the final REML fit at the estimate is an
+  ordinary `lmerTest` fit, and its tests are conditional on the estimated tau.
+
+**Per cell: A, tau and A/tau** (`server/08i_helpers_trajsat.R`), on request.
+A nonlinear mixed model, `nlme::nlme` (Pinheiro & Bates 2000), maximum
+likelihood:
+
+    y = b0[c] + A[c] (1 - exp(-t / exp(lt[c]))) + sum_h a_h[c] cos + b_h[c] sin
+        + participant random effects (diagonal; ladder: level + rise + rhythm,
+          level + rise, level; plus a curve-level intercept in within designs)
+
+- Starting values: the trajectory model's own cell values at its tau.
+- Covariance: `vcov()` times N / (N - p) -- nlme's `adjustSigma`, which its own
+  `summary()` and `anova(..., L = )` apply to ML fits. With it the Wald F here
+  equals `anova(fit, L = )` exactly (checked in `test-traj-sat.R`).
+- Denominator df: participants minus between-participant cells, for every
+  test and interval. **In-house choice**: nlme assigns the within-participant
+  df to every coefficient of a nonlinear model (597 on 48 participants x 14
+  times), far too generous for comparisons between groups of participants; this
+  is the between-within rule lme applies to between-participant terms.
+- tau: Wald on log tau, interval back-transformed (geometric, asymmetric in
+  hours); pairwise as a ratio. A: Wald. A/tau (the initial slope, the trend's
+  rate at the first observation): delta method from the joint covariance of
+  (A, log tau), gradient (1/tau, -A/tau) -- checked against a numerical
+  derivative.
+- "Is one tau enough?": the same model with one log tau, fitted by ML on the
+  same random structure; likelihood-ratio chi-square on (cells - 1) df. Equals
+  nlme's own `anova(fit_common, fit)`.
+- Trend curves per cell: A (1 - exp(-t/tau)) with a delta-method pointwise band.
+- Flags: |corr(A, log tau)| > 0.9 (A and tau not separately identified), and
+  tau longer than the recording (A is an extrapolation).
+
+**Two-stage**: each participant's A/tau (`init_slope`) from their own A_sat and
+tau, compared like every other per-participant scalar (ANOVA, Welch pairwise);
+group trend curves are the means of the participants' own A (1 - exp(-t/tau)).
+
+**The factor in the change's unit line** is the trend column at the last
+observation: T hours (linear), log(1 + T) (log), 1 - exp(-T/tau) (saturating:
+the share of A reached by the last observation -- 0.8162 for T = 31 h and
+tau = 18.3 h). It is now written out with T and tau.
+
+Tests: `tests/testthat/test-traj-sat.R` (51 expectations: recovery, nlme
+agreement, delta method, curves, flags, profile), `tests/traj_sat_app_test.R`
+(the Run button under each tau option, per cell, flat profile, two-stage).

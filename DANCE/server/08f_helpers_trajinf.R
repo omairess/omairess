@@ -264,9 +264,11 @@ dance_traj_calibration <- function(fit, method_kind = "kr", block = "circadian")
     out <- c(out, sprintf("it fits %d harmonics", spec$n_harmonics))
   if (!identical(spec$trend %||% "none", "none"))
     out <- c(out, sprintf(paste("it carries a '%s' trend term%s"), spec$trend,
-                          if (identical(spec$trend, "exp_sat"))
+                          if (!identical(spec$trend, "exp_sat")) ""
+                          else if (isTRUE(fit$tau_estimated))
                             " whose tau is profiled from the same data, so the reported degrees of freedom do not account for estimating it"
-                          else ""))
+                          else sprintf(" whose tau is held at %s h rather than estimated, so the trend's shape is assumed",
+                                       format(signif(spec$tau, 3)))))
   if (!identical(fit$engine %||% "lmer", "lmer"))
     out <- c(out, sprintf("it uses the %s engine, where Kenward-Roger is unavailable",
                           fit$engine))
