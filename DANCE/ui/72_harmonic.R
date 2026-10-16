@@ -33,10 +33,9 @@ ui_tab_harmonic <- tabItem(
               column(6, numericInput("harmonic_dv_min", "Lowest possible value:", value = NA, step = 1)),
               column(6, numericInput("harmonic_dv_max", "Highest possible value:", value = NA, step = 1))
             ),
-            helpText(HTML("Fitted values outside this range are flagged. With
-                           <i>M + A\u2081 + A\u2082</i> the trough of a reported pooled fit can
-                           sit below zero before the trend is added, which is
-                           structurally impossible for a non-negative scale.")),
+            helpText(HTML("Fitted values outside this range are flagged: a curve whose
+                           trough dips below zero, for instance, is impossible on a
+                           non-negative scale.")),
 
             hr(),
             # ================================================================
@@ -66,10 +65,13 @@ ui_tab_harmonic <- tabItem(
             # observation, always. Both the trend and the harmonics are anchored
             # there, so the intercept is the model value at the start of the
             # recording; axes and every acrophase still read in clock time.
-            numericInput("harmonic_period", "Fundamental Period (τ):", value = 24, min = 1, max = 168, step = 1),
+            # The period is P, not tau: tau is the saturating trend's time
+            # constant, and one symbol for two quantities made "tau held at
+            # 18 h" readable as a period.
+            numericInput("harmonic_period", "Fundamental period P:", value = 24, min = 1, max = 168, step = 1),
             helpText("Period in the same units as your time variable (e.g., 24 for circadian)."),
             sliderInput("n_harmonics", "Number of Harmonics:", min = 1, max = 8, value = 1, step = 1),
-            helpText("1 = fundamental (τ), 2 = adds τ/2, 3 = adds τ/3, etc."),
+            helpText("1 = fundamental (P), 2 = adds P/2, 3 = adds P/3, etc."),
             uiOutput("harmonic_warning_ui"),
             selectInput("harmonic_trend_type", "Non-periodic Trend Model:",
                         choices = c("None (circadian only)" = "none",
@@ -94,18 +96,48 @@ ui_tab_harmonic <- tabItem(
             ),
             conditionalPanel(
               condition = "input.harmonic_trend_type == 'linear'",
-              helpText(HTML("Y(t) = M + β·t + harmonics<br><small>Constant rate of change</small>"))
+              helpText(HTML("Y(t) = β<sub>0</sub> + β·t + harmonics<br><small>Constant rate of
+                             change: β is in response units per hour</small>"))
             ),
             conditionalPanel(
               condition = "input.harmonic_trend_type == 'log'",
-              helpText(HTML("Y(t) = M + β·log(t+1) + harmonics<br><small>Rapid initial change, slowing over time</small>"))
+              helpText(HTML("Y(t) = β<sub>0</sub> + β·log(t+1) + harmonics<br><small>Rapid initial
+                             change, slowing over time</small>"))
             ),
             conditionalPanel(
               condition = "input.harmonic_trend_type == 'exp_sat'",
-              helpText(HTML("Y(t) = M + A·(1-e<sup>-t/τ</sup>) + harmonics<br>
+              helpText(HTML("Y(t) = β<sub>0</sub> + A·(1-e<sup>-t/τ</sup>) + harmonics<br>
                             <small>Asymptotic saturation \u2014 the shape a homeostatic process is
-                            often assumed to take, fitted descriptively</small><br>
-                            <small><em>⚠️ Uses nonlinear least squares. If fit is poor, try Log trend instead.</em></small>"))
+                            often assumed to take, fitted descriptively. A is the rise above
+                            β<sub>0</sub> the trend approaches, in response units; τ is its
+                            time constant in hours.</small>")),
+              conditionalPanel(
+                condition = "input.harmonic_approach == 'two_stage'",
+                helpText(HTML("<small><em>Two-stage estimates A and τ for every participant by
+                               nonlinear least squares. If fits are poor, try the log
+                               trend.</em></small>"))
+              ),
+              # The mixed model is linear in its coefficients, so tau cannot be
+              # estimated alongside them: it is held at this value and the model
+              # estimates A per cell. Visible here because it IS part of the
+              # model -- it used to be read from a hidden two-stage field.
+              conditionalPanel(
+                condition = "input.harmonic_approach == 'mixed'",
+                numericInput("harmonic_traj_tau", "\u03c4 held at (h):", value = 18,
+                             min = 0.5, max = 168, step = 0.5),
+                helpText(HTML("<small>The mixed model estimates the rise A per cell with
+                               τ <b>held</b> at this value, so every cell's trend has the
+                               same shape. Daan, Beersma &amp; Borb\u00e9ly (1984) give
+                               τ<sub>rise</sub> \u2248 18 h under extended
+                               wakefulness.</small>"))
+              )
+            ),
+            conditionalPanel(
+              condition = "input.harmonic_trend_type != 'none'",
+              helpText(HTML("<small>β<sub>0</sub> is the <b>intercept</b>: the midline at the
+                             first observation, where the trend is zero. The <b>MESOR</b> is the
+                             midline β<sub>0</sub> + trend averaged over the recording. Without
+                             a trend the two are the same number.</small>"))
             ),
             # ================================================================
             # STUDY DESIGN (P21 phase 4)
@@ -411,7 +443,7 @@ ui_tab_harmonic <- tabItem(
                      uiOutput("harmonic_traj_header"),
 
                      h4("Primary \u2014 full trajectory difference"),
-                     helpText(HTML("Does the fitted trajectory differ? Level, non-periodic trend
+                     helpText(HTML("Does the fitted trajectory differ? Intercept, non-periodic trend
                                     and every harmonic, tested <b>jointly</b>. A group that is
                                     simply higher all day counts as different even when its
                                     amplitude and acrophase are identical.")),
@@ -427,9 +459,9 @@ ui_tab_harmonic <- tabItem(
                      fluidRow(
                        column(4, selectInput("harmonic_traj_component", "Component:",
                                              choices = c("Full fitted trajectory" = "full",
-                                                         "Harmonics only (zero baseline)" = "harmonics",
-                                                         "Baseline + harmonics" = "baseline_harm",
-                                                         "Nonperiodic change from origin" = "trend"),
+                                                         "Harmonics only (centred on zero)" = "harmonics",
+                                                         "Intercept + harmonics (trend removed)" = "baseline_harm",
+                                                         "Non-periodic change from origin (first observation)" = "trend"),
                                              selected = "full")),
                        column(4, selectInput("harmonic_traj_band", "Confidence band:",
                                              choices = c("Pointwise" = "pointwise",
@@ -439,6 +471,18 @@ ui_tab_harmonic <- tabItem(
                      ),
                      plotlyOutput("harmonic_traj_curves", height = "440px"),
                      uiOutput("harmonic_traj_band_note"),
+
+                     # The level of each trajectory as numbers: the intercept,
+                     # the MESOR and (with a trend) the non-periodic change over
+                     # the recording -- per cell, or as pairwise differences with
+                     # the same tests as the pairwise table below.
+                     h5(tags$b("Intercept, MESOR and change"), style = "margin-top:14px"),
+                     radioButtons("harmonic_traj_level_view", NULL,
+                                  choices = c("Estimates per cell" = "cells",
+                                              "Pairwise differences" = "pairs"),
+                                  selected = "cells", inline = TRUE),
+                     plotlyOutput("harmonic_traj_levels_plot", height = "340px"),
+                     uiOutput("harmonic_traj_levels_note"),
 
                      hr(),
                      h4("Difference between two cells"),
@@ -459,10 +503,10 @@ ui_tab_harmonic <- tabItem(
                        # model, and offering a trend comparison to a model with
                        # no trend is the same mistake the component selector had.
                        column(4, selectInput("harmonic_traj_what", "Compare:",
-                                             choices = c("Level (at t = 0)" = "level",
+                                             choices = c("Intercept" = "intercept",
                                                          "Amplitude — H1" = "amplitude1",
                                                          "Acrophase — H1" = "phase1"),
-                                             selected = "level")),
+                                             selected = "intercept")),
                        column(4, selectInput("harmonic_traj_adjust", "Multiplicity:",
                                              choices = c("Holm" = "holm",
                                                          "Bonferroni" = "bonferroni",

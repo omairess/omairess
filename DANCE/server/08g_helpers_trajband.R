@@ -145,9 +145,9 @@ DANCE_TRAJ_COMPONENTS <- c("full", "harmonics", "baseline_harm", "trend")
 
 DANCE_TRAJ_COMPONENT_LABEL <- c(
   full          = "Full fitted trajectory",
-  harmonics     = "Harmonics only (zero baseline)",
-  baseline_harm = "Baseline + harmonics",
-  trend         = "Nonperiodic change from origin")
+  harmonics     = "Harmonics only (centred on zero)",
+  baseline_harm = "Intercept + harmonics (trend removed)",
+  trend         = "Non-periodic change from origin (first observation)")
 
 # "Harmonics only" is every harmonic summed, which is the right default and the
 # wrong view for the question "what is H2 doing on its own". With two harmonics
@@ -347,7 +347,8 @@ dance_traj_diff_curve <- function(fit, cell1, cell2, times = NULL, conf = 0.95,
 # assumption about the dependence between contrasts, and -- unlike Tukey -- does
 # not require the contrasts to be a balanced set of pairwise mean differences,
 # which amplitude and phase contrasts are not.
-DANCE_TRAJ_PAIR_WHAT <- c("level", "amplitude", "phase", DANCE_TRAJ_BLOCKS)
+DANCE_TRAJ_PAIR_WHAT <- c("level", "amplitude", "phase", DANCE_TRAJ_BLOCKS,
+                          DANCE_TRAJ_LEVEL_QUANTITIES)
 
 # WHICH HARMONIC. "Amplitude" and "Acrophase" are properties of ONE harmonic,
 # and the panel took harmonic = 1 from a default argument that the UI never set
@@ -366,7 +367,7 @@ dance_traj_pair_parse <- function(what) {
   list(base = m[2], harmonic = h)
 }
 
-dance_traj_pair_label <- function(what, period = 24, n_harmonics = 1L) {
+dance_traj_pair_label <- function(what, period = 24, n_harmonics = 1L, trend = NULL) {
   pp <- dance_traj_pair_parse(what)
   if (!is.na(pp$harmonic)) {
     nm <- if (identical(pp$base, "amplitude")) "Amplitude" else "Acrophase"
@@ -375,24 +376,35 @@ dance_traj_pair_label <- function(what, period = 24, n_harmonics = 1L) {
     return(sprintf("%s — H%d (%s h)", nm, pp$harmonic,
                    format(round(period / pp$harmonic, 2), trim = TRUE)))
   }
+  # without a trend the midline is flat, so the intercept and the MESOR are the
+  # same number and are offered once, under both names
+  if (identical(what, "intercept") && identical(trend, "none"))
+    return("Intercept = MESOR (no trend)")
   unname(DANCE_TRAJ_PAIR_LABEL[what]) %||% what
 }
 
-# Which comparisons this fit can actually answer. The scalar three always; the
-# omnibus blocks only where they have terms and are not duplicates of each other
-# -- with no trend, "shape" and "circadian" are the same set of columns, and
-# offering both prints one test twice under two names, which reads as
-# corroboration. Same rule the omnibus table uses, so the two panels cannot
-# disagree about what exists.
+# Which comparisons this fit can actually answer. The level quantities first --
+# intercept, and with a trend the MESOR and the non-periodic change -- then the
+# amplitude and acrophase of every harmonic, then the joint blocks only where
+# they have terms and are not duplicates of each other: with no trend, "shape"
+# and "circadian" are the same set of columns, and offering both prints one test
+# twice under two names, which reads as corroboration. The trend's own block is
+# offered as "change", the same hypothesis in the response's units.
+#
+# The curve value at t0 ("level") is still computed by dance_traj_contrasts() but
+# is not offered: it adds where each rhythm happens to be at the first sample to
+# the intercept, and the intercept and the MESOR are the level quantities asked
+# for.
 dance_traj_pair_whats <- function(fit) {
-  if (!isTRUE(fit$ok)) return(c("level", "amplitude", "phase"))
+  if (!isTRUE(fit$ok)) return(c("intercept", "amplitude", "phase"))
   spec <- fit$spec
   K <- max(1L, as.integer(spec$n_harmonics %||% 1L))
+  lv <- Filter(function(q) length(DANCE_TRAJ_BLOCK_COMPONENTS(spec, q)) > 0,
+               DANCE_TRAJ_LEVEL_QUANTITIES)
   # every fitted harmonic gets its own amplitude and acrophase entry
-  out <- c("level",
-           sprintf("amplitude%d", seq_len(K)), sprintf("phase%d", seq_len(K)))
+  out <- c(lv, sprintf("amplitude%d", seq_len(K)), sprintf("phase%d", seq_len(K)))
   seen <- list()
-  for (b in c("full", "shape", "circadian", "trend")) {
+  for (b in c("full", "shape", "circadian")) {
     cp <- DANCE_TRAJ_BLOCK_COMPONENTS(spec, b)
     if (!length(cp)) next
     key <- paste(sort(cp), collapse = "|")
@@ -404,13 +416,42 @@ dance_traj_pair_whats <- function(fit) {
 }
 
 DANCE_TRAJ_PAIR_LABEL <- c(
-  level     = "Level (at t = 0)",
+  level     = "Curve value at the first observation",
+  intercept = "Intercept (midline at the first observation)",
+  mesor     = "MESOR (midline averaged over the window)",
+  change    = "Non-periodic change over the recording",
   amplitude = "Amplitude",
   phase     = "Acrophase",
   full      = "Full trajectory (joint)",
   shape     = "Temporal shape (joint)",
   circadian = "Rhythmic block (joint)",
-  trend     = "Non-periodic trend")
+  trend     = "Non-periodic trend coefficient")
+
+# The unit line under a scalar pairwise table, for the level quantities and the
+# trend: what one unit of the estimate is, and for the change, what the same
+# difference is in the trend coefficient -- the two are one test.
+dance_traj_level_unit <- function(fit, what) {
+  spec <- fit$spec
+  tw <- dance_traj_trend_window(spec$trend %||% "none", spec$t0,
+                                max(spec$data$t, na.rm = TRUE), spec$tau)
+  wc <- if (is.null(tw)) NULL else
+    dance_window_clock(tw$t0, tw$t_max, fit$clock_origin %||% 0, spec$period %||% 24)
+  win <- wc$text %||% "the observed window"
+  u <- if (is.null(fit$dv_units) || !nzchar(fit$dv_units)) "the response's own units" else fit$dv_units
+  coef_lab <- dance_traj_trend_coef_label(spec$trend %||% "none", spec$tau, fit$dv_units)
+  switch(what,
+    intercept = sprintf("difference in the intercept, in %s (the midline at the first observation%s)",
+                        u, if (is.null(wc)) "" else paste0(", ", wc$start)),
+    mesor     = sprintf("difference in the MESOR, in %s (the midline averaged over %s)", u, win),
+    change    = if (!is.null(tw) && length(tw$end))
+      sprintf(paste("difference in the non-periodic change from %s, in %s.",
+                    "The change is the %s times %.4g, so its test is the test of that coefficient."),
+              win, u, coef_lab, tw$end[[1]])
+      else sprintf("difference in the non-periodic change over the recording, in %s", u),
+    trend     = sprintf("difference in the %s", coef_lab),
+    level     = sprintf("difference in the fitted curve value at the first observation, in %s", u),
+    sprintf("difference in %s", u))
+}
 
 dance_traj_contrasts <- function(fit, what = "level",
                                  harmonic = 1, conf = 0.95, at_time = NULL,
@@ -451,7 +492,7 @@ dance_traj_contrasts <- function(fit, what = "level",
   # Same components and same L machinery as the omnibus row above the table, so
   # a significant block test and an empty pairwise panel cannot come from two
   # different notions of what the block is.
-  if (what %in% DANCE_TRAJ_BLOCKS) {
+  if (what %in% c(DANCE_TRAJ_BLOCKS, DANCE_TRAJ_LEVEL_QUANTITIES)) {
     rows <- lapply(seq_len(ncol(pairs)), function(p) {
       i <- pairs[1, p]; j <- pairs[2, p]
       r <- dance_traj_pair_block_test(fit, grid$.cell[i], grid$.cell[j], what,
@@ -482,11 +523,12 @@ dance_traj_contrasts <- function(fit, what = "level",
     return(list(ok = TRUE, what = what, harmonic = harmonic, method = tab$method[1],
                 block = what, joint = joint, table = tab, conf = conf, adjust = adjust,
                 n_cells = m, n_contrasts = nrow(tab),
-                label = dance_traj_pair_label(what, spec$period, spec$n_harmonics),
+                label = dance_traj_pair_label(what, spec$period, spec$n_harmonics,
+                                              spec$trend %||% "none"),
                 unit = if (joint)
                   sprintf("joint test over %d component(s); no single effect size -- read the difference curve for the size",
                           max(tab$df1))
-                else "difference in the response's own units",
+                else dance_traj_level_unit(fit, what),
                 note = paste(
                   sprintf("%d pairwise %s contrasts over %d design cells, on the SAME components and the same L matrix as the omnibus test.",
                           nrow(tab), unname(DANCE_TRAJ_BLOCK_LABEL[what]), m),
@@ -601,7 +643,7 @@ dance_traj_contrasts <- function(fit, what = "level",
        # heading cannot name different harmonics
        label = dance_traj_pair_label(
          if (what %in% c("amplitude", "phase")) paste0(what, harmonic) else what,
-         spec$period, spec$n_harmonics),
+         spec$period, spec$n_harmonics, spec$trend %||% "none"),
        table = tab, conf = conf, adjust = adjust, n_cells = m,
        n_contrasts = nrow(tab),
        note = paste(
@@ -773,8 +815,15 @@ dance_traj_group_fits <- function(fit, conf = 0.95) {
       group = cell, is_unassigned = FALSE,
       n = unname(n_per_cell[cell]),
       mean_mesor = b0, intercept = b0,
-      rhythm_adjusted_mean = dance_rhythm_adjusted_mean(
-        b0, spec$trend, unname(tr), min(spec$data$t), max(spec$data$t), 0),
+      # the MESOR from the same window means as the cell functionals; the
+      # legacy integrator was handed the saturating trend without its tau and
+      # without the t0 anchoring, and returned NA or an unanchored mean
+      rhythm_adjusted_mean = local({
+        tw <- dance_traj_trend_window(spec$trend %||% "none", spec$t0,
+                                      max(spec$data$t, na.rm = TRUE), spec$tau)
+        b0 + sum(vapply(intersect(names(tw$mean), names(tr)),
+                        function(nm) tw$mean[[nm]] * tr[[nm]], numeric(1)))
+      }),
       trend_coefs = unname(tr),
       trend_params = if (length(tr)) lapply(tr, function(v) list(mean = v)) else NULL,
       mean_coefs = coefs,
@@ -1229,6 +1278,15 @@ dance_traj_participant_table <- function(fit) {
       sum(vapply(spec$harm_terms[grepl("^c", spec$harm_terms)],
                  function(tm) mode_of(tm, k), numeric(1)))
     for (tm in spec$trend_terms) out[[tm]] <- dot(cell$coef[[tm]]) + mode_of(tm, k)
+    # the participant's own midline summaries, from the same window means the
+    # cell MESOR uses (dance_traj_trend_window)
+    tw <- fx$window
+    out$mesor <- out$intercept +
+      sum(vapply(intersect(names(tw$mean), spec$trend_terms),
+                 function(tm) tw$mean[[tm]] * out[[tm]], numeric(1)))
+    if (length(spec$trend_terms))
+      out$change <- sum(vapply(intersect(names(tw$end), spec$trend_terms),
+                               function(tm) tw$end[[tm]] * out[[tm]], numeric(1)))
     for (h in seq_len(spec$n_harmonics)) {
       ck <- paste0("c", h); sk <- paste0("s", h)
       a <- dot(cell$coef[[ck]]) + mode_of(ck, k); b <- dot(cell$coef[[sk]]) + mode_of(sk, k)
@@ -1335,7 +1393,8 @@ dance_traj_cell_equations <- function(fit) {
     out <- list(cell = cname,
                 n_participants = if (!is.na(ni)) cells_n$n_participants[ni] else NA_integer_,
                 n_obs = if (!is.na(ni)) cells_n$n_obs[ni] else NA_integer_,
-                intercept = dotb(cl$intercept), level_at_t0 = dotb(cl$level0))
+                intercept = dotb(cl$intercept), mesor = dotb(cl$mesor),
+                change = dotb(cl$change), level_at_t0 = dotb(cl$level0))
     for (tm in spec$trend_terms) out[[tm]] <- unname(co[[tm]])
     for (h in seq_len(spec$n_harmonics)) {
       a <- unname(co[[paste0("c", h)]]); b <- unname(co[[paste0("s", h)]])
@@ -1353,5 +1412,5 @@ dance_traj_cell_equations <- function(fit) {
     exp_sat = c(tab$trend_sat[i], spec$tau), NULL))
   list(ok = TRUE, table = tab, trend_coefs = trend_coefs,
        trend = spec$trend %||% "none", period = spec$period,
-       n_harmonics = spec$n_harmonics, tau = spec$tau)
+       n_harmonics = spec$n_harmonics, tau = spec$tau, window = fx$window)
 }

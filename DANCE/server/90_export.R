@@ -1579,65 +1579,14 @@
     }
   )
   
+  # The SAME text as the cosinor tab's summary and its own download button:
+  # one function writes it, so this file cannot drift from what is on screen.
+  # The copy that used to be built here printed the two-stage intercept as
+  # "MESOR" and knew nothing of the mixed-effects approach.
   output$export_harmonic_summary <- downloadHandler(
     filename = function() paste0("harmonic_summary_", Sys.Date(), ".txt"),
     content = function(file) {
       req(values$harmonic_model)
-      mod <- values$harmonic_model
-      
-      sink(file)
-      cat("=== Harmonic Regression (Cosinor Analysis) Summary ===\n")
-      cat("Generated:", as.character(Sys.time()), "\n\n")
-      cat("Period:", mod$period, "\n")
-      cat("Number of harmonics:", mod$n_harmonics, "\n")
-      cat("Number of subjects:", length(mod$individual_fits), "\n\n")
-      
-      if(!is.null(mod$pop_mean_fit)) {
-        pop <- mod$pop_mean_fit
-        cat("--- Population Mean Parameters ---\n")
-        cat(sprintf("MESOR:     %.4f\n", pop$mean_mesor))
-        cat(sprintf("Amplitude: %.4f\n", pop$mean_amplitude))
-        # AUDIT: acrophases are exported in CLOCK time, through the same helper
-        # the on-screen report uses, with the model-elapsed value alongside so
-        # the export is self-explaining.
-        cat(sprintf("Acrophase: %s clock  (%.4f rad, %.2f h model-elapsed, origin %s)\n",
-                    dance_acrophase_label(hours = pop$mean_acrophase_time,
-                                        period = mod$period, harmonic = 1,
-                                        clock_origin = dance_clock_origin(mod)),
-                    pop$mean_acrophase_rad, pop$mean_acrophase_time,
-                    dance_clock_label(dance_clock_origin(mod), mod$period, show_day = FALSE)))
-        cat(sprintf("Rayleigh Z: %.4f (p = %.4f)\n", pop$rayleigh_z, pop$rayleigh_p))
-        cat("\n")
-      }
-      
-      cat("--- Individual Parameter Statistics ---\n")
-      params <- mod$individual_params
-      cat(sprintf("MESOR:     Mean=%.4f, SD=%.4f\n", mean(params$mesor), sd(params$mesor)))
-      cat(sprintf("Amplitude (H1): Mean=%.4f, SD=%.4f\n", mean(params$amplitude_1), sd(params$amplitude_1)))
-      cat(sprintf("Acrophase (H1): arithmetic mean %s clock (%.2f h model-elapsed)\n",
-                  dance_acrophase_label(hours = mean(params$acrophase_time_1),
-                                      period = mod$period, harmonic = 1,
-                                      clock_origin = dance_clock_origin(mod), all = FALSE),
-                  mean(params$acrophase_time_1)))
-      cat(sprintf("R-squared: Mean=%.4f, Range=[%.4f, %.4f]\n", 
-                  mean(params$r_squared), min(params$r_squared), max(params$r_squared)))
-      cat(sprintf("Significant rhythms (p<0.05): %d / %d\n",
-                  sum(params$p_value < 0.05), nrow(params)))
-      
-      if(!is.null(mod$boot_results)) {
-        cat(sprintf("\n--- Bootstrap 95%% CIs (B=%d) ---\n", mod$boot_results$B))
-        cat(sprintf("MESOR:     [%.4f, %.4f]\n", 
-                    mod$boot_results$mesor_ci[1], mod$boot_results$mesor_ci[2]))
-        cat(sprintf("Amplitude: [%.4f, %.4f]\n", 
-                    mod$boot_results$amplitude_ci[1], mod$boot_results$amplitude_ci[2]))
-        cat(sprintf("Acrophase: [%s, %s] clock\n",
-                    dance_acrophase_label(hours = mod$boot_results$acrophase_ci[1],
-                                        period = mod$period, harmonic = 1,
-                                        clock_origin = dance_clock_origin(mod), all = FALSE),
-                    dance_acrophase_label(hours = mod$boot_results$acrophase_ci[2],
-                                        period = mod$period, harmonic = 1,
-                                        clock_origin = dance_clock_origin(mod), all = FALSE)))
-      }
-      sink()
+      writeLines(utils::capture.output(.print_harmonic_summary()), file)
     }
   )

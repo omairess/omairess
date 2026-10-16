@@ -39,12 +39,20 @@ test_that("the pairwise vocabulary follows the fit, with no duplicate blocks", {
   skip_if_not_installed("lme4")
   f2 <- mk(); skip_if_not(isTRUE(f2$ok))
   ws <- e$dance_traj_pair_whats(f2)
-  # amplitude and phase are now per harmonic -- see the harmonic block below
-  expect_true(all(c("level", "amplitude1", "phase1", "full", "shape", "circadian",
-                    "trend") %in% ws))
+  # amplitude and phase are now per harmonic -- see the harmonic block below.
+  # The level quantities are the intercept, the MESOR and the non-periodic
+  # change; the change is the trend coefficient's own test in response units,
+  # so the bare trend block is not offered beside it, and the curve value at t0
+  # ("level") is not offered at all.
+  expect_true(all(c("intercept", "mesor", "change", "amplitude1", "phase1", "full",
+                    "shape", "circadian") %in% ws))
+  expect_false(any(c("level", "trend") %in% ws))
+  expect_identical(ws[1:3], c("intercept", "mesor", "change"))
   f1 <- mk(K = 1, trend = "none"); skip_if_not(isTRUE(f1$ok))
   w1 <- e$dance_traj_pair_whats(f1)
-  expect_false("trend" %in% w1)
+  expect_false(any(c("trend", "mesor", "change", "level") %in% w1))
+  expect_true("intercept" %in% w1)
+  expect_equal(e$dance_traj_pair_label("intercept", 24, 1, "none"), "Intercept = MESOR (no trend)")
   # with no trend, shape and circadian are the SAME columns: one entry, not two
   expect_equal(sum(c("shape", "circadian") %in% w1), 1L)
   expect_true("full" %in% w1)
@@ -220,7 +228,9 @@ test_that("every fitted harmonic gets its own amplitude and acrophase entry", {
   expect_match(e$dance_traj_pair_label("phase2", 24, 2), "^Acrophase .* H2 \\(12 h\\)$")
   expect_match(e$dance_traj_pair_label("phase1", 12, 3), "H1 \\(12 h\\)")
   expect_match(e$dance_traj_pair_label("amplitude3", 24, 3), "H3 \\(8 h\\)")
-  expect_equal(e$dance_traj_pair_label("level", 24, 2), "Level (at t = 0)")
+  expect_equal(e$dance_traj_pair_label("level", 24, 2), "Curve value at the first observation")
+  expect_equal(e$dance_traj_pair_label("intercept", 24, 2, "linear"),
+               "Intercept (midline at the first observation)")
 })
 
 test_that("the harmonic in the name is the harmonic compared", {

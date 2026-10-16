@@ -154,7 +154,7 @@ test_that("P12.2: the two-stage group comparison reaches the report, as one tabl
   expect_true(grepl("Cosinor regression (two-stage)", txt, fixed = TRUE))
   expect_true(grepl("**Group differences (AGE).**", txt, fixed = TRUE))
   # the primary (MANOVA on the coefficient vector) and every component test
-  for (row in c("Complete coefficient vector", "Constant term (beta_0)",
+  for (row in c("Complete coefficient vector", "Intercept = MESOR (no trend)",
                 "H1 rhythm vector (cos, sin) jointly", "H1 amplitude", "H1 acrophase",
                 "Watson-Williams"))
     expect_true(grepl(row, txt, fixed = TRUE), info = row)

@@ -34,7 +34,7 @@ RESTORE_INPUTS <- list(
                "max_bound", "n_components", "n_permutations", "alpha_level",
                "harmonic_period", "n_harmonics", "n_clusters", "n_boot",
                "mixed_k_time", "mixed_k_subject", "mixed_period",
-               "mixed_harmonics",
+               "mixed_harmonics", "harmonic_traj_tau",
                # P19: the mixed analyses moved into the fANOVA and Cosinor tabs
                "fanova_mixed_k_time", "fanova_mixed_k_subject"),
   checkbox = c("is_cyclic", "use_real_time", "constrain_bounds",

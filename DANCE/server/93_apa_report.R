@@ -851,20 +851,38 @@ dance_apa_report <- function(values, input, title = NULL) {
       ce <- tryCatch(dance_traj_cell_equations(ff), error = function(e) NULL)
       if (!is.null(ce)) {
         tb <- ce$table
+        has_tr <- !identical(ff$spec$trend %|% "none", "none")
         rows <- data.frame(Cell = tb$cell, n = tb$n_participants,
-                           `Level at t0` = dance_apa_num(tb$level_at_t0, 2),
+                           Intercept = dance_apa_num(tb$intercept, 2),
                            check.names = FALSE, stringsAsFactors = FALSE)
+        if (has_tr) {
+          rows$MESOR <- dance_apa_num(tb$mesor, 2)
+          rows$Change <- dance_apa_num(tb$change, 2)
+        }
         for (k in seq_len(ce$n_harmonics)) {
           rows[[paste0("H", k, " amplitude")]] <- dance_apa_num(tb[[paste0("amplitude_", k)]], 2)
           rows[[paste0("H", k, " acrophase")]] <- vapply(tb[[paste0("acrophase_time_", k)]],
                                                           acro_txt, character(1), k = k)
         }
         L <- c(L, dance_md_table(rows)); blank()
-        add("Cell values are the fixed effects of the one model: the level is the ",
-            "fitted value at the first observation, amplitudes and acrophases are ",
-            "read off each cell's (cosine, sine) coefficients, and acrophases are ",
-            "clock times. Participant-level values are conditional modes and are ",
-            "not compared here.")
+        tw <- ce$window
+        wc <- if (is.null(tw)) NULL else
+          dance_window_clock(tw$t0, tw$t_max, ff$clock_origin %|% 0, ff$spec$period %|% 24)
+        add("Cell values are the fixed effects of the one model. The midline is the ",
+            "curve without its harmonics (intercept plus trend); the intercept is the ",
+            "midline at the first observation",
+            if (has_tr && !is.null(wc)) paste0(
+              " (", wc$start, "); the MESOR is that midline averaged over the ",
+              "recording (", wc$text, "), and the change is how far the trend moves ",
+              "it over the same window") else "; without a trend it is the MESOR",
+            ". Amplitudes and acrophases are read off each cell's (cosine, sine) ",
+            "coefficients, and acrophases are clock times.",
+            if (identical(ff$spec$trend, "exp_sat"))
+              paste0(" The saturating trend's time constant was held at ",
+                     dance_apa_num(ff$spec$tau, 1), " h, so the model estimates its ",
+                     "rise A per cell; the change is A times ",
+                     dance_apa_num(tw$end[[1]], 3), ".") else "",
+            " Participant-level values are conditional modes and are not compared here.")
         blank()
       }
       # the omnibus tests the comparison tab computed, from its own cache: a
@@ -882,8 +900,10 @@ dance_apa_report <- function(values, input, title = NULL) {
             trow(nm, tests$effects[[nm]], paste0(nm, ": whole trajectory"))),
           lapply(names(tests$blocks), function(nm)
             trow(nm, tests$blocks[[nm]],
-                 paste0("Any cell difference in the ",
-                        tolower(DANCE_TRAJ_BLOCK_LABEL[[nm]] %|% nm), " block")))))
+                 if (nm %in% DANCE_TRAJ_LEVEL_QUANTITIES)
+                   paste0("Any cell difference in the ", DANCE_TRAJ_BLOCK_LABEL[[nm]] %|% nm)
+                 else paste0("Any cell difference in the ",
+                             tolower(DANCE_TRAJ_BLOCK_LABEL[[nm]] %|% nm), " block")))))
         if (!is.null(ers) && nrow(ers)) {
           add("**Design effects.**"); blank()
           L <- c(L, dance_md_table(ers)); blank()
@@ -906,8 +926,15 @@ dance_apa_report <- function(values, input, title = NULL) {
       v <- f[[nm]]; if (length(v)) as.numeric(v)[1] else NA_real_ }, numeric(1))
     add(sum(ok), " of ", length(fits), " series were fitted successfully.")
     if (sum(ok) > 0) {
-      add(" MESOR ", dance_apa_M(g1("mesor")), "; amplitude ",
-          dance_apa_M(g1("amplitudes")), "; acrophase ",
+      ip <- hm$individual_params
+      has_tr <- !identical(hm$trend_type %|% "none", "none")
+      add(if (has_tr) " Intercept " else " Intercept (= MESOR, no trend) ",
+          dance_apa_M(g1("mesor")),
+          if (has_tr && !is.null(ip$mesor_adj))
+            paste0("; MESOR ", dance_apa_M(ip$mesor_adj)) else "",
+          if (has_tr && !is.null(ip$trend_change))
+            paste0("; non-periodic change over the recording ", dance_apa_M(ip$trend_change)) else "",
+          "; amplitude ", dance_apa_M(g1("amplitudes")), "; acrophase ",
           dance_apa_M(g1("acrophases_time")), " h.")
       pv <- g1("p_value"); nsig <- sum(is.finite(pv) & pv < .05)
       add(" A detectable rhythm (zero-amplitude *F* test, alpha = .05) was ",
@@ -987,19 +1014,29 @@ dance_apa_report <- function(values, input, title = NULL) {
     if (!is.null(hm$group_var_name) && length(gf) >= 1) {
       add("**By ", hm$group_var_name, ".**")
       blank()
+      gtr <- !identical(hm$trend_type %|% "none", "none")
       grows <- do.call(rbind, lapply(names(gf), function(nm) {
         g <- gf[[nm]]
         data.frame(
           Group      = nm,
           `n`        = g$n %|% NA,
+          `Intercept` = dance_apa_num(g$intercept %|% NA_real_, 2),
           `MESOR`    = dance_apa_num(g$rhythm_adjusted_mean %|% g$intercept %|% NA_real_, 2),
+          `Change`   = if (gtr) dance_apa_num(g$trend_change %|% NA_real_, 2) else "",
           `Amplitude`= paste0(dance_apa_num(g$mean_amplitude %|% NA_real_, 2), " (",
                               dance_apa_num(g$sd_amplitude %|% NA_real_, 2), ")"),
           `Acrophase (h)` = dance_apa_num(g$mean_acrophase_time %|% NA_real_, 2),
           check.names = FALSE, stringsAsFactors = FALSE)
       }))
+      if (!gtr) grows$Change <- NULL
+      if (!gtr) grows$MESOR <- NULL
       L <- c(L, dance_md_table(grows)); blank()
-      add("MESOR is the rhythm-adjusted mean. Amplitude is given as *M* (*SD*) ",
+      add(if (gtr) paste0("Intercept is the midline at the first observation; MESOR is the ",
+                          "mean of the participants' midlines averaged over the recording ",
+                          "(the rhythm-adjusted mean); Change is the mean non-periodic ",
+                          "change from the first to the last observation. ")
+          else "Without a trend the intercept is the MESOR. ",
+          "Amplitude is given as *M* (*SD*) ",
           "of the per-participant estimates. Acrophase is a group mean of a ",
           "circular quantity and is reported for description only; the test ",
           "below is the inferential statement.")

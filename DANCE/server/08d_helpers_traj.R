@@ -271,6 +271,66 @@ dance_traj_basis <- function(d, period = 24, n_harmonics = 1, trend = "none",
 }
 
 # ------------------------------------------------------------------------------
+# THE TREND BASIS OVER THE OBSERVED WINDOW
+# ------------------------------------------------------------------------------
+# Every trend column is anchored at t0 (zero at the first observation), so two
+# numbers per column summarise it over the window [t0, t_max]:
+#
+#   mean  its time average. The MIDLINE of the rhythm is intercept + trend, and
+#         the MESOR is that midline averaged over the window:
+#             MESOR  = b0 + sum_j c_j * mean_j
+#   end   its value at the last observation, which turns a coefficient into the
+#         NON-PERIODIC CHANGE over the recording (the right-hand end of the
+#         "change from origin" view):
+#             change = sum_j c_j * end_j
+#
+# Closed forms, so both are exact linear functions of the fixed effects given
+# the basis -- tested and compared by the same L-matrix machinery as everything
+# else, with no delta method. For the saturating trend tau is the basis's fixed
+# time constant; nothing here estimates it. These are the same window means
+# dance_rhythm_adjusted_mean() integrates numerically for the two-stage MESOR.
+dance_traj_trend_window <- function(trend = "none", t0, t_max, tau = NULL) {
+  T <- t_max - t0
+  if (!is.finite(T) || T <= 0) return(NULL)
+  out <- switch(as.character(trend),
+    none    = list(mean = numeric(0), end = numeric(0)),
+    linear  = list(mean = c(trend_lin = T / 2), end = c(trend_lin = T)),
+    log     = list(mean = c(trend_log = ((T + 1) * log(T + 1) - T) / T),
+                   end  = c(trend_log = log(T + 1))),
+    exp_sat = if (is.null(tau) || !is.finite(tau) || tau <= 0) NULL else
+      list(mean = c(trend_sat = 1 - (tau / T) * (1 - exp(-T / tau))),
+           end  = c(trend_sat = 1 - exp(-T / tau))),
+    NULL)
+  if (is.null(out)) return(NULL)
+  c(out, list(t0 = t0, t_max = t_max, T = T, trend = as.character(trend), tau = tau))
+}
+
+# The window's two ends on the clock, labelled together so that an end on the
+# next day carries its "(+1d)" -- dance_clock_label() only marks a day change
+# within the vector it is given, so labelling the ends one at a time loses it.
+dance_window_clock <- function(t_lo, t_hi, clock_origin = 0, period = 24) {
+  lab <- dance_clock_label(c(t_lo, t_hi) + (clock_origin %||% 0), period,
+                           show_day = TRUE)
+  list(start = lab[1], end = lab[2], text = sprintf("%s to %s", lab[1], lab[2]))
+}
+
+# What one unit of the trend coefficient is, in words -- the trend columns are
+# called trend_lin / trend_log / trend_sat internally, and a reader shown
+# "trend_sat" has no way to know it is a rise in the response's own units with a
+# time constant held fixed.
+dance_traj_trend_coef_label <- function(trend, tau = NULL, units = NULL, short = FALSE) {
+  u <- if (is.null(units) || !nzchar(units)) "response units" else units
+  switch(as.character(trend),
+    linear  = if (short) "slope" else sprintf("slope beta (%s per hour)", u),
+    log     = if (short) "log-trend beta" else
+      sprintf("log-trend beta (%s per unit of log(1 + hours since the first observation))", u),
+    exp_sat = if (short) "saturating rise A" else
+      sprintf("saturating rise A (%s above the intercept as t grows; tau held at %s h)",
+              u, if (is.null(tau)) "?" else format(signif(tau, 4))),
+    "no trend")
+}
+
+# ------------------------------------------------------------------------------
 # FIXED-EFFECTS FORMULA: basis x design
 # ------------------------------------------------------------------------------
 # `design_terms` are the factors to cross with the basis; `covariates` are

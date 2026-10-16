@@ -88,15 +88,15 @@ test_that("the component tests come from the named kernels and answer the plante
   df <- e$dance_ts_frame(m$mod, m$g)
   rows <- e$dance_ts_components(df, m$mod)
   lab <- vapply(rows, function(r) r$label, character(1))
-  expect_true("Constant term (beta_0)" %in% lab)
+  expect_true("Intercept = MESOR (no trend)" %in% lab)
   expect_true("H1 amplitude" %in% lab); expect_true("H1 acrophase" %in% lab)
   expect_true(any(grepl("Watson-Williams", lab)))
   get <- function(l) rows[[match(l, lab)]]
-  expect_equal(get("Constant term (beta_0)")$method, "one-way ANOVA")
+  expect_equal(get("Intercept = MESOR (no trend)")$method, "one-way ANOVA")
   expect_match(get("H1 amplitude")$method, "Bingham")
   expect_equal(get("H1 acrophase (Watson-Williams, unweighted)")$method, "Watson-Williams F")
   # equal constants: not rejected; different phases: rejected on both phase tests
-  expect_gt(get("Constant term (beta_0)")$p, 0.05)
+  expect_gt(get("Intercept = MESOR (no trend)")$p, 0.05)
   expect_lt(get("H1 acrophase")$p, 1e-3)
   expect_lt(get("H1 acrophase (Watson-Williams, unweighted)")$p, 1e-3)
   # Bingham's caution: with the phases differing, the amplitude row is flagged
@@ -109,7 +109,7 @@ test_that("the component tests come from the named kernels and answer the plante
   expect_null(amp2$note); expect_lt(amp2$p, 1e-3)
   # the ANOVA on the constant is the one-way F from the app's own kernel
   lt <- e$dance_group_linear_test(df$mesor, df$group)
-  expect_equal(get("Constant term (beta_0)")$F, lt$F)
+  expect_equal(get("Intercept = MESOR (no trend)")$F, lt$F)
 })
 
 test_that("pairwise: Welch's t for scalars, Watson-Williams for phase, Holm across the family", {
@@ -117,7 +117,8 @@ test_that("pairwise: Welch's t for scalars, Watson-Williams for phase, Holm acro
               amp = c(A = 8, B = 8, C = 11))
   df <- e$dance_ts_frame(m$mod, m$g)
   whats <- e$dance_ts_pair_whats(m$mod)
-  expect_true(all(c("level", "amplitude1", "phase1", "r_squared") %in% whats))
+  expect_true(all(c("intercept", "amplitude1", "phase1", "r_squared") %in% whats))
+  expect_false(any(c("level", "mesor", "change") %in% whats))   # no trend: one level
   pa <- e$dance_ts_pairwise(df, m$mod, "amplitude1", adjust = "holm")
   expect_true(isTRUE(pa$ok)); expect_false(pa$circular)
   expect_equal(nrow(pa$table), 3L)
@@ -169,4 +170,67 @@ test_that("group curves: the line is the mean-coefficient curve, the band is +/-
   # no grouping: one "(all)" cell whose line is the mean of everyone's curve
   g0 <- e$dance_ts_group_curves(m$mod, NULL, times)
   expect_equal(g0$cells, "(all)")
+})
+
+
+# ==============================================================================
+# INTERCEPT, MESOR AND THE NON-PERIODIC CHANGE, per participant and per group
+# ==============================================================================
+test_that("the change over the recording comes from each participant's own trend", {
+  m <- mk_mod(trend = "linear")
+  df <- e$dance_ts_frame(m$mod, m$g)
+  # linear: beta * (last - first), here 23 h
+  expect_equal(df$trend_change, df$trend_linear * 23, tolerance = 1e-12)
+  # saturating: BOTH parameters, A and tau, through the fitter's own trend
+  # function, anchored at each fit's offset
+  mod <- m$mod; mod$trend_type <- "exp_sat"
+  p <- data.frame(subject = 1:3, A_sat = c(10, 20, 20), tau = c(5, 5, 20))
+  ch <- e$dance_ts_trend_change(mod, p)
+  expect_equal(ch, p$A_sat * (1 - exp(-23 / p$tau)), tolerance = 1e-12)
+  expect_gt(ch[2], ch[3])                    # same A, slower rise: less change
+  mod$trend_type <- "log"
+  expect_equal(e$dance_ts_trend_change(mod, data.frame(subject = 1, trend_log = 2)),
+               2 * log(24), tolerance = 1e-12)
+  mod$trend_type <- "none"
+  expect_equal(e$dance_ts_trend_change(mod, p), c(0, 0, 0))
+  # a participant without the parameter is NA, not zero
+  mod$trend_type <- "exp_sat"
+  expect_true(is.na(e$dance_ts_trend_change(mod, data.frame(subject = 1, A_sat = 5, tau = NA))))
+})
+
+test_that("the level summary and the pairwise tests read the same per-participant columns", {
+  m <- mk_mod(n = c(A = 20, B = 16, C = 14), trend = "linear")
+  df <- e$dance_ts_frame(m$mod, m$g)
+  df$mesor_adj <- df$mesor + df$trend_linear * 11.5        # the window mean of beta * t
+  ls <- e$dance_ts_level_summary(df, m$mod)
+  expect_true(isTRUE(ls$ok))
+  expect_identical(ls$quantities, c("intercept", "mesor", "change"))
+  tb <- ls$table
+  for (lv in c("A", "B", "C")) {
+    expect_equal(tb$estimate[tb$quantity == "intercept" & tb$cell == lv], mean(df$mesor[df$group == lv]))
+    expect_equal(tb$estimate[tb$quantity == "mesor" & tb$cell == lv], mean(df$mesor_adj[df$group == lv]))
+    expect_equal(tb$estimate[tb$quantity == "change" & tb$cell == lv], mean(df$trend_change[df$group == lv]))
+  }
+  # a t interval on n - 1 df around each mean
+  r <- tb[tb$quantity == "intercept" & tb$cell == "A", ]
+  x <- df$mesor[df$group == "A"]
+  expect_equal(r$hi - r$estimate, stats::qt(.975, length(x) - 1) * stats::sd(x) / sqrt(length(x)))
+  # the pairwise differences are the differences of those means, Welch-tested
+  for (q in c("intercept", "mesor", "change")) {
+    pw <- e$dance_ts_pairwise(df, m$mod, q, adjust = "holm")
+    expect_true(isTRUE(pw$ok), info = q)
+    z <- pw$table[1, ]
+    expect_equal(z$estimate, tb$estimate[tb$quantity == q & tb$cell == z$cell1] -
+                   tb$estimate[tb$quantity == q & tb$cell == z$cell2], info = q)
+  }
+  # without a trend there is one level quantity, under both names
+  m0 <- mk_mod()
+  ls0 <- e$dance_ts_level_summary(e$dance_ts_frame(m0$mod, m0$g), m0$mod)
+  expect_identical(ls0$quantities, "intercept")
+  expect_equal(e$dance_ts_pair_label("intercept", 24, "none"), "Intercept = MESOR (no trend)")
+  expect_equal(e$dance_ts_pair_label("trend_linear", 24, "linear", "KSS points"),
+               "Slope beta (KSS points per hour)")
+  expect_equal(e$dance_ts_pair_label("A_sat", 24, "exp_sat", "KSS points"),
+               "Saturating rise A (KSS points above the intercept)")
+  expect_match(e$dance_ts_pair_label("tau", 24, "exp_sat"), "hours")
 })

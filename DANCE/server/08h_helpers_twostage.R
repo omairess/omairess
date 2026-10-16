@@ -26,7 +26,63 @@ dance_ts_frame <- function(mod, group_values) {
   p$group <- droplevels(factor(g))
   p <- p[!is.na(p$group), , drop = FALSE]
   if (!nrow(p)) return(NULL)
+  # each participant's non-periodic change over the recording, from their own
+  # trend parameters -- the number the "change from origin" curve ends at.
+  # Stored at fit time; recomputed for a model saved before it was.
+  if (!"trend_change" %in% names(p) || all(is.na(p$trend_change)))
+    p$trend_change <- dance_ts_trend_change(mod, p)
   p
+}
+
+# S(last observation) - S(first observation) for every participant, through the
+# same trend function the two-stage fits use (dance_trend_value), with each
+# fit's own anchoring. Zero without a trend; NA where a fit lacks a parameter.
+dance_ts_trend_change <- function(mod, p) {
+  tr <- as.character(mod$trend_type %||% "none")
+  if (identical(tr, "none")) return(rep(0, nrow(p)))
+  tv <- mod$time_vec
+  if (is.null(tv) || !any(is.finite(tv))) return(rep(NA_real_, nrow(p)))
+  tt <- range(tv, na.rm = TRUE)
+  vapply(seq_len(nrow(p)), function(i) {
+    coefs <- switch(tr,
+      linear  = p$trend_linear[i],
+      log     = p$trend_log[i],
+      exp_sat = c(p$A_sat[i], p$tau[i]),
+      NULL)
+    if (is.null(coefs) || !length(coefs) || !all(is.finite(coefs))) return(NA_real_)
+    fi <- tryCatch(mod$individual_fits[[p$subject[i]]], error = function(e) NULL)
+    off <- fi$t_offset %||% mod$t_offset %||% 0
+    s <- dance_trend_value(tr, coefs, tt, off)
+    s[2] - s[1]
+  }, numeric(1))
+}
+
+# The level quantities per group, as means of the per-participant estimates with
+# a t interval: the intercept (each fit's constant), and with a trend the MESOR
+# (each fit's midline averaged over the window, mesor_adj) and the non-periodic
+# change over the recording. The pairwise differences come from
+# dance_ts_pairwise(), the same Welch tests as the pairwise table.
+dance_ts_level_summary <- function(df, mod, conf = 0.95) {
+  has_trend <- !identical(mod$trend_type %||% "none", "none")
+  qs <- c(intercept = "mesor")
+  if (has_trend) qs <- c(qs, mesor = "mesor_adj", change = "trend_change")
+  qs <- qs[qs %in% names(df)]
+  g <- droplevels(factor(df$group))
+  rows <- list()
+  for (q in names(qs)) for (lv in levels(g)) {
+    x <- df[[qs[[q]]]][g == lv]; x <- x[is.finite(x)]
+    n <- length(x)
+    m <- if (n) mean(x) else NA_real_
+    se <- if (n > 1) stats::sd(x) / sqrt(n) else NA_real_
+    tq <- if (n > 1) stats::qt(1 - (1 - conf) / 2, n - 1) else NA_real_
+    rows[[length(rows) + 1L]] <- data.frame(quantity = q, cell = lv, n = n,
+                                            estimate = m, se = se,
+                                            lo = m - tq * se, hi = m + tq * se,
+                                            stringsAsFactors = FALSE)
+  }
+  if (!length(rows)) return(list(ok = FALSE, message = "No per-participant level estimates."))
+  tab <- do.call(rbind, rows); rownames(tab) <- NULL
+  list(ok = TRUE, table = tab, quantities = names(qs), conf = conf, has_trend = has_trend)
 }
 
 # The coefficient columns a MANOVA compares: constant, trend, and every
@@ -80,12 +136,17 @@ dance_ts_components <- function(df, mod) {
     else push(label = label, ok = TRUE, F = lt$F, df1 = lt$df1, df2 = lt$df2, p = lt$p,
               omega2 = lt$omega2, method = "one-way ANOVA", note = note)
   }
-  lt_row("Constant term (beta_0)", df$mesor,
-         "the fitted constant; NOT a MESOR when a trend is present")
-  if ("mesor_adj" %in% names(df) && !identical(mod$trend_type %||% "none", "none"))
-    lt_row("MESOR (rhythm-adjusted mean over the window)", df$mesor_adj)
+  trend <- mod$trend_type %||% "none"
+  has_trend <- !identical(trend, "none")
+  lab <- function(w) dance_ts_pair_label(w, period, trend, mod$dv_units)
+  lt_row(lab("intercept"), df$mesor,
+         if (has_trend) "the midline at the first observation, where the trend is zero" else NULL)
+  if (has_trend && "mesor_adj" %in% names(df))
+    lt_row(lab("mesor"), df$mesor_adj)
+  if (has_trend && "trend_change" %in% names(df))
+    lt_row(lab("change"), df$trend_change)
   for (tc in setdiff(dance_ts_coef_cols(mod), c("mesor", grep("^beta_", dance_ts_coef_cols(mod), value = TRUE))))
-    if (tc %in% names(df)) lt_row(sprintf("Trend: %s", tc), df[[tc]])
+    if (tc %in% names(df)) lt_row(lab(tc), df[[tc]])
   for (h in seq_len(K)) {
     bc <- paste0("beta_cos_", h); bs <- paste0("beta_sin_", h)
     if (!all(c(bc, bs) %in% names(df))) next
@@ -153,24 +214,38 @@ dance_ts_group_rhythm <- function(df, mod, h) {
 }
 
 # ---- PAIRWISE ---------------------------------------------------------------
+# The same names as the mixed-effects vocabulary for the quantities both
+# approaches have (intercept, mesor, change, amplitudeK, phaseK), so a selection
+# survives switching approach; the two-stage-only ones keep their column names.
+# The saturating trend has TWO per-participant parameters here, A_sat and tau,
+# because each participant's fit estimates both -- unlike the mixed model, which
+# holds tau fixed and estimates only the rise.
 dance_ts_pair_whats <- function(mod) {
   K <- mod$n_harmonics %||% 1L
   tr <- switch(mod$trend_type %||% "none", linear = "trend_linear", log = "trend_log",
                exp_sat = c("A_sat", "tau"), character(0))
-  out <- c("level", if (length(tr)) c("mesor_adj", "value_at_start"), tr,
+  out <- c("intercept", if (length(tr)) c("mesor", "change"), tr,
            sprintf("amplitude%d", seq_len(K)), sprintf("phase%d", seq_len(K)), "r_squared")
   out
 }
-dance_ts_pair_label <- function(what, period = 24) {
-  pp <- dance_traj_pair_parse(what)
-  if (!is.na(pp$harmonic))
+dance_ts_pair_label <- function(what, period = 24, trend = NULL, units = NULL) {
+  # only a harmonic name needs parsing; the level and trend labels stand alone
+  if (grepl("^(amplitude|phase)[0-9]*$", what)) {
+    pp <- dance_traj_pair_parse(what)
     return(sprintf("%s — H%d (%s h)", if (identical(pp$base, "amplitude")) "Amplitude" else "Acrophase",
                    pp$harmonic, format(round(period / pp$harmonic, 2), trim = TRUE)))
+  }
+  u <- if (is.null(units) || !nzchar(units)) "response units" else units
   switch(what,
-    level = "Constant term (beta_0)", mesor_adj = "MESOR (rhythm-adjusted mean)",
-    value_at_start = "Predicted value at the first observation",
-    trend_linear = "Linear trend (beta)", trend_log = "Log trend (beta)",
-    A_sat = "A_sat (asymptote)", tau = "tau (time constant)",
+    level = , intercept = if (identical(trend, "none")) "Intercept = MESOR (no trend)"
+                          else "Intercept (midline at the first observation)",
+    mesor = , mesor_adj = "MESOR (midline averaged over the window)",
+    change = , trend_change = "Non-periodic change over the recording",
+    value_at_start = "Curve value at the first observation",
+    trend_linear = sprintf("Slope beta (%s per hour)", u),
+    trend_log = sprintf("Log-trend beta (%s per unit of log(1 + hours))", u),
+    A_sat = sprintf("Saturating rise A (%s above the intercept)", u),
+    tau = "Time constant tau of the saturating rise (hours)",
     r_squared = "R-squared of the participant fit", what)
 }
 
@@ -182,7 +257,10 @@ dance_ts_pairwise <- function(df, mod, what, adjust = c("holm", "bonferroni", "n
   circular <- identical(pp$base, "phase")
   col <- if (!is.na(pp$harmonic)) {
     if (circular) paste0("acrophase_rad_", pp$harmonic) else paste0("amplitude_", pp$harmonic)
-  } else if (identical(what, "level")) "mesor" else what
+  } else switch(what, level = , intercept = "mesor", mesor = "mesor_adj",
+                change = "trend_change", what)
+  if (identical(col, "trend_change") && !col %in% names(df))
+    df$trend_change <- dance_ts_trend_change(mod, df)
   if (!col %in% names(df)) {
     # phases may be stored as time only
     if (circular && paste0("acrophase_time_", pp$harmonic) %in% names(df)) {
@@ -230,12 +308,20 @@ dance_ts_pairwise <- function(df, mod, what, adjust = c("holm", "bonferroni", "n
   tab$p_adj <- if (identical(adjust, "none")) tab$p_raw else stats::p.adjust(tab$p_raw, method = adjust)
   rownames(tab) <- NULL
   list(ok = TRUE, what = what, circular = circular, table = tab, adjust = adjust, conf = conf,
-       joint = FALSE, label = dance_ts_pair_label(what, period),
+       joint = FALSE,
+       label = dance_ts_pair_label(what, period, mod$trend_type %||% "none", mod$dv_units),
        method = if (circular) "Watson-Williams F on the per-participant phases"
                 else "Welch's t on the per-participant estimates",
        unit = if (circular)
          sprintf("acrophase difference in hours on an effective period of %.4g h (shortest arc); no interval -- the test is the statement", eff)
-       else "difference of group means of the per-participant estimates, with Welch's interval and Cohen's d",
+       else paste0("difference of group means of the per-participant estimates",
+                   if (!is.null(mod$dv_units) && nzchar(mod$dv_units) &&
+                       (what %in% c("intercept", "level", "mesor", "change", "A_sat") ||
+                        identical(pp$base, "amplitude"))) paste0(", in ", mod$dv_units)
+                   else if (identical(what, "tau")) ", in hours" else "",
+                   ", with Welch's interval and Cohen's d",
+                   if (identical(what, "change"))
+                     ". Each participant's change uses their own trend parameters" else ""),
        note = paste(
          sprintf("%d pairwise comparisons over %d groups, on the per-participant point estimates.",
                  nrow(tab), length(lv)),

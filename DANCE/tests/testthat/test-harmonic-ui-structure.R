@@ -104,5 +104,8 @@ test_that("tab 6 does not offer views or rows the fitted model cannot produce", 
   # the decomposition's block list is conditional on the trend
   blk <- regmatches(srv, regexpr('want <- if \\(identical\\(ff\\$spec\\$trend, "none"\\)[^\n]*\n[^\n]*\n[^\n]*', srv))
   expect_true(length(blk) == 1)
-  expect_true(grepl('c\\("full", "circadian", "level"\\)', blk))
+  # the level rows are the intercept and, with a trend, the MESOR -- not the
+  # curve value at the first observation, which mixes the rhythm into the level
+  expect_true(grepl('c\\("full", "circadian", "intercept"\\)', blk))
+  expect_true(grepl('"trend", "intercept", "mesor"', blk, fixed = TRUE))
 })
