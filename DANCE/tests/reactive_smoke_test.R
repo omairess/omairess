@@ -336,7 +336,11 @@ server <- function(input, output, session) {
   session$setInputs(harmonic_approach = "two_stage", harmonic_period = 24,
                     n_harmonics = 1, harmonic_trend_type = "none",
                     harmonic_model_selection = FALSE,
-                    harmonic_time_var = "_columns_",
+                    # "_columns_" is not a choice the app offers; it ran only
+                    # because an unknown time variable silently became equally
+                    # spaced times, which is now refused. "_index_" IS that
+                    # choice, made openly: the same times.
+                    harmonic_time_var = "_index_",
                     harmonic_dv_name = "Activity", harmonic_dv_units = "counts/min",
                     # P21 phase 4: the single "Group Variable" control became the
                     # Study Design panel. The grouping variable is now DERIVED
@@ -396,7 +400,11 @@ server <- function(input, output, session) {
   # Driven here with the user's own example: saturating exponential, 2 harmonics.
   cat("\n-- nested model selection: exp_sat + 2 harmonics -----------------------\n")
   t0 <- Sys.time()
+  # tau is estimated per participant within the range under Model
+  # Specification -- the app's defaults, which a mock session has to set
   session$setInputs(n_harmonics = 2, harmonic_trend_type = "exp_sat",
+                    harmonic_ts_tau_mode = "estimate", harmonic_tau_lo = 1,
+                    harmonic_tau_hi = 72,
                     harmonic_model_selection = TRUE, run_harmonic = 2)
   session$flushReact()
   el <- as.numeric(Sys.time() - t0, units = "secs")

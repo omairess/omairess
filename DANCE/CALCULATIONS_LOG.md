@@ -321,3 +321,104 @@ curve band through the logistic map against numerical derivatives; a range that
 excludes a cell's tau fails with the cell named), `traj_sat_app_test.R` (the
 profile stays in the range; an end-of-range estimate is called a bound; an
 impossible range is refused; two-stage held tau and ranged tau end to end).
+## 7. Assumptions audit: nothing a run decides is left unstated
+
+Every choice a cosinor run makes that is not a setting on screen -- a default,
+a convention, a rule of the estimator -- is now listed for that run, read off
+the fitted objects, by `dance_cosinor_assumptions()`
+(`server/08j_helpers_assumptions.R`). The summary prints it as **Assumptions
+and fixed settings** (and so does the summary download); the APA report puts
+the same list in its Methods. In-house: only the wording; every rule it states
+is the code's.
+
+What the list covers:
+
+- **Time**: where the times came from (clock times parsed at import, typed,
+  a column, or -- the "column index" choice -- NOT read from the data but
+  taken as equally spaced over exactly one period); the midnight rule; t = 0
+  at the recording's first time point for every participant and cell; the
+  period fixed, not estimated; cumulative harmonics.
+- **Data**: raw observations; a missing one is left out, never imputed.
+- **Trend**: log(1 + t) with t in hours (the +1 h is a convention); the MESOR
+  window (first to last time point) and the change (the trend at the end).
+- **Mixed**: the basis crossed with every design factor; REML via
+  lme4/lmerTest, bobyqa; random effects normal with full covariance per term,
+  the ladder rule (down only on failure or non-convergence, singular fits
+  kept) and the rung used; **residuals normal, independent, one variance --
+  no autocorrelation and no unequal variance is modelled**; the df method;
+  marginal effects with equal weights; Wald-z per-cell intervals; joint
+  amplitude/acrophase draws (6,000 per cell, 20,000 per contrast, seed
+  20240601) with Bingham's rule; band types; tau's procedure (held value, or
+  the profile's grid, structure, refinement, 1.92 cut, flat rule, bound rule,
+  conditional inference); the per-cell nlme settings.
+- **Two-stage**: the fitter (closed-form OLS; for the saturating trend
+  nlsLM -> nls port -> four restarts, starts and the range), default bounds
+  when bounding is on, the inclusion rule (non-converged out; on-a-bound
+  in or out; the fewer-than-3 fallback), group summaries (arithmetic means;
+  amplitude-weighted vector means; groups under 3 not summarised; unlabelled
+  participants out of group analyses), the tests and their assumptions
+  (estimates treated as exact; MANOVA Wilks; ANOVA equal variances;
+  Bingham; Watson-Williams; Welch + Holm), rhythm detection at p < .05
+  unadjusted, LOOCV, the bootstrap, the nested set and the free-vs-fixed
+  check.
+
+Behaviour the audit found wrong, and fixed:
+
+1. **Clock times parsed at import were not unwrapped at midnight.** They are
+   hours of the day in [0, 24), and the "shared clock times" route used them
+   as they came, so a recording from 08:00 to 15:00 the next day put its second
+   day BEFORE its first: every trend was fitted to scrambled times and t = 0 was
+   midnight. All three clock routes now go through `dance_unwrap_clock()`
+   (`server/03_helpers_clock.R`): a time earlier than the one before it is a
+   midnight crossing and it, and every later time, moves 24 h on.
+2. **The hand-entered (and column) times were unwrapped by one PERIOD**, not
+   24 h -- the same thing only when P = 24 h. A clock does not wrap at noon
+   because the period is 12 h.
+3. **A participant missing the first observation had their own trend origin.**
+   The two-stage fitters anchored the trend at each series' first NON-MISSING
+   time, so that participant's intercept was the midline at a later hour than
+   everyone else's, and group means averaged values from different times. Both
+   fitters take `t_origin`; the run passes the recording's first time point, so
+   every participant shares it (the mixed model is anchored there explicitly
+   too, even if nobody was observed at it). The exported script passes it as
+   well, and passes a held tau, which it did not.
+4. **The nested-model table averaged each candidate over whoever it fitted**,
+   while saying "same participants in every cell". `dance_model_set_common()`
+   keeps the participants scorable under every candidate (a candidate fitted to
+   nobody is named and dropped), and the summary and report state how many.
+5. **Free tau against held tau compared two different samples** (free over the
+   summarised fits, held over everyone with enough points), while saying
+   "scorable in both". It is now a per-participant difference on the same
+   observations and the same likelihood (`dance_gaussian_loglik`), averaged over
+   the participants with both.
+6. **The two-stage bootstrap was unseeded**: the same Run gave a different
+   interval each time. It is seeded (20240601), the session's random stream is
+   restored afterwards, and the summary states "percentile ... seed 20240601".
+7. **A flat tau profile fell back to a hidden value.** The value it falls back to
+   is the held value, now shown beside the range under the mixed approach in
+   both modes, and it must lie inside the range (refused otherwise, as typed and
+   at Run).
+8. **Converged nonlinear fits were labelled "not_attempted"**: the status was
+   assigned with `<<-` from inside `tryCatch`, which wrote it to the enclosing
+   environment. The fit's own `converged` flag was always right.
+9. **A time column of the wrong length silently became equally spaced times.**
+   It is refused.
+10. A group with no usable A or tau got a substituted A = 0 or tau = 1 h for its
+    curve; it now has no trend curve (NA). The ridge diagnostics' correlation
+    average no longer stops at the first 200 participants. The tau profile
+    counts the grid points it left out. The long-recording note said values
+    "will be wrapped using modulo"; nothing is.
+
+Also: the duplicated tau block under Model Specification (an editing error in
+the previous change, which created five input ids twice -- Shiny binds one and
+the other does nothing) is gone, and a test renders the tab and fails on any
+repeated id.
+
+Tests: `test-cosinor-assumptions.R` (midnight unwrapping by 24 h on every route;
+a missing first observation keeps the shared origin and recovers the true
+intercept; converged fits say so and leak nothing; the nested set's common
+sample; the assumption lists for mixed, flat-profile, failed-fit and two-stage
+runs; the printed width), `test-harmonic-ui-structure.R` (every id on the tab
+created once), `assumptions_app_test.R` (through Run: the clock route, the
+shared origin, the refusals, the seeded bootstrap, the nested set's sample, the
+summary and the report's list).

@@ -58,6 +58,22 @@ dance_cumulative_hours <- function(time_labels) {
   cum
 }
 
+# CLOCK TIMES IN RECORDING ORDER, for the cosinor. The columns are taken to be
+# in chronological order, so a time EARLIER than the one before it is a
+# midnight crossing: it and every later time move 24 h on. The cosinor used to
+# apply this only to hand-entered times -- and by one PERIOD rather than 24 h,
+# which is the same thing only when the period is 24 h -- while the clock times
+# parsed at import (hours in [0, 24)) went in unwrapped, so a recording from
+# 08:00 to 15:00 the next day put its second day BEFORE its first.
+# Returns the times and whether anything was moved.
+dance_unwrap_clock <- function(times, day = 24) {
+  t <- as.numeric(times)
+  if (length(t) > 1L) for (i in 2:length(t))
+    if (is.finite(t[i]) && is.finite(t[i - 1]) && t[i] < t[i - 1])
+      t[i:length(t)] <- t[i:length(t)] + day
+  list(times = t, wrapped = !isTRUE(all.equal(t, as.numeric(times))))
+}
+
 # TRUE when the columns are not evenly spaced in real time — the case where
 # smoothing against the column index actually distorts the curves.
 dance_spacing_is_uneven <- function(time_labels, tol = 1e-6) {

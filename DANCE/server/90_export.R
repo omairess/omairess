@@ -1307,7 +1307,8 @@
       if(!is.null(st)) {
         add(sprintf("use_bounds    <- %s", isTRUE(st$use_bounds)))
         for(nm in c("mesor_min", "mesor_max", "amplitude_min", "amplitude_max",
-                    "A_sat_min", "A_sat_max", "tau_min", "tau_max")) {
+                    "A_sat_min", "A_sat_max", "tau_min", "tau_max", "tau_fixed",
+                    "t_origin")) {
           v <- st[[nm]]
           add(sprintf("%-13s <- %s", nm,
                       if(is.null(v) || !is.finite(v)) "NA" else format(v)))
@@ -1330,9 +1331,13 @@
         add("              mesor_min = mesor_min, mesor_max = mesor_max,")
         add("              amplitude_min = amplitude_min, amplitude_max = amplitude_max,")
         add("              A_sat_min = A_sat_min, A_sat_max = A_sat_max,")
-        add("              tau_min = tau_min, tau_max = tau_max)")
+        # tau held at one value, and the one trend origin every participant
+        # shares: without them the script would estimate tau, and anchor a
+        # participant missing the first observation at their own first time
+        add("              tau_min = tau_min, tau_max = tau_max, tau_fixed = tau_fixed,")
+        add("              t_origin = if (is.finite(t_origin)) t_origin else min(time_vec))")
       } else {
-        add("              use_bounds = FALSE)")
+        add("              use_bounds = FALSE, t_origin = min(time_vec))")
       }
       add("})")
       add("")

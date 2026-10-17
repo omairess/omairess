@@ -109,3 +109,27 @@ test_that("tab 6 does not offer views or rows the fitted model cannot produce", 
   expect_true(grepl('c\\("full", "circadian", "intercept"\\)', blk))
   expect_true(grepl('"trend", "intercept", "mesor"', blk, fixed = TRUE))
 })
+
+test_that("every control on the cosinor tab is created exactly once", {
+  # A control created twice is not a cosmetic slip: Shiny binds one of the two
+  # and the other does nothing, so a value can be set that the run never
+  # reads. It happened once -- an editing error left a second, older tau block
+  # under Model Specification, with the same input ids as the new one.
+  skip_if_not_installed("shinydashboard")
+  skip_if_not_installed("plotly")
+  skip_if_not_installed("DT")
+  suppressPackageStartupMessages({
+    library(shiny); library(shinydashboard); library(plotly); library(DT)
+  })
+  env <- new.env()
+  eval(parse(file.path(app_dir, "ui/72_harmonic.R"), encoding = "UTF-8"), envir = env)
+  html <- as.character(env$ui_tab_harmonic)
+  ids <- regmatches(html, gregexpr('\\sid="[^"]+"', html))[[1]]
+  ids <- sub('^\\sid="', "", sub('"$', "", ids))
+  expect_gt(length(ids), 50)
+  expect_identical(unique(ids[duplicated(ids)]), character(0))
+  # and the tau controls are among them, once each
+  for (id in c("harmonic_traj_tau_mode", "harmonic_ts_tau_mode", "harmonic_traj_tau",
+               "harmonic_tau_lo", "harmonic_tau_hi", "harmonic_traj_sat_cells"))
+    expect_equal(sum(ids == id), 1L, info = id)
+})

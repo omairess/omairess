@@ -394,6 +394,9 @@ dance_traj_profile_tau <- function(d, period, n_harmonics, design_terms,
   prof <- do.call(rbind, Filter(Negate(is.null), rows))
   if (is.null(prof) || !nrow(prof))
     return(list(ok = FALSE, message = "No tau on the grid produced a usable fit."))
+  # grid points whose fit did not converge on the chosen structure are left
+  # out of the profile -- counted, so the report can say how many
+  n_grid_failed <- length(tau_grid) - nrow(prof)
 
   best <- prof$tau[which.max(prof$logLik)]
   drop <- max(prof$logLik) - min(prof$logLik)
@@ -502,7 +505,7 @@ dance_traj_profile_tau <- function(d, period, n_harmonics, design_terms,
   list(ok = TRUE, profile = prof, tau = best,
        ci = if (length(inside)) range(inside) else c(NA_real_, NA_real_),
        logLik_range = drop, flat = flat, at_edge = at_edge, fit = final,
-       rung = rung, grid = tau_grid, ci_open = ci_open,
+       rung = rung, grid = tau_grid, ci_open = ci_open, n_grid_failed = n_grid_failed,
        tau_estimated = TRUE,
        conditional_inference_warning = if (!is.null(final) && isTRUE(final$ok))
          final$tau_warning else NULL,

@@ -208,7 +208,9 @@ testServer(server, {
 
   # ====================================================== a range that excludes the optimum
   cat("\n-- mixed, tau searched only between 30 and 60 h ------------------------\n")
-  run(session, "mixed", 5, "profile", 18.3, lo = 30, hi = 60)
+  # the held value -- what a flat profile would fall back to -- has to lie in
+  # the range too, or Run refuses (checked below)
+  run(session, "mixed", 5, "profile", 40, lo = 30, hi = 60)
   ff <- values$harmonic_model$traj
   chk(isTRUE(ff$ok) && ff$spec$tau >= 30 - 1e-9 && ff$spec$tau <= 60 + 1e-9,
       sprintf("tau stays inside a range that excludes the optimum (%.1f h)", ff$spec$tau),
@@ -225,6 +227,10 @@ testServer(server, {
   chk(identical(values$harmonic_model, before),
       "a range whose lower end is above its upper end is refused",
       "an impossible range was fitted anyway")
+  run(session, "mixed", 9, "profile", 18.3, lo = 30, hi = 60)
+  chk(identical(values$harmonic_model, before),
+      "a held value outside the range is refused: a flat profile would hold tau there",
+      "a held value outside the range was accepted")
 
   # ====================================================== a flat profile
   cat("\n-- mixed, tau profiled on data with no saturating rise -----------------\n")

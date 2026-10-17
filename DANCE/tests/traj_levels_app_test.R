@@ -76,8 +76,11 @@ server <- function(input, output, session) {
 }
 
 run <- function(session, approach, trend, run_id, tau = 18) {
+  # the tau range's on-screen defaults: a mock session has no UI to supply them,
+  # and a two-stage saturating fit estimates each participant's tau inside it
   session$setInputs(harmonic_approach = approach, harmonic_period = 24, n_harmonics = 2,
                     harmonic_trend_type = trend, harmonic_traj_tau = tau,
+                    harmonic_tau_lo = 1, harmonic_tau_hi = 72,
                     harmonic_model_selection = FALSE, harmonic_time_var = "_manual_",
                     harmonic_manual_times = paste(clock, collapse = ","),
                     harmonic_dv_name = "KSS", harmonic_dv_units = "KSS points",

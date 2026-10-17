@@ -186,7 +186,10 @@ test_that("P12.2: the methods paragraph carries what a cosinor paper needs", {
   txt <- paste(e$dance_apa_report(vals, list(), "T"), collapse = "\n")
   expect_true(grepl("dependent variable was Activity (counts/min)", txt, fixed = TRUE))
   expect_true(grepl("period was FIXED at 24 rather than estimated", txt, fixed = TRUE))
-  expect_true(grepl("measured from the first observation in each series", txt, fixed = TRUE))
+  # one origin for every participant -- the recording's first time point -- not
+  # each series' first observation, which differed for a participant missing it
+  expect_true(grepl("measured from the first time point of the recording", txt, fixed = TRUE))
+  expect_false(grepl("first observation in each series", txt, fixed = TRUE))
   expect_true(grepl("zero-amplitude *F* test", txt, fixed = TRUE))
   expect_true(grepl("error ellipse", txt, fixed = TRUE))
   expect_true(grepl("Bingham et al. (1982)", txt, fixed = TRUE))

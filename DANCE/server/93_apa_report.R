@@ -580,9 +580,9 @@ dance_apa_report <- function(values, input, title = NULL) {
       add(" The period was FIXED at ", format(hm$period),
           " rather than estimated, so the acrophase and amplitude are conditional ",
           "on that choice.")
-      add(" Acrophase is reported in clock time, measured from the first ",
-          "observation in each series; a phase has no meaning without the origin ",
-          "it is measured from.")
+      add(" Acrophase is reported in clock time, measured from the first time ",
+          "point of the recording, which is also where every participant's trend ",
+          "starts; a phase has no meaning without the origin it is measured from.")
       add(" Rhythm detection used the zero-amplitude *F* test, which compares the ",
           "full model against a refit containing the trend but no harmonics; it ",
           "tests whether the rhythmic amplitude is distinguishable from zero, ",
@@ -605,7 +605,9 @@ dance_apa_report <- function(values, input, title = NULL) {
             "without the ones below it. Candidates were ranked by AICc, ",
             "corrected for the small ratio of observations to parameters that a ",
             "single participant's series gives, averaged per participant over ",
-            "the same participants in every cell, with Akaike weights.")
+            "the same participants in every cell (the ",
+            attr(ms, "n_common") %|% "", " scorable under every candidate), with ",
+            "Akaike weights.")
       }
       if (!is.null(hm$group_var_name)) {
         add(" Participants were grouped by ", hm$group_var_name, ". Group ",
@@ -622,6 +624,19 @@ dance_apa_report <- function(values, input, title = NULL) {
       }
     }
     blank()
+    # EVERY assumption of the run, the list the summary prints, so a Methods
+    # section adapted from this one can state each default and convention the
+    # prose above does not name
+    at <- if (exists("dance_cosinor_assumptions", mode = "function"))
+      tryCatch(dance_cosinor_assumptions(hm, hm$traj, input$harmonic_df_method %|% "kr"),
+               error = function(e) NULL) else NULL
+    if (!is.null(at) && nrow(at)) {
+      add("*Assumptions and fixed settings of the cosinor analysis* -- defaults, ",
+          "conventions and rules of the method that the paragraph above does not set out:")
+      blank()
+      for (i in seq_len(nrow(at))) add("- **", at$area[i], ".** ", at$text[i])
+      blank()
+    }
   }
 
   rg <- values$reg_model
@@ -1460,9 +1475,17 @@ dance_apa_html <- function(md_lines, title = "Analysis report") {
                "</th></tr></thead><tbody>", body, "</tbody></table>")
       next
     }
+    # a bulleted list: consecutive lines starting "- "
+    if (grepl("^- ", ln)) {
+      items <- character(0)
+      while (i <= n && grepl("^- ", md_lines[i])) {
+        items <- c(items, sub("^- ", "", md_lines[i])); i <- i + 1L }
+      out <- c(out, "<ul>", paste0("<li>", inline(esc(items)), "</li>"), "</ul>")
+      next
+    }
     para <- character(0)
     while (i <= n && nzchar(trimws(md_lines[i])) &&
-           !grepl("^(#{1,6} |\\||> |-{3,}$)", md_lines[i])) {
+           !grepl("^(#{1,6} |\\||> |-{3,}$|- )", md_lines[i])) {
       para <- c(para, md_lines[i]); i <- i + 1L }
     out <- c(out, "<p>", inline(esc(paste(para, collapse = " "))), "</p>")
   }
@@ -1477,6 +1500,7 @@ dance_apa_html <- function(md_lines, title = "Analysis report") {
     "padding-bottom:.25em;}",
     "h3{font-size:1.04em;margin:1.8em 0 .3em;font-style:italic;}",
     "p{margin:.7em 0;text-align:justify;}",
+    "ul{margin:.7em 0;padding-left:1.4em;} li{margin:.3em 0;}",
     "table{border-collapse:collapse;margin:1.4em 0;font-size:.94em;width:100%;}",
     "th,td{padding:.42em .7em;border:0;}",
     "thead th{border-top:1px solid #1a1a1a;border-bottom:1px solid #1a1a1a;",

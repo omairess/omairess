@@ -502,6 +502,26 @@ dance_akaike_table <- function(aicc_by_model) {
 }
 
 
+# THE NESTED SET ON ONE SAMPLE. `aicc` is a participants x candidates matrix,
+# NA where a candidate could not be fitted to a participant. Each candidate's
+# AICc is averaged over the participants scorable under EVERY candidate: the
+# loop this replaces averaged each candidate over whoever it happened to fit, so
+# a candidate that failed on the noisiest participants looked better for it,
+# while the output said "same participants in every cell". A candidate fitted
+# to nobody is dropped (and named) rather than emptying the common sample.
+dance_model_set_common <- function(aicc) {
+  aicc <- as.matrix(aicc)
+  aicc[!is.finite(aicc)] <- NA_real_
+  fitted_any <- colSums(!is.na(aicc)) > 0
+  not_fitted <- colnames(aicc)[!fitted_any]
+  aicc <- aicc[, fitted_any, drop = FALSE]
+  common <- if (ncol(aicc)) rowSums(is.na(aicc)) == 0 else logical(nrow(aicc))
+  means <- if (any(common)) colMeans(aicc[common, , drop = FALSE])
+           else stats::setNames(rep(NA_real_, ncol(aicc)), colnames(aicc))
+  list(means = as.list(means), n_common = sum(common), n = nrow(aicc),
+       not_fitted = not_fitted)
+}
+
 # ----------------------------------------------------------------- admissibility
 
 # The DV is never named anywhere in the report and its bounds are never checked.

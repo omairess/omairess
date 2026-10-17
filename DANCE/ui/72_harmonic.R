@@ -117,23 +117,33 @@ ui_tab_harmonic <- tabItem(
               # The mixed model is linear in its coefficients only for a given
               # tau, so its trajectory model shares ONE tau across cells; a tau
               # per cell is a nonlinear model of its own, offered below.
+              # The estimate IS the profile likelihood, restricted to the range:
+              # one method, named in its label.
               conditionalPanel(
                 condition = "input.harmonic_approach == 'mixed'",
                 radioButtons("harmonic_traj_tau_mode", "Time constant \u03c4:",
                              choices = c("Hold \u03c4 at a value" = "fixed",
-                                         "Estimate one \u03c4 for all cells, within a range" = "profile"),
+                                         "Estimate one \u03c4 for all cells (profile likelihood), within a range" = "profile"),
                              selected = "fixed")),
               conditionalPanel(
                 condition = "input.harmonic_approach == 'two_stage'",
                 radioButtons("harmonic_ts_tau_mode", "Time constant \u03c4:",
-                             choices = c("Estimate \u03c4 for each participant, within a range" = "estimate",
+                             choices = c("Estimate \u03c4 for each participant (nonlinear least squares), within a range" = "estimate",
                                          "Hold \u03c4 at a value for every participant" = "fixed"),
                              selected = "estimate")),
+              # Under the mixed approach the value is shown in BOTH modes: when
+              # tau is estimated it is what the model holds tau at if the
+              # profile is flat, and a value that decides a fit is not hidden.
               conditionalPanel(
-                condition = paste("(input.harmonic_approach == 'mixed' && input.harmonic_traj_tau_mode == 'fixed') ||",
+                condition = paste("input.harmonic_approach == 'mixed' ||",
                                   "(input.harmonic_approach == 'two_stage' && input.harmonic_ts_tau_mode == 'fixed')"),
                 numericInput("harmonic_traj_tau", "\u03c4 held at (h):", value = 18,
                              min = 0.5, max = 168, step = 0.5)),
+              conditionalPanel(
+                condition = "input.harmonic_approach == 'mixed' && input.harmonic_traj_tau_mode == 'profile'",
+                helpText(HTML("<small>Used only if the profile is flat: \u03c4 is then not
+                               identified by the data, and the model holds it at this value,
+                               which must lie inside the range.</small>"))),
               conditionalPanel(
                 condition = paste("(input.harmonic_approach == 'mixed' && (input.harmonic_traj_tau_mode == 'profile' || input.harmonic_traj_sat_cells)) ||",
                                   "(input.harmonic_approach == 'two_stage' && input.harmonic_ts_tau_mode == 'estimate')"),
@@ -142,6 +152,8 @@ ui_tab_harmonic <- tabItem(
                                          min = 0.1, step = 0.5)),
                   column(6, numericInput("harmonic_tau_hi", "to (h):", value = 72,
                                          min = 0.5, step = 1)))),
+              # what is wrong with the setting, as it is typed, not at Run
+              uiOutput("harmonic_tau_check"),
               helpText(HTML("<small>Daan, Beersma &amp; Borb\u00e9ly (1984) give
                              τ<sub>rise</sub> \u2248 18 h under extended wakefulness. An
                              estimate is never allowed outside the range; one that ends AT
@@ -164,75 +176,6 @@ ui_tab_harmonic <- tabItem(
                 helpText(HTML("<small><em>Each participant's A and τ are fitted by nonlinear least
                                squares; with τ held, A is a least-squares fit. If fits are poor,
                                try the log trend.</em></small>")))
-            ),
-            conditionalPanel(
-              condition = "input.harmonic_trend_type != 'none'",
-              # The control used to be called "Homeostatic Trend Model" and this
-              # note called the result a "Two-Process Model". A cosinor plus a
-              # trend separates a PERIODIC component from a NON-PERIODIC one.
-              # That may be informative about circadian modulation and
-              # homeostatic accumulation, but it is not the mechanistic Borbely
-              # two-process model, and naming it so asserts a mechanism the fit
-              # does not contain.
-              helpText(HTML("Separates a <b>periodic</b> component (the harmonics) from a
-                             <b>non-periodic</b> change over time (the trend). The trend may
-                             be informative about homeostatic processes, but this is a
-                             descriptive decomposition, not a mechanistic
-                             two-process model."))
-            ),
-            conditionalPanel(
-              condition = "input.harmonic_trend_type == 'linear'",
-              helpText(HTML("Y(t) = β<sub>0</sub> + β·t + harmonics<br><small>Constant rate of
-                             change: β is in response units per hour</small>"))
-            ),
-            conditionalPanel(
-              condition = "input.harmonic_trend_type == 'log'",
-              helpText(HTML("Y(t) = β<sub>0</sub> + β·log(t+1) + harmonics<br><small>Rapid initial
-                             change, slowing over time</small>"))
-            ),
-            conditionalPanel(
-              condition = "input.harmonic_trend_type == 'exp_sat'",
-              helpText(HTML("Y(t) = β<sub>0</sub> + A·(1-e<sup>-t/τ</sup>) + harmonics<br>
-                            <small>Asymptotic saturation \u2014 the shape a homeostatic process is
-                            often assumed to take, fitted descriptively. A is the rise above
-                            β<sub>0</sub> the trend approaches, in response units; τ is its
-                            time constant in hours.</small>")),
-              conditionalPanel(
-                condition = "input.harmonic_approach == 'two_stage'",
-                helpText(HTML("<small><em>Two-stage estimates A and τ for every participant by
-                               nonlinear least squares. If fits are poor, try the log
-                               trend.</em></small>"))
-              ),
-              # The mixed model is linear in its coefficients only for a given
-              # tau, so the trajectory model shares ONE tau across cells: held at
-              # a value, or estimated by profiling the likelihood. Estimating tau
-              # per cell is a nonlinear model of its own, offered below it.
-              # Visible here because tau IS part of the model -- it used to be
-              # read from a hidden two-stage field.
-              conditionalPanel(
-                condition = "input.harmonic_approach == 'mixed'",
-                radioButtons("harmonic_traj_tau_mode", "Time constant \u03c4:",
-                             choices = c("Hold \u03c4 at a value" = "fixed",
-                                         "Estimate one \u03c4 for all cells (profile likelihood)" = "profile"),
-                             selected = "fixed"),
-                conditionalPanel(
-                  condition = "input.harmonic_traj_tau_mode == 'fixed'",
-                  numericInput("harmonic_traj_tau", "\u03c4 held at (h):", value = 18,
-                               min = 0.5, max = 168, step = 0.5)),
-                helpText(HTML("<small>Every cell shares one τ and the model estimates
-                               the rise A per cell. Daan, Beersma &amp; Borb\u00e9ly
-                               (1984) give τ<sub>rise</sub> \u2248 18 h under extended
-                               wakefulness. Estimating τ refits the model at about 30
-                               values of τ, which takes roughly 15 to 20 times as long
-                               as one fit.</small>")),
-                checkboxInput("harmonic_traj_sat_cells",
-                              "Also estimate A and \u03c4 in every cell (nonlinear mixed model)",
-                              FALSE),
-                helpText(HTML("<small>Fits A, τ and the initial slope A/τ separately
-                               in each design cell (nlme), with intervals and tests,
-                               and tests whether one τ is enough. Shown on the
-                               comparison tab.</small>"))
-              )
             ),
             conditionalPanel(
               condition = "input.harmonic_trend_type != 'none'",
