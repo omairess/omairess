@@ -371,9 +371,8 @@
     if(!is.null(input$harmonic_trend_type) && input$harmonic_trend_type == "exp_sat") {
       hints_html <- paste0(hints_html, sprintf(
         "<strong>Suggested A_sat bounds:</strong> [%.2f, %.2f] (0.5× to 2× range)<br>
-         <strong>Suggested τ bounds:</strong> [0.5, %.1f] (0.5 to max time)<br>",
-        y_range * 0.5, y_range * 2,
-        time_max
+         <strong>τ:</strong> its range is set with the trend under Model Specification<br>",
+        y_range * 0.5, y_range * 2
       ))
     }
 
@@ -489,7 +488,7 @@
                           use_bounds = FALSE, mesor_min = NA, mesor_max = NA,
                           amplitude_min = 0, amplitude_max = NA,
                           A_sat_min = NA, A_sat_max = NA,
-                          tau_min = 0.5, tau_max = NA) {
+                          tau_min = 0.5, tau_max = NA, tau_fixed = NA) {
     # Remove NAs
     valid <- complete.cases(time, y)
     time <- time[valid]
@@ -515,7 +514,8 @@
                              "none" = 0,
                              "linear" = 1,
                              "log" = 1,
-                             "exp_sat" = 2,  # A and tau for nonlinear fit
+                             # A and tau for the nonlinear fit; A alone when tau is held
+                             "exp_sat" = if (isTRUE(is.finite(tau_fixed))) 1 else 2,
                              0)
 
     min_params <- 2 * n_harmonics + 1 + n_trend_params
@@ -528,7 +528,8 @@
       return(fit_cosinor_nonlinear(time, y, period, n_harmonics, trend_type,
                                     FALSE, NULL, 0.32, 0.66,
                                     use_bounds, mesor_min, mesor_max, amplitude_min, amplitude_max,
-                                    A_sat_min, A_sat_max, tau_min, tau_max))
+                                    A_sat_min, A_sat_max, tau_min, tau_max,
+                                    tau_fixed = tau_fixed))
     }
 
     # ========================================================================
@@ -918,6 +919,12 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
                                    do_loocv = TRUE, tau_fixed = NA) {
   # This function handles exponential saturation trend (exp_sat) and bounded optimization
 
+  # tau HELD at a value: the trend is then linear in A, tau is a constant of the
+  # formula rather than a parameter, and the fit reports it back as fixed
+  fixed_tau <- identical(trend_type, "exp_sat") && length(tau_fixed) == 1L &&
+    is.finite(tau_fixed) && tau_fixed > 0
+  # the caller's tau RANGE, honoured whether or not the other bounds are on
+  tau_min_in <- tau_min; tau_max_in <- tau_max
   n <- length(y)
   t_offset <- min(time)
   t_shifted <- time - t_offset  # For exponential saturation
@@ -936,6 +943,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     if(is.na(amplitude_max)) amplitude_max <- y_range * 2
     if(is.na(A_sat_min)) A_sat_min <- -Inf  # Allow negative for decreasing trends
     if(is.na(A_sat_max)) A_sat_max <- y_range * 2
+    if(is.na(tau_min) || tau_min <= 0) tau_min <- 0.5
     if(is.na(tau_max)) tau_max <- t_max * 5
   } else {
     # No user-specified bounds - use wide defaults with minimal numerical constraints
@@ -948,11 +956,13 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     # For exp_sat: Use original bounds from CIRCAREGold.R when bounding disabled
     # These bounds apply to Approaches 1-2, but Approach 3 will be unbounded
     if(trend_type == "exp_sat") {
-      # Original bounds: A_sat unbounded, tau constrained
+      # A_sat unbounded; tau inside the range the user set (Model
+      # Specification), and only when none was given the original defaults
+      # of 0.5 h to five times the recording
       A_sat_min <- -Inf
       A_sat_max <- Inf
-      tau_min <- 0.5  # Original fixed minimum
-      tau_max <- t_max * 5  # Original upper bound
+      tau_min <- if (isTRUE(is.finite(tau_min_in)) && tau_min_in > 0) tau_min_in else 0.5
+      tau_max <- if (isTRUE(is.finite(tau_max_in)) && tau_max_in > tau_min) tau_max_in else t_max * 5
     } else {
       A_sat_min <- -Inf
       A_sat_max <- Inf
@@ -1004,6 +1014,15 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     lower_bounds["tau"] <- tau_min
     upper_bounds["A_sat"] <- A_sat_max
     upper_bounds["tau"] <- tau_max
+    if (fixed_tau) {
+      # tau is data, not a parameter: it comes from fit_data below
+      start_list$tau <- NULL
+      lower_bounds <- lower_bounds[names(lower_bounds) != "tau"]
+      upper_bounds <- upper_bounds[names(upper_bounds) != "tau"]
+    } else {
+      # a start outside the range would be clipped to a bound and stall there
+      start_list$tau <- min(max(start_list$tau, tau_min * 1.05), tau_max * 0.95)
+    }
   }
 
   # Add harmonic components
@@ -1053,6 +1072,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     t_shifted = t_shifted,
     t_offset = t_offset
   )
+  if (fixed_tau) fit_data$tau <- tau_fixed
 
   # Try fitting with multiple approaches
   fit_success <- FALSE
@@ -1177,15 +1197,17 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
   # Approach 3: Try different starting values for tau parameters
   if(!fit_success && (trend_type == "exp_sat" || include_inertia)) {
     for(tau_mult in c(0.1, 0.5, 2, 5)) {
-      if(trend_type == "exp_sat") {
-        start_list$tau <- t_max * tau_mult / 3
+      if(trend_type == "exp_sat" && !fixed_tau) {
+        start_list$tau <- min(max(t_max * tau_mult / 3, tau_min * 1.05), tau_max * 0.95)
       }
       if(include_inertia) {
         start_list$tau_W <- tau_W_init * tau_mult
       }
 
       tryCatch({
-        if(use_bounds) {
+        # tau stays inside its range here too: this retry used to drop every
+        # bound for exp_sat, which is where a tau of hundreds of hours came from
+        if(use_bounds || trend_type == "exp_sat") {
           # Use port algorithm with bounds (only if user explicitly requested bounds)
           nls_fit <- nls(
             as.formula(formula_str),
@@ -1308,6 +1330,13 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     se <- tryCatch(summary(nls_fit)$coefficients[, 2],
                    error = function(e) rep(NA, length(coefs)))
     names(se) <- names(coefs)
+    # a held tau goes back into the coefficient vector where every reader of
+    # an exp_sat fit expects it -- after A_sat -- with no standard error
+    if (fixed_tau) {
+      at <- match("A_sat", names(coefs))
+      coefs <- append(coefs, c(tau = tau_fixed), after = at)
+      se <- append(se, c(tau = NA_real_), after = at)
+    }
 
     mesor <- coefs["mesor"]
     mesor_se <- se["mesor"]
@@ -1331,7 +1360,8 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       )
       trend_params$tau <- list(
         coef = as.numeric(coefs["tau"]),
-        se = if(!is.na(se["tau"])) as.numeric(se["tau"]) else NA
+        se = if(!is.na(se["tau"])) as.numeric(se["tau"]) else NA,
+        fixed = fixed_tau
       )
     }
 
@@ -1394,8 +1424,8 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     r_squared <- dance_r_squared(ss_resid, ss_total)   # P0.6: SST = 0 -> NA, not NaN
     percent_rhythm <- max(0, r_squared * 100)
 
-    # Calculate p-value for circadian rhythm
-    n_params <- length(coefs)
+    # Calculate p-value for circadian rhythm (a held tau is not a parameter)
+    n_params <- length(coefs) - as.integer(fixed_tau)
 
     # AUDIT (extra a): test the harmonics GIVEN the trend, by refitting the
     # trend-only model. See the note in fit_cosinor() -- the old numerator was
@@ -1406,7 +1436,10 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     # rejected true nulls at 14.6% against a nominal 5%. It now refits tau.
     # See dance_reduced_exp_sat_sse() in server/08_helpers_cosinor.R.
     ss_resid_trend_only <- tryCatch({
-      if(trend_type == "exp_sat" && !is.null(trend_params$A_sat) && !is.null(trend_params$tau)) {
+      if(fixed_tau) {
+        # the trend-only model with the SAME held tau: linear, so least squares
+        sum(residuals(lm(y ~ I(1 - exp(-(time - t_offset) / tau_fixed))))^2)
+      } else if(trend_type == "exp_sat" && !is.null(trend_params$A_sat) && !is.null(trend_params$tau)) {
         dance_reduced_exp_sat_sse(
           y, time, t_offset,
           start = list(mesor = as.numeric(coefs[["mesor"]]),
@@ -1477,11 +1510,11 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
         f_loo <- tryCatch({
           if(requireNamespace("minpack.lm", quietly = TRUE)) {
             minpack.lm::nlsLM(as.formula(formula_str), data = d_loo,
-                              start = as.list(coefs),
+                              start = as.list(coef(nls_fit)),
                               lower = lower_bounds, upper = upper_bounds,
                               control = minpack.lm::nls.lm.control(maxiter = 200))
           } else {
-            nls(as.formula(formula_str), data = d_loo, start = as.list(coefs),
+            nls(as.formula(formula_str), data = d_loo, start = as.list(coef(nls_fit)),
                 control = nls.control(maxiter = 200, warnOnly = TRUE))
           }
         }, error = function(e) NULL)
@@ -2194,8 +2227,29 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       amplitude_max <- if(use_bounds) input$harmonic_amplitude_max else NA
       A_sat_min <- if(use_bounds) input$harmonic_A_sat_min else NA
       A_sat_max <- if(use_bounds) input$harmonic_A_sat_max else NA
-      tau_min <- if(use_bounds) input$harmonic_tau_min else 0.5
-      tau_max <- if(use_bounds) input$harmonic_tau_max else NA
+      # TAU (saturating trend), set under Model Specification: a range every
+      # estimate of tau stays inside, or one value every fit holds. It used to
+      # be bounded only behind "Enable Parameter Bounding", which also bounds
+      # the intercept and the amplitudes -- otherwise anywhere from 0.5 h to
+      # five times the recording, and unbounded in the optimiser's last retry.
+      tau_in <- harmonic_tau_inputs()
+      if (identical(trend_type, "exp_sat")) {
+        if (identical(tau_in$mode, "fixed") && !tau_in$value_ok) {
+          showNotification("Set the value tau is held at: a positive number of hours.",
+                           type = "error", duration = 10)
+          return()
+        }
+        if ((identical(tau_in$mode, "estimate") || tau_in$sat_cells) && !tau_in$range_ok) {
+          showNotification(paste("Set the range tau is searched in: a lower and an upper bound",
+                                 "in hours, the lower above 0 and below the upper."),
+                           type = "error", duration = 10)
+          return()
+        }
+      }
+      tau_min <- if (tau_in$range_ok) tau_in$lo else 0.5
+      tau_max <- if (tau_in$range_ok) tau_in$hi else NA
+      tau_fixed <- if (identical(trend_type, "exp_sat") && identical(tau_in$mode, "fixed"))
+        tau_in$value else NA
 
       if(use_bounds) {
         bounds_msg <- sprintf("Using parameter bounds: intercept [%.2f, %.2f], Amplitude [%.2f, %.2f]",
@@ -2239,7 +2293,8 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
                                A_sat_min = A_sat_min,
                                A_sat_max = A_sat_max,
                                tau_min = tau_min,
-                               tau_max = tau_max)
+                               tau_max = tau_max,
+                               tau_fixed = tau_fixed)
 
           if(fit_i$success) {
             individual_fits[[i]] <- fit_i
@@ -3051,8 +3106,12 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
             for(i in seq_len(n_subjects)) {
               y_i <- as.numeric(Y[i, ])
               if(sum(!is.na(y_i)) < need) next
+              # the saturating candidates use the same tau setting as the fit
+              # being reported, so its row in the table is that fit
               f <- tryCatch(fit_cosinor(time_vec_model, y_i, period = period,
-                                        n_harmonics = m$k, trend_type = m$trend),
+                                        n_harmonics = m$k, trend_type = m$trend,
+                                        tau_min = tau_min, tau_max = tau_max,
+                                        tau_fixed = if (identical(m$trend, "exp_sat")) tau_fixed else NA),
                             error = function(e) NULL)
               if(is.null(f) || !isTRUE(f$success) || !is.finite(f$aicc)) next
               aicc_sum <- aicc_sum + f$aicc; k_ok <- k_ok + 1L
@@ -3091,7 +3150,10 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       #      wakefulness)
       # ======================================================================
       conditioning <- NULL
-      if(identical(approach, "two_stage") && trend_type == "exp_sat" && nrow(individual_params) > 0) {
+      # with tau HELD there is no A-tau ridge to diagnose: the checks below are
+      # about whether a free tau is identified
+      if(identical(approach, "two_stage") && trend_type == "exp_sat" && nrow(individual_params) > 0 &&
+         !is.finite(tau_fixed)) {
         conditioning <- list()
 
         cors <- list()
@@ -3239,7 +3301,9 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
         t_offset = t_offset_global,
         t_center = t_center_global,
         subjects_with_nas = subjects_with_nas,
-        Y = Y
+        Y = Y,
+        # the tau setting this run used (Model Specification), for every reader
+        tau_spec = if (identical(trend_type, "exp_sat")) tau_in else NULL
       )
       if (identical(approach, "mixed")) {
         # ONE fitted model for the whole module. Fitted here, once, when the
@@ -3349,7 +3413,13 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
          linear = "linear, beta*t",
          log = "logarithmic, beta*log(t + 1)",
          exp_sat = paste0("saturating exponential, A_sat*(1 - e^(-t/tau))",
-                          if (mixed && isTRUE(ff$ok)) paste0(". ", harmonic_tau_statement(ff)) else ""),
+                          if (mixed && isTRUE(ff$ok)) paste0(". ", harmonic_tau_statement(ff))
+                          else if (!mixed && identical(mod$tau_spec$mode, "fixed"))
+                            sprintf("; tau held at %s h for every participant", fmt1(mod$tau_spec$value))
+                          else if (!mixed && isTRUE(mod$tau_spec$range_ok))
+                            sprintf("; tau estimated per participant within %s to %s h",
+                                    fmtn(mod$tau_spec$lo, 1), fmtn(mod$tau_spec$hi, 1))
+                          else ""),
          trend_type))
     if (mixed && isTRUE(ff$ok)) {
       cls <- ff$spec$classification
@@ -3470,7 +3540,10 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       hdr("Saturating trend per cell (nonlinear mixed model)")
       if (!isTRUE(sf$ok)) { cat("  Not available: ", sf$message, "\n", sep = ""); return(invisible(NULL)) }
       un <- if (!is.null(dvu) && nzchar(dvu)) dvu else "response units"
-      cat(sprintf("  nlme, maximum likelihood; every parameter per cell, tau on the log scale.\n"))
+      cat(sprintf("  nlme, maximum likelihood; every parameter per cell, %s.\n",
+                  if (!is.null(sf$tau_range)) sprintf("tau searched only within %s to %s h",
+                                                      fmtn(sf$tau_range[1], 1), fmtn(sf$tau_range[2], 1))
+                  else "tau on the log scale"))
       cat(sprintf("  Random structure: %s. Intervals on %d df.\n", sf$re_label, sf$df))
       for (i in seq_len(nrow(sf$table))) {
         r <- sf$table[i, ]
@@ -3619,12 +3692,14 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
         if (isTRUE(sm$ok)) {
           hdr("Saturating trend per group (means of the per-participant fits)")
           un <- if (!is.null(dvu) && nzchar(dvu)) dvu else "response units"
+          held <- identical(mod$tau_spec$mode, "fixed")
           for (cl in unique(sm$table$cell)) {
             r <- function(q) sm$table[sm$table$quantity == q & sm$table$cell == cl, ]
-            a <- r("A_sat"); tq <- r("tau"); s0 <- r("init_slope")
-            cat(sprintf("  %-14s A %s [%s, %s] %s   tau %s [%s, %s] h   A/tau %s [%s, %s] %s/h  (n = %d)\n",
-                        cl, fmt2(a$estimate), fmt2(a$lo), fmt2(a$hi), un,
-                        fmt2(tq$estimate), fmt2(tq$lo), fmt2(tq$hi),
+            a <- r("A_sat"); s0 <- r("init_slope")
+            tau_txt <- if (held) sprintf("tau held at %s h", fmt1(mod$tau_spec$value)) else {
+              tq <- r("tau"); sprintf("tau %s [%s, %s] h", fmt2(tq$estimate), fmt2(tq$lo), fmt2(tq$hi)) }
+            cat(sprintf("  %-14s A %s [%s, %s] %s   %s   A/tau %s [%s, %s] %s/h  (n = %d)\n",
+                        cl, fmt2(a$estimate), fmt2(a$lo), fmt2(a$hi), un, tau_txt,
                         fmt3(s0$estimate), fmt3(s0$lo), fmt3(s0$hi), un, as.integer(a$n)))
           }
           cat("  95% t intervals across participants. Each participant's fit estimates A and tau\n")
@@ -3709,6 +3784,9 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
                     fmtn(cn$tau_fixed_n %||% NA, 0)))
       } else if (!is.null(cn) && isTRUE(cn$tau_fixed_skipped)) {
         cat("Free-tau vs fixed-tau check: NOT RUN -- enter a value in 'tau held at (h)'.\n")
+      } else if (identical(mod$tau_spec$mode, "fixed") && identical(trend_type, "exp_sat")) {
+        cat(sprintf("Free-tau vs fixed-tau check: not applicable -- tau was held at %s h for every participant.\n",
+                    fmt1(mod$tau_spec$value)))
       }
     }
 
@@ -4811,14 +4889,20 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     # so the fit held tau at that field's default of 18 h and nothing on screen
     # said where the number came from.
     sat <- identical(trend, "exp_sat")
-    tau_mode <- if (sat) (input$harmonic_traj_tau_mode %||% "fixed") else "none"
-    tau_user <- suppressWarnings(as.numeric(input$harmonic_traj_tau %||% NA))
-    tau_user_ok <- length(tau_user) == 1L && is.finite(tau_user) && tau_user > 0
+    # the settings this run was started with (Model Specification)
+    ti <- mod$tau_spec %||% harmonic_tau_inputs()
+    tau_mode <- if (!sat) "none" else if (identical(ti$mode, "estimate")) "profile" else "fixed"
+    tau_user <- ti$value
+    tau_user_ok <- isTRUE(ti$value_ok)
     if (sat && identical(tau_mode, "fixed") && !tau_user_ok)
       return(list(ok = FALSE, message = paste(
         "A saturating trend needs a time constant. Set tau under Model",
         "Specification, or choose to estimate it: the mixed model is linear in its",
         "coefficients only for a given tau.")))
+    if (sat && (identical(tau_mode, "profile") || isTRUE(ti$sat_cells)) && !isTRUE(ti$range_ok))
+      return(list(ok = FALSE, message = paste(
+        "Estimating tau needs the range to search: a lower and an upper bound in",
+        "hours under Model Specification.")))
     period <- mod$period %||% 24
     K <- mod$n_harmonics %||% 1
 
@@ -4829,8 +4913,12 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       dance_traj_fit(sp)
     }
     if (identical(tau_mode, "profile")) {
+      # the profile searches YOUR range only: 24 points spaced evenly in log tau
+      # between its ends, so tau cannot come back at a value you ruled out
+      grid <- exp(seq(log(ti$lo), log(ti$hi), length.out = 24))
       pr <- withProgress(message = "Profiling the likelihood over tau...", value = 0, {
         dance_traj_profile_tau(d, period, K, design_terms = NULL, roles = roles,
+                               tau_grid = grid,
                                progress = function(j, n) setProgress(
                                  j / (n + 1), detail = sprintf("grid point %d of %d", j, n)))
       })
@@ -4866,12 +4954,32 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     # only way to compare tau itself, and the initial slope A/tau, between cells.
     # The trajectory model above keeps one tau, so its block tests compare curves
     # on one basis.
-    if (sat && isTRUE(input$harmonic_traj_sat_cells)) {
+    if (sat && isTRUE(ti$sat_cells)) {
       ff$sat <- withProgress(
         message = "Estimating A and tau in every cell (nonlinear mixed model)...", value = 0.1,
-        dance_traj_sat_fit(ff, progress = function(msg) incProgress(0.3, detail = msg)))
+        dance_traj_sat_fit(ff, tau_range = c(ti$lo, ti$hi),
+                           progress = function(msg) incProgress(0.3, detail = msg)))
     }
+    ff$tau_range <- if (sat && isTRUE(ti$range_ok)) c(ti$lo, ti$hi) else NULL
     ff
+  }
+
+  # THE TAU SETTINGS, read in one place. Mixed: hold one value, or estimate one
+  # tau for all cells inside a range (plus, on request, a tau per cell inside the
+  # same range). Two-stage: estimate each participant's tau inside the range, or
+  # hold one value for every participant.
+  harmonic_tau_inputs <- function() {
+    mixed <- identical(input$harmonic_approach %||% "mixed", "mixed")
+    mode <- if (mixed) (input$harmonic_traj_tau_mode %||% "fixed")
+            else (input$harmonic_ts_tau_mode %||% "estimate")
+    if (identical(mode, "profile")) mode <- "estimate"
+    num <- function(x) suppressWarnings(as.numeric(if (is.null(x)) NA else x))[1]
+    value <- num(input$harmonic_traj_tau)
+    lo <- num(input$harmonic_tau_lo); hi <- num(input$harmonic_tau_hi)
+    list(mode = mode, value = value, lo = lo, hi = hi,
+         value_ok = is.finite(value) && value > 0,
+         range_ok = is.finite(lo) && is.finite(hi) && lo > 0 && hi > lo,
+         sat_cells = mixed && isTRUE(input$harmonic_traj_sat_cells))
   }
 
   # Where the trajectory model's tau came from, in one sentence: held at a value,
@@ -4886,10 +4994,14 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       profile = {
         lo <- if (isTRUE(pr$ci_open[["lower"]])) paste("below", f3(pr$ci[1])) else f3(pr$ci[1])
         hi <- if (isTRUE(pr$ci_open[["upper"]])) paste("above", f3(pr$ci[2])) else f3(pr$ci[2])
+        rg <- ff$tau_range %||% range(pr$grid %||% pr$profile$tau)
         sprintf(paste("The trajectory model's \u03c4 was estimated for all cells by profile",
-                      "likelihood: %s h (95%% profile interval %s to %s h)%s. Its tests are",
-                      "conditional on that value."), f3(sp$tau), lo, hi,
-                if (isTRUE(pr$at_edge)) "; the estimate sits at the edge of the search grid, so it is a bound" else "")
+                      "likelihood within %s to %s h: %s h (95%% profile interval %s to %s h)%s.",
+                      "Its tests are conditional on that value."),
+                f3(rg[1]), f3(rg[2]), f3(sp$tau), lo, hi,
+                if (isTRUE(pr$at_edge)) paste(
+                  "; it sits at the END of the search range, so it is a bound, not an",
+                  "estimate -- widen the range, or hold \u03c4 at a value") else "")
       },
       fixed_after_flat = sprintf(paste(
         "\u03c4 is not identified by these data: the profile likelihood varies by only %.2f",
@@ -5865,6 +5977,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       sm <- dance_ts_sat_summary(ts$df, mod)
       if (!isTRUE(sm$ok)) return(sm)
       return(list(ok = TRUE, approach = "two_stage", table = sm$table, units = mod$dv_units,
+                  quantities = sm$quantities,
                   n_cells = ts$n_groups, mod = mod, df = ts$df,
                   pair = function(q, adj) dance_ts_pairwise(ts$df, mod, q, adjust = adj),
                   curves = function() dance_ts_sat_curves(ts$df, mod),
@@ -5885,6 +5998,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
                        lo = st$init_slope_lo, hi = st$init_slope_hi, stringsAsFactors = FALSE))
     } else NULL
     list(ok = TRUE, approach = "mixed", ff = ff, sf = sf, have = have, table = tab,
+         quantities = DANCE_TRAJ_SAT_PARS,
          units = ff$dv_units, n_cells = if (have) sf$n_cells else nrow(dance_traj_cell_grid(ff$spec)),
          pair = function(q, adj) if (have) dance_traj_sat_pairwise(sf, q, adjust = adj)
                                  else list(ok = FALSE, message = "Not estimated per cell."),
@@ -5906,12 +6020,27 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     esc <- function(x) gsub(">", "&gt;", gsub("<", "&lt;", gsub("&", "&amp;", x, fixed = TRUE),
                                               fixed = TRUE), fixed = TRUE)
     if (!isTRUE(si$ok)) return(note(si$message %||% ""))
-    if (identical(si$approach, "two_stage"))
+    if (identical(si$approach, "two_stage")) {
+      ts_tau <- si$mod$tau_spec
+      if (identical(ts_tau$mode, "fixed"))
+        return(note("Every participant's fit held \u03c4 at ", format(signif(ts_tau$value, 3)),
+                    " h, set under Model Specification, and estimated A; A/\u03c4 is each ",
+                    "participant's A divided by that value. \u03c4 is not compared: it is ",
+                    "the same for everyone by construction."))
+      nb <- dance_ts_tau_at_bound(si$mod, si$df$subject)
       return(note("Group means of the per-participant fits, each of which estimates A and ",
-                  "\u03c4 jointly; A/\u03c4 is each participant's own ratio. Over a short ",
-                  "recording A and \u03c4 trade off along a ridge, so a participant's A and ",
-                  "\u03c4 are individually unstable: A/\u03c4 and the change over the ",
-                  "recording are the steadier numbers."))
+                  "\u03c4 jointly",
+                  if (isTRUE(ts_tau$range_ok)) paste0(", \u03c4 within ", format(ts_tau$lo),
+                                                      " to ", format(ts_tau$hi), " h") else "",
+                  "; A/\u03c4 is each participant's own ratio.",
+                  if (nb > 0) sprintf(paste0(
+                    " <span style='color:#8a5a12'>%d participant(s) reached an end of that ",
+                    "range: their \u03c4 is a bound, not an estimate (the fits are flagged; ",
+                    "excluding fits on a bound is under Advanced).</span>"), nb) else "",
+                  " Over a short recording A and \u03c4 trade off along a ridge, so a ",
+                  "participant's A and \u03c4 are individually unstable: A/\u03c4 and the ",
+                  "change over the recording are the steadier numbers."))
+    }
     ff <- si$ff
     tau_txt <- harmonic_tau_statement(ff)
     if (!isTRUE(si$have))
@@ -5934,9 +6063,14 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     flags <- dance_traj_sat_flags(sf)
     tagList(
       note(sprintf(paste("Nonlinear mixed model (nlme, maximum likelihood): every parameter per",
-                         "cell, \u03c4 on the log scale; random structure: %s (%d of %d tried).",
+                         "cell, %s; random structure: %s (%d of %d tried).",
                          "Intervals and tests on %d df (participants minus between-participant",
-                         "cells)."), sf$re_label, sf$rung, sf$n_rungs, sf$df),
+                         "cells)."),
+                   if (!is.null(sf$tau_range))
+                     sprintf("\u03c4 searched only within %s to %s h", format(sf$tau_range[1]),
+                             format(sf$tau_range[2]))
+                   else "\u03c4 on the log scale",
+                   sf$re_label, sf$rung, sf$n_rungs, sf$df),
            "<br>", lrt_txt, "<br>", tau_txt),
       if (length(flags)) tags$div(style = "font-size:11px;color:#8a5a12;margin:2px 0 6px 0",
                                   HTML(paste(flags, collapse = "<br>"))))
@@ -5946,7 +6080,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     si <- harmonic_traj_satinfo()
     if (!isTRUE(si$ok)) return(dw_msg(si$message %||% ""))
     view <- input$harmonic_traj_sat_view %||% "cells"
-    qs <- DANCE_TRAJ_SAT_PARS
+    qs <- si$quantities %||% DANCE_TRAJ_SAT_PARS
     if (identical(view, "profile")) {
       pr <- if (identical(si$approach, "mixed")) si$ff$tau_profile else NULL
       if (is.null(pr)) return(dw_msg(if (identical(si$approach, "mixed"))
@@ -6027,6 +6161,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     td <- function(x, mono = FALSE) tags$td(style = paste0("padding:3px 12px 3px 0", if (mono) ";font-family:monospace" else ""), x)
     if (identical(si$approach, "two_stage")) {
       cols <- c(A_sat = "A_sat", tau = "tau", init_slope = "init_slope")
+      cols <- cols[names(cols) %in% (si$quantities %||% names(cols))]
       rows <- lapply(names(cols), function(q) {
         r <- dance_group_linear_test(si$df[[cols[[q]]]], si$df$group)
         if (is.null(r)) return(NULL)

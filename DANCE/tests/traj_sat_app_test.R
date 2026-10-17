@@ -76,9 +76,11 @@ server <- function(input, output, session) {
   values$subject_ids <- rownames(raw)
 }
 
-run <- function(session, approach, run_id, tau_mode = "fixed", tau = 18, cells = FALSE) {
+run <- function(session, approach, run_id, tau_mode = "fixed", tau = 18, cells = FALSE,
+                lo = 1, hi = 72, ts_mode = "estimate") {
   session$setInputs(harmonic_approach = approach, harmonic_period = 24, n_harmonics = 2,
                     harmonic_trend_type = "exp_sat", harmonic_traj_tau_mode = tau_mode,
+                    harmonic_ts_tau_mode = ts_mode, harmonic_tau_lo = lo, harmonic_tau_hi = hi,
                     harmonic_traj_tau = tau, harmonic_traj_sat_cells = cells,
                     harmonic_model_selection = FALSE, harmonic_time_var = "_manual_",
                     harmonic_manual_times = paste(clock, collapse = ","),
@@ -119,7 +121,7 @@ testServer(server, {
   # ====================================================== a profiled tau + per cell
   cat("\n-- mixed, tau profiled for all cells, and A and tau per cell ------------\n")
   t1 <- Sys.time()
-  run(session, "mixed", 2, "profile", 18.3, cells = TRUE)
+  run(session, "mixed", 2, "profile", 18.3, cells = TRUE, lo = 2, hi = 48)
   cat(sprintf("   (fit, profile and per-cell model took %.0f s)\n", as.numeric(Sys.time() - t1, units = "secs")))
   ff <- values$harmonic_model$traj
   pr <- ff$tau_profile
@@ -131,6 +133,9 @@ testServer(server, {
   chk(length(unique(pr$profile$rung)) == 1L,
       "every point of the profile was fitted on one random structure",
       "the profile mixes random structures")
+  chk(all(pr$profile$tau >= 2 - 1e-9 & pr$profile$tau <= 48 + 1e-9),
+      "the profile searched only the range on screen, 2 to 48 h",
+      sprintf("the profile left its range: %.2f to %.2f", min(pr$profile$tau), max(pr$profile$tau)))
   hd <- text_of(output$harmonic_traj_header)
   chk(grepl("estimated for all cells by profile likelihood", hd, fixed = TRUE) &&
         grepl("conditional on that value", hd, fixed = TRUE),
@@ -157,6 +162,9 @@ testServer(server, {
         "A/tau is A divided by tau, cell by cell", "A/tau is not A / tau")
     chk(all(sf$table$tau_lo < sf$table$tau & sf$table$tau < sf$table$tau_hi),
         "each tau sits inside its interval", "a tau lies outside its interval")
+    chk(all(sf$table$tau_lo >= 2 - 1e-9 & sf$table$tau_hi <= 48 + 1e-9),
+        "every per-cell tau and its interval stay inside the range 2 to 48 h",
+        "a per-cell tau or its interval left the range")
     sh <- text_of(output$harmonic_traj_sat_header)
     chk(grepl("Is one", sh, fixed = TRUE) && grepl("Likelihood-ratio test", sh, fixed = TRUE),
         "the panel header reports the one-tau test", "the panel header lacks the one-tau test")
@@ -198,6 +206,26 @@ testServer(server, {
         "the report lacks the per-cell table or the tau statement")
   }
 
+  # ====================================================== a range that excludes the optimum
+  cat("\n-- mixed, tau searched only between 30 and 60 h ------------------------\n")
+  run(session, "mixed", 5, "profile", 18.3, lo = 30, hi = 60)
+  ff <- values$harmonic_model$traj
+  chk(isTRUE(ff$ok) && ff$spec$tau >= 30 - 1e-9 && ff$spec$tau <= 60 + 1e-9,
+      sprintf("tau stays inside a range that excludes the optimum (%.1f h)", ff$spec$tau),
+      sprintf("tau left its range: %s", format(ff$spec$tau)))
+  hd <- text_of(output$harmonic_traj_header)
+  chk(grepl("END of the search range", hd, fixed = TRUE),
+      "and an estimate at the end of the range is called a bound",
+      "an estimate at the end of the range is not flagged")
+
+  # ====================================================== settings that cannot run
+  cat("\n-- a range that is not a range is refused, not fitted -----------------\n")
+  before <- values$harmonic_model
+  run(session, "mixed", 6, "profile", 18.3, lo = 40, hi = 10)
+  chk(identical(values$harmonic_model, before),
+      "a range whose lower end is above its upper end is refused",
+      "an impossible range was fitted anyway")
+
   # ====================================================== a flat profile
   cat("\n-- mixed, tau profiled on data with no saturating rise -----------------\n")
   values$data <- flat_raw
@@ -210,6 +238,43 @@ testServer(server, {
   chk(grepl("not identified by these data", hd, fixed = TRUE),
       "and the header says tau is not identified", "the flat profile is not reported")
   values$data <- raw
+
+  # ====================================================== two-stage, tau held
+  cat("\n-- two-stage, tau held at 18 h for every participant -------------------\n")
+  run(session, "two_stage", 7, ts_mode = "fixed", tau = 18)
+  P <- values$harmonic_model$individual_params
+  chk(!is.null(P) && nrow(P) > 40 && all(P$tau == 18) && all(is.na(P$tau_se)),
+      sprintf("every participant's fit holds tau at 18 h (%d fits)", nrow(P %||% data.frame())),
+      "a held tau was not held in every fit")
+  chk(isTRUE(all.equal(P$init_slope, P$A_sat / 18)),
+      "and each A/tau is that participant's A over 18", "A/tau does not use the held tau")
+  mod <- values$harmonic_model
+  chk(!"tau" %in% dance_ts_coef_cols(mod) && !"tau" %in% dance_ts_pair_whats(mod),
+      "a held tau is not tested: out of the MANOVA and the pairwise menu",
+      "a constant tau is still offered as a test")
+  cm <- text_of(output$harmonic_traj_components)
+  chk(!grepl("Time constant tau", cm, fixed = TRUE),
+      "the component table has no tau row when tau is held",
+      "the component table tests a constant tau")
+  sh <- text_of(output$harmonic_traj_sat_header)
+  chk(grepl("held", sh, fixed = TRUE) && grepl("18 h", sh, fixed = TRUE),
+      "the panel says tau was held, and at what", "the panel does not say tau was held")
+  render("the held-tau panel renders", output$harmonic_traj_sat_plot)
+  sm <- text_of(capture.output(.print_harmonic_summary()))
+  chk(grepl("tau held at 18.0 h for every participant", sm, fixed = TRUE) &&
+        grepl("tau held at 18.0 h", sm, fixed = TRUE),
+      "the summary says tau was held for every participant", "the summary does not state the held tau")
+
+  # ====================================================== two-stage, a range
+  cat("\n-- two-stage, each participant's tau within 5 to 30 h -----------------\n")
+  run(session, "two_stage", 8, ts_mode = "estimate", lo = 5, hi = 30)
+  P <- values$harmonic_model$individual_params
+  chk(all(P$tau >= 5 - 1e-6 & P$tau <= 30 + 1e-6),
+      sprintf("every participant's tau is inside 5 to 30 h (%.2f to %.2f)", min(P$tau), max(P$tau)),
+      sprintf("a participant's tau left the range: %.2f to %.2f", min(P$tau), max(P$tau)))
+  sh <- text_of(output$harmonic_traj_sat_header)
+  chk(grepl("within 5 to 30 h", sh, fixed = TRUE),
+      "the panel states the range", "the panel does not state the range")
 
   # ====================================================== two-stage
   cat("\n-- two-stage: each participant's A/tau ----------------------------------\n")

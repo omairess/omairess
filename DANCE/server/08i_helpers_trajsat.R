@@ -68,11 +68,35 @@ dance_traj_sat_ladder <- function(harm_pars, curve_level = FALSE) {
   out
 }
 
-# The fixed-effect name nlme gives parameter `par` in cell k.
-dance_traj_sat_coef <- function(sf, par, k)
+# The fixed-effect name nlme gives parameter `par` in cell k. "tau" names the
+# parameter that carries tau, whichever scale it is on.
+dance_traj_sat_coef <- function(sf, par, k) {
+  if (identical(par, "tau")) par <- sf$tau_map$par %||% "lt"
   if (sf$n_cells > 1L) paste0(par, ".cell_g", k) else par
+}
 
-dance_traj_sat_fit <- function(ff, progress = NULL,
+# HOW tau IS CARRIED. Without a range, on the log scale: tau = exp(lt). With a
+# range [lo, hi] the search is CONSTRAINED to it by carrying tau on a logistic
+# scale, tau = lo + (hi - lo) * plogis(et) -- the standard way to bound a
+# parameter of a model that has no box constraints. Both maps are monotone, so
+# "tau equal across cells" is the same hypothesis on either scale; the tests and
+# intervals below go through the map's derivative.
+dance_traj_sat_tau_map <- function(range = NULL) {
+  if (is.null(range) || length(range) != 2L || !all(is.finite(range)) ||
+      range[1] <= 0 || range[2] <= range[1])
+    return(list(par = "lt", expr = "exp(lt)", range = NULL,
+                tau = function(x) exp(x), dtau = function(x) exp(x),
+                start = function(tau) log(tau)))
+  lo <- range[1]; w <- range[2] - range[1]
+  list(par = "et", range = range,
+       expr = sprintf("(%s + %s * plogis(et))", format(lo, digits = 15), format(w, digits = 15)),
+       tau = function(x) lo + w * stats::plogis(x),
+       dtau = function(x) w * stats::dlogis(x),
+       # a start inside the range, away from its ends where the scale flattens
+       start = function(tau) stats::qlogis(min(max((tau - lo) / w, 0.05), 0.95)))
+}
+
+dance_traj_sat_fit <- function(ff, progress = NULL, tau_range = NULL,
                                control = list(maxIter = 200, pnlsMaxIter = 20,
                                               msMaxIter = 200)) {
   if (!requireNamespace("nlme", quietly = TRUE))
@@ -96,8 +120,9 @@ dance_traj_sat_fit <- function(ff, progress = NULL,
   d$tt <- d$t - sp$t0
   K <- sp$n_harmonics
   harm <- as.vector(rbind(paste0("a", seq_len(K)), paste0("b", seq_len(K))))
+  map <- dance_traj_sat_tau_map(tau_range)
   form <- stats::as.formula(paste(
-    "y ~ b0 + A * (1 - exp(-tt / exp(lt)))",
+    sprintf("y ~ b0 + A * (1 - exp(-tt / %s))", map$expr),
     paste(sprintf("+ a%d * c%d + b%d * s%d", seq_len(K), seq_len(K), seq_len(K), seq_len(K)),
           collapse = " ")))
   cell_rhs <- if (G > 1L) "~ 0 + cell_" else "~ 1"
@@ -105,7 +130,7 @@ dance_traj_sat_fit <- function(ff, progress = NULL,
   fx_list <- function(lt_rhs) c(
     list(stats::as.formula(paste("b0", paste(c(cell_rhs, covs), collapse = " + ")))),
     list(stats::as.formula(paste("A", cell_rhs))),
-    list(stats::as.formula(paste("lt", lt_rhs))),
+    list(stats::as.formula(paste(map$par, lt_rhs))),
     lapply(harm, function(p) stats::as.formula(paste(p, cell_rhs))))
 
   # starting values: the trajectory model's own cell values at its tau
@@ -127,8 +152,8 @@ dance_traj_sat_fit <- function(ff, progress = NULL,
     per(function(c) val(c$coef[[paste0("s", h)]])))), use.names = FALSE)
   st_b0 <- c(per(function(c) val(c$intercept)), rep(0, n_cov))
   st_A <- per(function(c) val(c$coef[["trend_sat"]]))
-  start_cell <- c(st_b0, st_A, rep(log(tau0), G), st_harm)
-  start_common <- c(st_b0, st_A, log(tau0), st_harm)
+  start_cell <- c(st_b0, st_A, rep(map$start(tau0), G), st_harm)
+  start_common <- c(st_b0, st_A, map$start(tau0), st_harm)
 
   ctl <- do.call(nlme::nlmeControl, control)
   fit_one <- function(fixed, start, rung) tryCatch({
@@ -159,7 +184,7 @@ dance_traj_sat_fit <- function(ff, progress = NULL,
         stat <- 2 * (as.numeric(stats::logLik(m)) - as.numeric(stats::logLik(m1)))
         list(ok = TRUE, statistic = max(0, stat), df = G - 1L,
              p = stats::pchisq(max(0, stat), G - 1L, lower.tail = FALSE),
-             tau_common = exp(unname(nlme::fixef(m1)[["lt"]])))
+             tau_common = map$tau(unname(nlme::fixef(m1)[[map$par]])))
       }
     between <- intersect(sp$between_terms %||% character(0), sp$design_terms)
     n_subj <- length(unique(as.character(d$subject)))
@@ -170,17 +195,37 @@ dance_traj_sat_fit <- function(ff, progress = NULL,
                 re_label = rung$label, attempts = attempts, lrt = lrt,
                 df = max(1L, n_subj - n_between), n_participants = n_subj,
                 window = range(d$tt), t0 = sp$t0, period = sp$period,
-                tau_traj = sp$tau, method = "ML",
+                tau_traj = sp$tau, method = "ML", tau_map = map, tau_range = map$range,
                 formula = paste(deparse(form, width.cutoff = 500L), collapse = " "))
     out$table <- dance_traj_sat_table(out)
     return(out)
+  }
+  # WHY IT FAILED, when a range was set: a cell whose data put tau outside the
+  # range drives the constrained estimate into the bound, where the logistic
+  # scale goes flat and the fit cannot converge. One unconstrained fit tells the
+  # two failures apart, and names the cells -- as a diagnosis, not as a result.
+  outside <- NULL
+  if (!is.null(map$range)) {
+    free <- tryCatch(dance_traj_sat_fit(ff, progress = progress, tau_range = NULL,
+                                        control = control), error = function(e) NULL)
+    if (isTRUE(free$ok)) {
+      ft <- free$table
+      out_i <- which(ft$tau < map$range[1] | ft$tau > map$range[2])
+      if (length(out_i))
+        outside <- sprintf(paste(
+          "Without the range the model converges, and puts tau at %s -- outside %s to %s h,",
+          "so the constrained fit runs into the bound. Widen the range, or hold tau at a value."),
+          paste(sprintf("%.3g h in %s", ft$tau[out_i], ft$cell[out_i]), collapse = ", "),
+          format(map$range[1]), format(map$range[2]))
+    }
   }
   list(ok = FALSE, attempts = attempts, message = paste(
     "The per-cell saturating model did not converge on any random structure tried",
     sprintf("(%s).", paste(vapply(attempts, function(a) a$message, character(1)),
                            collapse = " | ")),
-    "A and tau are then not separately estimable per cell from these data; compare",
-    "the non-periodic change instead, which the trajectory model estimates."))
+    outside %||% paste(
+      "A and tau are then not separately estimable per cell from these data; compare",
+      "the non-periodic change instead, which the trajectory model estimates.")))
 }
 
 # The fixed-effect covariance as nlme itself reports it for a maximum-likelihood
@@ -198,18 +243,22 @@ dance_traj_sat_V <- function(fit) {
 dance_traj_sat_table <- function(sf, conf = 0.95) {
   fe <- nlme::fixef(sf$fit); V <- dance_traj_sat_V(sf$fit)
   q <- stats::qt(1 - (1 - conf) / 2, sf$df)
+  map <- sf$tau_map %||% dance_traj_sat_tau_map(NULL)
   rows <- lapply(seq_len(sf$n_cells), function(k) {
-    na <- dance_traj_sat_coef(sf, "A", k); nl <- dance_traj_sat_coef(sf, "lt", k)
-    A <- unname(fe[na]); lt <- unname(fe[nl]); tau <- exp(lt); s <- A / tau
-    vA <- V[na, na]; vl <- V[nl, nl]; cAl <- V[na, nl]
-    se_s <- sqrt(max(0, vA / tau^2 + s^2 * vl - 2 * (s / tau) * cAl))
+    na <- dance_traj_sat_coef(sf, "A", k); nl <- dance_traj_sat_coef(sf, "tau", k)
+    A <- unname(fe[na]); x <- unname(fe[nl]); tau <- map$tau(x); s <- A / tau
+    g <- map$dtau(x)                                 # dtau/dx
+    vA <- V[na, na]; vx <- V[nl, nl]; cAx <- V[na, nl]
+    # A/tau through the delta method: gradient (1/tau, -s * g / tau) in (A, x)
+    se_s <- sqrt(max(0, vA / tau^2 + (s * g / tau)^2 * vx - 2 * (s * g / tau^2) * cAx))
     data.frame(cell = sf$cells[k], n_cells = sf$n_cells,
                A = A, A_se = sqrt(vA), A_lo = A - q * sqrt(vA), A_hi = A + q * sqrt(vA),
-               tau = tau, tau_se = tau * sqrt(vl),
-               tau_lo = exp(lt - q * sqrt(vl)), tau_hi = exp(lt + q * sqrt(vl)),
+               tau = tau, tau_se = g * sqrt(vx),
+               # the interval on the carrying scale, mapped back: inside the range
+               tau_lo = map$tau(x - q * sqrt(vx)), tau_hi = map$tau(x + q * sqrt(vx)),
                init_slope = s, init_slope_se = se_s,
                init_slope_lo = s - q * se_s, init_slope_hi = s + q * se_s,
-               corr_A_logtau = cAl / sqrt(vA * vl),
+               corr_A_logtau = cAx / sqrt(vA * vx),
                stringsAsFactors = FALSE)
   })
   tab <- do.call(rbind, rows); rownames(tab) <- NULL
@@ -221,15 +270,21 @@ dance_traj_sat_table <- function(sf, conf = 0.95) {
 dance_traj_sat_vector <- function(sf, what) {
   fe <- nlme::fixef(sf$fit); V <- dance_traj_sat_V(sf$fit)
   G <- sf$n_cells
+  map <- sf$tau_map %||% dance_traj_sat_tau_map(NULL)
   nA <- vapply(seq_len(G), function(k) dance_traj_sat_coef(sf, "A", k), character(1))
-  nl <- vapply(seq_len(G), function(k) dance_traj_sat_coef(sf, "lt", k), character(1))
+  nl <- vapply(seq_len(G), function(k) dance_traj_sat_coef(sf, "tau", k), character(1))
+  x <- unname(fe[nl]); tau <- map$tau(x); g <- map$dtau(x)
   switch(what,
     A_sat = list(theta = unname(fe[nA]), V = unname(V[nA, nA, drop = FALSE]), scale = "identity"),
-    tau   = list(theta = unname(fe[nl]), V = unname(V[nl, nl, drop = FALSE]), scale = "log"),
+    # log tau, whichever scale carried it: d log tau / dx = g / tau
+    tau   = {
+      J <- diag(g / tau, nrow = G)
+      list(theta = log(tau), V = J %*% V[nl, nl, drop = FALSE] %*% t(J), scale = "log")
+    },
     init_slope = {
-      A <- unname(fe[nA]); tau <- exp(unname(fe[nl])); s <- A / tau
+      A <- unname(fe[nA]); s <- A / tau
       J <- matrix(0, G, 2L * G)
-      for (k in seq_len(G)) { J[k, k] <- 1 / tau[k]; J[k, G + k] <- -s[k] }
+      for (k in seq_len(G)) { J[k, k] <- 1 / tau[k]; J[k, G + k] <- -s[k] * g[k] / tau[k] }
       Vs <- J %*% V[c(nA, nl), c(nA, nl)] %*% t(J)
       list(theta = s, V = Vs, scale = "identity")
     },
@@ -296,12 +351,14 @@ dance_traj_sat_curves <- function(sf, n_time = 160, conf = 0.95) {
   fe <- nlme::fixef(sf$fit); V <- dance_traj_sat_V(sf$fit)
   tt <- seq(sf$window[1], sf$window[2], length.out = n_time)
   q <- stats::qt(1 - (1 - conf) / 2, sf$df)
+  map <- sf$tau_map %||% dance_traj_sat_tau_map(NULL)
   out <- lapply(seq_len(sf$n_cells), function(k) {
-    na <- dance_traj_sat_coef(sf, "A", k); nl <- dance_traj_sat_coef(sf, "lt", k)
-    A <- unname(fe[na]); tau <- exp(unname(fe[nl]))
+    na <- dance_traj_sat_coef(sf, "A", k); nl <- dance_traj_sat_coef(sf, "tau", k)
+    x <- unname(fe[nl]); A <- unname(fe[na]); tau <- map$tau(x)
     ex <- exp(-tt / tau)
     fit <- A * (1 - ex)
-    g1 <- 1 - ex; g2 <- -A * ex * tt / tau
+    # d fit / d x = d fit / d tau * d tau / d x = -A ex t / tau^2 * dtau
+    g1 <- 1 - ex; g2 <- -A * ex * tt / tau^2 * map$dtau(x)
     Vk <- V[c(na, nl), c(na, nl)]
     se <- sqrt(pmax(0, g1^2 * Vk[1, 1] + g2^2 * Vk[2, 2] + 2 * g1 * g2 * Vk[1, 2]))
     data.frame(cell = sf$cells[k], tt = tt, fit = fit, se = se,
@@ -324,6 +381,15 @@ dance_traj_sat_flags <- function(sf, threshold = 0.9) {
       "and the change over the recording far better than A and tau separately, so",
       "read A/tau and the change before A or tau alone."),
       paste(hi, collapse = ", "), threshold))
+  rg <- sf$tau_range
+  if (!is.null(rg)) {
+    edge <- tab$cell[tab$tau < rg[1] + 0.01 * diff(rg) | tab$tau > rg[2] - 0.01 * diff(rg)]
+    if (length(edge))
+      out <- c(out, sprintf(paste(
+        "In %s, tau ran to the end of the search range (%s to %s h): it is a bound, not an",
+        "estimate, and its interval is not meaningful. Widen the range, or hold tau at a value."),
+        paste(edge, collapse = ", "), format(rg[1]), format(rg[2])))
+  }
   long <- tab$cell[tab$tau > T]
   if (length(long))
     out <- c(out, sprintf(paste(

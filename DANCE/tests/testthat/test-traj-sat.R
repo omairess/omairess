@@ -167,3 +167,45 @@ test_that("the change's factor is spelled out per trend", {
   expect_match(e$dance_traj_change_factor_text(e$dance_traj_trend_window("log", 8, 33)),
                "log\\(1 \\+ 25 h\\)")
 })
+
+test_that("a search range bounds every per-cell tau and its interval", {
+  skip_heavy()
+  ff <- mk_fit(mk_long()); skip_if_not(isTRUE(ff$ok))
+  free <- e$dance_traj_sat_fit(ff)
+  sf <- e$dance_traj_sat_fit(ff, tau_range = c(3, 30))
+  skip_if_not(isTRUE(free$ok) && isTRUE(sf$ok))
+  expect_identical(sf$tau_map$par, "et")
+  st <- sf$table
+  expect_true(all(st$tau_lo >= 3 & st$tau_hi <= 30))
+  # with the optimum inside the range, the constrained fit IS the free fit
+  expect_equal(st$tau, free$table$tau, tolerance = 1e-3)
+  expect_equal(st$A, free$table$A, tolerance = 1e-3)
+  # A/tau through the logistic map, against a numerical derivative
+  V <- e$dance_traj_sat_V(sf$fit)
+  nm <- c(e$dance_traj_sat_coef(sf, "A", 2), e$dance_traj_sat_coef(sf, "tau", 2))
+  th <- nlme::fixef(sf$fit)[nm]
+  g <- function(p) p[1] / sf$tau_map$tau(p[2]); h <- 1e-6
+  J <- c((g(th + c(h, 0)) - g(th - c(h, 0))) / (2 * h), (g(th + c(0, h)) - g(th - c(0, h))) / (2 * h))
+  expect_equal(st$init_slope_se[2], sqrt(drop(t(J) %*% V[nm, nm] %*% J)), tolerance = 1e-6)
+  # the curves' band goes through the same map
+  cv <- e$dance_traj_sat_curves(sf, n_time = 5)
+  d <- cv$table[cv$table$cell == sf$cells[2], ]
+  gc <- function(p, t) p[1] * (1 - exp(-t / sf$tau_map$tau(p[2])))
+  tk <- d$tt[3]
+  Jc <- c((gc(th + c(h, 0), tk) - gc(th - c(h, 0), tk)) / (2 * h),
+          (gc(th + c(0, h), tk) - gc(th - c(0, h), tk)) / (2 * h))
+  expect_equal(d$se[3], sqrt(drop(t(Jc) %*% V[nm, nm] %*% Jc)), tolerance = 1e-6)
+})
+
+test_that("a range that excludes a cell's tau fails with the reason, not a guess", {
+  skip_heavy()
+  ff <- mk_fit(mk_long()); skip_if_not(isTRUE(ff$ok))
+  sf <- e$dance_traj_sat_fit(ff, tau_range = c(8, 40))   # cell A's planted tau is 5 h
+  if (isTRUE(sf$ok)) {
+    # if it converged, the estimate sits at the bound and is flagged as one
+    expect_true(any(grepl("end of the search range", e$dance_traj_sat_flags(sf), fixed = TRUE)))
+  } else {
+    expect_match(sf$message, "outside 8 to 40 h", fixed = TRUE)
+    expect_match(sf$message, "in A", fixed = TRUE)
+  }
+})

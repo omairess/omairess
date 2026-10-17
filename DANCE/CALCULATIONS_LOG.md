@@ -280,3 +280,44 @@ tau = 18.3 h). It is now written out with T and tau.
 Tests: `tests/testthat/test-traj-sat.R` (51 expectations: recovery, nlme
 agreement, delta method, curves, flags, profile), `tests/traj_sat_app_test.R`
 (the Run button under each tau option, per cell, flat profile, two-stage).
+
+### tau: one value, or a range every estimate stays inside
+
+Set with the saturating trend under Model Specification, and applied to every
+fit that estimates tau:
+
+- **Mixed, "Estimate one tau within a range"**: the profile grid is 24 points
+  evenly spaced in log tau between the range's ends (it used to run from
+  span/50 to 3 x span whatever the user wanted). A maximum at an end of the
+  range is reported as a bound, not an estimate.
+- **Mixed, per cell (nlme)**: tau is carried on a logistic scale,
+  tau = lo + (hi - lo) * plogis(et), so the search cannot leave the range --
+  the standard reparameterisation for bounding a parameter of a model without
+  box constraints. Tests and intervals for tau go through log tau by the delta
+  method (d log tau / d et = (hi - lo) dlogis(et) / tau); intervals are mapped
+  back from the et scale and lie inside the range. A cell whose data put tau
+  outside the range drives et to infinity and the fit fails; one unconstrained
+  refit then names the cell and where its tau lies, as a diagnosis only.
+- **Two-stage, "Estimate tau for each participant within a range"**: the range
+  is the nonlinear least-squares bound on every participant's tau -- including
+  the optimiser's last retry, which used to drop every bound for the saturating
+  trend (the source of taus of hundreds of hours). Fits that end on a bound are
+  flagged and counted, and "Include fits that hit a parameter bound" decides
+  whether they enter the summaries. Previously tau was bounded by the user only
+  behind "Enable Parameter Bounding" (which also bounds the intercept and the
+  amplitudes), and otherwise ran from 0.5 h to five times the recording.
+- **Two-stage, "Hold tau at a value"**: tau is a constant of the formula, A is a
+  least-squares estimate; the trend-only null of the zero-amplitude F test holds
+  the same tau (closed form), the parameter count excludes tau, and tau leaves
+  the MANOVA, the component tests and the pairwise menu (a constant has no
+  variance to test). The free-vs-fixed AIC check and the ridge diagnostics do
+  not apply and say so.
+- The nested-model (Delta-AICc) table fits its saturating candidates with the
+  same range or held value, so its "reported" row is the fit reported.
+
+Tests: `test-traj-sat.R` (the range bounds every per-cell tau and interval; the
+constrained fit equals the free one when the optimum is inside; A/tau and the
+curve band through the logistic map against numerical derivatives; a range that
+excludes a cell's tau fails with the cell named), `traj_sat_app_test.R` (the
+profile stays in the range; an end-of-range estimate is called a bound; an
+impossible range is refused; two-stage held tau and ranged tau end to end).

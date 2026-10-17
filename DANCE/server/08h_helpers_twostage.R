@@ -87,7 +87,9 @@ dance_ts_sat_summary <- function(df, mod, conf = 0.95) {
     return(list(ok = FALSE, message = "No saturating trend in this model."))
   if (!"init_slope" %in% names(df) && all(c("A_sat", "tau") %in% names(df)))
     df$init_slope <- df$A_sat / df$tau
-  dance_ts_group_means(df, c(A_sat = "A_sat", tau = "tau", init_slope = "init_slope"), conf)
+  qs <- c(A_sat = "A_sat", tau = "tau", init_slope = "init_slope")
+  if (dance_ts_tau_held(mod)) qs <- qs[names(qs) != "tau"]
+  dance_ts_group_means(df, qs, conf)
 }
 
 # The saturating trend per group from the per-participant fits: each
@@ -137,10 +139,26 @@ dance_ts_group_means <- function(df, qs, conf = 0.95) {
 
 # The coefficient columns a MANOVA compares: constant, trend, and every
 # (cos, sin) pair -- the complete per-participant fit.
+# TRUE when every participant's fit held tau at one value (Model
+# Specification): tau is then a constant of the design, not an estimate, and
+# has no place in a test.
+dance_ts_tau_held <- function(mod)
+  identical(mod$trend_type, "exp_sat") && identical(mod$tau_spec$mode, "fixed")
+
+# How many participants' tau ran to an end of the search range -- a bound the
+# optimiser was stopped at, not an estimate.
+dance_ts_tau_at_bound <- function(mod, subjects) {
+  hits <- vapply(subjects, function(sid) {
+    f <- tryCatch(mod$individual_fits[[sid]], error = function(e) NULL)
+    any(grepl("^tau \\(", f$bounds_hit %||% character(0)))
+  }, logical(1))
+  sum(hits)
+}
+
 dance_ts_coef_cols <- function(mod) {
   tr <- switch(mod$trend_type %||% "none",
                linear = "trend_linear", log = "trend_log",
-               exp_sat = c("A_sat", "tau"), character(0))
+               exp_sat = c("A_sat", if (!dance_ts_tau_held(mod)) "tau"), character(0))
   c("mesor", tr, unlist(lapply(seq_len(mod$n_harmonics %||% 1L),
                                 function(h) paste0(c("beta_cos_", "beta_sin_"), h))))
 }
@@ -275,7 +293,8 @@ dance_ts_group_rhythm <- function(df, mod, h) {
 dance_ts_pair_whats <- function(mod) {
   K <- mod$n_harmonics %||% 1L
   tr <- switch(mod$trend_type %||% "none", linear = "trend_linear", log = "trend_log",
-               exp_sat = c("A_sat", "tau", "init_slope"), character(0))
+               exp_sat = c("A_sat", if (!dance_ts_tau_held(mod)) "tau", "init_slope"),
+               character(0))
   out <- c("intercept", if (length(tr)) c("mesor", "change"), tr,
            sprintf("amplitude%d", seq_len(K)), sprintf("phase%d", seq_len(K)), "r_squared")
   out
