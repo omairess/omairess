@@ -29,9 +29,11 @@ canon <- function(f) {
 
 test_that("the table's method claim is taken over ALL tests, not the first one", {
   s <- canon("server/72_harmonic.R")
-  # methods_all collects every distinct method actually used
-  expect_true(grepl("methods_all = unique(vapply(Filter(function(r) isTRUE(r$ok), computed)",
-                    s, fixed = TRUE))
+  # methods_all collects every distinct method actually used -- in
+  # dance_traj_tests() (server/08f), which the app and the exported script call
+  s8 <- canon("server/08f_helpers_trajinf.R")
+  expect_true(grepl("ok_runs <- Filter(function(r) isTRUE(r$ok), computed)", s8, fixed = TRUE))
+  expect_true(grepl("methods_all = unique(vapply(ok_runs,", s8, fixed = TRUE))
   # and the per-row marker is driven by whether that set has more than one entry
   expect_true(grepl("mixed <- length(tt$methods_all %||% character(0)) > 1L",
                     s, fixed = TRUE))

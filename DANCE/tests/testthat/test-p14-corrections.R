@@ -94,7 +94,9 @@ test_that("P14.1: every trend the UI offers is in the candidate set", {
 })
 
 test_that("P14.1: the hardcoded grid is gone from the diagnostic", {
-  src <- code_of("server/72_harmonic.R")
+  # the nested set is dance_ts_model_set() (server/08h), which the Run handler
+  # and the exported script call
+  src <- paste(code_of("server/72_harmonic.R"), code_of("server/08h_helpers_twostage.R"))
   expect_false(grepl('ms_trends <- c("none", "linear", "exp_sat")', src, fixed = TRUE))
   expect_false(grepl("ms_harms  <- 1:3", src, fixed = TRUE))
   expect_true(grepl("dance_cosinor_model_set(n_harmonics)", src, fixed = TRUE))

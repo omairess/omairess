@@ -1361,7 +1361,7 @@
       if (mixed) {
         ff <- hm$traj
         di <- ff$design_input
-        add("# The packages the model and its tests use (called as pkg::fun):")
+        add("# The packages the model and its tests call (with ::, so none is attached):")
         add("for (.p in c(\"lme4\", \"lmerTest\", \"emmeans\"",
             if (identical(dfm, "kr")) ", \"pbkrtest\"" else "",
             if (sat && isTRUE(tsp$sat_cells)) ", \"nlme\"" else "", "))")

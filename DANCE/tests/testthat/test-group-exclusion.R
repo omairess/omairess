@@ -139,7 +139,9 @@ test_that("the MESOR is above beta_0 for a rising trend, as it must be", {
 
 # ---------------------------------------- the pairwise columns must exist
 test_that("the per-subject columns the pairwise picker offers are declared", {
-  src <- paste(readLines(file.path(app_dir, "server/72_harmonic.R"), warn = FALSE),
+  # the parameter table is built by dance_ts_param_row() (server/08h)
+  src <- paste(c(readLines(file.path(app_dir, "server/72_harmonic.R"), warn = FALSE),
+                 readLines(file.path(app_dir, "server/08h_helpers_twostage.R"), warn = FALSE)),
                collapse = "\n")
   for (col in c("mesor", "mesor_adj", "value_at_start"))
     expect_true(grepl(sprintf('"%s"', col), src, fixed = TRUE), info = col)

@@ -493,8 +493,9 @@ dance_ts_param_cols <- function(trend_type, n_harmonics) {
 # A/tau), every harmonic's amplitude and acrophase, and the fit statistics.
 # `time_vec` is the model axis (t = 0 at the recording's first time point).
 dance_ts_param_row <- function(i, fit_i, time_vec, period, n_harmonics, trend_type) {
-  coef_offset <- 1 + switch(as.character(trend_type),
-                            none = 0, linear = 1, log = 1, exp_sat = 2, 0)
+  # the trend's coefficients sit after the constant (dance_trend_npar() is the
+  # one count of a trend's parameters)
+  coef_offset <- 1L + dance_trend_npar(trend_type)
   row_data <- list(subject = i, mesor = fit_i$mesor, mesor_se = fit_i$mesor_se)
 
   # the rhythm-adjusted mean and the fitted value at the first
@@ -585,7 +586,7 @@ dance_ts_fit_all <- function(Y, time_vec, period = 24, n_harmonics = 1, trend_ty
                              amplitude_min = 0, amplitude_max = NA,
                              A_sat_min = NA, A_sat_max = NA,
                              tau_min = 0.5, tau_max = NA, tau_fixed = NA, progress = NULL) {
-  n_trend_params <- switch(as.character(trend_type), none = 0, linear = 1, log = 1, exp_sat = 2, 0)
+  n_trend_params <- dance_trend_npar(trend_type)
   fits <- list(); rows <- list(); failed <- list()
   for (i in seq_len(nrow(Y))) {
     y_i <- Y[i, ]
