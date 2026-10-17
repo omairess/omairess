@@ -531,15 +531,38 @@
         identical(environment(o), kernel_env)
     }
 
+    # The names a function refers to: codetools::findGlobals when it is
+    # installed (it ships with R as a recommended package), otherwise every
+    # symbol in the body and the default arguments. That is a superset, and
+    # the tests around it keep only the app's own objects, so an extra name
+    # costs nothing; without the fallback a missing codetools emitted the
+    # requested function alone and the script died at its first helper.
+    dance_globals_of <- function(obj) {
+      g <- if (requireNamespace("codetools", quietly = TRUE))
+        tryCatch(codetools::findGlobals(obj, merge = TRUE), error = function(e) NULL) else NULL
+      if (is.null(g))
+        g <- unique(c(all.names(body(obj)),
+                      unlist(lapply(as.list(formals(obj)), function(x)
+                        if (is.language(x)) all.names(x) else character(0)))))
+      g
+    }
+
+    # An app CONSTANT a kernel reads (DANCE_TRAJ_TRENDS and the like): written
+    # out as its value, since emitting functions alone left them undefined.
+    dance_is_app_const <- function(nm) {
+      if (!grepl("^DANCE_", nm) || !exists(nm, envir = kernel_env, inherits = FALSE)) return(FALSE)
+      o <- get(nm, envir = kernel_env, inherits = FALSE)
+      !is.function(o) && (is.atomic(o) || (is.list(o) && all(vapply(o, is.atomic, logical(1)))))
+    }
+    emitted_consts <- character(0)
+
     # Post-order: a helper is emitted before anything that calls it.
     dance_fn_order <- function(nm, seen = character(0), stack = character(0)) {
       if (nm %in% seen || nm %in% stack) return(seen)
       stack <- c(stack, nm)
       obj <- tryCatch(get(nm, envir = kernel_env), error = function(e) NULL)
       if (!is.function(obj)) return(seen)
-      g <- tryCatch(codetools::findGlobals(obj, merge = TRUE),
-                    error = function(e) character(0))
-      for (d in Filter(dance_is_app_fn, g)) seen <- dance_fn_order(d, seen, stack)
+      for (d in Filter(dance_is_app_fn, dance_globals_of(obj))) seen <- dance_fn_order(d, seen, stack)
       c(seen, nm)
     }
 
@@ -548,6 +571,11 @@
         if (f %in% emitted_fns) next
         obj <- tryCatch(get(f, envir = kernel_env), error = function(e) NULL)
         if (!is.function(obj)) next
+        for (cn in setdiff(Filter(dance_is_app_const, dance_globals_of(obj)), emitted_consts)) {
+          emitted_consts <<- c(emitted_consts, cn)
+          add(cn, " <- ", paste(deparse(get(cn, envir = kernel_env, inherits = FALSE)), collapse = "\n"))
+          add("")
+        }
         emitted_fns <<- c(emitted_fns, f)
         # Non-syntactic names (the app defines `%||%` this way) need backticks
         # on the left of the assignment or the emitted script does not parse.
@@ -652,6 +680,12 @@
         add("  if (nrow(data_matrix) == ", n_full, ") data_matrix <- data_matrix[analysed_rows, , drop = FALSE]")
       }
       add("}")
+      add("")
+      # The cosinor always fits the observations as imported, and the regression
+      # does when nothing was smoothed; both sections read them as raw_data,
+      # which was never defined -- so they stopped at their first line.
+      add("# The observations as imported, before any smoothing")
+      add("raw_data <- data_matrix")
       add("")
       add("# Number of subjects and time points")
       add("n_subjects <- nrow(data_matrix)  # ", n_subj)
@@ -1284,96 +1318,239 @@
     }
 
     # ---- SECTION 10: HARMONIC (COSINOR) REGRESSION ----
-    # MERGED APP: CIRCAREG had no code generator, so these three sections are
-    # new. Settings come from the fit itself (dance_settings), never from the
-    # live widgets, so the script matches the model that is on screen.
+    # The script reruns the analysis the app ran, whichever approach that was.
+    # Settings come from the fitted model object (never from the live widgets),
+    # the functions are the app's own, emitted verbatim, and the run's
+    # assumptions head the section as comments. This section used to refit
+    # each participant and stop: a mixed-effects run -- the default -- was not
+    # reproduced at all, and the script printed per-participant estimates where
+    # the app had reported a mixed model, without a word.
     if(!is.null(values$harmonic_model)) {
       hm <- values$harmonic_model
       st <- hm$dance_settings
+      mixed <- identical(hm$approach %||% "two_stage", "mixed") && isTRUE(hm$traj$ok)
+      dfm <- input$harmonic_df_method %||% "kr"
+      tsp <- hm$tau_spec
+      sat <- identical(hm$trend_type, "exp_sat")
+      num <- function(x) if (is.null(x) || length(x) != 1L || !is.finite(x)) "NA" else format(x, digits = 15)
       add("# -----------------------------------------------------------------------------")
-      add("# 10. HARMONIC (COSINOR) REGRESSION")
+      add("# 10. HARMONIC (COSINOR) REGRESSION -- ",
+          if (mixed) "mixed-effects (one model, all participants)"
+          else "two-stage (one fit per participant, then compared)")
       add("# -----------------------------------------------------------------------------")
+      add("#")
+      add("# What this run assumed -- defaults, conventions and rules of the method, the")
+      add("# list the app's summary and report print:")
+      for (ln in dance_cosinor_assumptions_text(dance_cosinor_assumptions(hm, hm$traj, dfm)))
+        add("#   ", ln)
       add("")
       add(sprintf("period        <- %s", hm$period))
       add(sprintf("n_harmonics   <- %s", hm$n_harmonics))
       add(sprintf('trend_type    <- "%s"', hm$trend_type))
+      add("# hours from the recording's first time point (",
+          dance_clock_label(dance_clock_origin(hm), hm$period %||% 24, show_day = FALSE),
+          " on the clock), midnight crossings unwrapped")
       add(sprintf("time_vec      <- c(%s)",
                   paste(signif(as.numeric(hm$time_vec), 10), collapse = ", ")))
       add(sprintf("cosinor_input <- %s   # %s",
                   if(isTRUE(hm$using_smoothed)) "smooth_curves" else "raw_data",
                   if(isTRUE(hm$using_smoothed)) "the smoothed curves"
-                  else "the raw data (no smoothing had been applied)"))
+                  else "the raw observations, as the app fits them"))
       add("")
-      if(!is.null(st)) {
-        add(sprintf("use_bounds    <- %s", isTRUE(st$use_bounds)))
-        for(nm in c("mesor_min", "mesor_max", "amplitude_min", "amplitude_max",
-                    "A_sat_min", "A_sat_max", "tau_min", "tau_max", "tau_fixed",
-                    "t_origin")) {
-          v <- st[[nm]]
-          add(sprintf("%-13s <- %s", nm,
-                      if(is.null(v) || !is.finite(v)) "NA" else format(v)))
+
+      if (mixed) {
+        ff <- hm$traj
+        di <- ff$design_input
+        add("# The packages the model and its tests use (called as pkg::fun):")
+        add("for (.p in c(\"lme4\", \"lmerTest\", \"emmeans\"",
+            if (identical(dfm, "kr")) ", \"pbkrtest\"" else "",
+            if (sat && isTRUE(tsp$sat_cells)) ", \"nlme\"" else "", "))")
+        add("  if (!requireNamespace(.p, quietly = TRUE)) stop(\"Install the package \", .p, \" first.\")")
+        add("")
+        add("# The app's own functions, verbatim:")
+        for (k in c("dance_traj_long", "dance_traj_run", "dance_traj_fit_report",
+                    "dance_traj_cell_equations", "dance_traj_level_summary",
+                    "dance_traj_tests", "dance_traj_tests_table", "dance_traj_contrasts",
+                    "dance_traj_pair_whats"))
+          emit_kernel(k)
+        add("# The design, one entry per curve (row of cosinor_input):")
+        add("cosinor_subject <- ", dance_export_vec(as.character(di$subject)))
+        if (length(di$factors)) {
+          add("cosinor_factors <- list(")
+          nms <- names(di$factors)
+          for (j in seq_along(nms))
+            add(sprintf("  `%s` = %s%s", nms[j], dance_export_vec(di$factors[[j]]),
+                        if (j < length(nms)) "," else ""))
+          add(")")
+          add("cosinor_roles <- ", dance_export_vec(di$roles))
+        } else {
+          add("cosinor_factors <- list()")
+          add("cosinor_roles <- NULL")
         }
         add("")
-      }
-      add("# The app's own fitting function, emitted verbatim (not a")
-      add("# re-implementation) so this script reproduces its numbers exactly:")
-      # P3.5: emit_kernel() pulls in fit_cosinor_nonlinear and the eleven dance_*
-      # helpers the estimator calls. The previous code emitted fit_cosinor and
-      # (conditionally) fit_cosinor_nonlinear and nothing else, so the script
-      # failed at the first fit with "could not find function dance_r_squared".
-      emit_kernel("fit_cosinor")
-      add("# The same per-subject call the app makes:")
-      add("cosinor_fits <- lapply(seq_len(nrow(cosinor_input)), function(i) {")
-      add("  fit_cosinor(time_vec, cosinor_input[i, ], period = period,")
-      add("              n_harmonics = n_harmonics, trend_type = trend_type,")
-      if(!is.null(st)) {
-        add("              use_bounds = use_bounds,")
-        add("              mesor_min = mesor_min, mesor_max = mesor_max,")
-        add("              amplitude_min = amplitude_min, amplitude_max = amplitude_max,")
-        add("              A_sat_min = A_sat_min, A_sat_max = A_sat_max,")
-        # tau held at one value, and the one trend origin every participant
-        # shares: without them the script would estimate tau, and anchor a
-        # participant missing the first observation at their own first time
-        add("              tau_min = tau_min, tau_max = tau_max, tau_fixed = tau_fixed,")
-        add("              t_origin = if (is.finite(t_origin)) t_origin else min(time_vec))")
+        add("traj_frame <- dance_traj_long(cosinor_input, time_vec, cosinor_subject, cosinor_factors)")
+        add("traj_fit <- dance_traj_run(traj_frame, period = period, n_harmonics = n_harmonics,")
+        add("                           trend = trend_type, roles = cosinor_roles, t0 = 0,")
+        add(sprintf('                           tau_mode = "%s", tau_value = %s,',
+                    if (identical(tsp$mode, "estimate")) "estimate" else "fixed",
+                    num(if (sat) (tsp$value %||% ff$spec$tau) else NA)))
+        add(sprintf("                           tau_lo = %s, tau_hi = %s, sat_cells = %s)",
+                    num(if (sat) tsp$lo else NA), num(if (sat) tsp$hi else NA),
+                    if (sat && isTRUE(tsp$sat_cells)) "TRUE" else "FALSE"))
+        add("if (!isTRUE(traj_fit$ok)) stop(traj_fit$message)")
+        add("cat(dance_traj_fit_report(traj_fit), \"\\n\")")
+        if (sat)
+          add("cat(\"tau used by the trajectory model:\", traj_fit$spec$tau, \"h (\", traj_fit$tau_mode, \")\\n\")")
+        add("print(summary(traj_fit$model)$coefficients)   # the fixed effects")
+        add("")
+        add("# Per design cell: the fitted equation, and the intercept, MESOR and change")
+        add("print(dance_traj_cell_equations(traj_fit)$table)")
+        add("print(dance_traj_level_summary(traj_fit)$table)")
+        add("")
+        add("# The comparison tab's tests: each factorial effect on the whole trajectory,")
+        add("# and the component blocks of the design, as marginal contrasts")
+        add(sprintf("traj_tests <- dance_traj_tests(traj_fit, df_method = \"%s\")", dfm))
+        add("print(dance_traj_tests_table(traj_tests))")
+        if (sat && isTRUE(tsp$sat_cells)) {
+          add("")
+          add("# A, tau and A/tau per cell (nonlinear mixed model), and one tau vs per cell")
+          add("print(traj_fit$sat$table)")
+          add("print(unlist(traj_fit$sat$lrt[c(\"statistic\", \"df\", \"p\", \"tau_common\")]))")
+        }
+        add("")
+        add("# Pairwise tables, as on the comparison tab -- one per quantity, e.g.:")
+        add(sprintf("#   dance_traj_contrasts(traj_fit, \"intercept\", adjust = \"holm\", df_method = \"%s\")", dfm))
+        add("# with the quantity any of dance_traj_pair_whats(traj_fit).")
+        add("")
       } else {
-        add("              use_bounds = FALSE, t_origin = min(time_vec))")
+        add("# The app's own functions, verbatim:")
+        for (k in c("dance_ts_fit_all", "dance_ts_gate", "dance_ts_frame", "dance_ts_level_summary",
+                    "dance_ts_group_rhythm", "dance_ts_coef_cols", "dance_ts_manova",
+                    "dance_ts_components", "dance_ts_pairwise", "dance_ts_pair_whats",
+                    if (sat) "dance_ts_sat_summary",
+                    if (!is.null(hm$boot_results)) "dance_ts_bootstrap",
+                    if (!is.null(hm$model_selection)) "dance_ts_model_set"))
+          emit_kernel(k)
+        if(!is.null(st)) {
+          add(sprintf("use_bounds    <- %s", isTRUE(st$use_bounds)))
+          for(nm in c("mesor_min", "mesor_max", "amplitude_min", "amplitude_max",
+                      "A_sat_min", "A_sat_max", "tau_min", "tau_max", "tau_fixed")) {
+            v <- st[[nm]]
+            add(sprintf("%-13s <- %s", nm,
+                        if(is.null(v) || !is.finite(v)) "NA" else format(v)))
+          }
+        } else {
+          add("use_bounds    <- FALSE")
+          for (nm in c("mesor_min", "mesor_max", "amplitude_max", "A_sat_min", "A_sat_max",
+                       "tau_max", "tau_fixed")) add(sprintf("%-13s <- NA", nm))
+          add("amplitude_min <- 0")
+          add("tau_min       <- 0.5")
+        }
+        add("")
+        add("# Every participant's cosinor, with one trend origin for all (t = 0):")
+        add("ts_fit <- dance_ts_fit_all(cosinor_input, time_vec, period = period,")
+        add("                           n_harmonics = n_harmonics, trend_type = trend_type,")
+        add("                           use_bounds = use_bounds, mesor_min = mesor_min,")
+        add("                           mesor_max = mesor_max, amplitude_min = amplitude_min,")
+        add("                           amplitude_max = amplitude_max, A_sat_min = A_sat_min,")
+        add("                           A_sat_max = A_sat_max, tau_min = tau_min, tau_max = tau_max,")
+        add("                           tau_fixed = tau_fixed)")
+        add("cosinor_fits <- ts_fit$fits")
+        add("# Which fits enter the summaries (non-converged never; on a bound: ",
+            if (isTRUE(hm$fit_audit$include_boundary %||% TRUE)) "included" else "excluded", ")")
+        add(sprintf("ts_gate <- dance_ts_gate(ts_fit$params, ts_fit$fits, n_attempted = nrow(cosinor_input),"))
+        add(sprintf("                         include_boundary = %s)",
+                    if (isTRUE(hm$fit_audit$include_boundary %||% TRUE)) "TRUE" else "FALSE"))
+        add("ts_params <- ts_fit$params[ts_gate$keep, , drop = FALSE]")
+        add("str(ts_gate$fit_audit[c(\"n_attempted\", \"n_converged\", \"n_boundary\",")
+        add("                        \"n_nonconverged\", \"n_failed\", \"n_summarised\")])")
+        add("")
+        add("ts_model <- list(individual_params = ts_params, individual_fits = ts_fit$fits,")
+        add("                 period = period, n_harmonics = n_harmonics, trend_type = trend_type,")
+        add("                 time_vec = time_vec, t_offset = 0,")
+        add(sprintf("                 tau_spec = list(mode = \"%s\", value = %s, lo = %s, hi = %s),",
+                    if (identical(tsp$mode, "fixed")) "fixed" else "estimate",
+                    num(tsp$value), num(tsp$lo), num(tsp$hi)))
+        add(sprintf("                 dv_units = %s)",
+                    if (is.null(hm$dv_units)) "NULL" else dance_export_vec(hm$dv_units)))
+        gv <- hm$group_var_name
+        gvals <- if (!is.null(gv)) values$covariates[[gv]] else NULL
+        add("# group of each curve (row of cosinor_input)",
+            if (!is.null(gv)) paste0(": ", gv) else ": none, one pooled sample")
+        add("ts_groups <- ", if (is.null(gvals)) "NULL" else dance_export_vec(gvals))
+        add("ts_df <- dance_ts_frame(ts_model, ts_groups)")
+        add("")
+        add("# Intercept, MESOR and change per group (means with t intervals), and each")
+        add("# harmonic's vector-mean amplitude and acrophase")
+        add("print(dance_ts_level_summary(ts_df, ts_model)$table)")
+        add("for (h in seq_len(n_harmonics)) print(dance_ts_group_rhythm(ts_df, ts_model, h))")
+        if (sat) add("print(dance_ts_sat_summary(ts_df, ts_model)$table)   # A, tau, A/tau per group")
+        if (!is.null(gvals)) {
+          add("")
+          add("# The comparison tab's tests, on the per-participant estimates")
+          add("print(unlist(dance_ts_manova(ts_df, dance_ts_coef_cols(ts_model))[c(\"F\", \"df1\", \"df2\", \"p\", \"method\")]))")
+          add("ts_components <- dance_ts_components(ts_df, ts_model)")
+          add("print(do.call(rbind, lapply(ts_components, function(r) data.frame(")
+          add("  test = r$label, F = if (isTRUE(r$ok)) r$F else NA, df1 = if (isTRUE(r$ok)) r$df1 else NA,")
+          add("  df2 = if (isTRUE(r$ok)) r$df2 else NA, p = if (isTRUE(r$ok)) r$p else NA,")
+          add("  method = if (isTRUE(r$ok)) r$method else r$message))))")
+          add("# Pairwise tables, as on the comparison tab, e.g.:")
+          add("#   dance_ts_pairwise(ts_df, ts_model, \"intercept\", adjust = \"holm\")")
+          add("# with the quantity any of dance_ts_pair_whats(ts_model).")
+        }
+        if (!is.null(hm$boot_results)) {
+          add("")
+          add(sprintf("# Bootstrap of the pooled sample (B = %d, seed %s), percentile intervals",
+                      as.integer(hm$boot_results$B), format(hm$boot_results$seed %||% 20240601L)))
+          add(sprintf("ts_boot <- dance_ts_bootstrap(ts_params, B = %d, period = period, seed = %sL)",
+                      as.integer(hm$boot_results$B), format(hm$boot_results$seed %||% 20240601L)))
+          add("print(ts_boot[c(\"mesor_ci\", \"amplitude_ci\", \"acrophase_ci\")])")
+        }
+        if (!is.null(hm$model_selection)) {
+          add("")
+          add("# The nested model set, every candidate on the same participants")
+          add("ts_models <- dance_ts_model_set(cosinor_input, time_vec, period = period,")
+          add("                                n_harmonics = n_harmonics, trend_type = trend_type,")
+          add("                                tau_min = tau_min, tau_max = tau_max, tau_fixed = tau_fixed)")
+          add("print(ts_models)")
+        }
+        add("")
+        # AUDIT (P3.8, found by tests/export_roundtrip_test.R the first time the
+        # exported script was actually RUN): this block read f$amplitude and
+        # f$acrophase. fit_cosinor() returns those fields under the names
+        # `amplitudes` and `acrophases` -- they are vectors, one entry per
+        # harmonic -- so both were NULL, and the script died on
+        # "arguments imply differing number of rows: 1, 0" at the first subject.
+        # The block also assumed every fit carries a MESOR; a failed fit does not.
+        add("# Per participant (successful fits): intercept, first-harmonic amplitude and")
+        add("# acrophase (radians; acrophase_hour in hours from t = 0), R-squared, p.")
+        add("ok <- vapply(cosinor_fits, function(f) isTRUE(f$success), logical(1))")
+        add("cosinor_params <- do.call(rbind, lapply(which(ok), function(i) {")
+        add("  f  <- cosinor_fits[[i]]")
+        add("  g1 <- function(x) if (length(x)) as.numeric(x)[1] else NA_real_")
+        add("  data.frame(subject        = i,")
+        add("             mesor          = g1(f$mesor),")
+        add("             amplitude      = g1(f$amplitudes),")
+        add("             acrophase_rad  = g1(f$acrophases),")
+        add("             acrophase_hour = g1(f$acrophases_time),")
+        add("             r_squared      = g1(f$r_squared),")
+        add("             p_value        = g1(f$p_value))")
+        add("}))")
+        add("print(head(cosinor_params))")
+        if(!is.null(hm$individual_fits)) {
+          add(sprintf("# The app fitted %d of %d subjects successfully.",
+                      sum(vapply(hm$individual_fits,
+                                 function(f) isTRUE(f$success), logical(1))),
+                      length(hm$individual_fits)))
+        }
+        add("")
+        add("# NOTE: acrophase is CIRCULAR. Do not average it arithmetically --")
+        add("# average the (cos, sin) components, as the app's polar plot does.")
+        add("")
       }
-      add("})")
-      add("")
-      # AUDIT (P3.8, found by tests/export_roundtrip_test.R the first time the
-      # exported script was actually RUN): this block read f$amplitude and
-      # f$acrophase. fit_cosinor() returns those fields under the names
-      # `amplitudes` and `acrophases` -- they are vectors, one entry per
-      # harmonic -- so both were NULL, and the script died on
-      # "arguments imply differing number of rows: 1, 0" at the first subject.
-      # The block also assumed every fit carries a MESOR; a failed fit does not.
-      add("# MESOR / amplitude / acrophase per subject (successful fits only).")
-      add("# amplitudes and acrophases are vectors, one entry per harmonic;")
-      add("# [1] is the fundamental. Acrophase is in radians, acrophases_time in")
-      add("# clock hours.")
-      add("ok <- vapply(cosinor_fits, function(f) isTRUE(f$success), logical(1))")
-      add("cosinor_params <- do.call(rbind, lapply(which(ok), function(i) {")
-      add("  f  <- cosinor_fits[[i]]")
-      add("  g1 <- function(x) if (length(x)) as.numeric(x)[1] else NA_real_")
-      add("  data.frame(subject        = i,")
-      add("             mesor          = g1(f$mesor),")
-      add("             amplitude      = g1(f$amplitudes),")
-      add("             acrophase_rad  = g1(f$acrophases),")
-      add("             acrophase_hour = g1(f$acrophases_time),")
-      add("             r_squared      = g1(f$r_squared),")
-      add("             p_value        = g1(f$p_value))")
-      add("}))")
-      add("print(head(cosinor_params))")
-      if(!is.null(hm$individual_fits)) {
-        add(sprintf("# The app fitted %d of %d subjects successfully.",
-                    sum(vapply(hm$individual_fits,
-                               function(f) isTRUE(f$success), logical(1))),
-                    length(hm$individual_fits)))
-      }
-      add("")
-      add("# NOTE: acrophase is CIRCULAR. Do not average it arithmetically --")
-      add("# average the (cos, sin) components, as the app's polar plot does.")
+      add(if (mixed) "# Not rerun here: the plots."
+          else paste("# Not rerun here: the plots, and the ridge diagnostics (the correlation",
+                     "of A and tau,\n# and the free-against-held tau check)."))
       add("")
     }
 

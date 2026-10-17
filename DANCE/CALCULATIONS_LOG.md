@@ -422,3 +422,47 @@ runs; the printed width), `test-harmonic-ui-structure.R` (every id on the tab
 created once), `assumptions_app_test.R` (through Run: the clock route, the
 shared origin, the refusals, the seeded bootstrap, the nested set's sample, the
 summary and the report's list).
+
+### The exported script reruns the cosinor analysis
+
+The code export (`server/90_export.R`, section 10) used to refit each
+participant's cosinor and stop. A mixed-effects run -- the default approach --
+was not reproduced at all: the script printed per-participant estimates where
+the app had reported a mixed model, and said nothing. The section also read its
+data as `raw_data`, which the script never defined (section 2 creates
+`data_matrix`), so for any cosinor fitted to raw observations -- every cosinor
+since smoothing was removed from it -- the script stopped at that line. The
+function-on-scalar section had the same hole.
+
+Now the section reruns whichever approach ran, with the run's settings read off
+the fitted model, by calling the functions the app calls -- moved out of the
+module's server code so that there is one copy:
+
+- **Mixed**: `dance_traj_run()` (server/08e) -- the long frame to the fitted
+  model, tau held or profiled within the range (flat profile -> the held value),
+  A and tau per cell on request -- and `dance_traj_tests()` (server/08f), every
+  design test the comparison tab reports. The script prints the fit report, the
+  fixed effects, the per-cell equations and intercept/MESOR/change, the design
+  tests, and the per-cell A, tau, A/tau.
+- **Two-stage**: `dance_ts_fit_all()`, `dance_ts_gate()`, `dance_ts_bootstrap()`,
+  `dance_ts_model_set()` (server/08h): the per-participant fits, the inclusion
+  rule, the seeded bootstrap and the nested set; then the comparison tab's
+  tables and tests through the existing `dance_ts_*` functions.
+- The run's assumptions head the section as comments (`dance_cosinor_assumptions`).
+- Helpers are pulled in through codetools when it is installed and, when not,
+  through every symbol in a function's body (a superset, narrowed to the app's
+  own objects); app constants such as `DANCE_TRAJ_TRENDS` are written out too.
+  Without the fallback a missing codetools emitted the requested function alone.
+
+Not rerun by the script, and said so in it: the plots, and the two-stage ridge
+diagnostics. Pairwise tables are one call each (`dance_traj_contrasts`,
+`dance_ts_pairwise`), shown as comments.
+
+Test: `tests/cosinor_export_test.R` presses Run, writes the script, runs its
+header, data loading and cosinor section in a separate `Rscript --vanilla`
+process with nothing of the app loaded, and compares: mixed (tau profiled, A
+and tau per cell) -- tau, fixed effects, per-cell levels, all design tests' F,
+df and p, per-cell A/tau/A-over-tau, the one-tau likelihood ratio; two-stage
+(tau in a range, groups, bootstrap, nested set) -- the whole parameter table,
+the inclusion audit, group summaries, component tests, bootstrap intervals and
+AICc. Every number matches exactly.

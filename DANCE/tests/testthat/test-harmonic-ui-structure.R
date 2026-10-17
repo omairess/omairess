@@ -101,8 +101,11 @@ test_that("tab 6 does not offer views or rows the fitted model cannot produce", 
   # printed one test twice under two names.
   expect_true(grepl("harmonic_traj_component <- reactive", srv, fixed = TRUE))
   expect_true(grepl("updateSelectInput(session, \"harmonic_traj_component\"", srv, fixed = TRUE))
-  # the decomposition's block list is conditional on the trend
-  blk <- regmatches(srv, regexpr('want <- if \\(identical\\(ff\\$spec\\$trend, "none"\\)[^\n]*\n[^\n]*\n[^\n]*', srv))
+  # the decomposition's block list is conditional on the trend; it lives in
+  # dance_traj_tests() (server/08f), which the app and the exported script call
+  inf <- slurp("server/08f_helpers_trajinf.R")
+  blk <- regmatches(inf, regexpr('want <- if \\(identical\\(ff\\$spec\\$trend, "none"\\)[^\n]*\n[^\n]*\n[^\n]*', inf))
+  expect_true(grepl("dance_traj_tests(ff, dfm", srv, fixed = TRUE))
   expect_true(length(blk) == 1)
   # the level rows are the intercept and, with a trend, the MESOR -- not the
   # curve value at the first observation, which mixes the rhythm into the level

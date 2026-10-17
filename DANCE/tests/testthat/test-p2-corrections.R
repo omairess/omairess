@@ -113,7 +113,11 @@ test_that("the fANOVA export deparses the app's own estimator", {
   # object is still what does the writing.
   expect_true(grepl('emit_kernel("perform_functional_anova")', src, fixed = TRUE))
   expect_true(grepl('emit_kernel("perform_rm_fanova")', src, fixed = TRUE))
-  expect_true(grepl('emit_kernel("fit_cosinor")', src, fixed = TRUE))
+  # the cosinor section emits the functions the app RUNS -- the two-stage
+  # pipeline (whose closure carries fit_cosinor) or the mixed-effects one
+  for (k in c('"dance_ts_fit_all"', '"dance_ts_gate"', '"dance_traj_run"', '"dance_traj_tests"'))
+    expect_true(grepl(k, src, fixed = TRUE), info = k)
+  expect_true(grepl("emit_kernel(k)", src, fixed = TRUE))
   expect_true(grepl('emit_kernel("dance_fit_fosr_ols")', src, fixed = TRUE))
   expect_true(grepl("paste(deparse(obj), collapse", src, fixed = TRUE))
   # the closure is computed from the live objects, not from a list that can go

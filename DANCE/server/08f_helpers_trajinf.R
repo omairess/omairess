@@ -1362,3 +1362,77 @@ dance_traj_pair_block_test <- function(fit, cell_i, cell_j, block = "full",
   }
   r
 }
+
+# ------------------------------------------------------------------------------
+# EVERY BLOCK TEST THE COMPARISON TAB REPORTS, computed once
+# ------------------------------------------------------------------------------
+# The full-trajectory test of each factorial effect (main effects and their
+# interactions), and the component blocks of the whole design: full, shape,
+# circadian, trend, intercept and MESOR (without a trend: full, circadian,
+# intercept). Every one is a model-based MARGINAL contrast -- difference
+# contrasts on the factors in the effect, equal weights over the others -- so a
+# factor's test does not depend on which level sorts first. Two requests can be
+# the same hypothesis (in a one-factor design the effect and the full block
+# are), so they are deduplicated on the contrast matrix: Kenward-Roger refits
+# per test. Written as a function, not inside the app's server code, so the
+# exported script reports the same tests.
+#
+#   progress   optional function(j, n), called before test j of n
+dance_traj_tests <- function(ff, df_method = "kr", progress = NULL) {
+  if (!isTRUE(ff$ok)) return(NULL)
+  dts <- ff$spec$design_terms
+  effects <- unlist(lapply(seq_along(dts), function(k)
+    utils::combn(dts, k, paste, collapse = ":")), use.names = FALSE)
+  # The level rows are the intercept and, with a trend, the MESOR. The trend row
+  # is the one trend coefficient per cell -- the same hypothesis as the
+  # non-periodic change over the recording.
+  want <- if (identical(ff$spec$trend, "none"))
+    c("full", "circadian", "intercept") else
+    c("full", "shape", "circadian", "trend", "intercept", "mesor")
+  reqs <- c(lapply(effects, function(ef) list(effect = strsplit(ef, ":", fixed = TRUE)[[1]],
+                                              block = "full", name = ef)),
+            lapply(want, function(w) list(effect = character(0), block = w, name = w)))
+  Ls <- lapply(reqs, function(r) tryCatch(
+    dance_traj_marginal_L(ff, r$effect, r$block), error = function(e) NULL))
+  keys <- vapply(Ls, function(L) if (is.null(L)) "" else
+    paste(format(round(unclass(L), 10), scientific = FALSE), collapse = "|"), character(1))
+  uniq <- unique(keys[nzchar(keys)])
+  computed <- lapply(seq_along(uniq), function(j) {
+    if (is.function(progress)) progress(j, length(uniq))
+    i <- match(uniq[j], keys)
+    dance_traj_marginal_test(ff, reqs[[i]]$effect, reqs[[i]]$block, df_method = df_method)
+  })
+  names(computed) <- uniq
+  names(keys) <- vapply(reqs, function(r) r$name, character(1))
+  get1 <- function(nm) if (nzchar(keys[[nm]])) computed[[keys[[nm]]]] else NULL
+  ok_runs <- Filter(function(r) isTRUE(r$ok), computed)
+  list(effects = stats::setNames(lapply(effects, get1), effects),
+       blocks  = stats::setNames(lapply(want, get1), want),
+       n_computed = length(uniq), n_requested = length(keys),
+       # THE METHOD IS PER TEST, NOT PER TABLE: Kenward-Roger falls through to
+       # Satterthwaite when KRmodcomp fails on one particular reduced model, so
+       # a table can carry two approximations and must say so
+       methods_all = unique(vapply(ok_runs, function(r) r$method %||% "F test", character(1))),
+       method = if (length(ok_runs)) ok_runs[[1]]$method %||% "F test" else "F test")
+}
+
+# The tests above as one table, for a script or a report.
+dance_traj_tests_table <- function(tt) {
+  if (is.null(tt)) return(NULL)
+  row <- function(kind, name, r) data.frame(
+    kind = kind, test = name,
+    F = if (isTRUE(r$ok)) r$statistic %||% NA_real_ else NA_real_,
+    df1 = if (isTRUE(r$ok)) r$df1 %||% NA_real_ else NA_real_,
+    df2 = if (isTRUE(r$ok)) r$df2 %||% NA_real_ else NA_real_,
+    p = if (isTRUE(r$ok)) r$p %||% NA_real_ else NA_real_,
+    method = if (isTRUE(r$ok)) r$method %||% "" else (r$message %||% "not testable"),
+    stringsAsFactors = FALSE)
+  rows <- c(lapply(names(tt$effects), function(nm)
+              if (!is.null(tt$effects[[nm]])) row("effect (full trajectory)", gsub(":", " x ", nm), tt$effects[[nm]])),
+            lapply(names(tt$blocks), function(nm)
+              if (!is.null(tt$blocks[[nm]])) row("component, whole design", nm, tt$blocks[[nm]])))
+  rows <- Filter(Negate(is.null), rows)
+  if (!length(rows)) return(NULL)
+  out <- do.call(rbind, rows); rownames(out) <- NULL
+  out
+}

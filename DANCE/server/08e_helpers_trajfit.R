@@ -562,3 +562,92 @@ dance_traj_fit_report <- function(fit) {
   }
   paste(l, collapse = "\n")
 }
+
+# ------------------------------------------------------------------------------
+# THE MIXED-EFFECTS COSINOR AS THE APP RUNS IT
+# ------------------------------------------------------------------------------
+# From a long frame to the fitted model the cosinor tab reports: tau held at a
+# value, or profiled once for all cells within a range (a flat profile holds
+# the held value, which must lie in the range), and on request A and tau per
+# cell. It used to live inside the module's server code, so the exported
+# script could not run it; it is one function now, called by the app and
+# written verbatim into the script, so the two cannot fit different models.
+#
+#   tau_mode   "fixed" (hold tau_value) or "estimate" (profile in tau_lo..tau_hi)
+#   progress   optional function(message, value in [0, 1])
+dance_traj_run <- function(d, period = 24, n_harmonics = 1, trend = "none", roles = NULL,
+                           t0 = NULL, tau_mode = c("fixed", "estimate"),
+                           tau_value = NA_real_, tau_lo = NA_real_, tau_hi = NA_real_,
+                           sat_cells = FALSE, progress = NULL) {
+  tau_mode <- match.arg(tau_mode)
+  say <- function(msg, value) if (is.function(progress)) progress(msg, value)
+  sat <- identical(trend, "exp_sat")
+  value_ok <- length(tau_value) == 1L && isTRUE(is.finite(tau_value) && tau_value > 0)
+  range_ok <- length(tau_lo) == 1L && length(tau_hi) == 1L &&
+    isTRUE(all(is.finite(c(tau_lo, tau_hi))) && tau_lo > 0 && tau_hi > tau_lo)
+  mode <- if (!sat) "none" else if (identical(tau_mode, "estimate")) "profile" else "fixed"
+  if (sat && identical(mode, "fixed") && !value_ok)
+    return(list(ok = FALSE, message = paste(
+      "A saturating trend needs a time constant. Set tau under Model",
+      "Specification, or choose to estimate it: the mixed model is linear in its",
+      "coefficients only for a given tau.")))
+  if (sat && (identical(mode, "profile") || isTRUE(sat_cells)) && !range_ok)
+    return(list(ok = FALSE, message = paste(
+      "Estimating tau needs the range to search: a lower and an upper bound in",
+      "hours under Model Specification.")))
+  # a flat profile holds tau at the held value, so that value has to be one tau
+  # is allowed to take
+  if (sat && identical(mode, "profile") && !(value_ok && tau_value >= tau_lo && tau_value <= tau_hi))
+    return(list(ok = FALSE, message = paste(
+      "The held value of tau is what a flat profile falls back to, so it must be",
+      "a positive number inside the search range.")))
+  if (is.null(t0)) t0 <- min(d$t, na.rm = TRUE)
+
+  fit_at <- function(tau) {
+    sp <- dance_traj_spec(d, period = period, n_harmonics = n_harmonics, trend = trend,
+                          t0 = t0, tau = tau, roles = roles)
+    if (!isTRUE(sp$ok)) return(list(ok = FALSE, message = sp$message))
+    dance_traj_fit(sp)
+  }
+  if (identical(mode, "profile")) {
+    # the profile searches the range only: 24 points spaced evenly in log tau
+    # between its ends, so tau cannot come back at a value that was ruled out
+    grid <- exp(seq(log(tau_lo), log(tau_hi), length.out = 24))
+    pr <- dance_traj_profile_tau(d, period, n_harmonics, design_terms = NULL, t0 = t0,
+                                 roles = roles, tau_grid = grid,
+                                 progress = function(j, n) say(
+                                   sprintf("Profiling the likelihood over tau: grid point %d of %d", j, n),
+                                   0.8 * j / (n + 1)))
+    if (!isTRUE(pr$ok)) return(list(ok = FALSE, message = pr$message))
+    # the profile without its fitted model, which IS the fit below
+    prof <- pr[c("profile", "tau", "ci", "ci_open", "flat", "at_edge", "logLik_range",
+                 "message", "rung", "grid", "n_grid_failed")]
+    if (!is.null(pr$fit) && isTRUE(pr$fit$ok)) {
+      ff <- pr$fit
+      ff$tau_mode <- "profile"
+    } else {
+      # A FLAT PROFILE: the data do not identify tau, so the profile returns no
+      # fit at its argmax. The model is fitted at the held value instead, and
+      # every report says so.
+      say("Fitting the mixed-effects cosinor at the held tau (flat profile)...", 0.85)
+      ff <- fit_at(tau_value)
+      if (!isTRUE(ff$ok)) return(list(ok = FALSE, message = ff$message))
+      ff$tau_mode <- "fixed_after_flat"
+    }
+    ff$tau_profile <- prof
+  } else {
+    say("Fitting the mixed-effects cosinor...", 0.5)
+    ff <- fit_at(if (sat) tau_value else NULL)
+    if (!isTRUE(ff$ok)) return(list(ok = FALSE, message = ff$message))
+    ff$tau_mode <- mode
+  }
+  # A AND TAU IN EVERY CELL, on request: a nonlinear mixed model (nlme), the
+  # only way to compare tau itself, and the initial slope A/tau, between cells
+  if (sat && isTRUE(sat_cells)) {
+    say("Estimating A and tau in every cell (nonlinear mixed model)...", 0.9)
+    ff$sat <- dance_traj_sat_fit(ff, tau_range = c(tau_lo, tau_hi),
+                                 progress = function(msg) say(msg, 0.95))
+  }
+  ff$tau_range <- if (sat && range_ok) c(tau_lo, tau_hi) else NULL
+  ff
+}

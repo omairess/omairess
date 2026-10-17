@@ -2160,52 +2160,9 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
                          type = "message", duration = 5)
       }
       
-      # Individual cosinor analysis
-      individual_fits <- list()
-      
-      # Build column names for all harmonics
-      # AUDIT: beta_0 and the MESOR are different quantities and both are
-      # comparable between groups, so both are stored per subject. beta_0 is the
-      # fitted constant -- the rhythm's own level, the thing a trend-free cosinor
-      # would call the MESOR. mesor_adj is the rhythm-adjusted mean: the
-      # time-average of beta_0 + S(t) across the observed window, which is where
-      # the data actually sit once the homeostatic rise is counted. A group can
-      # rank differently on the two.
-      param_cols <- c("subject", "mesor", "mesor_se", "mesor_adj", "value_at_start",
-                      "trend_change")
-
-      # Add trend columns based on type
-      if(trend_type == "linear") {
-        param_cols <- c(param_cols, "trend_linear", "trend_linear_se")
-      } else if(trend_type == "log") {
-        param_cols <- c(param_cols, "trend_log", "trend_log_se")
-      } else if(trend_type == "exp_sat") {
-        param_cols <- c(param_cols, "A_sat", "A_sat_se", "tau", "tau_se")
-      }
-
-      for(h in 1:n_harmonics) {
-        param_cols <- c(param_cols,
-                        paste0("amplitude_", h), paste0("amp_se_", h),
-                        paste0("acrophase_rad_", h), paste0("acrophase_time_", h),
-                        paste0("acro_se_time_", h),
-                        paste0("beta_cos_", h), paste0("beta_sin_", h))
-      }
-      param_cols <- c(param_cols, "r_squared", "percent_rhythm", "p_value",
-                      "r_squared_S", "r_squared_C",
-                      # AUDIT 1.3: the commonality partition, which sums to total R²
-                      "unique_S", "unique_C", "shared_SC",
-                      "percent_S", "percent_C", "percent_shared",
-                      # AUDIT 2.3: convergence is now recorded per subject
-                      "converged", "boundary_hit")
-      
-      individual_params <- data.frame(matrix(ncol = length(param_cols), nrow = 0))
-      colnames(individual_params) <- param_cols
-      
-      # Coefficient offset for trend
-      coef_offset <- 1 + n_trend_params
-      
-      # Track failed fits
-      failed_fits <- list()
+      # The per-participant fits, their parameter table and the inclusion rule
+      # are dance_ts_fit_all() and dance_ts_gate() (server/08h), the functions
+      # the exported script calls too.
       
       # ======================================================================
       # AUDIT 1.4.3 + 2.2: the time origin
@@ -2283,134 +2240,18 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
         showNotification(bounds_msg, type = "message", duration = 5)
       }
 
-      withProgress(message = 'Fitting individual cosinor models...', value = 0, {
-        for(i in 1:n_subjects) {
-          y_i <- Y[i, ]
+      .ts <- withProgress(message = 'Fitting individual cosinor models...', value = 0,
+        dance_ts_fit_all(Y, time_vec_model, period = period, n_harmonics = n_harmonics,
+                         trend_type = trend_type, use_bounds = use_bounds,
+                         mesor_min = mesor_min, mesor_max = mesor_max,
+                         amplitude_min = amplitude_min, amplitude_max = amplitude_max,
+                         A_sat_min = A_sat_min, A_sat_max = A_sat_max,
+                         tau_min = tau_min, tau_max = tau_max, tau_fixed = tau_fixed,
+                         progress = function(i, n) setProgress(i / n)))
+      individual_fits <- .ts$fits
+      individual_params <- .ts$params
+      failed_fits <- .ts$failed
 
-          # Count valid (non-NA) data points for this subject
-          n_valid_points <- sum(!is.na(y_i))
-
-          # Debug: Check for unusual values
-          if(n_valid_points == 0) {
-            cat(sprintf("Subject %d: All NA. First 5 values: %s\n", i,
-                        paste(head(y_i, 5), collapse=", ")))
-          }
-
-          fit_i <- fit_cosinor(time_vec_model, y_i, period = period, n_harmonics = n_harmonics,
-                               trend_type = trend_type,
-                               use_bounds = use_bounds,
-                               mesor_min = mesor_min,
-                               mesor_max = mesor_max,
-                               amplitude_min = amplitude_min,
-                               amplitude_max = amplitude_max,
-                               A_sat_min = A_sat_min,
-                               A_sat_max = A_sat_max,
-                               tau_min = tau_min,
-                               tau_max = tau_max,
-                               tau_fixed = tau_fixed,
-                               t_origin = min(time_vec_model))
-
-          if(fit_i$success) {
-            individual_fits[[i]] <- fit_i
-
-            # Build row with all harmonic parameters
-            row_data <- list(subject = i, mesor = fit_i$mesor, mesor_se = fit_i$mesor_se)
-
-            # the rhythm-adjusted mean and the fitted value at the first
-            # observation, per subject, from this subject's own coefficients
-            .tc <- switch(as.character(trend_type),
-                          "linear"  = c(fit_i$trend_params$trend_linear$coef %||% NA_real_),
-                          "log"     = c(fit_i$trend_params$trend_log$coef %||% NA_real_),
-                          "exp_sat" = c(fit_i$trend_params$A_sat$coef %||% NA_real_,
-                                        fit_i$trend_params$tau$coef %||% NA_real_),
-                          numeric(0))
-            row_data$mesor_adj <- dance_rhythm_adjusted_mean(
-              fit_i$mesor, trend_type, .tc,
-              min(time_vec_model, na.rm = TRUE), max(time_vec_model, na.rm = TRUE),
-              fit_i$t_offset %||% 0)
-            row_data$value_at_start <- tryCatch(
-              as.numeric(dance_rhythm_from_coefs(
-                fit_i$coefs, min(time_vec_model, na.rm = TRUE), period, n_harmonics,
-                trend_type, include_trend = TRUE, t_offset = fit_i$t_offset %||% 0)),
-              error = function(e) NA_real_)
-            # the non-periodic change over the recording: the trend at the last
-            # observation minus the trend at the first, from this subject's own
-            # trend parameters -- for the saturating trend, A and tau together
-            row_data$trend_change <- if (identical(as.character(trend_type), "none")) 0 else
-              tryCatch({
-                .s <- dance_trend_value(trend_type, .tc, range(time_vec_model, na.rm = TRUE),
-                                        fit_i$t_offset %||% 0)
-                if (all(is.finite(.s))) .s[2] - .s[1] else NA_real_
-              }, error = function(e) NA_real_)
-
-            # Add trend parameters based on type
-            if(trend_type != "none" && !is.null(fit_i$trend_params)) {
-              for(param_name in names(fit_i$trend_params)) {
-                row_data[[param_name]] <- fit_i$trend_params[[param_name]]$coef
-                row_data[[paste0(param_name, "_se")]] <- fit_i$trend_params[[param_name]]$se
-              }
-              # the initial slope of a saturating rise, A/tau: how fast it starts
-              if (identical(as.character(trend_type), "exp_sat"))
-                row_data$init_slope <- (fit_i$trend_params$A_sat$coef %||% NA_real_) /
-                                       (fit_i$trend_params$tau$coef %||% NA_real_)
-            }
-
-            for(h in 1:n_harmonics) {
-              row_data[[paste0("amplitude_", h)]] <- fit_i$amplitudes[h]
-              row_data[[paste0("amp_se_", h)]] <- fit_i$amp_se[h]
-              row_data[[paste0("acrophase_rad_", h)]] <- fit_i$acrophases[h]
-              row_data[[paste0("acrophase_time_", h)]] <- fit_i$acrophases_time[h]
-              row_data[[paste0("acro_se_time_", h)]] <- fit_i$acro_se_time[h]
-
-              # Get beta coefficients - handle both linear and nls fits
-              if(trend_type == "exp_sat") {
-                row_data[[paste0("beta_cos_", h)]] <- fit_i$coefs[paste0("b_cos", h)]
-                row_data[[paste0("beta_sin_", h)]] <- fit_i$coefs[paste0("b_sin", h)]
-              } else {
-                cos_idx <- coef_offset + 2 * (h - 1) + 1
-                sin_idx <- coef_offset + 2 * (h - 1) + 2
-                row_data[[paste0("beta_cos_", h)]] <- fit_i$coefs[cos_idx]
-                row_data[[paste0("beta_sin_", h)]] <- fit_i$coefs[sin_idx]
-              }
-            }
-            row_data$r_squared <- fit_i$r_squared
-            row_data$percent_rhythm <- fit_i$percent_rhythm
-            row_data$p_value <- fit_i$p_value
-            row_data$aic <- fit_i$aic
-            row_data$aicc <- fit_i$aicc
-            row_data$bic <- fit_i$bic
-            row_data$loocv_rmse <- fit_i$loocv_rmse
-            row_data$r_squared_S <- fit_i$r_squared_S
-            row_data$r_squared_C <- fit_i$r_squared_C
-            row_data$unique_S <- fit_i$unique_S %||% NA_real_
-            row_data$unique_C <- fit_i$unique_C %||% NA_real_
-            row_data$shared_SC <- fit_i$shared_SC %||% NA_real_
-            row_data$percent_S <- fit_i$percent_S
-            row_data$percent_C <- fit_i$percent_C
-            row_data$percent_shared <- fit_i$percent_shared %||% NA_real_
-            row_data$converged <- isTRUE(fit_i$converged)
-            row_data$boundary_hit <- isTRUE(fit_i$boundary_hit)
-
-            individual_params <- rbind(individual_params, as.data.frame(row_data))
-          } else {
-            # Store failed fit with reason
-            individual_fits[[i]] <- list(
-              success = FALSE, 
-              message = fit_i$message,
-              n_valid = n_valid_points,
-              n_required = 2 * n_harmonics + 1 + n_trend_params + 1
-            )
-            failed_fits[[length(failed_fits) + 1]] <- list(
-              subject = i,
-              n_valid = n_valid_points,
-              reason = fit_i$message
-            )
-          }
-          
-          if(i %% 10 == 0) incProgress(10 / n_subjects)
-        }
-      })
-      
       # Report failed fits
       if(length(failed_fits) > 0) {
         n_failed <- length(failed_fits)
@@ -2442,74 +2283,20 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       # from every population summary, and the counts are carried into the
       # report so the exclusion is visible rather than silent.
       # ========================================================================
+      # Non-converged fits never enter; fits on a bound do or do not, as the
+      # user chose (default: they do, with the bounds tabled); fewer than 3
+      # passing fits relaxes the gate, and the audit says so.
       all_params <- individual_params
-      conv_flag  <- if("converged" %in% names(all_params)) all_params$converged else rep(TRUE, nrow(all_params))
-      bound_flag <- if("boundary_hit" %in% names(all_params)) all_params$boundary_hit else rep(FALSE, nrow(all_params))
-      conv_flag[is.na(conv_flag)] <- FALSE
-      bound_flag[is.na(bound_flag)] <- FALSE
-
-      # Which bounds each returned fit sits on, per parameter.
-      bounds_list <- lapply(seq_len(nrow(all_params)), function(i) {
-        f <- individual_fits[[all_params$subject[i]]]
-        if (is.null(f) || is.null(f$bounds_hit)) character(0) else f$bounds_hit
-      })
-      bounds_summary <- dance_bounds_summary(
-        bounds_list,
-        subject_ids = if (!is.null(values$subject_ids))
-          values$subject_ids[all_params$subject] else all_params$subject)
-
-      fit_audit <- list(
-        n_attempted = n_subjects,
-        n_returned  = nrow(all_params),
-        n_converged = sum(conv_flag & !bound_flag),
-        n_boundary  = sum(conv_flag & bound_flag),
-        n_failed    = n_subjects - nrow(all_params),
-        n_nonconverged = sum(!conv_flag),
-        bounds = bounds_summary
-      )
-
-      # ======================================================================
-      # WHO ENTERS THE POPULATION SUMMARIES
-      #
-      # Non-converged fits are always excluded: the optimiser stopped without
-      # finding a solution, so there is no estimate to average.
-      #
-      # Fits pinned to a BOUND are a judgement call, and it is the user's, not
-      # this code's. The value is real -- the optimiser did converge to it --
-      # but it is the edge of the feasible region rather than an interior
-      # optimum, so its standard error is meaningless and averaging it pulls the
-      # mean toward whatever the bound happens to be. Excluding them makes the
-      # summary cleaner and the sample smaller and possibly biased; including
-      # them keeps everyone and lets the bound speak through the mean.
-      #
-      # Default is to INCLUDE, with the bound table shown, because a silently
-      # shrunken sample is the worse failure. The table names which bound each
-      # fit hit and which fits hit more than one, so the cost of including them
-      # is visible rather than assumed.
-      # ======================================================================
-      include_boundary <- isTRUE(input$harmonic_include_boundary %||% TRUE)
-      keep_rows <- conv_flag & (include_boundary | !bound_flag)
-      fit_audit$include_boundary <- include_boundary
-
-      if(sum(keep_rows) < 3) {
-        # Refusing to summarise 2 subjects is better than summarising 1305 bad
-        # ones, but refusing to summarise ANYTHING would be worse. Fall back,
-        # and say so.
+      .gate <- dance_ts_gate(all_params, individual_fits, n_attempted = n_subjects,
+                             include_boundary = isTRUE(input$harmonic_include_boundary %||% TRUE),
+                             subject_ids = values$subject_ids)
+      fit_audit <- .gate$fit_audit
+      if (isTRUE(fit_audit$gate_relaxed))
         showNotification(
           sprintf("Only %d of %d fits pass the current gate; population summaries fall back to all returned fits. Treat them as provisional.",
-                  sum(keep_rows), nrow(all_params)),
+                  fit_audit$n_passing, nrow(all_params)),
           type = "warning", duration = 15)
-        fit_audit$gate_relaxed <- TRUE
-        keep_rows <- rep(TRUE, nrow(all_params))
-      } else {
-        fit_audit$gate_relaxed <- FALSE
-      }
-      fit_audit$n_summarised <- sum(keep_rows)
-      individual_params <- all_params[keep_rows, , drop = FALSE]
-      fit_audit$bounds_kept <- dance_bounds_summary(
-        bounds_list[keep_rows],
-        subject_ids = if (!is.null(values$subject_ids))
-          values$subject_ids[all_params$subject[keep_rows]] else all_params$subject[keep_rows])
+      individual_params <- all_params[.gate$keep, , drop = FALSE]
 
       # Always calculate population mean parameters (vector averaging for circular data)
       {
@@ -2989,103 +2776,15 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
         attr(group_fits, "n_in_groups") <- .grp_total
       }
       
-      # Bootstrap CIs if requested
+      # Bootstrap CIs if requested: dance_ts_bootstrap() (server/08h), seeded,
+      # participants resampled with replacement, percentile intervals
       boot_results <- NULL
       if(isTRUE(input$harmonic_bootstrap) && identical(approach, "two_stage")) {
         B <- input$harmonic_n_boot
-        boot_mesor <- numeric(B)
-        boot_amplitude <- numeric(B)
-        boot_acrophase <- numeric(B)
-        
         showNotification(paste("Running", B, "bootstrap iterations..."), type = "message")
-        
-        # ====================================================================
-        # AUDIT (P21, findings A2 and A3)
-        #
-        # A2. This loop used to draw indices with replacement and then SELECT
-        # rows with `individual_params$subject %in% boot_idx`. `%in%` is a set
-        # test, so a participant drawn three times contributed one row: the
-        # procedure was a subsample WITHOUT replacement of the ~63% of
-        # participants drawn at least once, and the finite-population
-        # correction that comes with it made the interval 21% too SHORT on a
-        # 60-participant fixture. Resampling is now by INDEX, so a participant
-        # drawn three times appears three times, which is the whole point.
-        #
-        # The resampling unit is the PARTICIPANT, which is what §11 of the
-        # redesign brief requires and what the repeated-measures structure
-        # demands: a participant's whole row travels together.
-        #
-        # A3. The acrophase interval was `quantile()` on hours -- a linear
-        # quantile on a circular quantity. It is now the circular percentile
-        # interval (quantiles of the signed deviation from the bootstrap mean
-        # direction), computed by dance_boot_circ_ci_time(). The linear one is
-        # kept alongside ONLY so the readout can show what it would have said
-        # when the two disagree, which they do violently near midnight.
-        # ====================================================================
-        # NOTE ON CLUSTER IDENTITY. Every statistic in this loop is a MEAN OVER
-        # ROWS, so a participant drawn three times correctly contributes three
-        # times and their id never enters the arithmetic. That is why plain row
-        # indices are enough here. Any bootstrap that REFITS a model with the
-        # participant as a grouping factor must instead use
-        # dance_boot_clusters(), which gives each drawn copy a new id -- three
-        # copies sharing one id would be read as one participant with tripled
-        # observations, i.e. one random effect where the bootstrap intended
-        # three.
-        rows_by_subject <- split(seq_len(nrow(individual_params)),
-                                 individual_params$subject)
-        subj_ids <- names(rows_by_subject)
-        n_boot_subj <- length(subj_ids)
-
-        # A FIXED SEED, so the same data give the same interval twice and the
-        # seed can be stated in a methods section; the session's random stream
-        # is restored afterwards. Unseeded, the interval moved on every Run.
-        boot_seed <- 20240601L
-        .old_seed <- if (exists(".Random.seed", envir = globalenv(), inherits = FALSE))
-          get(".Random.seed", envir = globalenv()) else NULL
-        set.seed(boot_seed)
-
-        withProgress(message = 'Bootstrap...', value = 0, {
-          for(b in 1:B) {
-            take <- dance_boot_index(n_boot_subj)
-            boot_rows <- unlist(rows_by_subject[subj_ids[take]], use.names = FALSE)
-            boot_params <- individual_params[boot_rows, , drop = FALSE]
-
-            boot_mesor[b] <- mean(boot_params$mesor, na.rm = TRUE)
-
-            # Use first harmonic for bootstrap CIs
-            x_b <- boot_params$amplitude_1 * cos(boot_params$acrophase_rad_1)
-            y_b <- boot_params$amplitude_1 * sin(boot_params$acrophase_rad_1)
-            boot_amplitude[b] <- sqrt(mean(x_b, na.rm = TRUE)^2 + mean(y_b, na.rm = TRUE)^2)
-
-            acro_b <- atan2(mean(y_b, na.rm = TRUE), mean(x_b, na.rm = TRUE))
-            if(is.finite(acro_b) && acro_b < 0) acro_b <- acro_b + 2 * pi
-            boot_acrophase[b] <- acro_b
-
-            if(b %% 50 == 0) incProgress(50 / B)
-          }
-        })
-
-        if (!is.null(.old_seed)) assign(".Random.seed", .old_seed, envir = globalenv())
-        .acro_ci <- dance_boot_circ_ci_time(boot_acrophase, period, 1)
-        boot_results <- list(
-          mesor_ci = quantile(boot_mesor, c(0.025, 0.975), na.rm = TRUE),
-          amplitude_ci = quantile(boot_amplitude, c(0.025, 0.975), na.rm = TRUE),
-          # circular, and carrying its own width because lo > hi when it wraps
-          acrophase_ci = c(`2.5%` = .acro_ci$lo, `97.5%` = .acro_ci$hi),
-          acrophase_ci_circular = .acro_ci,
-          # what a linear quantile would have reported, for the readout to
-          # contrast when the interval wraps
-          acrophase_ci_linear = quantile(phi_to_hours(boot_acrophase, period, 1),
-                                         c(0.025, 0.975), na.rm = TRUE),
-          resample_unit = "participant",
-          n_resampled = n_boot_subj,
-          seed = boot_seed,
-          ci_method = "percentile",
-          boot_mesor = boot_mesor,
-          boot_amplitude = boot_amplitude,
-          boot_acrophase = boot_acrophase,
-          B = B
-        )
+        boot_results <- withProgress(message = 'Bootstrap...', value = 0,
+          dance_ts_bootstrap(individual_params, B, period,
+                             progress = function(b, n) setProgress(b / n)))
       }
       
       # ======================================================================
@@ -3098,69 +2797,22 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       # Akaike weights.
       #
       # The set is the one the brief asked for: trend in {none, linear,
-      # exp_sat} crossed with harmonics in {1, 2, 3}. Each cell is fitted on the
-      # SAME subjects with the SAME time vector, and the AICc's are summed
-      # across subjects (equivalently: this is the joint model over independent
-      # subjects, which is what "which specification should I report" asks).
+      # exp_sat} crossed with harmonics in {1, 2, 3}. Each cell is fitted with the
+      # SAME time vector, and each candidate's AICc is averaged per participant
+      # over the participants scorable under every candidate.
       #
       # Guarded behind a flag: 9 cells x n subjects x a nonlinear fit each is
       # minutes of compute on 1305 subjects, and it should not run unasked.
       # ======================================================================
+      # dance_ts_model_set() (server/08h): every candidate averaged over the
+      # participants scorable under every candidate
       model_selection <- NULL
       if(isTRUE(input$harmonic_model_selection) && identical(approach, "two_stage")) {
-        # AUDIT (P14). The grid used to be hardcoded here as
-        # c("none", "linear", "exp_sat") x 1:3. It omitted the `log` trend the
-        # UI offers -- so a user who selected it saw a table their own model was
-        # not in, with weights normalised over a set that excluded it -- and it
-        # ran to three harmonics whatever had been selected, spending compute on
-        # models the user had already ruled out and diluting the Akaike weight
-        # of the one they were reporting. The set now comes from
-        # dance_cosinor_model_set(), which crosses every trend the UI offers with
-        # the CUMULATIVE harmonic sets up to the number selected.
-        ms_models <- dance_cosinor_model_set(n_harmonics)
-        # participants x candidates; NA where the candidate cannot be fitted
-        ms_aicc <- matrix(NA_real_, n_subjects, length(ms_models),
-                          dimnames = list(NULL, vapply(ms_models, function(m) m$label, character(1))))
-        withProgress(message = "Fitting the nested model set...", value = 0, {
-          for(j in seq_along(ms_models)) {
-            m <- ms_models[[j]]
-            incProgress(1 / length(ms_models),
-                        detail = sprintf("%s, %s", dance_trend_label(m$trend),
-                                         dance_harmonic_label(m$k)))
-            # parameters + 1: a fit needs at least one observation more than it
-            # has parameters for the residual variance to be estimable
-            need <- dance_model_npar(m$trend, m$k) + 1L
-            if(n_time < need) next
-            for(i in seq_len(n_subjects)) {
-              y_i <- as.numeric(Y[i, ])
-              if(sum(!is.na(y_i)) < need) next
-              # the saturating candidates use the same tau setting as the fit
-              # being reported, so its row in the table is that fit
-              f <- tryCatch(fit_cosinor(time_vec_model, y_i, period = period,
-                                        n_harmonics = m$k, trend_type = m$trend,
-                                        tau_min = tau_min, tau_max = tau_max,
-                                        tau_fixed = if (identical(m$trend, "exp_sat")) tau_fixed else NA,
-                                        t_origin = min(time_vec_model)),
-                            error = function(e) NULL)
-              if(is.null(f) || !isTRUE(f$success) || !is.finite(f$aicc)) next
-              ms_aicc[i, j] <- f$aicc
-            }
-          }
-        })
-        # every candidate averaged over the SAME participants
-        ms_common <- dance_model_set_common(ms_aicc)
-        model_selection <- if (ms_common$n_common > 0) dance_akaike_table(ms_common$means) else NULL
-        if(!is.null(model_selection)) {
-          attr(model_selection, "per_subject_mean") <- TRUE
-          attr(model_selection, "n_common") <- ms_common$n_common
-          attr(model_selection, "n_participants") <- n_subjects
-          attr(model_selection, "not_fitted") <- ms_common$not_fitted
-          # Which row is the specification the user actually ran, so the readout
-          # and the report can point at it instead of leaving them to match a
-          # label by eye.
-          attr(model_selection, "selected") <- dance_model_label(trend_type, n_harmonics)
-          attr(model_selection, "n_harmonics_max") <- n_harmonics
-        }
+        model_selection <- withProgress(message = "Fitting the nested model set...", value = 0,
+          dance_ts_model_set(Y, time_vec_model, period = period, n_harmonics = n_harmonics,
+                             trend_type = trend_type, tau_min = tau_min, tau_max = tau_max,
+                             tau_fixed = tau_fixed,
+                             progress = function(j, n, label) setProgress(j / n, detail = label)))
       }
 
       # ======================================================================
@@ -4940,99 +4592,29 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       return(list(ok = FALSE, message = paste("Could not build the model frame:",
                                               conditionMessage(attr(d, "condition")))))
     trend <- mod$trend_type %||% "none"
-    # TAU, the saturating trend's time constant. The model is linear in its
-    # coefficients only for a GIVEN tau, so tau is either held at the value the
-    # user sets or estimated once for all cells by profiling the likelihood.
-    # Its own inputs, shown beside the trend choice: it used to be read from the
-    # two-stage free-vs-fixed check, an input hidden under the mixed approach,
-    # so the fit held tau at that field's default of 18 h and nothing on screen
-    # said where the number came from.
-    sat <- identical(trend, "exp_sat")
     # the settings this run was started with (Model Specification)
     ti <- mod$tau_spec %||% harmonic_tau_inputs()
-    tau_mode <- if (!sat) "none" else if (identical(ti$mode, "estimate")) "profile" else "fixed"
-    tau_user <- ti$value
-    tau_user_ok <- isTRUE(ti$value_ok)
-    if (sat && identical(tau_mode, "fixed") && !tau_user_ok)
-      return(list(ok = FALSE, message = paste(
-        "A saturating trend needs a time constant. Set tau under Model",
-        "Specification, or choose to estimate it: the mixed model is linear in its",
-        "coefficients only for a given tau.")))
-    if (sat && (identical(tau_mode, "profile") || isTRUE(ti$sat_cells)) && !isTRUE(ti$range_ok))
-      return(list(ok = FALSE, message = paste(
-        "Estimating tau needs the range to search: a lower and an upper bound in",
-        "hours under Model Specification.")))
-    # a flat profile holds tau at the value set beside the range, so that value
-    # has to be one tau is allowed to take
-    if (sat && identical(tau_mode, "profile") && !isTRUE(ti$fallback_ok %||%
-          (tau_user_ok && tau_user >= ti$lo && tau_user <= ti$hi)))
-      return(list(ok = FALSE, message = paste(
-        "The held value of tau is what a flat profile falls back to, so it must be",
-        "a positive number inside the search range.")))
-    period <- mod$period %||% 24
-    K <- mod$n_harmonics %||% 1
-
-    # t = 0 is the first time point of the recording -- the origin of the model
-    # axis, so the same instant as the two-stage fits and the clock conversion
-    # use, even when nobody was observed at it
-    t0 <- min(tv)
-    fit_at <- function(tau) {
-      sp <- dance_traj_spec(d, period = period, n_harmonics = K, trend = trend,
-                            t0 = t0, tau = tau, roles = roles)
-      if (!isTRUE(sp$ok)) return(list(ok = FALSE, message = sp$message))
-      dance_traj_fit(sp)
-    }
-    if (identical(tau_mode, "profile")) {
-      # the profile searches YOUR range only: 24 points spaced evenly in log tau
-      # between its ends, so tau cannot come back at a value you ruled out
-      grid <- exp(seq(log(ti$lo), log(ti$hi), length.out = 24))
-      pr <- withProgress(message = "Profiling the likelihood over tau...", value = 0, {
-        dance_traj_profile_tau(d, period, K, design_terms = NULL, t0 = t0, roles = roles,
-                               tau_grid = grid,
-                               progress = function(j, n) setProgress(
-                                 j / (n + 1), detail = sprintf("grid point %d of %d", j, n)))
-      })
-      if (!isTRUE(pr$ok)) return(list(ok = FALSE, message = pr$message))
-      # the profile without its fitted model, which IS ff below
-      prof <- pr[c("profile", "tau", "ci", "ci_open", "flat", "at_edge", "logLik_range",
-                   "message", "rung", "grid", "n_grid_failed")]
-      if (!is.null(pr$fit) && isTRUE(pr$fit$ok)) {
-        ff <- pr$fit
-        ff$tau_mode <- "profile"
-      } else {
-        # A FLAT PROFILE: the data do not identify tau, so the profile helper
-        # returns no fit at its argmax. The model is fitted at the held value set
-        # under Model Specification -- shown beside the range, and checked to lie
-        # inside it before anything was fitted -- and says so wherever tau is
-        # reported.
-        ff <- withProgress(message = "Fitting the mixed-effects cosinor...", value = 0.5,
-                           fit_at(tau_user))
-        if (!isTRUE(ff$ok)) return(list(ok = FALSE, message = ff$message))
-        ff$tau_mode <- "fixed_after_flat"
-      }
-      ff$tau_profile <- prof
-    } else {
-      ff <- withProgress(message = "Fitting the mixed-effects cosinor...", value = 0.5,
-                         fit_at(if (sat) tau_user else NULL))
-      if (!isTRUE(ff$ok)) return(list(ok = FALSE, message = ff$message))
-      ff$tau_mode <- tau_mode
-    }
+    # THE FIT ITSELF is dance_traj_run() (server/08e), the function the exported
+    # script calls too: tau held, or profiled within the range (a flat profile
+    # holds the held value), and on request A and tau per cell. t = 0 is the
+    # first time point of the recording -- the origin of the model axis, the
+    # same instant the two-stage fits and the clock conversion use, even when
+    # nobody was observed at it.
+    ff <- withProgress(message = "Fitting the mixed-effects cosinor...", value = 0,
+      dance_traj_run(d, period = mod$period %||% 24, n_harmonics = mod$n_harmonics %||% 1,
+                     trend = trend, roles = roles, t0 = min(tv),
+                     tau_mode = if (identical(ti$mode, "estimate")) "estimate" else "fixed",
+                     tau_value = ti$value %||% NA_real_, tau_lo = ti$lo %||% NA_real_,
+                     tau_hi = ti$hi %||% NA_real_, sat_cells = isTRUE(ti$sat_cells),
+                     progress = function(msg, value) setProgress(value, detail = msg)))
+    if (!isTRUE(ff$ok)) return(list(ok = FALSE, message = ff$message))
     # the offset that turns this model's elapsed axis back into clock time,
     # carried on the fit so every panel converts the same way
     ff$clock_origin <- dance_clock_origin(mod)
     ff$dv_units <- mod$dv_units
-
-    # A AND TAU IN EVERY CELL, on request: a nonlinear mixed model (nlme), the
-    # only way to compare tau itself, and the initial slope A/tau, between cells.
-    # The trajectory model above keeps one tau, so its block tests compare curves
-    # on one basis.
-    if (sat && isTRUE(ti$sat_cells)) {
-      ff$sat <- withProgress(
-        message = "Estimating A and tau in every cell (nonlinear mixed model)...", value = 0.1,
-        dance_traj_sat_fit(ff, tau_range = c(ti$lo, ti$hi),
-                           progress = function(msg) incProgress(0.3, detail = msg)))
-    }
-    ff$tau_range <- if (sat && isTRUE(ti$range_ok)) c(ti$lo, ti$hi) else NULL
+    # what the long frame was built from, so the exported script rebuilds the
+    # same frame from the fit rather than from whatever the inputs say later
+    ff$design_input <- list(subject = subj, factors = fl, roles = roles)
     ff
   }
 
@@ -5429,72 +5011,11 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     ff <- harmonic_traj()
     if (!isTRUE(ff$ok)) return(NULL)
     dfm <- input$harmonic_df_method %||% "kr"
-    dts <- ff$spec$design_terms
-    tl <- attr(stats::terms(stats::as.formula(ff$spec$fixed_formula)), "term.labels")
-
-    effects <- unlist(lapply(seq_along(dts), function(k)
-      utils::combn(dts, k, paste, collapse = ":")), use.names = FALSE)
-    # The level rows are the intercept and, with a trend, the MESOR. The curve
-    # value at the first observation ("level") is no longer tested here: it adds
-    # where each rhythm happens to be at the first sample to the intercept. The
-    # trend row is the one trend coefficient per cell -- the same hypothesis as
-    # the non-periodic change over the recording.
-    want <- if (identical(ff$spec$trend, "none"))
-      c("full", "circadian", "intercept") else
-      c("full", "shape", "circadian", "trend", "intercept", "mesor")
-
-    # BRIEF 1-3. EVERY TEST HERE IS NOW A MODEL-BASED MARGINAL CONTRAST.
-    # It used to select treatment-coded term blocks: "the Group effect" was every
-    # model term mentioning Group, dropped and refitted. With a second factor in
-    # the model that is the Group effect AT THE REFERENCE LEVEL of the other
-    # factor, not a marginal main effect -- and since dance_traj_long() rebuilds
-    # design factors from as.character(), the reference level is whichever one
-    # sorts first alphabetically, which is not a scientific choice. Measured on a
-    # 3 x 3 design with a real interaction, renaming the condition levels moved
-    # the "Group effect" from F(6, 97.5) = 4.27 to 35.10, p 7e-4 to 3e-22. The
-    # marginal test gives the same answer either way.
-    #
-    # A request is an (effect, block) pair, and two of them can still be the SAME
-    # hypothesis -- in a one-factor design the full trajectory effect of Group and
-    # the full block are identical -- so requests are deduplicated on the contrast
-    # matrix itself rather than on a name. Kenward-Roger refits per test, so this
-    # is worth doing.
-    reqs <- c(lapply(effects, function(ef) list(effect = strsplit(ef, ":", fixed = TRUE)[[1]],
-                                                block = "full", name = ef)),
-              lapply(want, function(w) list(effect = character(0), block = w, name = w)))
-    Ls <- lapply(reqs, function(r) tryCatch(
-      dance_traj_marginal_L(ff, r$effect, r$block), error = function(e) NULL))
-    keys <- vapply(Ls, function(L) if (is.null(L)) "" else
-      paste(format(round(unclass(L), 10), scientific = FALSE), collapse = "|"), character(1))
-    uniq <- unique(keys[nzchar(keys)])
-
-    withProgress(message = sprintf("Testing %d coefficient block%s...",
-                                   length(uniq), if (length(uniq) == 1L) "" else "s"),
-                 value = 0, {
-      computed <- lapply(uniq, function(k) {
-        incProgress(1 / length(uniq))
-        i <- match(k, keys)
-        dance_traj_marginal_test(ff, reqs[[i]]$effect, reqs[[i]]$block, df_method = dfm)
-      })
-      names(computed) <- uniq
-    })
-    names(keys) <- vapply(reqs, function(r) r$name, character(1))
-    get1 <- function(nm) if (nzchar(keys[[nm]])) computed[[keys[[nm]]]] else NULL
-
-    list(effects = stats::setNames(lapply(effects, get1), effects),
-         blocks  = stats::setNames(lapply(want, get1), want),
-         n_computed = length(uniq), n_requested = length(keys),
-         # THE METHOD IS PER TEST, NOT PER TABLE. dance_traj_block_test() asks
-         # for Kenward-Roger and falls through to Satterthwaite when KRmodcomp
-         # fails on that particular reduced model -- silently, and one block at
-         # a time. This used to read the FIRST successful result and print its
-         # method under the whole table, so a table could carry two different
-         # approximations and say it carried one. That is how a denominator df
-         # ends up looking impossible: the blocks are not comparable because
-         # they were not all computed the same way.
-         methods_all = unique(vapply(Filter(function(r) isTRUE(r$ok), computed),
-                                     function(r) r$method %||% "F test", character(1))),
-         method = (Filter(function(r) isTRUE(r$ok), computed)[[1]]$method) %||% "F test")
+    # dance_traj_tests() (server/08f) decides which tests, deduplicates them on
+    # the contrast matrix and runs each once; the exported script calls it too
+    withProgress(message = "Testing coefficient blocks...", value = 0,
+                 dance_traj_tests(ff, dfm, progress = function(j, n)
+                   setProgress(j / n, detail = sprintf("block %d of %d", j, n))))
   })
 
   # The cell coefficients, cached per harmonic. dance_traj_cell_coefs() runs

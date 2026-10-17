@@ -459,3 +459,288 @@ dance_ts_group_curves <- function(mod, group_values, times, include_trend = TRUE
                             "with SE(t) the standard error across participants of their own",
                             "fitted curves. Not simultaneous."), 100 * conf))
 }
+
+
+# ==============================================================================
+# THE TWO-STAGE FITS AS THE APP RUNS THEM
+# ==============================================================================
+# The per-participant fits, the row each contributes to the parameter table,
+# the rule for which fits enter the summaries, the bootstrap and the nested
+# model set. They used to be written out inside the module's Run handler, so
+# the exported script could only refit each participant and stop there; they
+# are functions now, called by the app and written verbatim into the script.
+
+# The parameter table's columns, for an analysis with no successful fit.
+dance_ts_param_cols <- function(trend_type, n_harmonics) {
+  cols <- c("subject", "mesor", "mesor_se", "mesor_adj", "value_at_start", "trend_change")
+  cols <- c(cols, switch(as.character(trend_type),
+                         linear = c("trend_linear", "trend_linear_se"),
+                         log = c("trend_log", "trend_log_se"),
+                         exp_sat = c("A_sat", "A_sat_se", "tau", "tau_se"),
+                         character(0)))
+  for (h in seq_len(n_harmonics))
+    cols <- c(cols, paste0("amplitude_", h), paste0("amp_se_", h),
+              paste0("acrophase_rad_", h), paste0("acrophase_time_", h),
+              paste0("acro_se_time_", h), paste0("beta_cos_", h), paste0("beta_sin_", h))
+  c(cols, "r_squared", "percent_rhythm", "p_value", "r_squared_S", "r_squared_C",
+    "unique_S", "unique_C", "shared_SC", "percent_S", "percent_C", "percent_shared",
+    "converged", "boundary_hit")
+}
+
+# One participant's row of the parameter table, from their own fit: the
+# intercept, the MESOR (the midline averaged over the window), the value at
+# the first time point, the non-periodic change, the trend parameters (and
+# A/tau), every harmonic's amplitude and acrophase, and the fit statistics.
+# `time_vec` is the model axis (t = 0 at the recording's first time point).
+dance_ts_param_row <- function(i, fit_i, time_vec, period, n_harmonics, trend_type) {
+  coef_offset <- 1 + switch(as.character(trend_type),
+                            none = 0, linear = 1, log = 1, exp_sat = 2, 0)
+  row_data <- list(subject = i, mesor = fit_i$mesor, mesor_se = fit_i$mesor_se)
+
+  # the rhythm-adjusted mean and the fitted value at the first
+  # observation, per subject, from this subject's own coefficients
+  .tc <- switch(as.character(trend_type),
+                "linear"  = c(fit_i$trend_params$trend_linear$coef %||% NA_real_),
+                "log"     = c(fit_i$trend_params$trend_log$coef %||% NA_real_),
+                "exp_sat" = c(fit_i$trend_params$A_sat$coef %||% NA_real_,
+                              fit_i$trend_params$tau$coef %||% NA_real_),
+                numeric(0))
+  row_data$mesor_adj <- dance_rhythm_adjusted_mean(
+    fit_i$mesor, trend_type, .tc,
+    min(time_vec, na.rm = TRUE), max(time_vec, na.rm = TRUE),
+    fit_i$t_offset %||% 0)
+  row_data$value_at_start <- tryCatch(
+    as.numeric(dance_rhythm_from_coefs(
+      fit_i$coefs, min(time_vec, na.rm = TRUE), period, n_harmonics,
+      trend_type, include_trend = TRUE, t_offset = fit_i$t_offset %||% 0)),
+    error = function(e) NA_real_)
+  # the non-periodic change over the recording: the trend at the last
+  # observation minus the trend at the first, from this subject's own
+  # trend parameters -- for the saturating trend, A and tau together
+  row_data$trend_change <- if (identical(as.character(trend_type), "none")) 0 else
+    tryCatch({
+      .s <- dance_trend_value(trend_type, .tc, range(time_vec, na.rm = TRUE),
+                              fit_i$t_offset %||% 0)
+      if (all(is.finite(.s))) .s[2] - .s[1] else NA_real_
+    }, error = function(e) NA_real_)
+
+  # Add trend parameters based on type
+  if(trend_type != "none" && !is.null(fit_i$trend_params)) {
+    for(param_name in names(fit_i$trend_params)) {
+      row_data[[param_name]] <- fit_i$trend_params[[param_name]]$coef
+      row_data[[paste0(param_name, "_se")]] <- fit_i$trend_params[[param_name]]$se
+    }
+    # the initial slope of a saturating rise, A/tau: how fast it starts
+    if (identical(as.character(trend_type), "exp_sat"))
+      row_data$init_slope <- (fit_i$trend_params$A_sat$coef %||% NA_real_) /
+                             (fit_i$trend_params$tau$coef %||% NA_real_)
+  }
+
+  for(h in 1:n_harmonics) {
+    row_data[[paste0("amplitude_", h)]] <- fit_i$amplitudes[h]
+    row_data[[paste0("amp_se_", h)]] <- fit_i$amp_se[h]
+    row_data[[paste0("acrophase_rad_", h)]] <- fit_i$acrophases[h]
+    row_data[[paste0("acrophase_time_", h)]] <- fit_i$acrophases_time[h]
+    row_data[[paste0("acro_se_time_", h)]] <- fit_i$acro_se_time[h]
+
+    # Get beta coefficients - handle both linear and nls fits
+    if(trend_type == "exp_sat") {
+      row_data[[paste0("beta_cos_", h)]] <- fit_i$coefs[paste0("b_cos", h)]
+      row_data[[paste0("beta_sin_", h)]] <- fit_i$coefs[paste0("b_sin", h)]
+    } else {
+      cos_idx <- coef_offset + 2 * (h - 1) + 1
+      sin_idx <- coef_offset + 2 * (h - 1) + 2
+      row_data[[paste0("beta_cos_", h)]] <- fit_i$coefs[cos_idx]
+      row_data[[paste0("beta_sin_", h)]] <- fit_i$coefs[sin_idx]
+    }
+  }
+  row_data$r_squared <- fit_i$r_squared
+  row_data$percent_rhythm <- fit_i$percent_rhythm
+  row_data$p_value <- fit_i$p_value
+  row_data$aic <- fit_i$aic
+  row_data$aicc <- fit_i$aicc
+  row_data$bic <- fit_i$bic
+  row_data$loocv_rmse <- fit_i$loocv_rmse
+  row_data$r_squared_S <- fit_i$r_squared_S
+  row_data$r_squared_C <- fit_i$r_squared_C
+  row_data$unique_S <- fit_i$unique_S %||% NA_real_
+  row_data$unique_C <- fit_i$unique_C %||% NA_real_
+  row_data$shared_SC <- fit_i$shared_SC %||% NA_real_
+  row_data$percent_S <- fit_i$percent_S
+  row_data$percent_C <- fit_i$percent_C
+  row_data$percent_shared <- fit_i$percent_shared %||% NA_real_
+  row_data$converged <- isTRUE(fit_i$converged)
+  row_data$boundary_hit <- isTRUE(fit_i$boundary_hit)
+
+  as.data.frame(row_data)
+}
+
+# Every participant's cosinor, on one time axis with one trend origin -- the
+# recording's first time point -- and one tau setting. Returns the fits (one
+# per row of Y; a failed fit records why), the parameter table of the fits
+# that returned, and the failures.
+#   progress   optional function(i, n)
+dance_ts_fit_all <- function(Y, time_vec, period = 24, n_harmonics = 1, trend_type = "none",
+                             use_bounds = FALSE, mesor_min = NA, mesor_max = NA,
+                             amplitude_min = 0, amplitude_max = NA,
+                             A_sat_min = NA, A_sat_max = NA,
+                             tau_min = 0.5, tau_max = NA, tau_fixed = NA, progress = NULL) {
+  n_trend_params <- switch(as.character(trend_type), none = 0, linear = 1, log = 1, exp_sat = 2, 0)
+  fits <- list(); rows <- list(); failed <- list()
+  for (i in seq_len(nrow(Y))) {
+    y_i <- Y[i, ]
+    n_valid <- sum(!is.na(y_i))
+    fit_i <- fit_cosinor(time_vec, y_i, period = period, n_harmonics = n_harmonics,
+                         trend_type = trend_type, use_bounds = use_bounds,
+                         mesor_min = mesor_min, mesor_max = mesor_max,
+                         amplitude_min = amplitude_min, amplitude_max = amplitude_max,
+                         A_sat_min = A_sat_min, A_sat_max = A_sat_max,
+                         tau_min = tau_min, tau_max = tau_max, tau_fixed = tau_fixed,
+                         t_origin = min(time_vec, na.rm = TRUE))
+    if (isTRUE(fit_i$success)) {
+      fits[[i]] <- fit_i
+      rows[[length(rows) + 1L]] <- dance_ts_param_row(i, fit_i, time_vec, period,
+                                                      n_harmonics, trend_type)
+    } else {
+      fits[[i]] <- list(success = FALSE, message = fit_i$message, n_valid = n_valid,
+                        n_required = 2 * n_harmonics + 1 + n_trend_params + 1)
+      failed[[length(failed) + 1L]] <- list(subject = i, n_valid = n_valid,
+                                            reason = fit_i$message)
+    }
+    if (is.function(progress) && i %% 10 == 0) progress(i, nrow(Y))
+  }
+  params <- if (length(rows)) do.call(rbind, rows) else {
+    cols <- dance_ts_param_cols(trend_type, n_harmonics)
+    stats::setNames(data.frame(matrix(ncol = length(cols), nrow = 0)), cols)
+  }
+  list(fits = fits, params = params, failed = failed)
+}
+
+# WHO ENTERS THE SUMMARIES. Fits that did not converge never do: there is no
+# solution to average. Fits sitting on a parameter bound do when
+# include_boundary is TRUE (the default, with the bounds tabled) -- the value
+# is real but it is where the optimiser was stopped. If fewer than 3 fits pass,
+# every returned fit is used and the audit says so (gate_relaxed).
+dance_ts_gate <- function(all_params, fits, n_attempted, include_boundary = TRUE,
+                          subject_ids = NULL) {
+  n <- nrow(all_params)
+  conv_flag  <- if ("converged" %in% names(all_params)) all_params$converged else rep(TRUE, n)
+  bound_flag <- if ("boundary_hit" %in% names(all_params)) all_params$boundary_hit else rep(FALSE, n)
+  conv_flag[is.na(conv_flag)] <- FALSE
+  bound_flag[is.na(bound_flag)] <- FALSE
+  # which bounds each returned fit sits on, per parameter
+  bounds_list <- lapply(seq_len(n), function(i) {
+    f <- fits[[all_params$subject[i]]]
+    if (is.null(f) || is.null(f$bounds_hit)) character(0) else f$bounds_hit
+  })
+  ids <- function(rows) if (!is.null(subject_ids)) subject_ids[all_params$subject[rows]]
+                        else all_params$subject[rows]
+  fit_audit <- list(
+    n_attempted = n_attempted, n_returned = n,
+    n_converged = sum(conv_flag & !bound_flag), n_boundary = sum(conv_flag & bound_flag),
+    n_failed = n_attempted - n, n_nonconverged = sum(!conv_flag),
+    bounds = dance_bounds_summary(bounds_list, subject_ids = ids(seq_len(n))))
+  keep <- conv_flag & (include_boundary | !bound_flag)
+  fit_audit$include_boundary <- include_boundary
+  fit_audit$n_passing <- sum(keep)
+  fit_audit$gate_relaxed <- sum(keep) < 3
+  if (fit_audit$gate_relaxed) keep <- rep(TRUE, n)
+  fit_audit$n_summarised <- sum(keep)
+  fit_audit$bounds_kept <- dance_bounds_summary(bounds_list[keep], subject_ids = ids(which(keep)))
+  list(keep = keep, fit_audit = fit_audit)
+}
+
+# THE BOOTSTRAP of the pooled sample's intercept and first-harmonic amplitude
+# and acrophase. The resampling unit is the PARTICIPANT, drawn with replacement
+# by index (a participant drawn three times counts three times); intervals are
+# percentile, the acrophase's circular. A FIXED SEED, so the same data give the
+# same interval twice and the seed can be stated; the caller's random stream is
+# restored afterwards.
+#   progress   optional function(b, B)
+dance_ts_bootstrap <- function(params, B, period = 24, seed = 20240601L, progress = NULL) {
+  rows_by_subject <- split(seq_len(nrow(params)), params$subject)
+  subj_ids <- names(rows_by_subject)
+  n_boot_subj <- length(subj_ids)
+  boot_mesor <- numeric(B); boot_amplitude <- numeric(B); boot_acrophase <- numeric(B)
+  old_seed <- if (exists(".Random.seed", envir = globalenv(), inherits = FALSE))
+    get(".Random.seed", envir = globalenv()) else NULL
+  set.seed(seed)
+  for (b in seq_len(B)) {
+    take <- dance_boot_index(n_boot_subj)
+    bp <- params[unlist(rows_by_subject[subj_ids[take]], use.names = FALSE), , drop = FALSE]
+    boot_mesor[b] <- mean(bp$mesor, na.rm = TRUE)
+    x_b <- bp$amplitude_1 * cos(bp$acrophase_rad_1)
+    y_b <- bp$amplitude_1 * sin(bp$acrophase_rad_1)
+    boot_amplitude[b] <- sqrt(mean(x_b, na.rm = TRUE)^2 + mean(y_b, na.rm = TRUE)^2)
+    acro_b <- atan2(mean(y_b, na.rm = TRUE), mean(x_b, na.rm = TRUE))
+    if (is.finite(acro_b) && acro_b < 0) acro_b <- acro_b + 2 * pi
+    boot_acrophase[b] <- acro_b
+    if (is.function(progress) && b %% 50 == 0) progress(b, B)
+  }
+  if (!is.null(old_seed)) assign(".Random.seed", old_seed, envir = globalenv())
+  acro_ci <- dance_boot_circ_ci_time(boot_acrophase, period, 1)
+  list(
+    mesor_ci = stats::quantile(boot_mesor, c(0.025, 0.975), na.rm = TRUE),
+    amplitude_ci = stats::quantile(boot_amplitude, c(0.025, 0.975), na.rm = TRUE),
+    # circular, and carrying its own width because lo > hi when it wraps
+    acrophase_ci = c(`2.5%` = acro_ci$lo, `97.5%` = acro_ci$hi),
+    acrophase_ci_circular = acro_ci,
+    # what a linear quantile would have reported, for the readout to contrast
+    # when the interval wraps
+    acrophase_ci_linear = stats::quantile(phi_to_hours(boot_acrophase, period, 1),
+                                          c(0.025, 0.975), na.rm = TRUE),
+    resample_unit = "participant", n_resampled = n_boot_subj,
+    seed = seed, ci_method = "percentile",
+    boot_mesor = boot_mesor, boot_amplitude = boot_amplitude,
+    boot_acrophase = boot_acrophase, B = B)
+}
+
+# THE NESTED MODEL SET: every trend crossed with the cumulative harmonic sets up
+# to n_harmonics, each fitted per participant with this run's tau setting and
+# origin, its AICc averaged over the participants scorable under EVERY
+# candidate. Returns the Akaike table (NULL if no participant is scorable under
+# all of them).
+#   progress   optional function(j, n, label)
+dance_ts_model_set <- function(Y, time_vec, period = 24, n_harmonics = 1, trend_type = "none",
+                               tau_min = 0.5, tau_max = NA, tau_fixed = NA, progress = NULL) {
+  ms_models <- dance_cosinor_model_set(n_harmonics)
+  n_time <- ncol(Y)
+  # participants x candidates; NA where the candidate cannot be fitted
+  aicc <- matrix(NA_real_, nrow(Y), length(ms_models),
+                 dimnames = list(NULL, vapply(ms_models, function(m) m$label, character(1))))
+  for (j in seq_along(ms_models)) {
+    m <- ms_models[[j]]
+    if (is.function(progress)) progress(j, length(ms_models),
+                                        sprintf("%s, %s", dance_trend_label(m$trend),
+                                                dance_harmonic_label(m$k)))
+    # parameters + 1: a fit needs at least one observation more than it has
+    # parameters for the residual variance to be estimable
+    need <- dance_model_npar(m$trend, m$k) + 1L
+    if (n_time < need) next
+    for (i in seq_len(nrow(Y))) {
+      y_i <- as.numeric(Y[i, ])
+      if (sum(!is.na(y_i)) < need) next
+      # the saturating candidates use the same tau setting as the fit being
+      # reported, so its row in the table is that fit
+      f <- tryCatch(fit_cosinor(time_vec, y_i, period = period, n_harmonics = m$k,
+                                trend_type = m$trend, tau_min = tau_min, tau_max = tau_max,
+                                tau_fixed = if (identical(m$trend, "exp_sat")) tau_fixed else NA,
+                                t_origin = min(time_vec, na.rm = TRUE)),
+                    error = function(e) NULL)
+      if (is.null(f) || !isTRUE(f$success) || !is.finite(f$aicc)) next
+      aicc[i, j] <- f$aicc
+    }
+  }
+  common <- dance_model_set_common(aicc)
+  tab <- if (common$n_common > 0) dance_akaike_table(common$means) else NULL
+  if (!is.null(tab)) {
+    attr(tab, "per_subject_mean") <- TRUE
+    attr(tab, "n_common") <- common$n_common
+    attr(tab, "n_participants") <- nrow(Y)
+    attr(tab, "not_fitted") <- common$not_fitted
+    # the specification the run reported, so a reader need not match it by eye
+    attr(tab, "selected") <- dance_model_label(trend_type, n_harmonics)
+    attr(tab, "n_harmonics_max") <- n_harmonics
+  }
+  tab
+}
