@@ -878,7 +878,11 @@ dance_apa_report <- function(values, input, title = NULL) {
         add(" The residuals were autocorrelated within curves: \u03c6 = ",
             dance_apa_num(ar$phi, 2, bounded = TRUE), " per hour, 95% profile interval [",
             dance_apa_num(ar$ci[1], 2, bounded = TRUE), ", ",
-            dance_apa_num(ar$ci[2], 2, bounded = TRUE), "]; against independent residuals, ",
+            dance_apa_num(ar$ci[2], 2, bounded = TRUE), "]",
+            if (!identical(ar$method %||% "REML", "REML")) " (at the estimated time constant)" else "",
+            "; against independent residuals",
+            if (!identical(ar$method %||% "REML", "REML")) " (with the time constant re-estimated)" else "",
+            ", ",
             "\u03c7<sup>2</sup>(1) = ", dance_apa_num(ar$lrt$statistic, 2), ", ",
             dance_apa_p(ar$lrt$p), " (half the \u03c7<sup>2</sup>(1) tail, as \u03c6 = 0 lies ",
             "on the boundary).")

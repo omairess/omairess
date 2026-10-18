@@ -379,6 +379,12 @@ dance_traj_fit <- function(spec, engine = c("lmer", "glmmTMB"), REML = TRUE,
   # compares differ only in tau. The rungs keep their numbers in the full ladder.
   min_rung <- max(1L, as.integer(min_rung %||% 1L))
   attempts <- list()
+  # the richer rungs min_rung skips are recorded as such, so the fit's log and
+  # its simplified_reason still account for every rung above the one used
+  for (i in seq_along(ladder)[seq_along(ladder) < min_rung])
+    attempts[[i]] <- list(rung = i, label = ladder[[i]]$label, formula = ladder[[i]]$formula,
+                          fitted = FALSE, converged = FALSE, singular = NA, skipped = TRUE,
+                          summary = "not refitted: the structure was carried over from the fit that chose it")
   for (i in seq_along(ladder)[seq_along(ladder) >= min_rung]) {
     m <- dance_traj_fit_one(spec, ladder[[i]]$formula, engine, REML, cor_struct,
                             light = light, phi = phi)
@@ -452,10 +458,12 @@ dance_traj_profile_tau <- function(d, period, n_harmonics, design_terms,
                                    tau_grid = NULL, engine = "lmer",
                                    REML = TRUE, interaction = "full",
                                    flat_tol = 1.92, roles = NULL, progress = NULL,
-                                   phi = 0) {
+                                   phi = 0, rung = NULL) {
   # phi: the CAR(1) residual correlation the profile is computed at (0 for
   # independent residuals). It is the same at every grid point, so log|det W|
   # is a constant of the profile and drops out of its comparisons.
+  # rung: the random structure to profile on, when the caller already has one
+  # (NULL: chosen at the middle of the grid, as below).
   if (is.null(tau_grid)) {
     span <- diff(range(d$t, na.rm = TRUE))
     tau_grid <- exp(seq(log(max(span / 50, 1e-3)), log(span * 3), length.out = 24))
@@ -469,15 +477,17 @@ dance_traj_profile_tau <- function(d, period, n_harmonics, design_terms,
   # model, was compared with its neighbours'. The structure is now chosen once,
   # at the middle of the grid, and every grid point is fitted on it; a point
   # where it does not converge is left out rather than refitted on another.
-  mid <- tau_grid[ceiling(length(tau_grid) / 2)]
-  sp_mid <- spec_at(mid)
-  ref <- if (isTRUE(sp_mid$ok)) dance_traj_fit(sp_mid, engine = engine, REML = FALSE,
-                                               light = TRUE, phi = phi) else NULL
-  if (is.null(ref) || !isTRUE(ref$ok))
-    return(list(ok = FALSE, message = paste(
-      "The model did not fit at the middle of the tau grid, so no random structure",
-      "could be chosen for the profile.", ref$message %||% sp_mid$message %||% "")))
-  rung <- ref$re_rung
+  if (is.null(rung)) {
+    mid <- tau_grid[ceiling(length(tau_grid) / 2)]
+    sp_mid <- spec_at(mid)
+    ref <- if (isTRUE(sp_mid$ok)) dance_traj_fit(sp_mid, engine = engine, REML = FALSE,
+                                                 light = TRUE, phi = phi) else NULL
+    if (is.null(ref) || !isTRUE(ref$ok))
+      return(list(ok = FALSE, message = paste(
+        "The model did not fit at the middle of the tau grid, so no random structure",
+        "could be chosen for the profile.", ref$message %||% sp_mid$message %||% "")))
+    rung <- ref$re_rung
+  }
   rows <- lapply(seq_along(tau_grid), function(j) {
     tau <- tau_grid[j]
     if (is.function(progress)) progress(j, length(tau_grid))
@@ -693,6 +703,7 @@ dance_traj_profile_phi <- function(spec, rung = 1L, REML = TRUE, grid = NULL,
        at_zero = best < 1e-3, at_upper = at_upper,
        lrt = list(statistic = stat, df = 1L,
                   p = if (stat > 1e-8) 0.5 * stats::pchisq(stat, 1, lower.tail = FALSE) else 1,
+                  ll_max = top, ll0 = ll0,
                   method = "likelihood ratio against independent residuals (phi = 0), boundary-corrected"),
        profile = prof, grid = grid, rung = rung, REML = REML, n_grid_failed = n_failed)
 }
@@ -765,6 +776,12 @@ dance_traj_residual_statement <- function(fit) {
     if (ar$lrt$p < 0.001) "< .001" else sprintf("= %.3f", ar$lrt$p),
     paste0(if (isTRUE(ar$at_zero)) " The estimate is 0: no positive autocorrelation, and the model is the independent-residual one." else "",
            if (isTRUE(ar$at_upper)) " The estimate sits at the top of the search (0.98): a bound, not an estimate." else "",
+           if (!identical(ar$method %||% "REML", "REML")) paste(
+             " The interval is computed at tau's estimate; the likelihood ratio compares with",
+             "independent residuals at their own best tau.") else "",
+           if (isTRUE(ar$n_grid_failed > 0L)) sprintf(
+             " %d of the %d values of phi on the grid did not converge and are not in the profile.",
+             as.integer(ar$n_grid_failed), length(ar$grid)) else "",
            if (identical(ar$settled, FALSE)) " tau and phi had not settled after four rounds." else ""))
 }
 
@@ -805,7 +822,8 @@ dance_traj_fit_report <- function(fit) {
     a("Rungs tried:")
     for (at in fit$attempts)
       a("  %d. %-52s %s", at$rung, at$formula,
-        if (!at$fitted) "did not fit"
+        if (isTRUE(at$skipped)) "not refitted (structure carried over)"
+        else if (!at$fitted) "did not fit"
         else if (!at$converged) "did not converge"
         else if (at$singular) "singular"
         else "accepted")
@@ -905,6 +923,7 @@ dance_traj_run <- function(d, period = 24, n_harmonics = 1, trend = "none", role
     tau_fields <- c("tau_mode", "tau_profile", "tau_estimated", "tau_profile_ci", "tau_warning")
     joint <- identical(ff$tau_mode, "profile")
     rung <- if (joint) ff$tau_profile$rung %||% ff$re_rung else ff$re_rung
+    prof_indep <- if (joint) ff$tau_profile else NULL   # the tau profile at phi = 0
     phi_used <- 0; rounds <- 0L; settled <- TRUE
     repeat {
       rounds <- rounds + 1L
@@ -932,6 +951,22 @@ dance_traj_run <- function(d, period = 24, n_harmonics = 1, trend = "none", role
       }
       ff <- pr$fit; ff$tau_mode <- "profile"; ff$tau_profile <- prof
       rung <- pr$rung
+    }
+    if (joint) {
+      # THE LIKELIHOOD RATIO WITH tau ESTIMATED: independence is the model at
+      # phi = 0 with tau at ITS best value, not at the tau the AR(1) chose. The
+      # first tau profile is exactly that (ML, phi = 0); profiled again on this
+      # random structure if the rounds moved to another one.
+      p0 <- if (identical(as.integer(prof_indep$rung), as.integer(rung))) prof_indep
+            else dance_traj_profile_tau(d, period, n_harmonics, design_terms = NULL, t0 = t0,
+                                        roles = roles, tau_grid = grid, phi = 0, rung = rung)
+      ll0 <- max(c(php$lrt$ll0, if (isTRUE(p0$ok %||% TRUE)) p0$profile$logLik), na.rm = TRUE)
+      stat <- max(0, 2 * (php$lrt$ll_max - ll0))
+      php$lrt <- utils::modifyList(php$lrt, list(
+        ll0 = ll0, statistic = stat,
+        p = if (stat > 1e-8) 0.5 * stats::pchisq(stat, 1, lower.tail = FALSE) else 1,
+        method = paste("likelihood ratio against independent residuals (phi = 0) with tau",
+                       "re-estimated, boundary-corrected")))
     }
     say("Refitting at the residual autocorrelation...", 0.9)
     ff2 <- dance_traj_fit(ff$spec, REML = TRUE, min_rung = rung, phi = php$phi)

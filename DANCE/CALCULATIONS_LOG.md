@@ -497,7 +497,10 @@ Checked against nlme (`tests/testthat/test-traj-car1.R`): at a given phi the
 whitened fit has the fixed effects, standard errors, sigma and REML
 log-likelihood of `nlme::lme(correlation = corCAR1)`; the phi profile finds
 nlme's REML estimate; its likelihood ratio against independence is nlme's;
-phi = 0 is the independent fit exactly. nlme itself was not used for the
+phi = 0 is the independent fit exactly. The same holds with a
+within-participant factor, where the correlation runs within each curve
+(participant x level) -- with a curve-level random effect, and with random
+effects by participant only (nlme's `corCAR1(form = ~ t | subject/curve)`). nlme itself was not used for the
 tests: its default ("containment") df ignore random slopes -- 200+ df for a
 between-group rhythm contrast where Kenward-Roger and Satterthwaite give about
 18 -- and emmeans' Satterthwaite for lme objects differentiates the covariance
@@ -513,8 +516,15 @@ Liang 1987). REML when the fixed-effect design is fixed (tau held, or a
 linear, log or no trend); maximum likelihood when tau is estimated too, since
 REML likelihoods of different trend shapes are not comparable -- then tau and
 phi are profiled in turn, each given the other, until phi moves by less than
-0.005 (at most four rounds). The model is then refitted by REML at phi-hat;
-its tests treat phi (like tau) as known.
+0.005 (at most four rounds). Then phi's interval is the profile at tau-hat (tau
+enters the mean and phi the covariance, and in a Gaussian model their expected
+cross-information is zero, so to first order this is the full profile
+interval; the reports say it is computed at tau-hat), and the likelihood ratio
+compares with the independent model at ITS best tau -- the maximum of the
+first tau profile, which is computed at phi = 0 (profiled again on the final
+random structure if the rounds moved to another), not the independent model at
+the tau the AR(1) chose, which would overstate the ratio. The model is then
+refitted by REML at phi-hat; its tests treat phi (like tau) as known.
 
 **What changes downstream.** R-squared and the residual plots are computed on
 the data's scale (the whitened model's own `fitted()` is not); the residual
@@ -547,3 +557,15 @@ of what independence gets wrong for a between-participant contrast. What the
 AR(1) adds is a correct residual model, with phi estimated and tested; it was
 not measured for designs whose random structure falls back to fewer terms,
 for within-participant factors, or for other sampling grids.
+
+**Fixed along the way.** (1) The per-cell nonlinear model grouped its CAR(1)
+by participant on the rung whose random effects are by participant only; with
+a within-participant factor that joined a participant's sessions into one
+series (and nlme refused the repeated times). It is grouped by curve on every
+rung now. (2) A fit restarted on an already-chosen random structure below the
+first rung -- what the tau and phi profiles do -- stopped with an error while
+listing the rungs it had skipped, so a tau profile on a reduced structure
+failed outright. The skipped rungs are now recorded as "not refitted
+(structure carried over)" in the fit's log. (3) phi grid points that do not
+converge are left out of the profile and counted in the residual statement,
+as for tau.

@@ -3461,7 +3461,8 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       if (length(ff$attempts)) {
         for (at in ff$attempts)
           cat(sprintf("  %d. %-52s %s\n", at$rung, at$formula,
-                      if (!isTRUE(at$fitted)) "did not fit"
+                      if (isTRUE(at$skipped)) "not refitted (structure carried over)"
+                      else if (!isTRUE(at$fitted)) "did not fit"
                       else if (!isTRUE(at$converged)) "did not converge"
                       else if (isTRUE(at$singular)) "singular"
                       else "accepted"))

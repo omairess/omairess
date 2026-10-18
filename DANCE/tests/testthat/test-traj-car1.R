@@ -112,3 +112,60 @@ test_that("the run function estimates phi, refits there, and reports it", {
   expect_identical(ind$phi, 0)
   expect_match(dance_traj_residual_statement(ind), "independent", fixed = TRUE)
 })
+
+# ---- a within-participant factor: the AR(1) runs within each CURVE ------------
+# two sessions per participant, each its own series: the correlation is by
+# curve (participant x session), never across a participant's sessions
+set.seed(23)
+tw <- c(0, 2, 4, 6, 8, 11, 14, 16, 18, 21)
+rw <- expand.grid(i = 1:12, ses = c("A", "B"))
+uw <- matrix(rnorm(36, 0, c(1.5, 0.8, 0.8)), 12, 3, byrow = TRUE)
+Lw <- t(chol(0.5^abs(outer(tw, tw, "-"))))
+Yw <- t(vapply(seq_len(nrow(rw)), function(k) {
+  i <- rw$i[k]
+  20 + (rw$ses[k] == "B") * 0.8 + uw[i, 1] + rnorm(1, 0, 0.5) +
+    (4 + uw[i, 2]) * cos(2 * pi * tw / 24) + (2 + uw[i, 3]) * sin(2 * pi * tw / 24) +
+    as.numeric(Lw %*% rnorm(length(tw)))
+}, numeric(length(tw))))
+Yw[3, 4] <- NA; Yw[15, c(2, 9)] <- NA
+dw <- dance_traj_long(Yw, tw, sprintf("S%02d", rw$i), list(Session = as.character(rw$ses)))
+spw <- dance_traj_spec(dw, period = 24, n_harmonics = 1, trend = "none", t0 = 0,
+                       roles = c(Session = "within"))
+ctl_w <- nlme::lmeControl(maxIter = 500, msMaxIter = 500, opt = "optim")
+
+test_that("with a within factor the whitened fit is nlme's corCAR1 by curve", {
+  expect_true(spw$has_curve_level)
+  # rung 2: participant rhythm plus a curve level; rung 4: random effects by
+  # participant only, the correlation still by curve (a finer grouping)
+  refs <- list(
+    `2` = nlme::lme(y ~ (c1 + s1) * Session, random = list(subject = ~ 1 + c1 + s1, curve = ~ 1),
+                    data = spw$data, correlation = nlme::corCAR1(form = ~ t | subject/curve),
+                    method = "REML", control = ctl_w),
+    `4` = nlme::lme(y ~ (c1 + s1) * Session, random = ~ 1 + c1 + s1 | subject,
+                    data = spw$data, correlation = nlme::corCAR1(form = ~ t | subject/curve),
+                    method = "REML", control = ctl_w))
+  for (k in names(refs)) {
+    ref_k <- refs[[k]]
+    phi_k <- as.numeric(stats::coef(ref_k$modelStruct$corStruct, unconstrained = FALSE))
+    fk <- dance_traj_fit(spw, REML = TRUE, min_rung = as.integer(k), max_rung = as.integer(k),
+                         phi = phi_k)
+    expect_true(fk$ok)
+    expect_equal(fk$re_rung, as.integer(k))
+    expect_equal(unname(lme4::fixef(fk$model)[names(nlme::fixef(ref_k))]),
+                 unname(nlme::fixef(ref_k)), tolerance = 1e-5)
+    expect_equal(dance_traj_loglik(fk)$logLik, as.numeric(stats::logLik(ref_k)), tolerance = 1e-5)
+    expect_equal(dance_traj_profile_phi(spw, rung = as.integer(k), REML = TRUE)$phi, phi_k,
+                 tolerance = 2e-3)
+  }
+})
+
+test_that("a fit started below the first rung records the rungs it skipped", {
+  # the tau and phi profiles fit every point on the structure already chosen
+  # (min_rung); this used to fail outright whenever that was not rung 1
+  f3 <- dance_traj_fit(spw, REML = TRUE, min_rung = 3L, max_rung = 3L)
+  expect_true(f3$ok)
+  expect_equal(f3$re_rung, 3L)
+  expect_true(isTRUE(f3$attempts[[1]]$skipped) && isTRUE(f3$attempts[[2]]$skipped))
+  expect_length(f3$simplified_reason, 2L)
+  expect_match(dance_traj_fit_report(f3), "not refitted (structure carried over)", fixed = TRUE)
+})

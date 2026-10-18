@@ -12,7 +12,8 @@
 #     it against independence, and says so in the summary, the comparison tab,
 #     the assumptions list, the residual diagnostics and the report;
 #   * the comparison tab's tests run on it with Kenward-Roger df;
-#   * with tau profiled, tau and phi are estimated together and settle;
+#   * with tau profiled, tau and phi are estimated together and settle, and
+#     independence is tested against the independent model at its own best tau;
 #   * the per-cell nonlinear model carries the same residual model;
 #   * the setting is restored with a session and written into the export.
 #
@@ -185,6 +186,32 @@ testServer(server, {
   hd <- text_of(output$harmonic_traj_header)
   chk(grepl("estimated together, by maximum likelihood", hd, fixed = TRUE),
       "the tau statement says tau and phi were estimated together", "the tau statement is silent on phi")
+  chk(grepl("The interval is computed at tau's estimate; the likelihood ratio compares with independent residuals at their own best tau.",
+            text_of(dance_traj_residual_statement(fj)), fixed = TRUE),
+      "the phi statement says its interval is at tau-hat and how independence was fitted",
+      "the phi statement does not say what the joint interval and test are conditional on")
+  rpj <- text_of(dance_apa_report(values, input, "T"))
+  smj <- text_of(capture.output(.print_harmonic_summary()))
+  chk(grepl("(at the estimated time constant); against independent residuals (with the time constant re-estimated)",
+            rpj, fixed = TRUE) &&
+        grepl("With tau estimated too, phi's interval is computed at tau's estimate", smj, fixed = TRUE),
+      "the report and the assumptions list say what the joint interval and test are conditional on",
+      "the report or the assumptions list is silent on the joint interval and test")
+  # independence, with tau estimated, is the independent model at ITS best tau:
+  # the maximum of the tau profile an independent-residual run computes
+  run(session, 5, resid = "independent", trend = "exp_sat", tau_mode = "profile")
+  fi <- values$harmonic_model$traj
+  at_tau_hat <- aj$profile$logLik[aj$profile$phi == 0][1]
+  chk(identical(as.integer(fi$tau_profile$rung), as.integer(aj$rung)) &&
+        isTRUE(all.equal(aj$lrt$ll0, max(max(fi$tau_profile$profile$logLik), at_tau_hat))) &&
+        aj$lrt$ll0 >= at_tau_hat &&
+        isTRUE(all.equal(aj$lrt$statistic, 2 * (aj$lrt$ll_max - aj$lrt$ll0))) &&
+        grepl("tau re-estimated", aj$lrt$method, fixed = TRUE),
+      sprintf(paste("the likelihood ratio for phi compares with independence at its own best tau",
+                    "(log-likelihood %.3f, against %.3f at the AR(1)'s tau): chi2(1) = %.2f"),
+              aj$lrt$ll0, at_tau_hat, aj$lrt$statistic),
+      sprintf("the joint likelihood ratio's null is not the independent model's maximum (%s vs %s)",
+              format(aj$lrt$ll0), format(max(fi$tau_profile$profile$logLik))))
 
   # ====================================================== per cell
   cat("\n-- saturating trend, tau held, A and tau per cell ----------------------\n")

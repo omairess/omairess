@@ -163,12 +163,14 @@ dance_traj_sat_fit <- function(ff, progress = NULL, tau_range = NULL,
   # and the one-tau fit alike, so their likelihood ratio compares the same
   # residual model. Not held fixed: nlme 3.1-164 crashes R itself (an invalid
   # pointer in its C code) when a corCAR1 is held fixed inside nlme().
+  # Grouped by CURVE on every rung, as in the trajectory model -- also on the
+  # rung whose random effects are by participant only (nlme takes a finer
+  # grouping for the correlation than for the random effects): two sessions of
+  # one participant are not one series.
   car1 <- length(phi) == 1L && is.finite(phi) && phi > 0
   cor_for <- function(rung) if (!car1) NULL else
     nlme::corCAR1(value = min(max(phi, 0.01), 0.99),
-                  form = if (grepl("curve", paste(deparse(rung$groups), collapse = "")))
-                           ~ tt | subject/curve
-                         else ~ tt | subject)
+                  form = if (isTRUE(sp$has_curve_level)) ~ tt | subject/curve else ~ tt | subject)
   fit_one <- function(fixed, start, rung) tryCatch({
     m <- nlme::nlme(form, data = d, fixed = fixed, random = rung$random,
                     groups = rung$groups, start = start, method = "ML", control = ctl,

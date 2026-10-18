@@ -106,8 +106,11 @@ dance_cosinor_assumptions <- function(mod, ff = NULL, df_method = "kr") {
         "falls 1.92; the model is fitted to the whitened data (Prais-Winsten for unequal",
         "gaps), which is the same model, and refitted by REML at phi-hat. Its tests treat",
         "phi as known. Independence is tested by the likelihood ratio, half the",
-        "chi-square(1) p (phi = 0 is on the boundary)."),
-        f(ar$phi %||% ff$phi), ar$method %||% "REML"))
+        "chi-square(1) p (phi = 0 is on the boundary).%s"),
+        f(ar$phi %||% ff$phi), ar$method %||% "REML",
+        if (!identical(ar$method %||% "REML", "REML")) paste(
+          " With tau estimated too, phi's interval is computed at tau's estimate, and",
+          "the independent model in the likelihood ratio has its own best tau.") else ""))
       sf <- ff$sat
       if (!is.null(sf) && isTRUE(sf$ok))
         a("Residuals", sprintf(paste(
