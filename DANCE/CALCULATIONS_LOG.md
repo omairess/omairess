@@ -466,3 +466,84 @@ df and p, per-cell A/tau/A-over-tau, the one-tau likelihood ratio; two-stage
 (tau in a range, groups, bootstrap, nested set) -- the whole parameter table,
 the inclusion audit, group summaries, component tests, bootstrap intervals and
 AICc. Every number matches exactly.
+
+## 8. Autocorrelated residuals in the mixed cosinor (continuous-time AR(1))
+
+**The model.** Under Model Specification the mixed approach offers
+"Residuals within a curve: Independent / Autocorrelated: continuous-time AR(1)".
+With the AR(1), the residuals of one curve correlate as
+
+    corr(e(t), e(t')) = phi^|t - t'|      (t in hours, 0 <= phi < 1)
+
+-- nlme's `corCAR1` (Jones 1993; Pinheiro & Bates 2000, sec. 5.3), which takes
+uneven spacing and missing observations as they are. Residuals of different
+curves stay independent, with one variance throughout.
+
+**How it is fitted: whitening, so the validated tests still apply.** The CAR(1)
+correlation matrix has a bidiagonal inverse Cholesky factor W (Prais & Winsten
+1954, for unequal gaps): along each curve in time order,
+e*_1 = e_1 and e*_k = (e_k - r_k e_(k-1)) / sqrt(1 - r_k^2), r_k = phi^(t_k - t_(k-1)).
+W R W' = I exactly, so for a given phi the CAR(1) model IS the ordinary mixed
+model fitted to W y, W X and W Z with independent residuals (generalized least
+squares), and the log-likelihood of the data -- ML or REML -- is the whitened
+one plus log|det W|. The fit uses lme4's own modular steps (lFormula,
+mkLmerDevfun, optimizeLmer, mkMerMod) on the whitened design, so the model
+keeps its formula and coefficient names, and Kenward-Roger (pbkrtest) and
+Satterthwaite (lmerTest, from the same whitened deviance function) apply
+unchanged, conditional on phi. In-house: the whitener (`dance_car1_whitener`)
+and the fit wrapper (`dance_traj_lmer_car1`), server/08e.
+
+Checked against nlme (`tests/testthat/test-traj-car1.R`): at a given phi the
+whitened fit has the fixed effects, standard errors, sigma and REML
+log-likelihood of `nlme::lme(correlation = corCAR1)`; the phi profile finds
+nlme's REML estimate; its likelihood ratio against independence is nlme's;
+phi = 0 is the independent fit exactly. nlme itself was not used for the
+tests: its default ("containment") df ignore random slopes -- 200+ df for a
+between-group rhythm contrast where Kenward-Roger and Satterthwaite give about
+18 -- and emmeans' Satterthwaite for lme objects differentiates the covariance
+by refitting on randomly perturbed data (unseeded), so its df change between
+identical runs.
+
+**How phi is estimated.** By profile likelihood on the random structure the
+independent fit reached: 20 values from 0 to 0.98, evenly spaced in
+-log(1 - phi), the maximum refined between its neighbours, the 95% interval
+where the log-likelihood falls 1.92, and the likelihood-ratio test of phi = 0,
+whose p is half the chi-square(1) tail because 0 is on the boundary (Self &
+Liang 1987). REML when the fixed-effect design is fixed (tau held, or a
+linear, log or no trend); maximum likelihood when tau is estimated too, since
+REML likelihoods of different trend shapes are not comparable -- then tau and
+phi are profiled in turn, each given the other, until phi moves by less than
+0.005 (at most four rounds). The model is then refitted by REML at phi-hat;
+its tests treat phi (like tau) as known.
+
+**What changes downstream.** R-squared and the residual plots are computed on
+the data's scale (the whitened model's own `fitted()` is not); the residual
+plots show the normalized (whitened) residuals; the information criteria use
+the data's log-likelihood and count phi; the per-cell nonlinear model (nlme)
+gets corCAR1 too, with phi estimated within it (nlme 3.1-164 crashes R when a
+corCAR1 is held fixed in `nlme()`). The summary, the comparison tab's header,
+the assumptions list, the APA Methods and Results and the exported script
+state the residual model, phi-hat, its interval and its test. For an
+independent-residual fit the summary reports how strongly consecutive residuals
+of a curve correlate -- with no threshold attached; the AR(1) model's
+likelihood ratio is the test.
+
+**Calibration** (`tests/traj_car1_calibration.R`; two groups of 12, 16 uneven
+times, one harmonic, random intercept and rhythm per participant, a few
+missing points; circadian block test of Group, Kenward-Roger, alpha = .05):
+
+| data (300 replicates each)        | independent-residual model | AR(1) model | phi-hat (true) | phi interval covers |
+|-----------------------------------|----------------------------|-------------|----------------|---------------------|
+| null, independent residuals       | 0.043                      | 0.040       | 0.104 (0)      | 0.987               |
+| null, AR(1) residuals, phi = 0.6  | 0.050                      | 0.037       | 0.589 (0.6)    | 0.947               |
+| 0.75 h phase shift, AR(1), power  | 0.687                      | 0.670       | 0.587 (0.6)    | 0.947               |
+
+Read plainly: the AR(1) model holds its size (slightly conservative), estimates
+phi without material bias, and its profile interval covers at the nominal rate
+(above it when phi = 0, which is the boundary); power is essentially the same.
+In this design -- a random rhythm per participant -- the independent-residual
+model's between-group test held its size too: the random effects absorb most
+of what independence gets wrong for a between-participant contrast. What the
+AR(1) adds is a correct residual model, with phi estimated and tested; it was
+not measured for designs whose random structure falls back to fewer terms,
+for within-participant factors, or for other sampling grids.

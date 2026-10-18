@@ -276,7 +276,10 @@ dance_traj_calibration <- function(fit, method_kind = "kr", block = "circadian")
     out <- c(out, "it models a residual correlation structure")
   if (isTRUE(fit$phi > 0) || !is.null(fit$residual_ar))
     out <- c(out, paste("its residuals are a continuous-time AR(1) whose phi is estimated from the",
-                        "same data, and the degrees of freedom treat phi as known"))
+                        "same data, and the degrees of freedom treat phi as known (simulated on one",
+                        "design -- 2 x 12 participants, 16 uneven times, phi = 0.6, a random rhythm",
+                        "per participant -- the circadian test rejected 3.7% of 300 true nulls at",
+                        ".05; see tests/traj_car1_calibration.R)"))
   # BRIEF 6. The grid simulated the MAXIMAL random structure -- every cell it
   # cleared reported rung 1 in 100% of replicates, singular fits retained. A fit
   # that descended the ladder is a different model from the one measured, and it
