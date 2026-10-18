@@ -1337,10 +1337,16 @@ dance_traj_r2 <- function(fit) {
   if (!isTRUE(fit$ok)) return(NULL)
   m <- fit$model
   if (!inherits(m, "merMod")) return(NULL)
-  Xb <- tryCatch(as.numeric(stats::predict(m, re.form = NA)), error = function(e) NULL)
+  # a CAR(1) fit stores its WHITENED design: the fixed part and Z are rebuilt
+  # on the data's scale (predict with newdata, and the unwhitened Z)
+  car1 <- isTRUE(fit$phi > 0)
+  Xb <- tryCatch(as.numeric(if (car1) stats::predict(m, newdata = fit$spec$data, re.form = NA)
+                            else stats::predict(m, re.form = NA)), error = function(e) NULL)
   if (is.null(Xb)) return(NULL)
   var_f <- stats::var(Xb)
-  Z <- tryCatch(as.matrix(lme4::getME(m, "Z")), error = function(e) NULL)
+  Z <- tryCatch(if (car1) Matrix::t(as.matrix(lme4::lFormula(stats::formula(m),
+                  data = fit$spec$data)$reTrms$Zt))
+                else as.matrix(lme4::getME(m, "Z")), error = function(e) NULL)
   vc <- tryCatch(lme4::VarCorr(m), error = function(e) NULL)
   if (is.null(Z) || is.null(vc)) return(NULL)
   # the full random-effect covariance, block-diagonal over grouping levels, in

@@ -98,7 +98,8 @@ dance_traj_sat_tau_map <- function(range = NULL) {
 
 dance_traj_sat_fit <- function(ff, progress = NULL, tau_range = NULL,
                                control = list(maxIter = 200, pnlsMaxIter = 20,
-                                              msMaxIter = 200)) {
+                                              msMaxIter = 200),
+                               phi = ff$phi %||% 0) {
   if (!requireNamespace("nlme", quietly = TRUE))
     return(list(ok = FALSE, message = paste(
       "The per-cell saturating model needs the nlme package, which ships with R",
@@ -156,9 +157,22 @@ dance_traj_sat_fit <- function(ff, progress = NULL, tau_range = NULL,
   start_common <- c(st_b0, st_A, map$start(tau0), st_harm)
 
   ctl <- do.call(nlme::nlmeControl, control)
+  # AUTOCORRELATED RESIDUALS: when the trajectory model has CAR(1) residuals,
+  # this model has them too (nlme's corCAR1, within each curve), ESTIMATED with
+  # everything else and started at the trajectory model's phi -- in the per-cell
+  # and the one-tau fit alike, so their likelihood ratio compares the same
+  # residual model. Not held fixed: nlme 3.1-164 crashes R itself (an invalid
+  # pointer in its C code) when a corCAR1 is held fixed inside nlme().
+  car1 <- length(phi) == 1L && is.finite(phi) && phi > 0
+  cor_for <- function(rung) if (!car1) NULL else
+    nlme::corCAR1(value = min(max(phi, 0.01), 0.99),
+                  form = if (grepl("curve", paste(deparse(rung$groups), collapse = "")))
+                           ~ tt | subject/curve
+                         else ~ tt | subject)
   fit_one <- function(fixed, start, rung) tryCatch({
     m <- nlme::nlme(form, data = d, fixed = fixed, random = rung$random,
-                    groups = rung$groups, start = start, method = "ML", control = ctl)
+                    groups = rung$groups, start = start, method = "ML", control = ctl,
+                    correlation = cor_for(rung))
     v <- diag(stats::vcov(m))
     if (any(!is.finite(v)) || any(v < 0)) stop("the fixed-effect covariance is not positive definite")
     m
@@ -196,6 +210,10 @@ dance_traj_sat_fit <- function(ff, progress = NULL, tau_range = NULL,
                 df = max(1L, n_subj - n_between), n_participants = n_subj,
                 window = range(d$tt), t0 = sp$t0, period = sp$period,
                 tau_traj = sp$tau, method = "ML", tau_map = map, tau_range = map$range,
+                # the residual autocorrelation this model estimated (0: none modelled)
+                phi = if (car1) tryCatch(as.numeric(stats::coef(m$modelStruct$corStruct,
+                                                                 unconstrained = FALSE)),
+                                         error = function(e) NA_real_) else 0,
                 formula = paste(deparse(form, width.cutoff = 500L), collapse = " "))
     out$table <- dance_traj_sat_table(out)
     return(out)
@@ -207,7 +225,7 @@ dance_traj_sat_fit <- function(ff, progress = NULL, tau_range = NULL,
   outside <- NULL
   if (!is.null(map$range)) {
     free <- tryCatch(dance_traj_sat_fit(ff, progress = progress, tau_range = NULL,
-                                        control = control), error = function(e) NULL)
+                                        control = control, phi = phi), error = function(e) NULL)
     if (isTRUE(free$ok)) {
       ft <- free$table
       out_i <- which(ft$tau < map$range[1] | ft$tau > map$range[2])

@@ -1369,6 +1369,7 @@
         add("")
         add("# The app's own functions, verbatim:")
         for (k in c("dance_traj_long", "dance_traj_run", "dance_traj_fit_report",
+                    "dance_traj_residual_statement",
                     "dance_traj_cell_equations", "dance_traj_level_summary",
                     "dance_traj_tests", "dance_traj_tests_table", "dance_traj_contrasts",
                     "dance_traj_pair_whats"))
@@ -1394,11 +1395,14 @@
         add(sprintf('                           tau_mode = "%s", tau_value = %s,',
                     if (identical(tsp$mode, "estimate")) "estimate" else "fixed",
                     num(if (sat) (tsp$value %||% ff$spec$tau) else NA)))
-        add(sprintf("                           tau_lo = %s, tau_hi = %s, sat_cells = %s)",
+        add(sprintf("                           tau_lo = %s, tau_hi = %s, sat_cells = %s,",
                     num(if (sat) tsp$lo else NA), num(if (sat) tsp$hi else NA),
                     if (sat && isTRUE(tsp$sat_cells)) "TRUE" else "FALSE"))
+        add(sprintf("                           residuals = \"%s\")",
+                    if (identical(hm$resid_model, "car1")) "car1" else "independent"))
         add("if (!isTRUE(traj_fit$ok)) stop(traj_fit$message)")
         add("cat(dance_traj_fit_report(traj_fit), \"\\n\")")
+        add("cat(dance_traj_residual_statement(traj_fit), \"\\n\")")
         if (sat)
           add("cat(\"tau used by the trajectory model:\", traj_fit$spec$tau, \"h (\", traj_fit$tau_mode, \")\\n\")")
         add("print(summary(traj_fit$model)$coefficients)   # the fixed effects")

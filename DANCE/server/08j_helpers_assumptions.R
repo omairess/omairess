@@ -94,11 +94,31 @@ dance_cosinor_assumptions <- function(mod, ff = NULL, df_method = "kr") {
       "moves down only when a fit fails or does not converge; a singular fit is kept.",
       "Used: rung %d of %d, '%s'."), top, as.integer(ff$re_rung %||% 1L),
       as.integer(ff$n_rungs %||% length(sp$re_ladder)), ff$re_label))
-    a("Residuals", paste(
+    ar <- ff$residual_ar
+    if (isTRUE(ff$phi > 0) || !is.null(ar)) {
+      a("Residuals", sprintf(paste(
+        "Normal, with ONE variance for every cell and time point, and AUTOCORRELATED within",
+        "each curve as a continuous-time AR(1): two residuals dt hours apart correlate",
+        "phi^dt (uneven gaps and missing observations as they are), and residuals of",
+        "different curves are independent. phi = %s per hour, estimated by profile",
+        "likelihood (%s) on 20 values from 0 to 0.98 evenly spaced in -log(1 - phi), the",
+        "maximum refined between neighbours, its 95%% interval where the log-likelihood",
+        "falls 1.92; the model is fitted to the whitened data (Prais-Winsten for unequal",
+        "gaps), which is the same model, and refitted by REML at phi-hat. Its tests treat",
+        "phi as known. Independence is tested by the likelihood ratio, half the",
+        "chi-square(1) p (phi = 0 is on the boundary)."),
+        f(ar$phi %||% ff$phi), ar$method %||% "REML"))
+      sf <- ff$sat
+      if (!is.null(sf) && isTRUE(sf$ok))
+        a("Residuals", sprintf(paste(
+          "The per-cell nonlinear model has the same CAR(1) residuals (nlme corCAR1),",
+          "with phi estimated within it: %s per hour."), f(sf$phi)))
+    } else a("Residuals", paste(
       "Normal and INDEPENDENT, with ONE variance for every cell and time point: no",
       "autocorrelation between successive observations and no unequal variance is",
-      "modelled. Serially correlated residuals make standard errors too small; check",
-      "the residual plots on the diagnostics tab."))
+      "modelled. Serially correlated residuals make standard errors too small; the",
+      "summary's diagnostics report the correlation of consecutive residuals, and",
+      "Model Specification offers a continuous-time AR(1)."))
     a("Tests", sprintf(paste(
       "F tests of linear contrasts of the fixed effects with %s denominator df. A main",
       "effect averages the other factors' levels with EQUAL weights, whatever the cell",

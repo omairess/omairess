@@ -64,7 +64,7 @@ dance_traj_refit <- function(fit, drop_terms = character(0), REML = fit$REML) {
   ff <- spec$fixed_formula
   if (length(drop_terms)) ff <- paste(ff, "-", paste(drop_terms, collapse = " - "))
   dance_traj_fit_one(spec, fit$re_formula, fit$engine %||% "lmer", REML,
-                     fit$residual_cor, fixed_formula = ff)
+                     fit$residual_cor, fixed_formula = ff, phi = fit$phi)
 }
 
 # ------------------------------------------------------------------------------
@@ -182,10 +182,95 @@ dance_traj_status <- function(m) {
 }
 
 # ------------------------------------------------------------------------------
+# AUTOCORRELATED RESIDUALS: THE CONTINUOUS-TIME AR(1), BY WHITENING
+# ------------------------------------------------------------------------------
+# Within a curve the residuals are taken to be correlated as
+#
+#     corr(e(t), e(t')) = phi^|t - t'|          t in hours, 0 <= phi < 1
+#
+# so phi is the correlation of two residuals one hour apart -- the
+# continuous-time AR(1), CAR(1) (Jones 1993; Pinheiro & Bates 2000, sec. 5.3,
+# nlme::corCAR1). It handles uneven spacing and missing observations as they
+# are: restricted to the times observed, the process is still first-order
+# Markov with r_k = phi^(t_k - t_(k-1)) between neighbours.
+#
+# Its correlation matrix R has a bidiagonal inverse Cholesky factor W (Prais &
+# Winsten 1954, for unequal gaps): along each curve in time order
+#
+#     e*_1 = e_1,    e*_k = (e_k - r_k e_(k-1)) / sqrt(1 - r_k^2)
+#
+# and W R W' = I exactly. So for a GIVEN phi the model with CAR(1) residuals IS
+# the ordinary mixed model fitted to W y, W X and W Z with independent
+# residuals (generalized least squares), and its log-likelihood -- ML or REML --
+# is the whitened one plus log|det W|. That is why the fit stays an lme4 fit:
+# Kenward-Roger (pbkrtest) and Satterthwaite (lmerTest) apply to it unchanged,
+# conditional on phi, as they are conditional on tau. Checked against
+# nlme::lme(correlation = corCAR1) in tests/testthat/test-traj-car1.R: same
+# fixed effects, standard errors, sigma and log-likelihood.
+dance_car1_whitener <- function(t, curve, phi) {
+  n <- length(t)
+  ord <- order(as.character(curve), t)
+  cs <- as.character(curve)[ord]; ts <- t[ord]
+  first <- c(TRUE, cs[-1L] != cs[-n])
+  dt <- c(NA_real_, diff(ts))
+  if (any(!first & dt <= 0))
+    stop("Two observations of one curve share a time point; the AR(1) residual model needs distinct times.")
+  r <- ifelse(first, 0, phi^dt)
+  s <- sqrt(1 - r^2)
+  nf <- which(!first)
+  W <- Matrix::sparseMatrix(i = c(ord, ord[nf]), j = c(ord, ord[nf - 1L]),
+                            x = c(1 / s, -r[nf] / s[nf]), dims = c(n, n))
+  attr(W, "logdet") <- -sum(log(s))
+  W
+}
+
+# log|det W| for a spec's data at phi: what turns the whitened log-likelihood
+# into the likelihood of the data themselves
+dance_car1_logdet <- function(spec, phi) {
+  if (!length(phi) || !is.finite(phi) || phi <= 0) return(0)
+  attr(dance_car1_whitener(spec$data$t, spec$data[[spec$curve_var %||% "subject"]], phi), "logdet")
+}
+
+# The mixed model with CAR(1) residuals at a given phi: lme4's own modular fit
+# (lFormula, mkLmerDevfun, optimizeLmer, mkMerMod -- the steps lme4::lmer
+# takes) on the whitened design. The object keeps the formula, the coefficient
+# names and the model frame of the data, so predict(newdata), ranef(), emmeans
+# and the tests read it like any other fit; fitted() and resid() are on the
+# whitened scale (the residuals are the normalized ones). lmerTest's
+# Satterthwaite object is built from the same whitened deviance function.
+dance_traj_lmer_car1 <- function(f, d, phi, curve_var, REML, ctrl, light = FALSE) {
+  lmod <- lme4::lFormula(f, data = d, REML = REML, control = ctrl)
+  if (nrow(lmod$fr) != nrow(d)) stop("The model frame dropped rows; the whitening needs them all.")
+  W <- dance_car1_whitener(d$t, d[[curve_var]], phi)
+  att <- attributes(lmod$X)
+  X <- as.matrix(W %*% lmod$X); attributes(X) <- att
+  lmod$X <- X
+  lmod$fr[[1L]] <- as.numeric(W %*% lmod$fr[[1L]])
+  lmod$reTrms$Zt <- methods::as(lmod$reTrms$Zt %*% Matrix::t(W), "CsparseMatrix")
+  devfun <- do.call(lme4::mkLmerDevfun, c(lmod, list(control = ctrl)))
+  opt <- lme4::optimizeLmer(devfun, optimizer = ctrl$optimizer, restart_edge = ctrl$restart_edge,
+                            boundary.tol = ctrl$boundary.tol, control = ctrl$optCtrl,
+                            calc.derivs = ctrl$calc.derivs, use.last.params = ctrl$use.last.params)
+  cc <- lme4::checkConv(attr(opt, "derivs"), opt$par, ctrl = ctrl$checkConv,
+                        lbound = environment(devfun)$lower)
+  m <- lme4::mkMerMod(environment(devfun), opt, lmod$reTrms, fr = lmod$fr,
+                      mc = quote(dance_traj_lmer_car1()), lme4conv = cc)
+  if (!isTRUE(light) && requireNamespace("lmerTest", quietly = TRUE)) {
+    # a fresh deviance function on the same whitened design, so lmerTest's
+    # Hessian and Jacobian do not move the fitted model's own state
+    devfun2 <- do.call(lme4::mkLmerDevfun, c(lmod, list(control = ctrl)))
+    as_lt <- get("as_lmerModLT", envir = asNamespace("lmerTest"))
+    m <- tryCatch(as_lt(m, devfun2, tol = 1e-8), error = function(e) m)
+  }
+  m
+}
+
+# ------------------------------------------------------------------------------
 # ONE FIT at a given rung
 # ------------------------------------------------------------------------------
 dance_traj_fit_one <- function(spec, re_formula, engine = "lmer", REML = TRUE,
-                               cor_struct = NULL, fixed_formula = NULL, light = FALSE) {
+                               cor_struct = NULL, fixed_formula = NULL, light = FALSE,
+                               phi = NULL) {
   # fixed_formula overrides the spec's, so a REDUCED model can be built the same
   # way the full one was. stats::update() cannot do this job here: the recorded
   # call refers to `d` and `REML` by name, which exist only in this function's
@@ -225,6 +310,11 @@ dance_traj_fit_one <- function(spec, re_formula, engine = "lmer", REML = TRUE,
   }
   if (!requireNamespace("lme4", quietly = TRUE)) return(NULL)
   ctrl <- lme4::lmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 2e5))
+  # CAR(1) residuals at a given phi: the whitened fit (phi = 0 IS independence)
+  if (length(phi) == 1L && is.finite(phi) && phi > 0)
+    return(tryCatch(dance_traj_lmer_car1(f, d, phi, spec$curve_var %||% "subject", REML,
+                                         ctrl, light = light),
+                    error = function(e) NULL))
   # `light` fits with lme4 alone: lmerTest's conversion computes what the
   # Satterthwaite tests need, which a fit read only for its log-likelihood (a
   # point of the tau profile) never uses -- same likelihood, half the time.
@@ -257,7 +347,8 @@ dance_traj_fit_one <- function(spec, re_formula, engine = "lmer", REML = TRUE,
 # separate visits.
 dance_traj_fit <- function(spec, engine = c("lmer", "glmmTMB"), REML = TRUE,
                            residual_cor = c("none", "auto", "ar1", "ou"),
-                           ar1 = FALSE, max_rung = NULL, min_rung = 1L, light = FALSE) {
+                           ar1 = FALSE, max_rung = NULL, min_rung = 1L, light = FALSE,
+                           phi = NULL) {
   engine <- match.arg(engine)
   residual_cor <- match.arg(residual_cor)
   if (isTRUE(ar1) && identical(residual_cor, "none")) residual_cor <- "ar1"
@@ -290,7 +381,7 @@ dance_traj_fit <- function(spec, engine = c("lmer", "glmmTMB"), REML = TRUE,
   attempts <- list()
   for (i in seq_along(ladder)[seq_along(ladder) >= min_rung]) {
     m <- dance_traj_fit_one(spec, ladder[[i]]$formula, engine, REML, cor_struct,
-                            light = light)
+                            light = light, phi = phi)
     st <- dance_traj_status(m)
     attempts[[i]] <- c(list(rung = i, label = ladder[[i]]$label,
                             formula = ladder[[i]]$formula), st)
@@ -319,6 +410,9 @@ dance_traj_fit <- function(spec, engine = c("lmer", "glmmTMB"), REML = TRUE,
       return(list(
         ok = TRUE, model = m, engine = engine, REML = REML,
         ar1 = identical(cor_struct, "ar1"), residual_cor = cor_struct,
+        # CAR(1) residuals at this phi (0: independent); the profile that chose
+        # phi is attached by the caller as $residual_ar
+        phi = if (length(phi) == 1L && is.finite(phi)) phi else 0,
         residual_cor_group = if (is.null(cor_struct)) NULL else (spec$curve_var %||% "subject"),
         spec = spec,
         re_rung = i, re_label = ladder[[i]]$label, re_formula = ladder[[i]]$formula,
@@ -357,7 +451,11 @@ dance_traj_profile_tau <- function(d, period, n_harmonics, design_terms,
                                    covariates = character(0), t0 = NULL,
                                    tau_grid = NULL, engine = "lmer",
                                    REML = TRUE, interaction = "full",
-                                   flat_tol = 1.92, roles = NULL, progress = NULL) {
+                                   flat_tol = 1.92, roles = NULL, progress = NULL,
+                                   phi = 0) {
+  # phi: the CAR(1) residual correlation the profile is computed at (0 for
+  # independent residuals). It is the same at every grid point, so log|det W|
+  # is a constant of the profile and drops out of its comparisons.
   if (is.null(tau_grid)) {
     span <- diff(range(d$t, na.rm = TRUE))
     tau_grid <- exp(seq(log(max(span / 50, 1e-3)), log(span * 3), length.out = 24))
@@ -374,7 +472,7 @@ dance_traj_profile_tau <- function(d, period, n_harmonics, design_terms,
   mid <- tau_grid[ceiling(length(tau_grid) / 2)]
   sp_mid <- spec_at(mid)
   ref <- if (isTRUE(sp_mid$ok)) dance_traj_fit(sp_mid, engine = engine, REML = FALSE,
-                                               light = TRUE) else NULL
+                                               light = TRUE, phi = phi) else NULL
   if (is.null(ref) || !isTRUE(ref$ok))
     return(list(ok = FALSE, message = paste(
       "The model did not fit at the middle of the tau grid, so no random structure",
@@ -386,7 +484,7 @@ dance_traj_profile_tau <- function(d, period, n_harmonics, design_terms,
     sp <- spec_at(tau)
     if (!isTRUE(sp$ok)) return(NULL)
     fit <- dance_traj_fit(sp, engine = engine, REML = FALSE, min_rung = rung, max_rung = rung,
-                          light = TRUE)
+                          light = TRUE, phi = phi)
     if (!isTRUE(fit$ok)) return(NULL)
     data.frame(tau = tau, logLik = as.numeric(stats::logLik(fit$model)),
                rung = fit$re_rung, stringsAsFactors = FALSE)
@@ -412,7 +510,7 @@ dance_traj_profile_tau <- function(d, period, n_harmonics, design_terms,
     sp <- spec_at(tau)
     if (!isTRUE(sp$ok)) return(NA_real_)
     f <- dance_traj_fit(sp, engine = engine, REML = FALSE, min_rung = rung, max_rung = rung,
-                        light = TRUE)
+                        light = TRUE, phi = phi)
     if (isTRUE(f$ok)) as.numeric(stats::logLik(f$model)) else NA_real_
   }
   if (!flat && !at_edge) {
@@ -462,7 +560,7 @@ dance_traj_profile_tau <- function(d, period, n_harmonics, design_terms,
   if (!flat) {
     sp <- spec_at(best)
     if (isTRUE(sp$ok)) {
-      final <- dance_traj_fit(sp, engine = engine, REML = REML, min_rung = rung)
+      final <- dance_traj_fit(sp, engine = engine, REML = REML, min_rung = rung, phi = phi)
       # if the profile's structure does not converge by REML at the optimum, the
       # ladder continues from there rather than reporting no fit
     }
@@ -522,6 +620,155 @@ dance_traj_profile_tau <- function(d, period, n_harmonics, design_terms,
 }
 
 # ------------------------------------------------------------------------------
+# PROFILE OVER phi, the CAR(1) residual correlation at a lag of one hour
+# ------------------------------------------------------------------------------
+# On ONE random structure (`rung`), as the tau profile is, so the likelihoods
+# compared differ only in phi. REML when the fixed-effect design is fixed --
+# the estimate nlme's corCAR1 gives -- and ML when tau is estimated alongside,
+# since REML likelihoods of different trend shapes are not comparable. Every
+# likelihood is the data's: the whitened one plus log|det W|.
+#
+# 20 grid points from 0 to 0.98, evenly spaced in -log(1 - phi) (denser where
+# the likelihood turns fastest); the maximum refined between its neighbours;
+# the 95% interval where the log-likelihood falls 1.92 below its maximum,
+# interpolated on the same scale; and the likelihood-ratio test of phi = 0
+# (independent residuals), whose null value lies on the boundary of the
+# parameter space, so its p is half the chi-square(1) tail (Self & Liang 1987).
+dance_traj_profile_phi <- function(spec, rung = 1L, REML = TRUE, grid = NULL,
+                                   flat_tol = 1.92, progress = NULL) {
+  if (!isTRUE(spec$ok)) return(list(ok = FALSE, message = spec$message))
+  if (is.null(grid)) grid <- 1 - exp(-seq(0, -log(0.02), length.out = 20))
+  u_of <- function(phi) -log(1 - phi)
+  phi_of <- function(u) 1 - exp(-u)
+  ll_at <- function(phi) {
+    f <- dance_traj_fit(spec, REML = REML, min_rung = rung, max_rung = rung,
+                        light = TRUE, phi = phi)
+    if (!isTRUE(f$ok)) return(NA_real_)
+    as.numeric(stats::logLik(f$model)) + dance_car1_logdet(spec, phi)
+  }
+  ll <- vapply(seq_along(grid), function(j) {
+    if (is.function(progress)) progress(j, length(grid))
+    ll_at(grid[j])
+  }, numeric(1))
+  if (!is.finite(ll[1L]))
+    return(list(ok = FALSE, message = paste(
+      "The model did not fit with independent residuals on the random structure chosen,",
+      "so the residual autocorrelation could not be profiled.")))
+  prof <- data.frame(phi = grid[is.finite(ll)], logLik = ll[is.finite(ll)])
+  n_failed <- sum(!is.finite(ll))
+  jb <- which.max(prof$logLik); best <- prof$phi[jb]
+  at_upper <- jb == nrow(prof)
+  if (!at_upper) {
+    lo_u <- u_of(prof$phi[max(1L, jb - 1L)]); hi_u <- u_of(prof$phi[jb + 1L])
+    opt <- tryCatch(stats::optimize(function(u) {
+      v <- ll_at(phi_of(u)); if (is.finite(v)) -v else 1e100
+    }, interval = c(lo_u, hi_u), tol = 0.001), error = function(e) NULL)
+    if (!is.null(opt) && is.finite(opt$objective) && -opt$objective > max(prof$logLik)) {
+      prof <- rbind(prof, data.frame(phi = phi_of(opt$minimum), logLik = -opt$objective))
+      prof <- prof[order(prof$phi), , drop = FALSE]; rownames(prof) <- NULL
+      best <- phi_of(opt$minimum)
+    }
+  }
+  # the interval: where the profile falls 1.92 below its maximum; phi cannot
+  # go below 0, so a profile still within 1.92 at phi = 0 has its interval
+  # start there, and one still within 1.92 at 0.98 is open above
+  top <- max(prof$logLik); cut <- top - flat_tol; jb <- which.max(prof$logLik)
+  cross <- function(idx) {
+    for (j in idx) {
+      a <- j; b <- if (idx[1] < jb) j + 1L else j - 1L
+      if (prof$logLik[a] < cut && prof$logLik[b] >= cut) {
+        w <- (cut - prof$logLik[a]) / (prof$logLik[b] - prof$logLik[a])
+        return(phi_of(u_of(prof$phi[a]) + w * (u_of(prof$phi[b]) - u_of(prof$phi[a]))))
+      }
+    }
+    NA_real_
+  }
+  ci_lo <- if (jb > 1L) cross(rev(seq_len(jb - 1L))) else NA_real_
+  ci_hi <- if (jb < nrow(prof)) cross(seq.int(jb + 1L, nrow(prof))) else NA_real_
+  ll0 <- prof$logLik[prof$phi == 0][1]
+  stat <- max(0, 2 * (top - ll0))
+  list(ok = TRUE, phi = best,
+       ci = c(if (is.finite(ci_lo)) ci_lo else 0, if (is.finite(ci_hi)) ci_hi else max(prof$phi)),
+       ci_open = c(lower = FALSE, upper = !is.finite(ci_hi)),
+       at_zero = best < 1e-3, at_upper = at_upper,
+       lrt = list(statistic = stat, df = 1L,
+                  p = if (stat > 1e-8) 0.5 * stats::pchisq(stat, 1, lower.tail = FALSE) else 1,
+                  method = "likelihood ratio against independent residuals (phi = 0), boundary-corrected"),
+       profile = prof, grid = grid, rung = rung, REML = REML, n_grid_failed = n_failed)
+}
+
+# ------------------------------------------------------------------------------
+# WHAT A FIT WITH CAR(1) RESIDUALS IS, ON THE SCALE OF THE DATA
+# ------------------------------------------------------------------------------
+# The whitened fit's own logLik(), fitted() and resid() are on the whitened
+# scale. These put them back where a reader needs them.
+
+# The log-likelihood of the data, with the parameters it counts: the whitened
+# log-likelihood plus log|det W|, and phi as one parameter more.
+dance_traj_loglik <- function(fit) {
+  ll <- tryCatch(stats::logLik(fit$model), error = function(e) NULL)
+  if (is.null(ll)) return(NULL)
+  car1 <- isTRUE(fit$phi > 0)
+  k <- as.integer(attr(ll, "df")) + as.integer(car1)
+  v <- as.numeric(ll) + if (car1) dance_car1_logdet(fit$spec, fit$phi) else 0
+  n <- tryCatch(stats::nobs(fit$model), error = function(e) nrow(fit$spec$data))
+  list(logLik = v, df = k, n = n, REML = isTRUE(fit$REML),
+       AIC = -2 * v + 2 * k, BIC = -2 * v + k * log(n))
+}
+
+# Fitted values and residuals on the data's scale (conditional on the random
+# effects), and the NORMALIZED residuals: for a CAR(1) fit the whitened
+# model's residuals -- independent, variance sigma^2, if the model is right --
+# and for an independent-residual fit the residuals themselves.
+dance_traj_residuals <- function(fit) {
+  m <- fit$model; d <- fit$spec$data
+  car1 <- isTRUE(fit$phi > 0)
+  fv <- if (car1) as.numeric(stats::predict(m, newdata = d, re.form = NULL))
+        else as.numeric(stats::fitted(m))
+  list(fitted = fv, raw = d$y - fv, normalized = as.numeric(stats::resid(m)), car1 = car1)
+}
+
+# How strongly consecutive residuals of one curve go together: the
+# correlation of each residual with the curve's previous one, pooled over
+# curves. On the residuals of an independent-residual fit it says whether
+# that assumption holds; on the normalized residuals of a CAR(1) fit, whether
+# the AR(1) took the autocorrelation out.
+dance_traj_resid_lag1 <- function(fit, which = c("normalized", "raw")) {
+  which <- match.arg(which)
+  rs <- dance_traj_residuals(fit)
+  d <- fit$spec$data; cv <- as.character(d[[fit$spec$curve_var %||% "subject"]])
+  ord <- order(cv, d$t)
+  r <- rs[[which]][ord]; cs <- cv[ord]; ts <- d$t[ord]
+  i <- which(c(FALSE, cs[-1L] == cs[-length(cs)]))
+  if (length(i) < 3L) return(NULL)
+  list(r = stats::cor(r[i], r[i - 1L]), n_pairs = length(i),
+       median_gap = stats::median(ts[i] - ts[i - 1L]), which = which)
+}
+
+# The residual model in one sentence, for every place a fit is reported.
+dance_traj_residual_statement <- function(fit) {
+  ar <- fit$residual_ar
+  if (!isTRUE(fit$phi > 0) && is.null(ar))
+    return(paste("Residuals are taken as independent, with one variance: no autocorrelation",
+                 "is modelled."))
+  f3 <- function(x) format(signif(x, 3))
+  if (is.null(ar))
+    return(sprintf(paste("Residuals are autocorrelated within each curve as a continuous-time",
+                         "AR(1), phi = %s per hour."), f3(fit$phi)))
+  sprintf(paste(
+    "Residuals are autocorrelated within each curve as a continuous-time AR(1): two",
+    "residuals dt hours apart correlate phi^dt, with phi = %s per hour (95%% profile",
+    "interval %s to %s%s; %s). Against independent residuals: likelihood ratio %s,",
+    "p %s (boundary-corrected). The tests treat phi as known.%s"),
+    f3(ar$phi %||% fit$phi), f3(ar$ci[1]), if (isTRUE(ar$ci_open[["upper"]])) "above " else "",
+    f3(ar$ci[2]), ar$method %||% "REML", f3(ar$lrt$statistic),
+    if (ar$lrt$p < 0.001) "< .001" else sprintf("= %.3f", ar$lrt$p),
+    paste0(if (isTRUE(ar$at_zero)) " The estimate is 0: no positive autocorrelation, and the model is the independent-residual one." else "",
+           if (isTRUE(ar$at_upper)) " The estimate sits at the top of the search (0.98): a bound, not an estimate." else "",
+           if (identical(ar$settled, FALSE)) " tau and phi had not settled after four rounds." else ""))
+}
+
+# ------------------------------------------------------------------------------
 # THE FITTING LOG (brief §16 / §4 / §14)
 # ------------------------------------------------------------------------------
 dance_traj_fit_report <- function(fit) {
@@ -532,6 +779,9 @@ dance_traj_fit_report <- function(fit) {
   a("Random structure:  rung %d of %d -- %s", fit$re_rung, fit$n_rungs, fit$re_label)
   if (isTRUE(fit$simplified)) a("  ! %s", fit$note)
   if (isTRUE(fit$ar1)) a("Residuals:         AR(1) within participant")
+  if (isTRUE(fit$phi > 0) || !is.null(fit$residual_ar))
+    a("Residuals:         continuous-time AR(1) within each curve, phi = %s per hour",
+      format(signif(fit$residual_ar$phi %||% fit$phi, 3)))
   # BRIEF 8. This line used to be the literal string "converged, non-singular",
   # printed whatever the fit had actually done -- while dance_traj_status() had
   # already separated the five states and dance_traj_fit() had stored every one
@@ -578,8 +828,11 @@ dance_traj_fit_report <- function(fit) {
 dance_traj_run <- function(d, period = 24, n_harmonics = 1, trend = "none", roles = NULL,
                            t0 = NULL, tau_mode = c("fixed", "estimate"),
                            tau_value = NA_real_, tau_lo = NA_real_, tau_hi = NA_real_,
-                           sat_cells = FALSE, progress = NULL) {
+                           sat_cells = FALSE, residuals = c("independent", "car1"),
+                           progress = NULL) {
   tau_mode <- match.arg(tau_mode)
+  residuals <- match.arg(residuals)
+  car1 <- identical(residuals, "car1")
   say <- function(msg, value) if (is.function(progress)) progress(msg, value)
   sat <- identical(trend, "exp_sat")
   value_ok <- length(tau_value) == 1L && isTRUE(is.finite(tau_value) && tau_value > 0)
@@ -641,12 +894,60 @@ dance_traj_run <- function(d, period = 24, n_harmonics = 1, trend = "none", role
     if (!isTRUE(ff$ok)) return(list(ok = FALSE, message = ff$message))
     ff$tau_mode <- mode
   }
+
+  # AUTOCORRELATED RESIDUALS (CAR(1) within each curve). The random structure
+  # is the one the fit above reached with independent residuals; phi is
+  # profiled on it, and the model refitted by REML at phi-hat.
+  #   tau held (or no saturating trend, or a flat tau profile): phi by REML.
+  #   tau estimated: tau and phi by ML, each profiled given the other in turn
+  #   until phi moves by less than 0.005 (at most four rounds).
+  if (car1) {
+    tau_fields <- c("tau_mode", "tau_profile", "tau_estimated", "tau_profile_ci", "tau_warning")
+    joint <- identical(ff$tau_mode, "profile")
+    rung <- if (joint) ff$tau_profile$rung %||% ff$re_rung else ff$re_rung
+    phi_used <- 0; rounds <- 0L; settled <- TRUE
+    repeat {
+      rounds <- rounds + 1L
+      say(sprintf("Estimating the residual autocorrelation%s...",
+                  if (joint) sprintf(" (round %d)", rounds) else ""), 0.86)
+      php <- dance_traj_profile_phi(ff$spec, rung = rung, REML = !joint)
+      if (!isTRUE(php$ok)) return(list(ok = FALSE, message = php$message))
+      if (!joint) break
+      if (abs(php$phi - phi_used) < 0.005) break
+      if (rounds >= 4L) { settled <- FALSE; break }
+      phi_used <- php$phi
+      say(sprintf("Profiling tau at the residual autocorrelation (round %d)...", rounds), 0.88)
+      pr <- dance_traj_profile_tau(d, period, n_harmonics, design_terms = NULL, t0 = t0,
+                                   roles = roles, tau_grid = grid, phi = phi_used)
+      if (!isTRUE(pr$ok)) return(list(ok = FALSE, message = pr$message))
+      prof <- pr[c("profile", "tau", "ci", "ci_open", "flat", "at_edge", "logLik_range",
+                   "message", "rung", "grid", "n_grid_failed")]
+      if (is.null(pr$fit) || !isTRUE(pr$fit$ok)) {
+        # flat at this phi: tau is held at the held value, and phi is
+        # estimated given it by REML, as for any held tau
+        ff <- fit_at(tau_value)
+        if (!isTRUE(ff$ok)) return(list(ok = FALSE, message = ff$message))
+        ff$tau_mode <- "fixed_after_flat"; ff$tau_profile <- prof
+        joint <- FALSE; rung <- ff$re_rung; next
+      }
+      ff <- pr$fit; ff$tau_mode <- "profile"; ff$tau_profile <- prof
+      rung <- pr$rung
+    }
+    say("Refitting at the residual autocorrelation...", 0.9)
+    ff2 <- dance_traj_fit(ff$spec, REML = TRUE, min_rung = rung, phi = php$phi)
+    if (!isTRUE(ff2$ok)) return(list(ok = FALSE, message = ff2$message))
+    for (k in tau_fields) ff2[[k]] <- ff[[k]]
+    ff <- ff2
+    php$method <- if (joint) "ML, jointly with tau" else "REML"
+    php$rounds <- rounds; php$settled <- settled
+    ff$residual_ar <- php
+  }
   # A AND TAU IN EVERY CELL, on request: a nonlinear mixed model (nlme), the
   # only way to compare tau itself, and the initial slope A/tau, between cells
   if (sat && isTRUE(sat_cells)) {
     say("Estimating A and tau in every cell (nonlinear mixed model)...", 0.9)
     ff$sat <- dance_traj_sat_fit(ff, tau_range = c(tau_lo, tau_hi),
-                                 progress = function(msg) say(msg, 0.95))
+                                 progress = function(msg) say(msg, 0.95), phi = ff$phi %||% 0)
   }
   ff$tau_range <- if (sat && range_ok) c(tau_lo, tau_hi) else NULL
   ff

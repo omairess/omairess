@@ -2998,7 +2998,10 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
         subjects_with_nas = subjects_with_nas,
         Y = Y,
         # the tau setting this run used (Model Specification), for every reader
-        tau_spec = if (identical(trend_type, "exp_sat")) tau_in else NULL
+        tau_spec = if (identical(trend_type, "exp_sat")) tau_in else NULL,
+        # the residual model of the mixed-effects fit (Model Specification)
+        resid_model = if (identical(approach, "mixed") &&
+                          identical(input$harmonic_traj_resid, "car1")) "car1" else "independent"
       )
       if (identical(approach, "mixed")) {
         # ONE fitted model for the whole module. Fitted here, once, when the
@@ -3123,6 +3126,10 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
         sprintf("%s (%s, %d levels)", f, r$role, r$n_levels)
       }, character(1)), collapse = "; ") else "none -- one trajectory for the whole sample"
       kv("Design factors", des)
+      kv("Residuals", if (isTRUE(ff$phi > 0) || !is.null(ff$residual_ar))
+           sprintf("continuous-time AR(1) within each curve, phi = %s per hour",
+                   fmt3(ff$residual_ar$phi %||% ff$phi))
+         else "independent (no autocorrelation modelled)")
       kv("Denominator df", switch(dfm, kr = "Kenward-Roger", satterthwaite = "Satterthwaite", dfm))
     } else {
       kv("Grouping factor", mod$group_var_name %||% "none")
@@ -3218,7 +3225,9 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       cat(sprintf("  beta_0%s, A_h, phi_h: fixed effects, one set per design cell\n",
                   switch(trend_type, linear = , log = ", beta", exp_sat = ", A_sat", "")))
       cat("  b_i(t): participant i's deviation from its cell's curve (random effects on the same basis)\n")
-      cat("  e: residual error\n")
+      cat(if (isTRUE(ff$phi > 0) || !is.null(ff$residual_ar))
+            "  e: residual error, continuous-time AR(1) within each curve: corr(e(t), e(t')) = phi^|t - t'|\n"
+          else "  e: residual error, independent\n")
       cat("  Fixed effects:  ", ff$spec$fixed_formula, "\n", sep = "")
       cat("  Random effects: ", ff$re_formula, "\n", sep = "")
     } else {
@@ -3417,11 +3426,14 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     hdr("Information criteria of the fitted model")
     if (mixed) {
       m <- ff$model
-      ll <- tryCatch(stats::logLik(m), error = function(e) NULL)
+      # the data's log-likelihood: for AR(1) residuals the whitened fit's plus
+      # log|det W|, with phi counted as a parameter
+      ll <- dance_traj_loglik(ff)
       if (!is.null(ll)) {
-        cat(sprintf("  logLik %s (%s, %d parameters)   AIC %s   BIC %s\n",
-                    fmt2(as.numeric(ll)), if (isTRUE(ff$REML)) "REML" else "ML",
-                    as.integer(attr(ll, "df")), fmt2(stats::AIC(m)), fmt2(stats::BIC(m))))
+        cat(sprintf("  logLik %s (%s, %d parameters%s)   AIC %s   BIC %s\n",
+                    fmt2(ll$logLik), if (isTRUE(ll$REML)) "REML" else "ML", as.integer(ll$df),
+                    if (isTRUE(ff$phi > 0)) ", phi included" else "",
+                    fmt2(ll$AIC), fmt2(ll$BIC)))
         if (isTRUE(ff$REML))
           cat("  REML criteria compare models with the SAME fixed effects only (different random\n",
               "  structures); to compare fixed effects, the comparison tab refits by ML.\n", sep = "")
@@ -3513,6 +3525,23 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
                   if (isTRUE(ff$converged)) "ok" else "FAILED",
                   if (isTRUE(ff$singular)) "yes (boundary, kept)" else "no",
                   if (isTRUE(ff$rank_deficient)) "DEFICIENT" else "full"))
+      # THE RESIDUAL AUTOCORRELATION: what the AR(1) estimated, or -- for an
+      # independent-residual fit -- whether independence holds
+      car1_fit <- isTRUE(ff$phi > 0) || !is.null(ff$residual_ar)
+      cat(paste(strwrap(dance_traj_residual_statement(ff), 88, initial = "  ", prefix = "    "),
+                collapse = "\n"), "\n", sep = "")
+      lg <- tryCatch(dance_traj_resid_lag1(ff, if (car1_fit) "normalized" else "raw"),
+                     error = function(e) NULL)
+      if (!is.null(lg)) {
+        cat(sprintf("  %s residuals of a curve: consecutive ones correlate r = %s (%d pairs, median gap %s h).\n",
+                    if (car1_fit) "Normalized" else "Conditional", fmt2(lg$r), lg$n_pairs,
+                    fmtn(lg$median_gap, 1)))
+        # no threshold is applied to r: the AR(1) model's likelihood-ratio test
+        # is the test of independence
+        if (!car1_fit)
+          cat("  Independence is assumed. The AR(1) residual model (Model Specification) estimates\n",
+              "  the autocorrelation and tests it against independence.\n", sep = "")
+      }
       cat("  Residual normality and the residual plots are on the diagnostics tab.\n")
     } else {
       cat(sprintf("  R-squared per participant: mean %s, range [%s, %s]\n",
@@ -4429,9 +4458,13 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     mod <- values$harmonic_model
     if (harmonic_is_mixed()) {
       ff <- harmonic_traj(); if (!isTRUE(ff$ok)) return(NULL)
-      return(list(fitted = as.numeric(stats::fitted(ff$model)),
-                  resid = as.numeric(stats::resid(ff$model)),
-                  source = "the mixed-effects model (conditional residuals)"))
+      # fitted values on the data's scale; with AR(1) residuals the residuals
+      # shown are the NORMALIZED ones, which should look independent
+      rs <- dance_traj_residuals(ff)
+      return(list(fitted = rs$fitted, resid = rs$normalized,
+                  source = if (rs$car1)
+                    "the mixed-effects model with AR(1) residuals (normalized residuals)"
+                  else "the mixed-effects model (conditional residuals)"))
     }
     all_fitted <- c(); all_resid <- c()
     for(fit_i in mod$individual_fits) {
@@ -4495,6 +4528,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
                   if (isTRUE(ff$singular)) "yes (boundary, kept)" else "no",
                   if (isTRUE(ff$rank_deficient)) "DEFICIENT" else "full"))
       cat(sprintf("Residual SD (sigma): %.4f\n", stats::sigma(m)))
+      cat(paste(strwrap(dance_traj_residual_statement(ff), 90), collapse = "\n"), "\n", sep = "")
       r2 <- dance_traj_r2(ff)
       if (!is.null(r2))
         cat(sprintf("R-squared: marginal %.3f (fixed effects), conditional %.3f (fixed + random)\n  [%s]\n",
@@ -4606,6 +4640,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
                      tau_mode = if (identical(ti$mode, "estimate")) "estimate" else "fixed",
                      tau_value = ti$value %||% NA_real_, tau_lo = ti$lo %||% NA_real_,
                      tau_hi = ti$hi %||% NA_real_, sat_cells = isTRUE(ti$sat_cells),
+                     residuals = mod$resid_model %||% "independent",
                      progress = function(msg, value) setProgress(value, detail = msg)))
     if (!isTRUE(ff$ok)) return(list(ok = FALSE, message = ff$message))
     # the offset that turns this model's elapsed axis back into clock time,
@@ -4688,7 +4723,11 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
                 f3(rg[1]), f3(rg[2]), f3(sp$tau), lo, hi,
                 if (isTRUE(pr$at_edge)) paste(
                   "; it sits at the END of the search range, so it is a bound, not an",
-                  "estimate -- widen the range, or hold \u03c4 at a value") else ""), failed)
+                  "estimate -- widen the range, or hold \u03c4 at a value") else ""), failed,
+               if (!is.null(ff$residual_ar) && !identical(ff$residual_ar$method, "REML"))
+                 paste(" \u03c4 and the residual autocorrelation were estimated together, by",
+                       "maximum likelihood; this profile is computed at the autocorrelation's",
+                       "estimate.") else "")
       },
       fixed_after_flat = paste0(sprintf(paste(
         "\u03c4 is not identified by these data: the profile likelihood varies by only %.2f",
@@ -4988,6 +5027,9 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
         },
         if (identical(ff$spec$trend, "exp_sat"))
           tags$div(style = "font-size:12px;color:#555;margin-top:4px", harmonic_tau_statement(ff)),
+        # the residual model, which every test below is conditional on
+        tags$div(style = "font-size:12px;color:#555;margin-top:4px",
+                 dance_traj_residual_statement(ff)),
         if (!isTRUE(cal$validated))
           tags$div(style = "font-size:11px;color:#8a5a12;margin-top:6px", cal$calibration)
         else tags$div(style = "font-size:11px;color:#8a5a12;margin-top:6px",

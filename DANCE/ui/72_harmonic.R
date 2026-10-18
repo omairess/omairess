@@ -177,6 +177,25 @@ ui_tab_harmonic <- tabItem(
                                squares; with τ held, A is a least-squares fit. If fits are poor,
                                try the log trend.</em></small>")))
             ),
+            # THE RESIDUALS (mixed approach). Independent is the classical mixed
+            # cosinor. Densely sampled curves usually leave residuals that are
+            # correlated with their neighbours in time; the continuous-time AR(1)
+            # models that, with uneven gaps and missing observations as they are.
+            conditionalPanel(
+              condition = "input.harmonic_approach == 'mixed'",
+              radioButtons("harmonic_traj_resid", "Residuals within a curve:",
+                           choices = c("Independent" = "independent",
+                                       "Autocorrelated: continuous-time AR(1), estimated" = "car1"),
+                           selected = "independent"),
+              conditionalPanel(
+                condition = "input.harmonic_traj_resid == 'car1'",
+                helpText(HTML("<small>Two residuals of one curve Δt hours apart correlate
+                               φ<sup>Δt</sup>. φ is estimated by profile likelihood
+                               (REML; by maximum likelihood together with τ when τ is
+                               estimated) and the model is refitted at φ&#770;; the tests treat
+                               φ as known. Estimating φ refits the model about 25 times (and
+                               repeats the τ profile when τ is estimated too).</small>")))
+            ),
             conditionalPanel(
               condition = "input.harmonic_trend_type != 'none'",
               helpText(HTML("<small>β<sub>0</sub> is the <b>intercept</b>: the midline at the

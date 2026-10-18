@@ -65,10 +65,13 @@ lin <- clock; for (i in 2:length(lin)) if (lin[i] < lin[i - 1]) lin[i:length(lin
 tt <- lin - lin[1]
 grp <- factor(rep(c("A", "B"), each = 14))
 T0 <- c(A = 10, B = 16)
+# residuals autocorrelated within a curve (continuous-time AR(1), 0.5 per hour),
+# so the AR(1) scenario exercises the whitened fit
+Lc <- t(chol(0.5^abs(outer(tt, tt, "-"))))
 raw <- t(vapply(seq_along(grp), function(i) {
   g <- as.character(grp[i])
   20 + rnorm(1, 0, 1.5) + (12 + rnorm(1, 0, 2)) * (1 - exp(-tt / T0[[g]])) +
-    5 * cos(2 * pi * (lin - 16) / 24) + rnorm(length(tt), 0, 1)
+    5 * cos(2 * pi * (lin - 16) / 24) + as.numeric(Lc %*% rnorm(length(tt), 0, 1))
 }, numeric(length(tt))))
 rownames(raw) <- sprintf("S%02d", seq_along(grp))
 raw[3, 1:2] <- NA                   # a participant missing the first two observations
@@ -160,6 +163,29 @@ testServer(server, {
          ff$sat$table[, c("A", "tau", "init_slope")], tf$sat$table[, c("A", "tau", "init_slope")])
     same("one tau vs per cell (likelihood ratio)", ff$sat$lrt$statistic, tf$sat$lrt$statistic)
   }
+
+  # ====================================================== mixed, AR(1) residuals
+  cat("\n-- mixed-effects with continuous-time AR(1) residuals, tau held ---------\n")
+  run(session, "mixed", 3, harmonic_traj_tau_mode = "fixed", harmonic_traj_tau = 12,
+      harmonic_tau_lo = 2, harmonic_tau_hi = 48, harmonic_traj_sat_cells = FALSE,
+      harmonic_traj_resid = "car1")
+  fa <- values$harmonic_model$traj
+  if (!isTRUE(fa$ok)) fail("the app's AR(1) fit failed:", fa$message %||% "")
+  if (isTRUE(fa$phi > 0)) ok(sprintf("the app estimated phi = %.3f per hour", fa$phi))
+  else fail("phi-hat is 0: the whitened fit is not exercised")
+  app_tests_a <- dance_traj_tests_table(harmonic_traj_tests())
+  sc <- run_script(generate_analysis_code(), "mixed_car1", c("traj_fit", "traj_tests"))
+  if (!is.null(sc)) {
+    tf <- sc$traj_fit
+    same("the residual autocorrelation phi", fa$residual_ar$phi, tf$residual_ar$phi)
+    same("its profile interval", fa$residual_ar$ci, tf$residual_ar$ci)
+    same("its test against independence", fa$residual_ar$lrt$statistic, tf$residual_ar$lrt$statistic)
+    same("the fixed effects at phi-hat", lme4::fixef(fa$model), lme4::fixef(tf$model))
+    sct <- dance_traj_tests_table(sc$traj_tests)
+    same("every design test's F, df and p",
+         app_tests_a[, c("F", "df2", "p")], sct[, c("F", "df2", "p")])
+  }
+  session$setInputs(harmonic_traj_resid = "independent")
 
   # ====================================================== two-stage
   cat("\n-- two-stage: tau within 2 to 48 h, groups, bootstrap, nested set ----\n")

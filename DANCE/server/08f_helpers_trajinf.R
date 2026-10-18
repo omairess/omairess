@@ -274,6 +274,9 @@ dance_traj_calibration <- function(fit, method_kind = "kr", block = "circadian")
                           fit$engine))
   if (isTRUE(fit$ar1) || !is.null(fit$residual_cor))
     out <- c(out, "it models a residual correlation structure")
+  if (isTRUE(fit$phi > 0) || !is.null(fit$residual_ar))
+    out <- c(out, paste("its residuals are a continuous-time AR(1) whose phi is estimated from the",
+                        "same data, and the degrees of freedom treat phi as known"))
   # BRIEF 6. The grid simulated the MAXIMAL random structure -- every cell it
   # cleared reported rung 1 in 100% of replicates, singular fits retained. A fit
   # that descended the ladder is a different model from the one measured, and it

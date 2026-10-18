@@ -547,6 +547,17 @@ dance_apa_report <- function(values, input, title = NULL) {
           " participants (", ff$spec$n_obs, " observations): the response was ",
           "regressed on ", harm_txt, des_txt, ", with random effects for each ",
           "participant on the same basis (", ff$re_label, ").")
+      if (!is.null(ff$residual_ar))
+        add(" Residuals within a curve were modelled as a continuous-time first-order ",
+            "autoregressive process, corr(e(t), e(t')) = \u03c6^|t \u2212 t'| with t in hours ",
+            "(CAR(1); Pinheiro & Bates, 2000), which accommodates unequal spacing and missing ",
+            "observations; \u03c6 was estimated by profile likelihood (",
+            if (identical(ff$residual_ar$method, "REML")) "REML" else "maximum likelihood, jointly with the time constant",
+            ") and the model refitted by REML at its estimate, with the fit computed on the ",
+            "whitened data (an exact transformation for this structure). Inference treats ",
+            "\u03c6 as known.")
+      else
+        add(" Residuals were modelled as independent, with one variance.")
       if (!is.null(hm$dv_name))
         add(" The dependent variable was ", hm$dv_name,
             if (!is.null(hm$dv_units)) paste0(" (", hm$dv_units, ")") else "", ".")
@@ -862,6 +873,15 @@ dance_apa_report <- function(values, input, title = NULL) {
             dance_apa_num(r2$conditional, 3, bounded = TRUE),
             " (fixed and random effects; Nakagawa & Schielzeth, 2013, with ",
             "Johnson's 2014 random-slope extension).")
+      ar <- ff$residual_ar
+      if (!is.null(ar))
+        add(" The residuals were autocorrelated within curves: \u03c6 = ",
+            dance_apa_num(ar$phi, 2, bounded = TRUE), " per hour, 95% profile interval [",
+            dance_apa_num(ar$ci[1], 2, bounded = TRUE), ", ",
+            dance_apa_num(ar$ci[2], 2, bounded = TRUE), "]; against independent residuals, ",
+            "\u03c7<sup>2</sup>(1) = ", dance_apa_num(ar$lrt$statistic, 2), ", ",
+            dance_apa_p(ar$lrt$p), " (half the \u03c7<sup>2</sup>(1) tail, as \u03c6 = 0 lies ",
+            "on the boundary).")
       blank()
       ce <- tryCatch(dance_traj_cell_equations(ff), error = function(e) NULL)
       if (!is.null(ce)) {
