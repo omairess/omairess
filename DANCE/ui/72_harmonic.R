@@ -187,6 +187,14 @@ ui_tab_harmonic <- tabItem(
                            choices = c("Independent" = "independent",
                                        "Autocorrelated: continuous-time AR(1), estimated" = "car1"),
                            selected = "independent"),
+              helpText(HTML("<small><b>Independent</b> is the usual model in sleep and
+                             circadian cosinor work, with the participant-level random effects
+                             carrying between-person differences. Use the <b>AR(1)</b> for intensive
+                             longitudinal sampling (readings close enough in time to share
+                             short-term fluctuations), or as a sensitivity analysis: it is the
+                             continuous-time form, so uneven or gapped sampling and missing
+                             observations are handled as they are, and on an even grid it is the
+                             ordinary AR(1).</small>")),
               conditionalPanel(
                 condition = "input.harmonic_traj_resid == 'car1'",
                 helpText(HTML("<small>Two residuals of one curve Δt hours apart correlate
