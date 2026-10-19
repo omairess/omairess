@@ -30,7 +30,7 @@
 # was fitted with. Anything the reset in server/00_state.R clears has settings
 # that belong here; a result without its settings is not a restored analysis.
 RESTORE_INPUTS <- list(
-  numeric  = c("n_basis", "n_basis_manual", "smooth_factor", "min_bound",
+  numeric  = c("n_basis", "n_basis_manual", "shift_model_df", "smooth_factor", "min_bound",
                "max_bound", "n_components", "n_permutations", "alpha_level",
                "harmonic_period", "n_harmonics", "n_clusters", "n_boot",
                "mixed_k_time", "mixed_k_subject", "mixed_period",

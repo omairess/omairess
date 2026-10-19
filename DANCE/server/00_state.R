@@ -139,6 +139,7 @@ dance_reset_analyses <- function(values, keep_smoothing = FALSE) {
     # fitted to values$data, so a re-smooth does not invalidate them but a new
     # dataset or a new variable selection does
     values$mixed_results <- NULL
+    values$shift_model <- NULL     # the warping tab's shift model, on the raw data
   }
   values$pca_results <- NULL
   values$warping_results <- NULL

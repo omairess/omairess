@@ -609,6 +609,96 @@
   })
 
   # ============================================================================
+  # HOW MUCH WARPING, AND IS IT NEEDED (server/05b_helpers_warpstats.R)
+  # ============================================================================
+  # the warping domain [0, 1] stands for the time axis of the data
+  warp_axis <- function() {
+    ax <- dance_smoothing_axis(input, values)
+    list(t = ax$t_full, span = diff(ax$t_rng),
+         unit = if (isTRUE(ax$using_real_time)) "h" else "time steps")
+  }
+  warp_ids <- function(n) {
+    ids <- values$subject_ids %||% rownames(values$data)
+    if (length(ids) != n) ids <- sprintf("S%03d", seq_len(n))
+    as.character(ids)
+  }
+
+  observeEvent(input$run_shift_model, {
+    req(values$data)
+    ax <- warp_axis()
+    withProgress(message = "Fitting the shift model...", value = 0.5, {
+      values$shift_model <- tryCatch(
+        dance_shift_model(values$data, ax$t, df = input$shift_model_df %||% 6,
+                          ids = warp_ids(nrow(values$data))),
+        error = function(e) list(ok = FALSE, message = conditionMessage(e)))
+      values$shift_model$unit <- ax$unit
+    })
+  })
+
+  output$shift_model_text <- renderText({
+    sm <- values$shift_model
+    if (is.null(sm)) return("Not fitted yet.")
+    dance_shift_model_text(sm, sm$unit %||% "h")
+  })
+
+  output$shift_model_table <- renderDT({
+    sm <- values$shift_model
+    if (!isTRUE(sm$ok)) return(NULL)
+    tb <- sm$shifts
+    names(tb) <- c("Participant", sprintf("Predicted shift (%s, positive = later)", sm$unit %||% "h"))
+    if (!is.null(values$group_labels) && length(values$group_labels) == nrow(values$data))
+      tb$Group <- as.character(values$group_labels)[match(tb$Participant, warp_ids(nrow(values$data)))]
+    datatable(tb, rownames = FALSE, options = list(pageLength = 10, scrollX = TRUE)) %>%
+      formatRound(2, 2)
+  })
+
+  output$warp_amp_phase <- renderText({
+    w <- values$warping_results
+    if (is.null(w) || is.null(values$fd_obj)) return("Run time-warped PCA first.")
+    dance_amp_phase_text(dance_amp_phase(values$fd_obj, w))
+  })
+
+  warp_params <- reactive({
+    w <- values$warping_results
+    req(w, values$fd_obj)
+    ax <- warp_axis()
+    dance_warp_estimates(w, warp_ids(ncol(values$fd_obj$coefs)), span = ax$span, unit = ax$unit)
+  })
+
+  output$warp_params_table <- renderDT({
+    wp <- warp_params()
+    tb <- wp
+    names(tb)[names(tb) == "participant"] <- "Participant"
+    names(tb)[names(tb) == "estimate"] <- attr(wp, "label")
+    names(tb)[names(tb) == "mean_displacement"] <- "Mean displacement of the time axis"
+    if (!is.null(values$group_labels) && length(values$group_labels) == nrow(tb))
+      tb$Group <- as.character(values$group_labels)
+    datatable(tb, rownames = FALSE, options = list(pageLength = 10, scrollX = TRUE)) %>%
+      formatRound(which(vapply(tb, is.numeric, logical(1))), 3)
+  })
+
+  output$warp_group_test <- renderText({
+    wp <- warp_params()
+    g <- values$group_labels
+    if (is.null(g) || length(g) != nrow(wp)) return("No groups to compare.")
+    gt <- dance_warp_group_test(wp$estimate, g, circular = isTRUE(attr(wp, "circular")),
+                                cycle = attr(wp, "span"))
+    if (!isTRUE(gt$ok)) return(gt$message)
+    paste0(
+      "Per group -- ", attr(wp, "label"), ":\n",
+      paste(sprintf("  %-14s n = %-3d mean %8.3f  SD %7.3f  median %8.3f",
+                    gt$groups$group, gt$groups$n, gt$groups$mean, gt$groups$sd, gt$groups$median),
+            collapse = "\n"), "\n\n",
+      paste(sprintf("  %-28s statistic %7.3f  df %-9s p %s", gt$tests$test, gt$tests$statistic,
+                    gt$tests$df, ifelse(gt$tests$p < 0.001, "< .001", sprintf("= %.3f", gt$tests$p))),
+            collapse = "\n"),
+      if (isTRUE(gt$circular)) "\n\n  Shifts on the cycle are angles: compared as circular means."
+      else "\n\n  Welch's ANOVA does not assume equal variances; Kruskal-Wallis compares ranks.",
+      if (isTRUE(values$warping_results$method == "linear_shift"))
+        "\n  These are the registration's estimates, so they carry its resolution (one grid step)." else "")
+  })
+
+  # ============================================================================
   # WARPING FIT STATISTICS OUTPUTS
   # ============================================================================
 

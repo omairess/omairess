@@ -199,19 +199,34 @@ linear_shift_alignment <- function(fd_obj, periodic = FALSE,
         if (lag_idx > n_circ / 2) lag_idx <- lag_idx - n_circ
         shifts[i] <- -lag_idx / n_circ
       } else {
-        # Standard cross-correlation
-        ccf_result <- ccf(curves[,i], ref_curve, lag.max = floor(n_time/4), 
-                          plot = FALSE, na.action = na.pass)
-        if(!is.null(ccf_result$acf) && length(ccf_result$acf) > 0) {
-          best_lag <- ccf_result$lag[which.max(ccf_result$acf)]
-          # AUDIT (P0.8): was  best_lag / n_time * 0.1  -- the estimated lag
-          # was multiplied by 0.1 here and by a further 0.5 below, so the warp
-          # carried 5% of the shift it had just measured. Neither constant was
-          # justified anywhere. The measured lag is now used as measured.
-          shifts[i] <- best_lag / n_time
-        } else {
-          shifts[i] <- 0
-        }
+        # The lag at which the curve best matches the reference: for each lag
+        # k (in grid steps, up to a quarter of the recording either way), the
+        # correlation between x[t + k] and ref[t] over the times where both
+        # exist. A curve running k steps LATER than the reference matches at
+        # +k; the warp is h(t) = t - s and the registered curve x(h(t)), so
+        # aligning it needs s = -k steps.
+        #
+        # AUDIT. This used ccf(), with two defects. ccf divides every lag's sum
+        # by the FULL series length, which pulls the estimate towards lag 0 --
+        # strongly for curves that rise across the recording: a sigmoid two
+        # steps late scored 0.96 at lag 0 and 0.83 at its true lag, so its
+        # shift came out 0. And the shift was applied with the wrong sign
+        # (s = +k), moving every curve the wrong way and doubling its
+        # misalignment: identical peaks at 0.4, 0.5 and 0.6 came out at 0.4,
+        # 0.6 and 0.8. (Before that, P0.8 removed a 0.05 factor, and the step
+        # was 1 / n_time where a grid step is 1 / (n_time - 1).) The overlap
+        # correlation ignores level differences, as the cross-correlation
+        # meant to; ties go to the smallest |k|.
+        L <- floor(n_time / 4)
+        lags <- c(0L, as.vector(rbind(seq_len(L), -seq_len(L))))   # 0, 1, -1, 2, -2, ...
+        r <- vapply(lags, function(k) {
+          idx <- if (k >= 0) seq_len(n_time - k) else seq.int(1L - k, n_time)
+          xv <- curves[idx + k, i]; rv <- ref_curve[idx]
+          ok <- is.finite(xv) & is.finite(rv)
+          if (sum(ok) < 3L || stats::sd(xv[ok]) == 0 || stats::sd(rv[ok]) == 0) return(NA_real_)
+          stats::cor(xv[ok], rv[ok])
+        }, numeric(1))
+        shifts[i] <- if (all(is.na(r))) 0 else -lags[which.max(r)] / (n_time - 1)
       }
       
       # ---- AUDIT (P0.8): the warp is the shift, and nothing else -----------

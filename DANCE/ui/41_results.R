@@ -99,6 +99,37 @@ ui_tab_results <- tabItem(
                 )
               ),
               hr(),
+              h4("Is warping needed? (shape-invariant model)"),
+              p(HTML(paste(
+                "There is no GCV for how much to warp: every registration criterion improves",
+                "as the warps get more flexible. What can be estimated is whether participants'",
+                "curves differ in <b>timing</b> at all, and by how much. This fits one common",
+                "curve to everyone, moved up or down and <b>shifted in time</b> per participant",
+                "(nlme, maximum likelihood), estimates the spread of the shifts and tests it",
+                "against no shifts. It reads the raw data, so it does not depend on the",
+                "smoothing or on the warping method below. For a 24 h rhythm the cosinor's",
+                "per-participant acrophase is the model-based answer instead."))),
+              fluidRow(
+                column(4, numericInput("shift_model_df", "Flexibility of the common curve (spline df):",
+                                       value = 6, min = 3, max = 12, step = 1)),
+                column(4, br(), actionButton("run_shift_model", "Fit the shift model", class = "btn-primary"))
+              ),
+              verbatimTextOutput("shift_model_text"),
+              DTOutput("shift_model_table"),
+              hr(),
+              h4("Amplitude and phase"),
+              verbatimTextOutput("warp_amp_phase"),
+              hr(),
+              h4("Each participant's warp, compared between groups"),
+              p(HTML(paste(
+                "The registration's estimate for each participant in the data's time units",
+                "(the shift, the warp parameter, or the mean displacement of the time axis).",
+                "Warping removes these differences from the curves analysed afterwards, so",
+                "they are reported here, and compared between the groups, instead of",
+                "disappearing."))),
+              DTOutput("warp_params_table"),
+              verbatimTextOutput("warp_group_test"),
+              hr(),
               h4("Per-Subject Transformation Diagnostics"),
               p(HTML(paste(
                 "How far registration moved each subject's curve. <b>R&sup2;, RMSE",

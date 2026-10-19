@@ -40,7 +40,11 @@ mono <- apply(r1$warp_functions, 2, function(w) all(diff(w) > 0))
 cat(sprintf("  monotone warps: %d of %d\n", sum(mono), length(mono)))
 
 cat("\n=== RECOVERY OF THE KNOWN SHIFT ===\n")
-est <- r1$shifts
+# The curves are sin(2 pi (t - true_shift)): curve i runs true_shift LATE. The
+# warp is h(t) = t - s, so aligning it needs s = -true_shift. (This test used to
+# require s = +true_shift -- the sign the non-periodic branch had, which moved
+# every curve AWAY from the reference; the sign is now the one that aligns.)
+est <- -r1$shifts
 cat(sprintf("  correlation(estimated, true) = %.3f\n", cor(est, true_shift)))
 cat(sprintf("  slope of est on true         = %.3f  (1.0 = correct scale)\n",
             coef(lm(est ~ true_shift))[2]))

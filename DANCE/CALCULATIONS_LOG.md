@@ -602,3 +602,60 @@ the registration kernels already did). Time-warped PCA used to put them on
 min(20, n - 2, max(4, n / 3)) cubic B-splines of its own -- 6 functions on 18
 time points, a smoothing step nobody asked for -- and fANOVA and its pairwise
 tests on min(20, n - 2), when the kernel returned no fd object.
+
+## 10. How much warping, and is it needed?
+
+There is no GCV for the amount of warping: every registration criterion
+improves as the warps get more flexible, down to absorbing amplitude
+differences ("pinching"); Marron, Ramsay, Sangalli & Srivastava (2015,
+*Statistical Science*) leave the choice to the scientific question. Three
+things can be estimated, and the time-warped PCA results now report them
+(server/05b_helpers_warpstats.R).
+
+**Is warping needed? -- the shape-invariant model** (`dance_shift_model`). One
+common curve for everyone, moved up or down and shifted in time per
+participant: y_ij = b0 + a_i + f(t_ij - s_i) + e_ij, a_i ~ N(0, sd_a^2),
+s_i ~ N(0, sd_s^2), f a natural cubic spline (df set on screen, default 6;
+it continues as a straight line beyond the data, where a shifted time can
+land). Self-modelling regression (Lawton, Sylvestre & Maggio 1972; Kneip &
+Gasser 1988; Brumback & Lindstrom 2004). Fitted by nlme, maximum likelihood,
+on the RAW data in the data's time units; the model without shifts is linear
+and fitted exactly by lme. Reported: sd_s with its 95% interval
+(nlme::intervals), the likelihood ratio against no shifts (sd_s = 0 is on the
+boundary: half the chi-square(1) tail), AIC and BIC, and each participant's
+predicted shift (a random-effect prediction, shrunk towards zero).
+Simulated (24 participants, 18 hourly points, a rising sigmoid, 200 data sets
+each): with no shifts the test rejected 3.1% at .05 (fitted 193/200; the rest
+failed with the spread at zero, which the message says); with sd_s = 0.75 h it
+rejected 85%, mean estimate 0.71 h. Shift only -- no stretching of time --
+and independent residuals.
+
+**Amplitude and phase** (`dance_amp_phase`): Kneip & Ramsay's (2008, *JASA*)
+decomposition, computed by fda::AmpPhaseDecomp from the curves before and after
+registration and the warping functions (as straight lines through the warp
+values; for a translation the identity, whose derivative -- all fda reads --
+is the translation's). It needs warps that map the recording onto itself, so
+it is reported for parametric and landmark warps and periodic shifts, and
+refused for a shift of a non-periodic recording, where it is not a
+decomposition (on test data it attributed -107% of the variation to phase).
+
+**Each participant's warp, by group** (`dance_warp_estimates`,
+`dance_warp_group_test`): the shift in the data's time units (positive = the
+participant ran later than the reference), the parametric alpha with the mean
+displacement of the time axis, or that displacement alone (landmark). Groups
+compared by Welch's one-way ANOVA (stats::oneway.test) and Kruskal-Wallis
+(stats::kruskal.test); periodic shifts are angles, compared by the
+Watson-Williams test already used for acrophases.
+
+**Fixed: the non-periodic linear shift registration.** Its lag came from ccf(),
+which divides every lag's sum by the full series length and so pulls the
+estimate towards zero -- strongly for curves that rise across the recording (a
+sigmoid two steps late scored 0.96 at lag 0, 0.83 at its true lag) -- and the
+shift was applied with the wrong sign, moving every curve away from the
+reference: identical peaks at 0.4, 0.5 and 0.6 registered at 0.4, 0.6 and 0.8.
+It also divided by n_time where a grid step is 1/(n_time - 1). Now: the
+correlation of the curve with the reference over the times both cover, at each
+lag up to a quarter of the recording, the best lag applied with the sign that
+aligns, ties to the smallest lag. Time-warped PCA and fANOVA runs that used
+the non-periodic linear shift before this fix registered the curves wrongly.
+The periodic shift was correct.
