@@ -361,6 +361,38 @@ dance_apa_report <- function(values, input, title = NULL) {
           dance_apa_num(1 / (ng - 1), 4, bounded = TRUE),
           " of the observed interval; differences smaller than that are not ",
           "resolvable and are not interpreted.")
+    ap <- tryCatch(dance_amp_phase(values$fd_obj, wr), error = function(e) NULL)
+    if (isTRUE(ap$ok))
+      add(" How the registration divided the variation between amplitude and ",
+          "phase was quantified by the decomposition of Kneip and Ramsay (2008), ",
+          "computed with fda::AmpPhaseDecomp.")
+    if (!is.null(values$group_labels) && nlevels(droplevels(factor(values$group_labels))) >= 2)
+      add(" Each participant's registration estimate (",
+          if (identical(wr$method, "linear_shift")) "the time shift"
+          else if (identical(wr$method, "parametric")) "the warp parameter"
+          else "the mean displacement of the time axis",
+          ") was compared between groups ",
+          if (identical(wr$method, "linear_shift") && identical(wr$boundary, "periodic wrap"))
+            "with the Watson-Williams test, the shifts being angles on the cycle."
+          else "with Welch's one-way ANOVA and the Kruskal-Wallis test, so that the timing differences registration removes from the curves are reported rather than discarded.")
+    blank()
+  }
+
+  sm <- values$shift_model
+  if (isTRUE(sm$ok)) {
+    add("**Timing between participants.** Whether participants' curves differed ",
+        "in timing was tested with a shape-invariant (self-modelling) mixed model ",
+        "(Lawton, Sylvestre, & Maggio, 1972; Kneip & Gasser, 1988): every curve was ",
+        "modelled as one common curve -- a natural cubic spline with ", sm$df,
+        " degrees of freedom -- moved up or down and shifted in time by ",
+        "participant-specific normal random effects, and fitted by maximum ",
+        "likelihood (nlme) to the ", sm$n_obs, " raw observations of ",
+        sm$n_participants, " participants. The standard deviation of the shifts ",
+        "was estimated with a 95% confidence interval and tested against the same ",
+        "model without shifts by a likelihood-ratio test whose *p* value is half ",
+        "the &chi;<sup>2</sup>(1) tail, because a standard deviation of zero lies on ",
+        "the boundary of the parameter space (Self & Liang, 1987). The model allows ",
+        "a shift of time only, not a stretching, and treats residuals as independent.")
     blank()
   }
 
@@ -1386,8 +1418,37 @@ dance_apa_report <- function(values, input, title = NULL) {
           "than aligning phase &mdash; near a peak, a small move in time changes ",
           "the value a great deal. Inspect the registered curves before ",
           "reporting this as evidence of phase variation.")
+    ap <- tryCatch(dance_amp_phase(values$fd_obj, wr), error = function(e) NULL)
+    if (isTRUE(ap$ok))
+      add(" In the amplitude/phase decomposition (Kneip & Ramsay, 2008), the ",
+          "registration attributed ", dance_apa_num(100 * ap$RSQR, 1),
+          "% of the variation to phase (MS<sub>amplitude</sub> = ",
+          dance_apa_num(ap$MS.amp, 3), ", MS<sub>phase</sub> = ",
+          dance_apa_num(ap$MS.pha, 3), ", *C* = ", dance_apa_num(ap$C, 3), ").")
+    g_lab <- values$group_labels
+    if (!is.null(g_lab) && !is.null(values$fd_obj) && length(g_lab) == ncol(values$fd_obj$coefs)) {
+      ax <- dance_smoothing_axis(input, values)
+      unit <- if (isTRUE(ax$using_real_time)) "h" else "time steps"
+      ids <- values$subject_ids %||% rownames(values$data)
+      if (length(ids) != length(g_lab)) ids <- seq_along(g_lab)
+      we <- dance_warp_estimates(wr, as.character(ids), span = diff(ax$t_rng), unit = unit)
+      gt <- dance_warp_group_test(we$estimate, g_lab, circular = isTRUE(attr(we, "circular")),
+                                  cycle = attr(we, "span"))
+      if (isTRUE(gt$ok)) {
+        add(" By group, the ", attr(we, "label"), " averaged ",
+            paste(sprintf("%s for %s (*SD* = %s, *n* = %d)", dance_apa_num(gt$groups$mean, 2),
+                          gt$groups$group, dance_apa_num(gt$groups$sd, 2), gt$groups$n),
+                  collapse = "; "), ". ")
+        tt <- gt$tests
+        add(paste(sprintf("%s, %s(%s) = %s, %s", tt$test,
+                          ifelse(grepl("Kruskal", tt$test), "*H*", "*F*"), tt$df,
+                          dance_apa_num(tt$statistic, 2),
+                          vapply(tt$p, dance_apa_p, character(1))),
+                  collapse = "; "), ".")
+      }
+    }
     blank()
-    add("*What these numbers do not establish.* This is **not** an ",
+    add("*What these numbers do not establish.* The dispersion reduction is **not** an ",
         "amplitude/phase variance decomposition: *V*<sub>pre</sub> and ",
         "*V*<sub>post</sub> are two dispersions of the same curves, before and ",
         "after registration, and are not orthogonal components of a total. No ",
@@ -1395,6 +1456,24 @@ dance_apa_report <- function(values, input, title = NULL) {
         "the observed curves under a candidate registration is specified and ",
         "there is therefore no likelihood to penalise. Do not report the ",
         "reduction as \"variance explained by phase\".")
+  }
+
+  if (isTRUE(sm$ok)) {
+    any_result <- TRUE
+    h(3, "Timing between participants")
+    u <- sm$unit %||% "h"
+    add("In the shape-invariant model, participants' time shifts had a standard ",
+        "deviation of ", dance_apa_num(sm$sd_shift, 2), " ", u,
+        if (all(is.finite(sm$sd_shift_ci)))
+          paste0(" (95% CI [", dance_apa_num(sm$sd_shift_ci[1], 2), ", ",
+                 dance_apa_num(sm$sd_shift_ci[2], 2), "])") else "",
+        "; against a model without shifts, &chi;<sup>2</sup>(1) = ",
+        dance_apa_num(sm$lrt$statistic, 2), ", ", dance_apa_p(sm$lrt$p),
+        " (AIC ", dance_apa_num(sm$AIC[["with_shift"]], 1), " vs. ",
+        dance_apa_num(sm$AIC[["without_shift"]], 1), "; BIC ",
+        dance_apa_num(sm$BIC[["with_shift"]], 1), " vs. ",
+        dance_apa_num(sm$BIC[["without_shift"]], 1), ").")
+    blank()
   }
 
   if (!any_result) {

@@ -1035,6 +1035,45 @@
       add("# and no second basis rule to keep in step with the first.")
       add("reg_fd <- warp_result$regfd")
       add("")
+
+      # each participant's warp, by group, and the amplitude/phase decomposition
+      # -- the same functions the app reports them with
+      ax <- dance_smoothing_axis(input, values)
+      add("# Each participant's registration estimate, in the data's time units")
+      emit_kernel("dance_warp_estimates")
+      add("warp_ids <- if (!is.null(rownames(data_matrix))) rownames(data_matrix) else seq_len(nrow(data_matrix))")
+      add(sprintf("warp_est <- dance_warp_estimates(warp_result, as.character(warp_ids), span = %s, unit = \"%s\")",
+                  format(diff(ax$t_rng), digits = 15), if (isTRUE(ax$using_real_time)) "h" else "time steps"))
+      add("print(warp_est)")
+      if (!is.null(values$group_labels)) {
+        emit_kernel("dance_warp_group_test")
+        add("print(dance_warp_group_test(warp_est$estimate, group_labels,")
+        add("                            circular = isTRUE(attr(warp_est, 'circular')), cycle = attr(warp_est, 'span')))")
+      }
+      add("# Amplitude/phase decomposition (Kneip & Ramsay 2008), where it is defined")
+      emit_kernel("dance_amp_phase")
+      add("print(dance_amp_phase(fd_obj, warp_result)[c('ok', 'MS.amp', 'MS.pha', 'RSQR', 'C', 'message')])")
+      add("")
+    }
+
+    # ---- SECTION 4b: TIMING BETWEEN PARTICIPANTS (shape-invariant model) ----
+    sm <- values$shift_model
+    if (isTRUE(sm$ok)) {
+      ax <- dance_smoothing_axis(input, values)
+      add("# -----------------------------------------------------------------------------")
+      add("# 4b. TIMING BETWEEN PARTICIPANTS: SHAPE-INVARIANT MODEL")
+      add("# -----------------------------------------------------------------------------")
+      add("# One common curve (natural spline), moved up or down and shifted in time per")
+      add("# participant (nlme, ML); the SD of the shifts, and the likelihood ratio against")
+      add("# no shifts (half the chi-square(1) tail: SD = 0 is on the boundary).")
+      emit_kernel("dance_shift_model")
+      add("shift_times <- c(", paste(format(ax$t_full, digits = 15), collapse = ", "), ")   # ",
+          if (isTRUE(ax$using_real_time)) "hours" else "time steps")
+      add("shift_fit <- dance_shift_model(data_matrix, shift_times, df = ", sm$df, ")")
+      add("print(unlist(shift_fit[c('sd_shift', 'sd_shift_ci')]))")
+      add("print(unlist(shift_fit$lrt)); print(shift_fit$AIC); print(shift_fit$BIC)")
+      add("print(shift_fit$shifts)")
+      add("")
     }
 
     # ---- SECTION 5: PCA ----

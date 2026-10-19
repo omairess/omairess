@@ -659,3 +659,14 @@ lag up to a quarter of the recording, the best lag applied with the sign that
 aligns, ties to the smallest lag. Time-warped PCA and fANOVA runs that used
 the non-periodic linear shift before this fix registered the curves wrongly.
 The periodic shift was correct.
+
+**In the APA report and the exported script.** Methods: the shift model (as
+above), the group comparison of the per-participant registration estimates,
+and the amplitude/phase decomposition where it is defined. Results: SD(s) with
+its 95% interval, the likelihood ratio, AIC/BIC; per-group means and SDs of
+the estimates with Welch's F, Kruskal-Wallis H (or Watson-Williams), and the
+decomposition. The script writes out the same functions and calls them with
+the run's settings (the time axis as numbers); `tests/warp_report_export_test.R`
+runs it in a clean `Rscript --vanilla` session and finds SD(s), its interval,
+the test, the predicted shifts and every participant's warp identical to the
+app's.
