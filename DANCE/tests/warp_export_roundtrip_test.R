@@ -43,6 +43,7 @@ kernels <- c("linear_shift_alignment", "parametric_alignment",
 
 # ---- 1. the shipped kernel ---------------------------------------------------
 kern <- new.env(parent = globalenv())
+source("server/04_helpers_fd.R", local = kern)    # dance_refd()
 source("server/05_helpers_warp.R", local = kern)
 for (f in kernels)
   chk(exists(f, envir = kern, inherits = FALSE),

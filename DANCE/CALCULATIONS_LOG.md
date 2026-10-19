@@ -595,6 +595,10 @@ participant's own mean. This applies to that representation only: the raw matrix
 keeps its NAs. The APA report, the smoothing summary and the exported script say
 so (the script previously built no curves at all for a no-smoothing run).
 
-Not changed here: time-warped PCA and fANOVA on registered curves re-represent
-them on their own cubic bases (6 to 20 functions), which is a smoothing step of
-its own.
+The same holds after time warping. The registered curves go back onto the
+curves' own basis through one helper (`dance_refd`): straight lines through the
+registered values when nothing was smoothed, the smoothing basis otherwise (as
+the registration kernels already did). Time-warped PCA used to put them on
+min(20, n - 2, max(4, n / 3)) cubic B-splines of its own -- 6 functions on 18
+time points, a smoothing step nobody asked for -- and fANOVA and its pairwise
+tests on min(20, n - 2), when the kernel returned no fd object.

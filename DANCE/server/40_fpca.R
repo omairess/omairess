@@ -177,11 +177,11 @@
           values$pca_results <- pca.fd(warp_fd$regfd, nharm = n_components)
         } else if(!is.null(warp_fd$registered_curves) && ncol(warp_fd$registered_curves) > 0) {
           cat("Creating fd from registered curves\n")
-          # Create fd from registered curves
-          # Use lambda=0: registered curves are already processed, just need fd representation
-          reg_basis <- create.bspline.basis(c(0, 1), nbasis = min(20, n-2, max(4, floor(n/3))))
-          reg_fd <- smooth.basis(time_grid, warp_fd$registered_curves, 
-                                 fdPar(reg_basis, 2, 0))$fd
+          # back onto the curves' own basis: straight lines through the
+          # registered values when nothing was smoothed (it used to be its own
+          # min(20, n - 2, max(4, n / 3)) cubic B-splines -- 6 on 18 points --
+          # a smoothing step nobody asked for)
+          reg_fd <- dance_refd(warp_fd$registered_curves, time_grid, values$fd_obj$basis)
           values$pca_results <- pca.fd(reg_fd, nharm = n_components)
         } else {
           cat("Warning: No valid warped data, using original fd_obj\n")

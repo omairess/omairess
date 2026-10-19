@@ -16,6 +16,7 @@ app <- if (dir.exists("server")) "." else "DANCE"
 # server/05_helpers_warp.R now, which the app, the exported script and this test
 # all load the same way -- so there is one definition and no extraction step.
 env <- new.env(parent = globalenv())
+source(file.path(app, "server/04_helpers_fd.R"), local = env)    # dance_refd()
 source(file.path(app, "server/05_helpers_warp.R"), local = env)
 
 # curves with a KNOWN phase shift

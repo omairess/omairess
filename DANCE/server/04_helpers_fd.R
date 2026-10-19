@@ -63,6 +63,22 @@ dance_fd_no_smoothing <- function(data_mat, argvals = NULL) {
   fd(cf, dance_interpolating_basis(argvals))
 }
 
+# Curves evaluated on a grid (time x curves), put back into an fd object on
+# `basis` -- registered curves after time warping. On the straight-line basis
+# of an unsmoothed run they are joined by straight lines through the grid
+# values (no fitting, as above); on a smoothing basis they are projected onto
+# it, as before. Every warped-curve path goes through here, so a run without a
+# smoothing step is never smoothed after warping.
+dance_is_straight_line_basis <- function(basis)
+  identical(basis$type, "bspline") && basis$nbasis - length(basis$params) == 2L
+
+dance_refd <- function(curves, time_points, basis = NULL) {
+  curves <- as.matrix(curves)
+  if (is.null(basis) || dance_is_straight_line_basis(basis))
+    return(dance_fd_no_smoothing(t(curves), time_points))
+  smooth.basis(time_points, curves, basis)$fd
+}
+
 # Used by the analysis tabs when values$fd_obj does not exist because the user
 # went straight to an analysis. Builds the interpolating representation and
 # SAYS SO, rather than quietly picking a smoothing basis on their behalf.

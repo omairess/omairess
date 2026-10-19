@@ -286,7 +286,7 @@ linear_shift_alignment <- function(fd_obj, periodic = FALSE,
     
     # Create fd objects for output
     basis <- fd_obj$basis
-    reg_smooth <- smooth.basis(time_points, registered_curves, basis)
+    reg_smooth <- list(fd = dance_refd(registered_curves, time_points, basis))
     
     # Create warping function fd objects
     warp_basis <- create.bspline.basis(rangeval = c(0, 1), nbasis = 10)
@@ -482,7 +482,7 @@ parametric_alignment <- function(fd_obj, family = "power",
     
     # Create fd objects
     basis <- fd_obj$basis
-    reg_smooth <- smooth.basis(time_points, registered_curves, basis)
+    reg_smooth <- list(fd = dance_refd(registered_curves, time_points, basis))
     
     return(list(
       regfd = reg_smooth$fd,
@@ -667,7 +667,7 @@ landmark_alignment_simple <- function(fd_obj, landmarks, time_points,
     }
     
     basis <- fd_obj$basis
-    reg_smooth <- smooth.basis(time_points, registered_curves, basis)
+    reg_smooth <- list(fd = dance_refd(registered_curves, time_points, basis))
     
     return(list(
       regfd = reg_smooth$fd,

@@ -25,7 +25,7 @@ test_that("the old cubic representation is what produced the swings (base R B-sp
   expect_lt(min(f), 0); expect_gt(max(f), 75)
   # order 2 with a knot at every observation: each function is 1 at its own
   # time point and 0 at the others, so the coefficients are the data
-  expect_equal(splines::splineDesign(c(0, x, 1), x, ord = 2), diag(n), ignore_attr = TRUE)
+  expect_equal(unname(splines::splineDesign(c(0, x, 1), x, ord = 2)), diag(n))
 })
 
 test_that("no smoothing: the curves and their mean are the data joined by straight lines", {
@@ -41,7 +41,7 @@ test_that("no smoothing: the curves and their mean are the data joined by straig
   # at the observations: the data (a gap read off the line between neighbours)
   Yf <- Y
   Yf[3, 5] <- mean(Y[3, c(4, 6)]); Yf[7, 1:2] <- Y[7, 3]; Yf[9, n] <- Y[9, n - 1]
-  expect_equal(t(eval.fd(x, fdo)), Yf, ignore_attr = TRUE)
+  expect_equal(unname(t(eval.fd(x, fdo))), unname(Yf))
   # between them: straight lines, so the mean curve is the line through the
   # column means and never leaves their range
   g <- seq(0, 1, length.out = 681)
@@ -51,4 +51,44 @@ test_that("no smoothing: the curves and their mean are the data joined by straig
   # fPCA runs on it, and its mean is the same curve
   pc <- pca.fd(fdo, nharm = 3)
   expect_equal(as.numeric(eval.fd(g, pc$meanfd)), m, tolerance = 1e-8)
+})
+
+test_that("warped curves of an unsmoothed run go back onto straight lines", {
+  # without fda: stand-ins record what the helper builds
+  e <- new.env()
+  e$`%||%` <- function(a, b) if (is.null(a)) b else a
+  e$create.bspline.basis <- function(rangeval, breaks, norder)
+    list(type = "bspline", rangeval = rangeval, nbasis = length(breaks) + norder - 2,
+         params = breaks[-c(1, length(breaks))])
+  e$fd <- function(coef, basisobj) list(coefs = coef, basis = basisobj)
+  e$smooth.basis <- function(...) stop("a smoothing fit was attempted")
+  sys.source(file.path(app_dir, "server/04_helpers_fd.R"), envir = e)
+  x <- seq(0, 1, length.out = 18)
+  line_basis <- e$dance_interpolating_basis(x)
+  expect_true(e$dance_is_straight_line_basis(line_basis))
+  expect_false(e$dance_is_straight_line_basis(list(type = "bspline", nbasis = 18, params = 1:14)))
+  expect_false(e$dance_is_straight_line_basis(list(type = "fourier", nbasis = 13, params = 1)))
+  R <- matrix(seq_len(18 * 3), 18, 3)            # time x curves, as the warp kernels hold them
+  r <- e$dance_refd(R, x, line_basis)
+  expect_equal(unname(r$coefs), unname(R))
+  expect_true(e$dance_is_straight_line_basis(r$basis))
+  # a smoothing basis is projected onto, as before
+  expect_error(e$dance_refd(R, x, list(type = "bspline", nbasis = 12, params = 1:8)),
+               "a smoothing fit was attempted")
+})
+
+test_that("time-warped curves of an unsmoothed run are straight lines through the registered values", {
+  skip_if_not_installed("fda")
+  suppressPackageStartupMessages(library(fda))
+  e <- new.env(parent = globalenv())
+  sys.source(file.path(app_dir, "server/04_helpers_fd.R"), envir = e)
+  sys.source(file.path(app_dir, "server/05_helpers_warp.R"), envir = e)
+  set.seed(8)
+  x <- seq(0, 1, length.out = 18)
+  Y <- t(vapply(1:12, function(i) 30 + 20 * sin(2 * pi * (x - runif(1, -0.05, 0.05))) + rnorm(18, 0, 3),
+                numeric(18)))
+  fdo <- e$dance_fd_no_smoothing(Y, x)
+  w <- e$linear_shift_alignment(fdo, time_points = x)
+  expect_true(e$dance_is_straight_line_basis(w$regfd$basis))
+  expect_equal(unname(eval.fd(x, w$regfd)), unname(as.matrix(w$registered_curves)), tolerance = 1e-10)
 })

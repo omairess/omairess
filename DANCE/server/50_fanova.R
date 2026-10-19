@@ -1180,10 +1180,10 @@
           if(is.null(time_points)) {
             time_points <- seq(0, 1, length.out = n_time)
           }
-          basis <- create.bspline.basis(rangeval = c(0, 1), nbasis = min(20, n_time-2))
-          # Use lambda=0: registered curves are already processed, just need fd representation
-          fd_to_use <- smooth.basis(time_points, values$warping_results$registered_curves, 
-                                    fdPar(basis, 2, 0))$fd
+          # back onto the curves' own basis (straight lines when nothing was
+          # smoothed), not min(20, n_time - 2) cubic B-splines of its own
+          fd_to_use <- dance_refd(values$warping_results$registered_curves, time_points,
+                                  values$fd_obj$basis)
           used_warped <- TRUE
           showNotification("Using time-warped curves for FANOVA", type = "message", duration = 3)
         } else {
@@ -2154,10 +2154,10 @@
           if(is.null(time_points)) {
             time_points <- seq(0, 1, length.out = n_time)
           }
-          basis <- create.bspline.basis(rangeval = c(0, 1), nbasis = min(20, n_time-2))
-          # Use lambda=0: registered curves already processed, just need fd representation
-          fd_to_use <- smooth.basis(time_points, values$warping_results$registered_curves, 
-                                    fdPar(basis, 2, 0))$fd
+          # back onto the curves' own basis (straight lines when nothing was
+          # smoothed), not min(20, n_time - 2) cubic B-splines of its own
+          fd_to_use <- dance_refd(values$warping_results$registered_curves, time_points,
+                                  values$fd_obj$basis)
         }
       }
       

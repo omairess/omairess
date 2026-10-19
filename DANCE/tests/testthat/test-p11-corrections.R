@@ -39,6 +39,7 @@ code_of <- function(f) {
 }
 kern_env <- function() {
   e <- new.env(parent = globalenv())
+  source(file.path(app_dir, "server/04_helpers_fd.R"), local = e)    # dance_refd()
   source(file.path(app_dir, "server/05_helpers_warp.R"), local = e)
   e
 }
