@@ -116,31 +116,26 @@ observeEvent(input$apply_smooth, {
       # ---- raw data, no smoothing -------------------------------------------
       values$smooth_data <- values$data
 
-      # fd_obj still has to exist for the fPCA family; NAs are mean-imputed
-      # for that representation only (values$smooth_data keeps the real NAs).
-      temp_data <- values$data
-      for(i in 1:n_subjects) {
-        na_idx <- is.na(temp_data[i, ])
-        if(any(na_idx)) {
-          temp_data[i, na_idx] <- mean(temp_data[i, !na_idx], na.rm = TRUE)
-        }
-      }
-      # "No smoothing" now means exactly that: an interpolating basis, so the
-      # fd object passes through the observed values. WaPaa built this on
+      # fd_obj still has to exist for the fPCA family: the data points joined by
+      # straight lines (server/04_helpers_fd.R), a missing value read off the
+      # line between its neighbours for that representation only
+      # (values$smooth_data keeps the real NAs). WaPaa built this on
       # min(20, n_time - 2) basis functions, which on 24 hourly columns is a
       # real smooth applied under a control labelled "no smoothing".
-      values$fd_obj <- dance_fd_no_smoothing(temp_data, time_points_01)
+      values$fd_obj <- dance_fd_no_smoothing(values$data, time_points_01)
       values$smooth_fit_metrics <- list(
         method        = "none",
-        n_basis       = ncol(temp_data),
-        basis_type    = "bspline (interpolating)",
+        n_basis       = ncol(values$data),
+        basis_type    = "bspline order 2 (the data points joined by straight lines)",
         time_axis     = if(using_real_time) "real clock time (hours)" else "column index",
         fill_headline = dance_fill_headline(values$fill_status),
-        extrapolation = "mean-imputed for the curve representation only; values$smooth_data keeps the real NAs"
+        extrapolation = paste("missing values read off the straight line between the curve's neighbouring",
+                              "observations (the nearest observation before the first or after the last),",
+                              "for the curve representation only; values$smooth_data keeps the real NAs")
       )
       values$smoothing_avg_metrics <- NULL
       showNotification(
-        "Using raw data (no smoothing): curves are represented by an interpolating basis and pass through your data points.",
+        "Using raw data (no smoothing): each curve is your data points joined by straight lines.",
         type = "message", duration = 8)
 
     } else {

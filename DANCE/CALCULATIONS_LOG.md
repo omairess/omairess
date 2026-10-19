@@ -569,3 +569,32 @@ failed outright. The skipped rungs are now recorded as "not refitted
 (structure carried over)" in the fit's log. (3) phi grid points that do not
 converge are left out of the profile and counted in the residual statement,
 as for tau.
+
+## 9. "No smoothing" is the data points joined by straight lines
+
+The fPCA family (fPCA, time-warped PCA, fANOVA, clustering) needs an fd object
+even when Data Preprocessing is set to "Raw data (no smoothing)", or when no
+smoothing step was run. That object was a cubic B-spline with as many functions
+as time points on fda's default, EVENLY spaced knots
+(`create.bspline.basis(nbasis = n_time, norder = 4)`). It passed through every
+observation, but its knots did not sit at the observation times, and between
+them it swung far outside the data -- worst next to the first and last
+observations. On 18 hourly VAS sleepiness ratings whose means run from 10 to 65,
+the fPCA mean curve ran from -2 to 79 (reproduced with base R's B-splines in
+`tests/testthat/test-fd-no-smoothing.R`), so it did not look like the mean of the
+raw data.
+
+Now (`dance_fd_no_smoothing`, server/04_helpers_fd.R): an order-2 B-spline basis
+with a knot at every observation time. Each function is 1 at its own time point
+and 0 at the others, so the coefficients ARE the observed values -- no fitting
+step -- and each curve is the line plot of its data; the mean curve is the line
+through the column means. A missing value, which an fd object cannot carry, is
+read off the straight line between the curve's neighbouring observations (held at
+the nearest observation before the first or after the last); it used to be the
+participant's own mean. This applies to that representation only: the raw matrix
+keeps its NAs. The APA report, the smoothing summary and the exported script say
+so (the script previously built no curves at all for a no-smoothing run).
+
+Not changed here: time-warped PCA and fANOVA on registered curves re-represent
+them on their own cubic bases (6 to 20 functions), which is a smoothing step of
+its own.

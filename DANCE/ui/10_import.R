@@ -24,22 +24,6 @@ ui_tab_import <- tabItem(
 
   fluidRow(
     box(
-      title = "DANCE — Direct Analysis of multivariate Nonlinear and Circadian Effects in R",
-      status = "success", solidHeader = TRUE, width = 12, collapsible = TRUE,
-      helpText(HTML(
-        "One import, one smoothing step, every analysis.<br>",
-        "<b>Import &rarr; Preprocessing/Smoothing</b> are shared: do them once and every ",
-        "tab below reads the same curves.<br>",
-        "<b>F</b> &mdash; functional PCA / time-warped PCA, functional ANOVA and post-hoc tests.<br>",
-        "<b>C</b> &mdash; function-on-scalar regression, harmonic (cosinor) ",
-        "regression and pairwise tests on circadian parameters.<br>",
-        "<b>K</b> &mdash; functional clustering (k-means, hierarchical, DCF) with elbow and ",
-        "silhouette diagnostics."))
-    )
-  ),
-
-  fluidRow(
-    box(
       title = "1. Upload Data",
       collapsible = TRUE, collapsed = FALSE,
       status = "primary",

@@ -76,7 +76,7 @@
         # smoothing is invented here; an interpolating basis is used and the
         # user is told. (WaPaa silently smoothed onto min(20, n-2) bases.)
         if(!dance_ensure_fd_obj(values)) return()
-        cat("Created fd_obj with an interpolating basis (no smoothing)\n")
+        cat("Created fd_obj: the data points joined by straight lines (no smoothing)\n")
       }
       
       if(input$pca_type == "fpca") {

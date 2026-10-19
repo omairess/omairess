@@ -16,42 +16,51 @@ if (!exists("%||%", mode = "function")) `%||%` <- function(a, b) if (is.null(a))
 #   * Running fPCA or fANOVA without visiting the smoothing tab built fd_obj
 #     the same way, silently, from inside an analysis tab.
 #
-# So there is now ONE rule, here. "No smoothing" means an INTERPOLATING basis:
-# nbasis = n_time, which makes smooth.basis a square system that reproduces
-# the observed values at the observed times. The only thing lost is what is
-# unavoidable in any fd representation — behaviour strictly between the
-# measurement points.
+# So there is now ONE rule, here. "No smoothing" means the observations joined
+# by STRAIGHT LINES: an order-2 B-spline basis with a knot at every observation
+# time, whose coefficients are the observed values themselves. The curve is the
+# line plot of the data, and the mean curve is the line plot of the column
+# means -- nothing is added between the measurement points.
+#
+# It used to be a cubic B-spline with nbasis = n_time on fda's default, EVENLY
+# spaced knots. That also passed through every point, but its knots did not sit
+# at the observation times, and between the points it swung far outside the
+# data: on 18 hourly sleepiness ratings with means between 10 and 65 the mean
+# curve ran from -2 to 79, with the largest swings next to the first and last
+# observations.
 #
 # The penalised smoothing on the preprocessing tab is untouched: it remains
 # the one place a roughness penalty is applied.
 # ==============================================================================
 
-# A basis that interpolates n_time points on `rangeval` rather than smoothing
-# them. Cubic where there is room for it, lower order for very short series.
-dance_interpolating_basis <- function(n_time, rangeval = c(0, 1)) {
-  norder <- max(2L, min(4L, as.integer(n_time)))
-  create.bspline.basis(rangeval = rangeval,
-                       nbasis   = max(as.integer(n_time), norder),
-                       norder   = norder)
+# The straight-line basis: order 2 (piecewise linear) with a knot at every
+# observation time, so there are exactly as many functions as observations and
+# each one is 1 at its own time point and 0 at all the others.
+dance_interpolating_basis <- function(argvals) {
+  create.bspline.basis(rangeval = range(argvals), breaks = as.numeric(argvals), norder = 2)
 }
 
-# Build an fd object from a subjects x time matrix WITHOUT smoothing it.
-# argvals defaults to an even 0-1 grid, the range the fPCA family assumes.
-# NAs are mean-imputed for this representation only — an fd object cannot
-# carry them — which is what the source apps did too.
+# Build an fd object from a subjects x time matrix WITHOUT smoothing it: the
+# coefficients ARE the observed values (no fitting step). argvals defaults to
+# an even 0-1 grid, the range the fPCA family assumes. An fd object cannot
+# carry NAs, so for this representation only a missing value is read off the
+# straight line between the curve's neighbouring observations (held at the
+# nearest observation before the first or after the last one); it used to be
+# the participant's own mean, which put a step at every gap.
 dance_fd_no_smoothing <- function(data_mat, argvals = NULL) {
   data_mat <- as.matrix(data_mat)
   n_time <- ncol(data_mat)
   if (is.null(argvals)) argvals <- seq(0, 1, length.out = n_time)
   for (i in seq_len(nrow(data_mat))) {
-    na_idx <- is.na(data_mat[i, ])
-    if (any(na_idx)) {
-      if (all(na_idx)) return(NULL)
-      data_mat[i, na_idx] <- mean(data_mat[i, !na_idx], na.rm = TRUE)
-    }
+    ok <- !is.na(data_mat[i, ])
+    if (!any(ok)) return(NULL)
+    if (!all(ok))
+      data_mat[i, !ok] <- if (sum(ok) == 1L) data_mat[i, ok]
+                          else stats::approx(argvals[ok], data_mat[i, ok], argvals[!ok], rule = 2)$y
   }
-  basis <- dance_interpolating_basis(n_time, range(argvals))
-  smooth.basis(argvals, t(data_mat), fdPar(basis, 2, 0))$fd
+  cf <- t(data_mat)
+  dimnames(cf) <- list(NULL, rownames(data_mat))
+  fd(cf, dance_interpolating_basis(argvals))
 }
 
 # Used by the analysis tabs when values$fd_obj does not exist because the user
@@ -73,10 +82,9 @@ dance_ensure_fd_obj <- function(values) {
   values$fd_obj <- fd
 
   showNotification(
-    paste("No smoothing step was applied, so these curves are represented by an",
-          "INTERPOLATING basis: they pass exactly through your data points, and",
-          "nothing has been smoothed. Visit 'Data Preprocessing/Smoothing' if you",
-          "want a smooth."),
+    paste("No smoothing step was applied, so each curve is your data points joined",
+          "by straight lines: nothing has been smoothed. Visit 'Data",
+          "Preprocessing/Smoothing' if you want a smooth."),
     type = "warning", duration = 12)
   TRUE
 }
@@ -282,8 +290,9 @@ dance_smoothing_basis <- function(axis, nb, method = "manual", nb_fourier = NULL
     else
       fda::create.fourier.basis(rangeval = axis$t_rng, nbasis = nb_used)
   } else if (identical(method, "none")) {
+    # the straight-line representation dance_fd_no_smoothing() uses
     b <- fda::create.bspline.basis(rangeval = axis$t_rng, breaks = axis$t_full,
-                                   norder = 4)
+                                   norder = 2)
   } else {
     b <- fda::create.bspline.basis(rangeval = axis$t_rng, nbasis = nb)
   }

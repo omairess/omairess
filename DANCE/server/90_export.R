@@ -779,7 +779,11 @@
 
       if(smooth_method == "none") {
         add("# Smoothing method: None (raw data)")
-        add("# Data used as-is without smoothing")
+        add("# Each curve is its data points joined by straight lines (an order-2")
+        add("# B-spline basis with a knot at every time point); a missing value is")
+        add("# read off the line between its neighbouring observations.")
+        emit_kernel("dance_fd_no_smoothing")
+        add("fd_obj <- dance_fd_no_smoothing(data_matrix, time_points)")
         add("")
       } else if(smooth_method == "auto") {
         n_basis <- if(!is.null(input$n_basis)) input$n_basis else 20

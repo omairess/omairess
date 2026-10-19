@@ -269,12 +269,14 @@ dance_apa_report <- function(values, input, title = NULL) {
   sm <- values$smooth_fit_metrics
   if (!is.null(sm)) {
     meth <- sm$method %|% "auto"
-    add("**Smoothing.** Each series was represented in a ",
-        if (isTRUE(input$is_cyclic)) "Fourier" else "B-spline", " basis of ",
-        sm$n_basis %|% "--", " functions over ", sm$time_axis %|% "the column index",
-        ". ",
+    add("**Smoothing.** ",
+        if (identical(meth, "none")) paste0("Each series was represented over ",
+                                            sm$time_axis %|% "the column index", ". ")
+        else paste0("Each series was represented in a ",
+                    if (isTRUE(input$is_cyclic)) "Fourier" else "B-spline", " basis of ",
+                    sm$n_basis %|% "--", " functions over ", sm$time_axis %|% "the column index", ". "),
         if (identical(meth, "none"))
-          "No roughness penalty was applied: the basis interpolates the observations, so each curve passes through every measured value."
+          "No smoothing was applied: each curve is its observations joined by straight lines (an order-2 B-spline basis with a knot at every observation time), with a missing value read off the line between its neighbouring observations."
         else if (identical(meth, "auto"))
           # P12.1: this used to say "over the whole sample", which was not true
           # -- the search capped its objective at 60 subjects. The cap is gone,

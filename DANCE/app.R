@@ -1,5 +1,5 @@
 # ==============================================================================
-# DANCE — Direct Analysis of multivariate Nonlinear and Circadian Effects in R
+# DANCE.R — Direct Analysis of multivariate Nonlinear and Circadian Effects in R
 # ==============================================================================
 # One integrated Shiny app merging two previously separate apps:
 #
@@ -223,7 +223,7 @@ DANCE_SERVER_FILES <- sort(list.files(dance_dir("server"), full.names = TRUE,
 # UI
 # ==============================================================================
 ui <- dashboardPage(
-  dashboardHeader(title = "DANCE", titleWidth = 300),
+  dashboardHeader(title = "DANCE.R", titleWidth = 300),
 
   dashboardSidebar(
     width = 300,

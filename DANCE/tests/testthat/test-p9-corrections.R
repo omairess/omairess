@@ -133,7 +133,7 @@ test_that("P9.3: the extracted basis builder reproduces production exactly", {
   same(dance_smoothing_basis(ax(TRUE), 12, "manual"),
        create.fourier.basis(rangeval = tr, nbasis = min(n, 13)))
   same(dance_smoothing_basis(ax(FALSE), 12, "none"),
-       create.bspline.basis(rangeval = tr, breaks = ti, norder = 4))
+       create.bspline.basis(rangeval = tr, breaks = ti, norder = 2))
   same(dance_smoothing_basis(ax(FALSE), 12, "manual"),
        create.bspline.basis(rangeval = tr, nbasis = 12))
 

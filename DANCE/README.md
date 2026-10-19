@@ -1,4 +1,4 @@
-# DANCE — Direct Analysis of multivariate Nonlinear and Circadian Effects in R
+# DANCE.R — Direct Analysis of multivariate Nonlinear and Circadian Effects in R
 
 One Shiny app combining two previously separate tools:
 
