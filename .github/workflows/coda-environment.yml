@@ -1,0 +1,29 @@
+# Creates (and keeps) the "CODA" deployment environment for this repository.
+#
+# Why a workflow: GitHub creates an environment automatically the first time a
+# job references one that does not exist yet. Running this once is therefore
+# enough for "CODA" to appear under Settings -> Environments, where protection
+# rules, reviewers and environment secrets/variables can then be added.
+#
+# Later jobs that should use CODA's secrets or protection rules only need:
+#   environment: CODA
+
+name: CODA environment
+
+on:
+  push:
+    paths:
+      - '.github/workflows/coda-environment.yml'
+  workflow_dispatch:        # the "Run workflow" button, to re-run on demand
+
+permissions:
+  contents: read
+
+jobs:
+  coda:
+    name: Register CODA environment
+    runs-on: ubuntu-latest
+    environment: CODA
+    steps:
+      - name: Confirm environment
+        run: echo "Job ran in the CODA environment for ${{ github.repository }}."
