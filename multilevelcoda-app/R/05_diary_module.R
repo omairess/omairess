@@ -83,7 +83,38 @@ diaryModuleUI <- function(id) {
           shiny::hr(),
           shiny::selectInput(ns("night_id"), "Night-by-night composition for", choices = NULL),
           shiny::plotOutput(ns("nights"), height = "380px"),
-          plotExportUI(ns, "nights"))
+          plotExportUI(ns, "nights"),
+          shiny::hr(),
+          shiny::h4("Ternary (triangle) diagram"),
+          shiny::helpText("Three parts at a time. With more than three parts the",
+            "chosen three are re-closed (a subcomposition)."),
+          shiny::fluidRow(
+            shiny::column(6, shiny::selectizeInput(ns("tern_parts"),
+              "Parts, in vertex order (bottom-left, bottom-right, top)",
+              choices = NULL, multiple = TRUE,
+              options = list(maxItems = 3, plugins = list("drag_drop", "remove_button")))),
+            shiny::column(6, shiny::checkboxGroupInput(ns("tern_layers"), "Show",
+              c("Nights" = "nights", "Participant means" = "persons",
+                "Overall centre" = "centre"),
+              selected = c("nights", "persons", "centre"), inline = TRUE))),
+          shiny::fluidRow(
+            shiny::column(4, shiny::radioButtons(ns("tern_ellipse"), "95% region of",
+              c("Nights" = "nights", "Participant means" = "persons", "None" = "none"))),
+            shiny::column(4,
+              shiny::checkboxInput(ns("tern_centre"), "Centre the data", TRUE),
+              shiny::helpText("Perturbs by the inverse compositional centre so",
+                "small parts (e.g. awake in bed) become visible; gridlines keep",
+                "the original percentages (von Eynatten et al., 2002).")),
+            shiny::column(4,
+              shiny::radioButtons(ns("tern_colour_by"), "Colour",
+                c("By participant" = "participant", "Single colour" = "single")),
+              colourpicker::colourInput(ns("tern_single"), "Single colour", "#B3CDE3"),
+              colourpicker::colourInput(ns("tern_ell_col"), "Region colour", "#E5A0A0"))),
+          shiny::fluidRow(
+            shiny::column(6, shiny::sliderInput(ns("tern_size"), "Point size", 0.5, 5, 1.6, 0.1)),
+            shiny::column(6, shiny::sliderInput(ns("tern_alpha"), "Point opacity", 0.05, 1, 0.45, 0.05))),
+          shiny::plotOutput(ns("tern"), height = "620px"),
+          plotExportUI(ns, "tern", w = 2400, h = 2100))
       )
     )
   )
@@ -266,6 +297,42 @@ diaryModuleServer <- function(id, data_bus, rec) {
     })
     output$nights <- shiny::renderPlot(nights_plot())
     plotExportServer(input, output, "nights", nights_plot, "composition_nights")
+
+    # ---- ternary diagram ----
+    shiny::observe({
+      p <- parts()
+      cur <- shiny::isolate(input$tern_parts)
+      sel <- if (length(cur) == 3 && all(cur %in% p)) cur else utils::head(p, 3)
+      shiny::updateSelectizeInput(session, "tern_parts", choices = p, selected = sel)
+    })
+    tern_args <- shiny::reactive({
+      shiny::req(length(input$tern_parts) == 3, all(input$tern_parts %in% parts()))
+      list(parts3 = input$tern_parts, layers = input$tern_layers %||% character(0),
+           ellipse = input$tern_ellipse, centre_data = isTRUE(input$tern_centre),
+           colour_by = input$tern_colour_by, single_colour = input$tern_single,
+           ellipse_colour = input$tern_ell_col, point_size = input$tern_size,
+           alpha = input$tern_alpha, base_size = input$base_size)
+    })
+    tern_plot <- shiny::reactive(do.call(ternary_plot, c(list(ana()), tern_args())))
+    output$tern <- shiny::renderPlot(tern_plot())
+    plotExportServer(input, output, "tern", tern_plot, "ternary")
+
+    shiny::observe({
+      a <- tern_args()
+      rec$record("ternary",
+        sprintf("Ternary diagram of %s%s (%s; 95%% region: %s)",
+                paste(a$parts3, collapse = " / "),
+                if (length(parts()) > 3) " (re-closed subcomposition)" else "",
+                if (a$centre_data) "centred by the inverse compositional centre" else "not centred",
+                a$ellipse),
+        sprintf(paste0("print(ternary_plot(ana, parts3 = %s, layers = %s,\n",
+                       "  ellipse = %s, centre_data = %s, colour_by = %s,\n",
+                       "  single_colour = %s, ellipse_colour = %s, point_size = %s,\n",
+                       "  alpha = %s, base_size = %s))"),
+                r_lit(a$parts3), r_lit(a$layers), r_lit(a$ellipse), r_lit(a$centre_data),
+                r_lit(a$colour_by), r_lit(a$single_colour), r_lit(a$ellipse_colour),
+                a$point_size, a$alpha, a$base_size))
+    }, priority = 65)
 
     shiny::observe({
       cl <- cols_r()

@@ -24,7 +24,12 @@ rstan 2.32, shiny 1.14, shinyWidgets 0.9.
    of three layouts, and all files are stacked into one row per participant-night.
 2. **Diary & composition** — map columns to diary items (guessed from Dutch,
    French and English names), derive the sleep parameters, choose the
-   composition, handle zeros, pick outcomes and align them in time.
+   composition, handle zeros, pick outcomes and align them in time. The
+   Describe sub-tab has stacked bars and a ternary (triangle) diagram: nights,
+   participant means and the overall centre, a 95% region drawn in ilr
+   coordinates, and optional centring by perturbation with the inverse
+   compositional centre (von Eynatten et al., 2002) so small parts such as
+   time awake in bed are visible; gridlines keep the original percentages.
 3. **Model** — `complr()` + `brmcoda()`: the composition predicts an outcome
    (between- and within-person ilrs) or is itself the outcome.
 4. **Substitution** — `substitution()`: expected change in the outcome when
@@ -125,5 +130,7 @@ multilevelcoda-app/
 - Aitchison, J. (1982). The statistical analysis of compositional data. *Journal of the Royal Statistical Society: Series B, 44*(2), 139–177.
 - Egozcue, J. J., Pawlowsky-Glahn, V., Mateu-Figueras, G., & Barceló-Vidal, C. (2003). Isometric logratio transformations for compositional data analysis. *Mathematical Geology, 35*(3), 279–300.
 - Martín-Fernández, J. A., Barceló-Vidal, C., & Pawlowsky-Glahn, V. (2003). Dealing with zeros and missing values in compositional data sets using nonparametric imputation. *Mathematical Geology, 35*(3), 253–278.
+- von Eynatten, H., Pawlowsky-Glahn, V., & Egozcue, J. J. (2002). Understanding perturbation on the simplex: A simple method to better visualize and interpret compositional data in ternary diagrams. *Mathematical Geology, 34*(3), 249–257.
+- Pawlowsky-Glahn, V., Egozcue, J. J., & Tolosana-Delgado, R. (2015). *Modeling and analysis of compositional data*. Wiley.
 - Dumuid, D., et al. (2019). The compositional isotemporal substitution model. *Statistical Methods in Medical Research, 28*(3), 846–857.
 - Bürkner, P.-C. (2017). brms: An R package for Bayesian multilevel models using Stan. *Journal of Statistical Software, 80*(1), 1–28. https://doi.org/10.18637/jss.v080.i01

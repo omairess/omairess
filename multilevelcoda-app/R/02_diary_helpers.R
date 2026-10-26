@@ -805,3 +805,161 @@ plot_substitution <- function(sub, colours = NULL, base_size = 12) {
     ggplot2::theme(strip.background = ggplot2::element_rect(fill = "grey97"),
                    legend.position = "bottom")
 }
+
+# ---- ternary (triangle) diagram -----------------------------------------------
+
+# Barycentric -> Cartesian: part 1 bottom-left, part 2 bottom-right, part 3 top.
+ternary_xy <- function(P) {
+  P <- as.matrix(P)
+  P <- P / rowSums(P)
+  data.frame(x = P[, 2] + P[, 3] / 2, y = P[, 3] * sqrt(3) / 2)
+}
+
+closure <- function(X) { X <- as.matrix(X); X / rowSums(X) }
+
+# Perturbation by the inverse of the centre g: x (-) g = C(x / g)
+# (von Eynatten, Pawlowsky-Glahn & Egozcue, 2002, Mathematical Geology 34:249).
+perturb_inv <- function(X, g) closure(sweep(as.matrix(X), 2, g, "/"))
+
+# Ellipse of a logistic-normal region, built in ilr space and mapped back.
+ternary_ellipse <- function(X, level = 0.95, n = 200) {
+  Z <- unclass(compositions::ilr(compositions::acomp(X)))
+  if (nrow(Z) < 4) return(NULL)
+  m <- colMeans(Z)
+  e <- eigen(stats::cov(Z), symmetric = TRUE)
+  r <- sqrt(stats::qchisq(level, df = 2))
+  a <- seq(0, 2 * pi, length.out = n)
+  circ <- rbind(cos(a), sin(a))
+  E <- t(m + e$vectors %*% diag(sqrt(pmax(e$values, 0)), 2) %*% circ * r)
+  closure(unclass(compositions::ilrInv(E, D = 3)))
+}
+
+#' Ternary diagram of three compositional parts (a subcomposition when the
+#' composition has more parts: the three are re-closed).
+#'
+#' @param ana      analysis data (ID, parts as columns)
+#' @param parts3   the three parts to show, in vertex order
+#' @param layers   any of "nights", "persons" (closed geometric mean per
+#'                 participant), "centre" (overall closed geometric mean)
+#' @param ellipse  "none", "nights" or "persons": 95% region (logistic-normal,
+#'                 drawn in ilr coordinates)
+#' @param centre_data perturb everything by the inverse centre so the data sit
+#'                 in the middle; gridlines stay in original percentages
+#' @param colour_by "participant" or "single"
+ternary_plot <- function(ana, parts3, layers = c("nights", "persons", "centre"),
+                         ellipse = "nights", level = 0.95, centre_data = FALSE,
+                         colour_by = "participant", single_colour = "#B3CDE3",
+                         ellipse_colour = "#E5A0A0", point_size = 1.6,
+                         alpha = 0.45, base_size = 12, grid_levels = NULL) {
+  stopifnot(length(parts3) == 3, all(parts3 %in% names(ana)))
+  X <- closure(ana[, parts3, drop = FALSE])
+  ids <- as.character(ana$ID)
+  geo <- function(M) { g <- exp(colMeans(log(M))); g / sum(g) }
+  persons <- do.call(rbind, lapply(split(seq_len(nrow(X)), ids), function(i) geo(X[i, , drop = FALSE])))
+  centre <- geo(X)
+  g <- if (isTRUE(centre_data)) centre else rep(1 / 3, 3)
+  tr <- function(M) ternary_xy(if (isTRUE(centre_data)) perturb_inv(M, g) else closure(M))
+
+  # gridlines: straight at 10% steps, or curved (perturbed) at levels around
+  # the data when centred
+  grid <- list()
+  for (j in 1:3) {
+    lv <- grid_levels[[j]] %||% if (isTRUE(centre_data)) {
+      p <- pretty(stats::quantile(X[, j], c(0.025, 0.975)), n = 4)
+      p[p > 0 & p < 1]
+    } else seq(0.1, 0.9, by = 0.1)
+    others <- setdiff(1:3, j)
+    for (v in lv) {
+      s <- seq(0, 1, length.out = 120)
+      M <- matrix(0, length(s), 3)
+      M[, j] <- v
+      M[, others[1]] <- (1 - v) * s
+      M[, others[2]] <- (1 - v) * (1 - s)
+      M <- M[rowSums(M == 0) == 0 | !isTRUE(centre_data), , drop = FALSE]
+      xy <- tr(pmax(M, 1e-9))
+      grid[[length(grid) + 1]] <- data.frame(xy, part = parts3[j], level = v,
+                                             line = paste(j, v), ord = seq_len(nrow(xy)))
+    }
+  }
+  grid <- do.call(rbind, grid)
+  # each part labels its gridlines on its own edge: part j at the end where
+  # part j+1 (cyclically) is 0; labels are pushed outwards from the centroid
+  lab <- do.call(rbind, lapply(split(grid, grid$line), function(d) {
+    j <- match(d$part[1], parts3)
+    nxt <- j %% 3 + 1
+    first_other <- setdiff(1:3, j)[1]
+    d[if (first_other == nxt) which.min(d$ord) else which.max(d$ord), ]
+  }))
+  dx <- lab$x - 0.5; dy <- lab$y - sqrt(3) / 6
+  len <- sqrt(dx^2 + dy^2)
+  lab$x <- lab$x + 0.045 * dx / len
+  lab$y <- lab$y + 0.045 * dy / len
+  lab$text <- paste0(round(100 * lab$level), "%")
+  # drop labels that would overprint a neighbour (lines converge when centred)
+  keep <- rep(TRUE, nrow(lab))
+  for (i in seq_len(nrow(lab))[-1]) {
+    prev <- which(keep[seq_len(i - 1)])
+    if (length(prev) && min(sqrt((lab$x[prev] - lab$x[i])^2 + (lab$y[prev] - lab$y[i])^2)) < 0.04)
+      keep[i] <- FALSE
+  }
+  lab <- lab[keep, ]
+
+  tri <- data.frame(x = c(0, 1, 0.5, 0), y = c(0, 0, sqrt(3) / 2, 0))
+  vert <- data.frame(x = c(-0.04, 1.04, 0.5), y = c(-0.05, -0.05, sqrt(3) / 2 + 0.05),
+                     label = parts3, hjust = c(1, 0, 0.5))
+
+  p <- ggplot2::ggplot() +
+    ggplot2::geom_path(data = grid, ggplot2::aes(x, y, group = line),
+                       colour = "grey88", linewidth = 0.3) +
+    ggplot2::geom_text(data = lab, ggplot2::aes(x, y, label = text),
+                       colour = "grey55", size = base_size / 4.2) +
+    ggplot2::geom_path(data = tri, ggplot2::aes(x, y), colour = "grey35", linewidth = 0.5)
+
+  n_id <- length(unique(ids))
+  pal <- stats::setNames(pastel_palette(n_id), sort(unique(ids)))
+  if ("nights" %in% layers) {
+    pts <- cbind(tr(X), ID = ids)
+    p <- p + if (colour_by == "participant")
+      ggplot2::geom_point(data = pts, ggplot2::aes(x, y, colour = ID),
+                          size = point_size, alpha = alpha)
+    else ggplot2::geom_point(data = pts, ggplot2::aes(x, y), colour = single_colour,
+                             size = point_size, alpha = alpha)
+  }
+  if ("persons" %in% layers) {
+    pp <- cbind(tr(persons), ID = rownames(persons))
+    p <- p + if (colour_by == "participant")
+      ggplot2::geom_point(data = pp, ggplot2::aes(x, y, fill = ID), shape = 21,
+                          colour = "grey25", size = point_size * 2.2, stroke = 0.4)
+    else ggplot2::geom_point(data = pp, ggplot2::aes(x, y), shape = 21,
+                             fill = darken(single_colour, 0.85), colour = "grey25",
+                             size = point_size * 2.2, stroke = 0.4)
+  }
+  if (!identical(ellipse, "none")) {
+    src <- if (identical(ellipse, "persons")) persons else X
+    el <- ternary_ellipse(src, level)
+    if (!is.null(el)) p <- p + ggplot2::geom_path(data = tr(el), ggplot2::aes(x, y),
+                                                  colour = darken(ellipse_colour, 0.8),
+                                                  linewidth = 0.8, linetype = 2)
+  }
+  if ("centre" %in% layers) {
+    p <- p + ggplot2::geom_point(data = tr(matrix(centre, 1)), ggplot2::aes(x, y),
+                                 shape = 23, fill = "white", colour = "black",
+                                 size = point_size * 3, stroke = 0.8)
+  }
+  cap <- c(
+    if (isTRUE(centre_data)) "Centred: perturbed by the inverse of the compositional centre; gridlines show original percentages.",
+    if (!identical(ellipse, "none")) sprintf("Dashed: %d%% region of %s (logistic-normal, ilr coordinates).",
+                                             round(100 * level), if (identical(ellipse, "persons")) "participant means" else "nights"),
+    if ("centre" %in% layers) "Diamond: overall compositional centre (closed geometric mean).")
+  p <- p +
+    ggplot2::geom_text(data = vert, ggplot2::aes(x, y, label = label, hjust = hjust),
+                       size = base_size / 2.8, fontface = "bold") +
+    ggplot2::scale_colour_manual(values = pal, guide = if (n_id <= 12) "legend" else "none") +
+    ggplot2::scale_fill_manual(values = pal, guide = if (n_id <= 12) "legend" else "none") +
+    ggplot2::coord_equal(xlim = c(-0.15, 1.15), ylim = c(-0.1, sqrt(3) / 2 + 0.1), clip = "off") +
+    ggplot2::labs(caption = paste(cap, collapse = "\n"), colour = NULL, fill = NULL) +
+    ggplot2::theme_void(base_size = base_size) +
+    ggplot2::theme(legend.position = "right",
+                   plot.caption = ggplot2::element_text(hjust = 0, colour = "grey40"))
+  p
+}

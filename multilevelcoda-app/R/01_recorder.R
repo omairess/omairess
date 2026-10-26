@@ -8,7 +8,7 @@
 # becomes stale (e.g. data re-imported) clears the steps downstream of it.
 # ============================================================================
 
-STEP_ORDER <- c("import", "diary", "composition", "describe", "complr",
+STEP_ORDER <- c("import", "diary", "composition", "describe", "ternary", "complr",
                 "model", "substitution", "sub_plot")
 
 new_recorder <- function() {
