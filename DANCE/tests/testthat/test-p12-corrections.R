@@ -126,7 +126,8 @@ test_that("P12.1: the report states the count instead of claiming a scope", {
 test_that("P12.2a: the linear fitter computes the Bingham region too", {
   src <- code_of("server/72_harmonic.R")
   # both fitters must build it; before P12.2 only the nonlinear one did
-  expect_equal(length(gregexpr("bingham[[h]] <- dance_bingham_ci", src, fixed = TRUE)[[1]]), 2L)
+  # [h] <- list(...): a NULL region keeps its slot (see the repeated-curves fix)
+  expect_equal(length(gregexpr("bingham[h] <- list(dance_bingham_ci", src, fixed = TRUE)[[1]]), 2L)
   expect_equal(length(gregexpr("bingham = bingham", src, fixed = TRUE)[[1]]), 2L)
 })
 
