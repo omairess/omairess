@@ -304,7 +304,10 @@
     if (!length(chosen)) return(helpText(HTML(
       "<i>No design factor selected \u2014 one trajectory will be fitted for the whole sample.</i>")))
     req(values$covariates, values$data)
-    subj <- rownames(values$data) %||% as.character(seq_len(nrow(values$data)))
+    # the participant identifier read at import -- the same one the fit uses.
+    # Row names are CURVES: with several curves per participant they made every
+    # curve its own participant, so a within factor read as "between".
+    subj <- values$subject_ids %||% rownames(values$data) %||% as.character(seq_len(nrow(values$data)))
     rows <- lapply(chosen, function(f) {
       v <- values$covariates[[f]]
       if (is.null(v)) return(sprintf("<li><b>%s</b> \u2014 not found in the data</li>", f))
@@ -321,11 +324,13 @@
               else sprintf("\u2014 <span style='color:#b8860b'>you selected it as %s</span>", want))
     })
     n_sub <- length(unique(subj))
+    no_id <- is.null(values$subject_ids)
     n_cells <- prod(vapply(chosen, function(f)
       max(1L, length(unique(values$covariates[[f]][!is.na(values$covariates[[f]])]))), integer(1)))
     helpText(HTML(sprintf(
-      "<b>Read from your data:</b><ul style='margin:4px 0 4px 16px;padding:0'>%s</ul>%d participants, %d design cell(s).%s",
-      paste(unlist(rows), collapse = ""), n_sub, n_cells,
+      "<b>Read from your data:</b><ul style='margin:4px 0 4px 16px;padding:0'>%s</ul>%d curves from %d participants, %d design cell(s).%s%s",
+      paste(unlist(rows), collapse = ""), nrow(values$data), n_sub, n_cells,
+      if (no_id) " <span style='color:#b8860b'>No participant identifier was read at import, so every curve counts as its own participant; a within-participant factor cannot be recognised. Name the identifier column on the Data Import tab.</span>" else "",
       if (!is.null(dt$within))
         sprintf(" Each participant contributes up to %d curve(s).",
                 max(1L, length(unique(values$covariates[[dt$within]][!is.na(values$covariates[[dt$within]])]))))
@@ -677,11 +682,15 @@
       acrophases[h] <- atan2(beta_sin, beta_cos)
       if(acrophases[h] < 0) acrophases[h] <- acrophases[h] + 2 * pi
 
-      bingham[[h]] <- dance_bingham_ci(as.numeric(beta_cos), as.numeric(beta_sin),
+      # bingham[h] <- list(...), not bingham[[h]] <- ...: the region is NULL
+      # when the fit has no residual df, and assigning NULL with [[ ]] DELETES
+      # the slot, so harmonic 2's region moved into slot 1 and fi$bingham[[2]]
+      # was out of bounds (a curve with 5 observations and two harmonics).
+      bingham[h] <- list(dance_bingham_ci(as.numeric(beta_cos), as.numeric(beta_sin),
                                      vcov_mat[c(cos_idx, sin_idx),
                                               c(cos_idx, sin_idx), drop = FALSE],
                                      length(y), length(coefs),
-                                     level = 0.95, period = period, harmonic = h)
+                                     level = 0.95, period = period, harmonic = h))
 
       if(amplitudes[h] > 1e-10) {
         grad_amp <- c(beta_cos, beta_sin) / amplitudes[h]
@@ -1415,8 +1424,9 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       acro_se[h] <- dance_acro_se(beta_cos, beta_sin, Vh)
 
       # Bingham elliptical joint region for (amplitude, acrophase)
-      bingham[[h]] <- dance_bingham_ci(beta_cos, beta_sin, Vh, n, length(coefs),
-                                     level = 0.95, period = period, harmonic = h)
+      # [h] <- list(...): a NULL region must keep its slot (see fit_cosinor)
+      bingham[h] <- list(dance_bingham_ci(beta_cos, beta_sin, Vh, n, length(coefs),
+                                     level = 0.95, period = period, harmonic = h))
     }
 
     # AUDIT (extra i): divide by h -- harmonic h lives on the effective period T/h.

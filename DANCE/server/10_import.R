@@ -717,7 +717,18 @@ output$data_status <- renderPrint({
     }
   } else {
     cat("Analysis Data Ready!\n")
-    cat("Dimensions:", nrow(values$data), "subjects x", ncol(values$data), "time points\n")
+    n_pid <- if (!is.null(values$subject_ids)) length(unique(values$subject_ids)) else NA_integer_
+    if (is.finite(n_pid) && n_pid < nrow(values$data)) {
+      per <- table(values$subject_ids)
+      cat("Dimensions:", nrow(values$data), "curves x", ncol(values$data), "time points\n")
+      cat("Participants:", n_pid, "-- repeated measures: each contributes",
+          if (min(per) == max(per)) max(per) else paste(min(per), "to", max(per)), "curves\n")
+    } else {
+      cat("Dimensions:", nrow(values$data), "curves (one per participant) x", ncol(values$data), "time points\n")
+      if (is.null(values$subject_ids))
+        cat("  No participant identifier column was found; if a participant contributes\n",
+            " more than one row, name the identifier column under 'Participant identifier'.\n", sep = "")
+    }
     fr <- values$import_full
     if (!is.null(fr) && !dance_filter_is_empty(values$row_filter)) {
       fk <- dance_filter_keep(fr, values$row_filter$excluded_ids %||% character(0),
@@ -741,7 +752,7 @@ output$data_status <- renderPrint({
       cat("  also be given the times manually on its own tab.\n")
     }
     if(!is.null(values$group_labels)) {
-      cat("Groups:", length(unique(values$group_labels)), "groups detected\n")
+      cat("Groups:", length(unique(values$group_labels)), "levels of", values$selected_group_vars[1] %||% "the first scalar variable", "\n")
       cat("Group distribution:", table(values$group_labels), "\n")
     } else {
       cat("No grouping variable selected.\n")

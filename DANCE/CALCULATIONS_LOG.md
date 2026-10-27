@@ -670,3 +670,33 @@ the run's settings (the time axis as numbers); `tests/warp_report_export_test.R`
 runs it in a clean `Rscript --vanilla` session and finds SD(s), its interval,
 the test, the predicted shifts and every participant's warp identical to the
 app's.
+
+## 11. Several curves per participant (repeated cycles, sessions)
+
+Found on a repeated-cycles file (13 participants, up to 7 cycles each, 85
+curves of two-hourly sleepiness ratings with gaps):
+
+- **The design readout identified participants by ROW**, not by the
+  participant column read at import, so every curve was its own participant
+  and a within-participant factor ("cycle") read as between. The fit itself
+  already used the participant column; the readout now does too, and says when
+  no identifier was read.
+- **Two-stage stopped with "subscript out of bounds"** when a curve had no
+  joint confidence region for a harmonic (a participant at the floor of the
+  scale, 1 at every time point, has zero amplitude). The region is NULL, and
+  `bingham[[h]] <- NULL` deletes the list slot instead of storing NULL, so the
+  regions shifted and the second harmonic's was out of bounds. Stored with
+  `bingham[h] <- list(...)` now.
+- **The p-value formatter** coerces its input to one number and calls
+  base::sub explicitly; the reported failure came through a sub() that was not
+  base R's, presumably from a package attached in the user's session.
+- **The data status** counts curves and participants ("85 curves x 14 time
+  points; Participants: 13 -- repeated measures: each contributes 3 to 7
+  curves").
+- **The raw-data mean curves** (data plot, group previews) are means of the
+  OBSERVED values at each time point; without na.rm a single missing value
+  removed that time point from the mean.
+
+A within-participant factor needs the mixed-effects approach: two-stage
+compares the per-curve estimates as independent groups and says so.
+`tests/repeated_curves_app_test.R` covers the case.

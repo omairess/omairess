@@ -169,3 +169,12 @@ test_that("a fit started below the first rung records the rungs it skipped", {
   expect_length(f3$simplified_reason, 2L)
   expect_match(dance_traj_fit_report(f3), "not refitted (structure carried over)", fixed = TRUE)
 })
+
+test_that("p-values format from whatever arrives", {
+  expect_identical(dance_fmt_p(0.0234), ".023")
+  expect_identical(dance_fmt_p(0.0001), "< .001")
+  expect_identical(dance_fmt_p(NA), "—")
+  expect_identical(dance_fmt_p(NULL), "—")
+  expect_identical(dance_fmt_p(list(0.5)), ".500")
+  expect_identical(dance_fmt_p(numeric(0)), "—")
+})

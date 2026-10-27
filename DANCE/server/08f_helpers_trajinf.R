@@ -968,10 +968,15 @@ dance_traj_selection_from_fit <- function(fit, selected = character(0)) {
 
 # One p-value format for the whole module, so the screen, the report and the
 # exported script cannot render the same number three different ways.
+# One number in, one string out, whatever arrives (NULL, a list cell, a vector),
+# and base::sub explicitly: a package attached in the user's session that masks
+# sub() made every p-value on the comparison tab fail with "subscript out of
+# bounds".
 dance_fmt_p <- function(p, digits = 3) {
-  if (!is.finite(p)) return("\u2014")
+  p <- suppressWarnings(as.numeric(unlist(p))[1])
+  if (!isTRUE(is.finite(p))) return("\u2014")
   if (p < .001) return("< .001")
-  sub("^0", "", formatC(p, format = "f", digits = digits))
+  base::sub("^0", "", base::formatC(p, format = "f", digits = digits))
 }
 
 # ==============================================================================

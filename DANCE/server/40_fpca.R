@@ -44,7 +44,7 @@
       for(i in 1:n_groups) {
         group_idx <- which(values$group_labels == groups[i])
         if(length(group_idx) > 0) {
-          group_mean <- colMeans(values$data[group_idx, , drop = FALSE])
+          group_mean <- colMeans(values$data[group_idx, , drop = FALSE], na.rm = TRUE)
           lines(time_points_plot, group_mean, col = colors[i], lwd = 3)
         }
       }
@@ -1711,7 +1711,7 @@
         if(!is.null(values$fd_obj)) {
           mean_curve <- rowMeans(eval.fd(time_points, values$fd_obj))
         } else {
-          mean_curve <- colMeans(values$data)
+          mean_curve <- colMeans(values$data, na.rm = TRUE)
         }
         
         p <- plot_ly(source = "landmark_source") %>%

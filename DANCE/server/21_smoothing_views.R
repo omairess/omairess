@@ -158,7 +158,7 @@
       n_show <- min(n_subj, as.integer(n_req))
       for(i in 1:n_show) {
         # Determine if this curve is selected
-        is_selected <- !is.null(selected_idx) && i == selected_idx
+        is_selected <- isTRUE(!is.null(selected_idx) && i == selected_idx)
 
         # Set color and width based on selection
         curve_color <- if(is_selected) 'rgba(0, 100, 255, 0.9)' else 'rgba(100, 100, 100, 0.3)'
@@ -183,9 +183,11 @@
                              showlegend = FALSE)
       }
 
-      # Add mean curve
+      # Add mean curve: the mean of the OBSERVED values at each time point.
+      # Without na.rm a single missing value removed that time point from the
+      # mean, so on a file with gaps the red curve was mostly absent.
       p <- p %>% add_trace(x = time_points,
-                           y = colMeans(data_to_plot),
+                           y = colMeans(data_to_plot, na.rm = TRUE),
                            type = 'scatter',
                            mode = 'lines',
                            name = "Mean",
@@ -200,7 +202,8 @@
                         clickmode = 'event')
 
       # Apply time axis formatting with hour labels
-      p <- format_plotly_time_axis(p, time_points, tick_step_hours = as.numeric(input$tick_freq_preprocess))
+      p <- format_plotly_time_axis(p, time_points,
+                                   tick_step_hours = as.numeric(input$tick_freq_preprocess %||% 1))
       
       p
     }, error = function(e) {

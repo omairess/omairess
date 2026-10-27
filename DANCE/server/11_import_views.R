@@ -81,7 +81,7 @@
         for(i in 1:n_groups) {
           group_idx <- which(values$group_labels == groups[i])
           if(length(group_idx) > 0) {
-            group_mean <- colMeans(values$data[group_idx, , drop = FALSE])
+            group_mean <- colMeans(values$data[group_idx, , drop = FALSE], na.rm = TRUE)
             lines(time_points_plot, group_mean, col = colors[i], lwd = 3)
           }
         }
@@ -93,7 +93,7 @@
                 col = rgb(0.5, 0.5, 0.5, 0.3), lty = 1,
                 xlab = time_label, ylab = "Value", 
                 main = paste("Raw Functional Data (", n_subj, "subjects)"))
-        lines(time_points_plot, colMeans(values$data), col = "red", lwd = 3)
+        lines(time_points_plot, colMeans(values$data, na.rm = TRUE), col = "red", lwd = 3)
         legend("topright", legend = "Mean", col = "red", lwd = 3)
       }
     }, error = function(e) {
