@@ -32,6 +32,13 @@ dance_clock_hours <- function(time_labels) {
              error = function(e) NA_real_),
     numeric(1), USE.NAMES = FALSE))
   if (any(!is.finite(hours))) return(NULL)
+  # "24" is midnight in many protocols (..., 22, 24, 2, 4, ...): read as 0 when
+  # an earlier hour follows it, i.e. the recording crosses midnight there. A
+  # series that merely ends at 24 (T1 ... T24) is still not taken for clock time.
+  at24 <- which(hours == 24)
+  if (length(at24) && all(vapply(at24, function(i)
+        i < length(hours) && any(hours[(i + 1L):length(hours)] < 24), logical(1))))
+    hours[at24] <- 0
   if (any(hours < 0 | hours >= 24)) return(NULL)
   hours
 }

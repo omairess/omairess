@@ -33,6 +33,10 @@
 
 # --- Packages ---------------------------------------------------------------
 # Required: the app cannot start without these.
+# what the user's session had attached before the app loaded anything (see
+# "Base R is base R inside the app" below)
+DANCE_SEARCH_AT_START <- search()
+
 required_packages <- c("shiny", "shinydashboard", "shinyWidgets", "fda", "mgcv",
                        "plotly", "DT", "dplyr", "tidyr", "ggplot2", "cluster",
                        "readxl")
@@ -193,6 +197,48 @@ if (length(missing_optional)) {
   message(sprintf("  install.packages(c(%s))\n",
                   paste(sprintf('"%s"', missing_optional), collapse = ", ")))
 }
+
+# --- Base R is base R inside the app -----------------------------------------
+# A package attached in the user's session BEFORE the app started can export a
+# function with a base name -- rsat, for one, exports a `sub` -- and every call
+# to sub() in the app then reached that function instead of base::sub, failing
+# with "subscript out of bounds" deep inside the cosinor summary. The server
+# functions look names up here before they reach the attached packages, so the
+# base versions of whatever such a package masks are bound here: the app gets
+# base R, and the user's workspace is left as it was. DANCE's own packages
+# (and R's default ones) are exempt: where they extend a base function, that is
+# what the app was written against.
+DANCE_BASE_RESTORED <- local({
+  # only packages that were attached BEFORE this file ran, and that are not
+  # DANCE's packages or anything they depend on: Matrix (attached with lme4)
+  # extends t(), solve(), as.matrix() ... for sparse matrices, and the mixed
+  # model needs exactly those extensions
+  ours <- base::c(required_packages, base::names(optional_packages))
+  deps <- base::tryCatch(base::unlist(tools::package_dependencies(
+            ours, db = utils::installed.packages(), recursive = TRUE,
+            which = base::c("Depends", "Imports", "LinkingTo")), use.names = FALSE),
+          error = function(e) base::character(0))
+  ours <- base::c(ours, deps, "stats", "graphics", "grDevices", "utils", "datasets",
+                  "methods", "base")
+  attached <- base::sub("^package:", "",
+                        base::grep("^package:", DANCE_SEARCH_AT_START, value = TRUE))
+  base_fns <- base::Filter(function(nm) base::is.function(base::get(nm, envir = base::baseenv())),
+                           base::ls(base::baseenv()))
+  out <- base::list()
+  for (p in base::setdiff(attached, ours)) {
+    hit <- base::intersect(base::ls(base::paste0("package:", p)), base_fns)
+    for (nm in hit) out[[nm]] <- base::c(out[[nm]], p)
+  }
+  out
+})
+for (nm in base::names(DANCE_BASE_RESTORED))
+  base::assign(nm, base::get(nm, envir = base::baseenv()), envir = base::environment())
+if (base::length(DANCE_BASE_RESTORED))
+  base::message("DANCE: using base R's ",
+                base::paste(base::sprintf("%s() (masked by %s)", base::names(DANCE_BASE_RESTORED),
+                                          base::vapply(DANCE_BASE_RESTORED, base::paste, "",
+                                                       collapse = ", ")), collapse = "; "),
+                " inside the app.")
 
 # --- Source the UI and remember the server files ----------------------------
 # The UI files run now (they build tab objects).  The server files must run

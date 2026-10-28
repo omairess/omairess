@@ -713,3 +713,23 @@ vector-mean coefficients and the band from the participants' own curves, as
 before. Overlaying the raw data under two-stage failed with "object 'tv' not
 found" (a variable from another function); fixed.
 `tests/ts_trajectory_views_test.R`.
+
+## 13. A package in the user's session that masks a base function
+
+The cosinor summary failed with "subscript out of bounds" inside sub(). The
+traceback ran sub -> .get_parts -> isFALSE, which is not base R's sub: a package
+attached in the user's R session before the app started exported its own `sub`
+(rsat is one CRAN package that does), and every sub() in the app reached it.
+app.R now records the search path when it starts, and binds base R's version
+of every function such a package masks in the environment the server functions
+look in first, and says so at startup ("DANCE: using base R's sub() (masked by
+...) inside the app"). The user's workspace is not changed. DANCE's own packages
+and their dependencies are exempt: Matrix, attached with lme4, extends t(),
+solve(), as.matrix() and others for sparse matrices, and the mixed model relies
+on those. `tests/base_masking_app_test.R` loads app.R as runApp does with a
+masking `sub` attached; with the old app.R it fails exactly as reported.
+
+Also: a column named ..._24 is read as midnight when the recording carries on
+past it (22, 24, 2, ...), so CORT_10 ... CORT_24, CORT_2 ... CORT_8,
+CORT_10_SD ... CORT_20_SD give 36 h of clock time; a series that merely ends
+at 24 (T1 ... T24) is still not taken for clock time.
