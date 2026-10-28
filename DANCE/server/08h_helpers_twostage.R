@@ -414,12 +414,35 @@ dance_ts_pairwise <- function(df, mod, what, adjust = c("holm", "bonferroni", "n
 # across participants of their own fitted curves at time t. That replaces the
 # app's earlier approximation, which rescaled the whole curve by the amplitude's
 # standard error and was neither a pointwise nor a simultaneous interval.
+# component -- the views the mixed approach offers, on the same scale:
+#   "full"          intercept + trend + harmonics
+#   "baseline_harm" intercept + harmonics, trend removed ("rhythm" is accepted)
+#   "harmonics"     the harmonics alone, centred on zero
+#   "trend"         the non-periodic change from the first observation:
+#                   trend(t) - trend(t0), zero at the start by construction
+# include_trend is the older switch (FALSE = "baseline_harm"), kept for callers.
 dance_ts_group_curves <- function(mod, group_values, times, include_trend = TRUE,
-                                  conf = 0.95) {
+                                  conf = 0.95, component = NULL) {
   df <- dance_ts_frame(mod, group_values)
   if (is.null(df)) return(NULL)
   period <- mod$period %||% 24; K <- mod$n_harmonics %||% 1L
   trend <- mod$trend_type %||% "none"
+  component <- component %||% (if (isTRUE(include_trend)) "full" else "baseline_harm")
+  if (identical(component, "rhythm")) component <- "baseline_harm"
+  t0 <- min(mod$time_vec, na.rm = TRUE)
+  # one participant's (or one coefficient vector's) curve for the component
+  curve_of <- function(coefs, t_offset) {
+    full <- function(tt) dance_rhythm_from_coefs(coefs, tt, period, K, trend,
+                                                 include_trend = TRUE, t_offset = t_offset)
+    base <- function(tt) dance_rhythm_from_coefs(coefs, tt, period, K, trend,
+                                                 include_trend = FALSE, t_offset = t_offset)
+    switch(component,
+      full          = full(times),
+      baseline_harm = base(times),
+      harmonics     = base(times) - coefs[1],
+      trend         = (full(times) - base(times)) - (full(t0) - base(t0)),
+      stop("unknown component: ", component))
+  }
   fits <- mod$individual_fits
   g <- droplevels(factor(df$group))
   q <- stats::qnorm(1 - (1 - conf) / 2)
@@ -429,9 +452,7 @@ dance_ts_group_curves <- function(mod, group_values, times, include_trend = TRUE
     M <- do.call(rbind, lapply(rows, function(i) {
       f <- fits[[df$subject[i]]]
       if (is.null(f) || !isTRUE(f$success) || is.null(f$coefs)) return(NULL)
-      pr <- tryCatch(dance_rhythm_from_coefs(f$coefs, times, period, K, trend,
-                                             include_trend = include_trend,
-                                             t_offset = f$t_offset %||% mod$t_offset %||% 0),
+      pr <- tryCatch(curve_of(f$coefs, f$t_offset %||% mod$t_offset %||% 0),
                      error = function(e) NULL)
       if (is.null(pr) || !all(is.finite(pr))) NULL else pr
     }))
@@ -441,10 +462,7 @@ dance_ts_group_curves <- function(mod, group_values, times, include_trend = TRUE
     gf <- mod$group_fits[[lv]]
     mc <- if (!is.null(gf)) gf$mean_coefs
           else if (identical(lv, "(all)")) mod$pop_mean_fit$mean_coefs else NULL
-    line <- if (!is.null(mc))
-      dance_rhythm_from_coefs(mc, times, period, K, trend,
-                              include_trend = include_trend, t_offset = mod$t_offset %||% 0)
-      else colMeans(M)
+    line <- if (!is.null(mc)) curve_of(mc, mod$t_offset %||% 0) else colMeans(M)
     se <- apply(M, 2, stats::sd) / sqrt(nrow(M))
     out[[lv]] <- data.frame(cell = lv, t = times, fit = line, se = se,
                             lo = line - q * se, hi = line + q * se,
@@ -454,7 +472,7 @@ dance_ts_group_curves <- function(mod, group_values, times, include_trend = TRUE
   if (!length(out)) return(NULL)
   tab <- do.call(rbind, out); rownames(tab) <- NULL
   list(ok = TRUE, table = tab, cells = names(out), times = times, conf = conf,
-       band = "pointwise",
+       band = "pointwise", component = component,
        note = sprintf(paste("Pointwise %.0f%% band: the group's mean-coefficient curve +/- z * SE(t),",
                             "with SE(t) the standard error across participants of their own",
                             "fitted curves. Not simultaneous."), 100 * conf))

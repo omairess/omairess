@@ -4904,8 +4904,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     mod <- ts$mod
     tv <- mod$time_vec
     times <- seq(min(tv, na.rm = TRUE), max(tv, na.rm = TRUE), length.out = 160)
-    dance_ts_group_curves(mod, ts$gvals, times,
-                          include_trend = !identical(component, "rhythm"))
+    dance_ts_group_curves(mod, ts$gvals, times, component = component)
   }
 
   ts_curves_plot <- function() {
@@ -4930,7 +4929,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       for (cl in gc$cells) {
         rows <- sub[g == cl]
         if (!length(rows)) next
-        yy <- as.numeric(t(Y[rows, , drop = FALSE])); xx <- rep(tv, length(rows))
+        yy <- as.numeric(t(Y[rows, , drop = FALSE])); xx <- rep(mod$time_vec, length(rows))
         ok <- is.finite(yy)
         p <- p %>% add_markers(x = xx[ok], y = yy[ok], name = cl, legendgroup = cl, showlegend = FALSE,
                                marker = list(color = dance_group_rgba(cols[[cl]], 0.35), size = 4))
@@ -4941,7 +4940,8 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     p %>% layout(
       xaxis = list(title = if (co != 0) "Clock time" else "Time", tickmode = "array", tickvals = brk,
                    ticktext = dance_clock_label(brk + co, P, show_day = TRUE, with_minutes = FALSE)),
-      yaxis = list(title = if (identical(harmonic_traj_component(), "rhythm")) "Rhythm (trend removed)"
+      yaxis = list(title = if (!identical(harmonic_traj_component(), "full"))
+                     dance_traj_component_label(harmonic_traj_component(), P)
                    else if (!is.null(mod$dv_name)) paste0(mod$dv_name, if (!is.null(mod$dv_units)) paste0(" (", mod$dv_units, ")") else "") else "Response"),
       hovermode = "x unified", legend = list(orientation = "h", y = -0.18))
   }
@@ -5312,7 +5312,13 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
   # them drew a flat zero line and a duplicate. The options now follow the model.
   harmonic_traj_component <- reactive({
     cc <- input$harmonic_traj_component %||% "full"
-    if (!harmonic_is_mixed()) return(if (cc %in% c("full", "rhythm")) cc else "full")
+    if (!harmonic_is_mixed()) {
+      mod <- values$harmonic_model
+      ok <- c("full", "harmonics",
+              if (!identical(mod$trend_type %||% "none", "none")) c("baseline_harm", "trend"))
+      if (identical(cc, "rhythm")) cc <- "baseline_harm"
+      return(if (cc %in% ok) cc else "full")
+    }
     ff <- harmonic_traj()
     # the fit decides the vocabulary, so a stale selection from a previous model
     # -- H2 after refitting with one harmonic, a trend view with no trend --
@@ -5323,8 +5329,13 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
   observe({
     if (!harmonic_is_mixed()) {
       mod <- values$harmonic_model; if (is.null(mod)) return()
-      ch <- c("Full fitted trajectory" = "full")
-      if (!identical(mod$trend_type %||% "none", "none")) ch <- c(ch, "Rhythm only (trend removed)" = "rhythm")
+      # the same views as the mixed approach: with a trend, the trend itself
+      # (the non-periodic change from the first observation), the rhythm with
+      # the trend removed, and the harmonics alone
+      comps <- c("full", "harmonics",
+                 if (!identical(mod$trend_type %||% "none", "none")) c("baseline_harm", "trend"))
+      ch <- stats::setNames(comps, vapply(comps, dance_traj_component_label, character(1),
+                                          period = mod$period %||% 24))
       sel <- isolate(input$harmonic_traj_component) %||% "full"
       updateSelectInput(session, "harmonic_traj_component", choices = ch,
                         selected = if (sel %in% ch) sel else "full")

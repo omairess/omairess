@@ -700,3 +700,16 @@ curves of two-hourly sleepiness ratings with gaps):
 A within-participant factor needs the mixed-effects approach: two-stage
 compares the per-curve estimates as independent groups and says so.
 `tests/repeated_curves_app_test.R` covers the case.
+
+## 12. Two-stage estimated trajectories: the trend views
+
+With a trend in the model, the two-stage "Estimated trajectories" offered only
+the full trajectory and the rhythm with the trend removed, so differences in
+the trend between groups could not be drawn. `dance_ts_group_curves()` now
+takes the component the mixed approach offers -- full, the non-periodic change
+from the first observation (trend(t) - trend(t0), zero at the start), intercept
++ harmonics, harmonics alone -- and computes each group's line from its
+vector-mean coefficients and the band from the participants' own curves, as
+before. Overlaying the raw data under two-stage failed with "object 'tv' not
+found" (a variable from another function); fixed.
+`tests/ts_trajectory_views_test.R`.
