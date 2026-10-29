@@ -47,6 +47,7 @@ values <- reactiveValues(
   # component ANOVA uses it to detect repeated curves, which make a
   # between-groups test anticonservative.
   subject_ids           = NULL,
+  subject_ids_missing   = NULL,   # rows whose identifier cell was empty (server/10_import.R)
   time_labels           = NULL,   # original column names for the time points
   time_numeric          = NULL,   # WaPaa's plotting x coordinates: 1:n_time.
                                   #   NOT clock times — see 03_helpers_clock.R

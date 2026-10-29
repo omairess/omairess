@@ -127,6 +127,7 @@ observeEvent(input$load_data, {
     values$group_variables <- NULL
     values$selected_group_vars <- NULL
     values$subject_ids <- NULL
+    values$subject_ids_missing <- NULL
     values$time_numeric <- NULL
     values$time_clock <- NULL
     values$import_full <- NULL
@@ -277,21 +278,42 @@ observeEvent(input$apply_selection, {
     # captured here and carried through the row filters below alongside the
     # group vectors. Auto-detected; the user can override in the scalar picker.
     values$subject_ids <- NULL
+    values$subject_ids_missing <- NULL
     id_pick <- input$subject_id_var
+    id_col <- NULL
     if (!is.null(id_pick) && nzchar(id_pick) && !identical(id_pick, "_none_") &&
         id_pick %in% names(values$raw_df)) {
       values$subject_ids <- as.character(values$raw_df[[id_pick]])
+      id_col <- id_pick
     } else {
       cand <- names(values$raw_df)[tolower(names(values$raw_df)) %in%
                                      c("id", "subject", "subject_id", "subjectid",
                                        "participant", "participant_id", "pid")]
       if (length(cand)) {
         values$subject_ids <- as.character(values$raw_df[[cand[1]]])
+        id_col <- cand[1]
         cat("Participant identifier auto-detected from column:", cand[1], "\n")
       }
     }
     if (!is.null(values$subject_ids) && length(values$subject_ids) != nrow(values$data)) {
       values$subject_ids <- NULL   # cannot vouch for it; better absent than wrong
+    }
+    # An EMPTY identifier cell. Left as NA, the mixed models dropped that
+    # participant's every observation (lme4 drops rows whose grouping factor is
+    # NA) while the other tabs kept the curve -- one person in one analysis and
+    # not in the next, with nothing said. Each row is one curve here, so an
+    # unnamed row is its own participant: it is named by its row of the data,
+    # and the import says which rows and in which column.
+    if (!is.null(values$subject_ids)) {
+      miss <- is.na(values$subject_ids) | !nzchar(trimws(values$subject_ids))
+      if (any(miss)) {
+        values$subject_ids[miss] <- sprintf("Row %d (no ID)", row_index[miss])
+        values$subject_ids_missing <- list(column = id_col, rows = row_index[miss])
+        showNotification(
+          sprintf("%d row(s) have no participant identifier in column '%s' (data row %s). Each is kept as its own participant, labelled 'Row N (no ID)'. Fill the cell in the file if it belongs to someone.",
+                  sum(miss), id_col, paste(row_index[miss], collapse = ", ")),
+          type = "warning", duration = 15)
+      }
     }
     if (!is.null(values$subject_ids)) {
       n_dup <- sum(duplicated(values$subject_ids))
@@ -729,6 +751,10 @@ output$data_status <- renderPrint({
         cat("  No participant identifier column was found; if a participant contributes\n",
             " more than one row, name the identifier column under 'Participant identifier'.\n", sep = "")
     }
+    sm <- values$subject_ids_missing
+    if (!is.null(sm) && length(sm$rows))
+      cat(sprintf("  %d row(s) have an empty '%s' cell (data row %s, counting from the first row\n  under the header); each is kept as its own participant, labelled 'Row N (no ID)'.\n",
+                  length(sm$rows), sm$column %||% "identifier", paste(sm$rows, collapse = ", ")))
     fr <- values$import_full
     if (!is.null(fr) && !dance_filter_is_empty(values$row_filter)) {
       fk <- dance_filter_keep(fr, values$row_filter$excluded_ids %||% character(0),
