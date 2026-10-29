@@ -56,6 +56,9 @@
   # Run PCA analysis - FIXED with better error handling
   observeEvent(input$run_analysis, {
     cat("Running PCA analysis...\n")
+    # a new PCA has new scores: the component ANOVA on the old ones no longer
+    # describes them (its plot read the new scores with the old result)
+    values$pca_anova <- NULL
     
     if(is.null(values$data)) {
       showNotification("No data loaded", type = "error", duration = 5)

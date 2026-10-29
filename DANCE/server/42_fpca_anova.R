@@ -446,9 +446,16 @@ output$pca_anova_plot <- renderPlotly({
   res <- values$pca_anova
   validate(need(!is.null(res), "Run the component ANOVA to see the score distributions."))
   req(values$pca_results, values$group_variables)
+  # the grouping variable the result was computed on, exactly ([[ ]] with an
+  # empty name fails with "attempt to select less than one element")
+  gv <- res[["group_var"]]
+  validate(need(length(gv) == 1L && !is.na(gv) && nzchar(gv) &&
+                  gv %in% names(values$group_variables),
+                "The grouping variable of this result is no longer available; run the component ANOVA again."))
 
   S <- as.matrix(values$pca_results$scores)
-  g <- droplevels(as.factor(values$group_variables[[res$group_var]]))
+  validate(need(ncol(S) >= res$k, "The PCA has changed since the component ANOVA ran; run it again."))
+  g <- droplevels(as.factor(values$group_variables[[gv]]))
   validate(need(length(g) == nrow(S), "Score rows and group labels are not aligned."))
 
   k <- res$k
