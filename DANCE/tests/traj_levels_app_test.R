@@ -241,6 +241,14 @@ testServer(server, {
         !any(c("mesor", "change", "level") %in% dance_traj_pair_whats(values$harmonic_model$traj)),
       "no MESOR, change or curve-value entry is offered without a trend",
       "the no-trend pairwise menu offers a duplicate level quantity")
+  pw <- harmonic_pairwise_all()
+  ws <- harmonic_traj_whats(values$harmonic_model$traj)
+  ct <- harmonic_traj_ct("intercept", input$harmonic_traj_adjust %||% "holm",
+                         input$harmonic_df_method %||% "kr")
+  chk(!is.null(pw) && all(pw$approach == "mixed") && setequal(unique(pw$quantity), ws) &&
+        isTRUE(all.equal(pw$p_adjusted[pw$quantity == "intercept"], ct$table$p_adj)),
+      sprintf("the mixed pairwise export has every quantity of the menu (%d) with the panel's numbers", length(ws)),
+      sprintf("mixed pairwise export: %s", if (is.null(pw)) "NULL" else paste(unique(pw$quantity), collapse = ",")))
   run(session, "two_stage", "none", 5)
   lv <- harmonic_traj_levels()
   chk(isTRUE(lv$ok) && identical(lv$quantities, "intercept"), "two-stage, no trend: one quantity",

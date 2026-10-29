@@ -6097,6 +6097,63 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
               else sprintf(" p adj is %s-adjusted within each table.", adj)))))
   }
 
+  # EVERY pairwise table of the fitted approach, as one data frame for the CSV
+  # exports: each quantity the "Compare" menu offers, over the whole design,
+  # with the multiplicity adjustment chosen on the tab (the family is the pairs
+  # of one quantity, as on screen). The simple effects within a slice of the
+  # design are not included; they are read on the tab.
+  harmonic_pairwise_all <- function() {
+    adj <- input$harmonic_traj_adjust %||% "holm"
+    one <- function(r, what, approach) {
+      if (!isTRUE(r$ok) || is.null(r$table) || !nrow(r$table)) return(NULL)
+      tb <- r$table
+      col <- function(nm) if (nm %in% names(tb)) tb[[nm]] else rep(NA, nrow(tb))
+      data.frame(approach = approach, quantity = what, label = r$label %||% what,
+                 unit = r$unit %||% "",
+                 comparison = sprintf(if (isTRUE(r$ratio)) "%s / %s" else "%s vs %s",
+                                      tb$cell1, tb$cell2),
+                 n1 = col("n1"), n2 = col("n2"),
+                 estimate = col("estimate"), ci_lo = col("lo"), ci_hi = col("hi"),
+                 conf_level = r$conf %||% 0.95,
+                 statistic = col("statistic"), df1 = col("df1"), df2 = col("df2"),
+                 p = col("p_raw"), p_adjusted = col("p_adj"), adjustment = r$adjust %||% adj,
+                 joint_test = col("joint"), cohen_d = col("d"),
+                 method = if ("method" %in% names(tb)) tb$method else (r$method %||% ""),
+                 stringsAsFactors = FALSE)
+    }
+    if (harmonic_is_mixed()) {
+      ff <- harmonic_traj()
+      if (!isTRUE(ff$ok)) return(NULL)
+      dfm <- input$harmonic_df_method %||% "kr"
+      ws <- harmonic_traj_whats(ff)
+      rows <- lapply(ws, function(w) {
+        r <- if (w %in% DANCE_TRAJ_SAT_PARS) dance_traj_sat_pairwise(ff$sat, w, adjust = adj)
+             else harmonic_traj_ct(w, adj, dfm)
+        if (w %in% DANCE_TRAJ_SAT_PARS) r$label <- dance_traj_sat_label(w, ff$dv_units)
+        one(r, w, "mixed")
+      })
+    } else {
+      ts <- harmonic_ts()
+      if (is.null(ts) || !isTRUE(ts$ok) || ts$n_groups < 2) return(NULL)
+      rows <- lapply(dance_ts_pair_whats(ts$mod), function(w)
+        one(dance_ts_pairwise(ts$df, ts$mod, w, adjust = adj), w, "two-stage"))
+    }
+    out <- do.call(rbind, Filter(Negate(is.null), rows))
+    if (is.null(out)) return(NULL)
+    rownames(out) <- NULL
+    out
+  }
+  harmonic_pairwise_csv <- function(file) {
+    tab <- withProgress(message = "Computing every pairwise table...", value = 0.5,
+                        harmonic_pairwise_all())
+    if (is.null(tab))
+      tab <- data.frame(message = "No pairwise comparisons: fit the cosinor with a grouping or design factor of at least two levels.")
+    utils::write.csv(tab, file, row.names = FALSE, na = "")
+  }
+  output$download_harmonic_pairwise <- downloadHandler(
+    filename = function() sprintf("cosinor_pairwise_%s.csv", Sys.Date()),
+    content = harmonic_pairwise_csv)
+
   output$harmonic_traj_pairwise <- renderUI({
     if (!harmonic_is_mixed()) return(ts_pairwise())
     ff <- harmonic_traj(); req(isTRUE(ff$ok))

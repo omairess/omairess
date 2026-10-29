@@ -792,3 +792,31 @@ not the rise at t = tau, which is A * (1 - 1/e), about 63% of A. When the
 per-cell nonlinear model (a tau per cell) has been fitted, its A replaces this
 entry, so the menu never shows two different numbers called A.
 
+
+## 16. An empty participant identifier
+
+A file whose identifier column has an empty cell (one row in a real file: the
+cell between subjects 22 and 24) passed NA on as that participant's
+identifier. The participant picker showed the row as "Row 22", and the mixed
+cosinor dropped all of its observations, because lme4's model frame removes
+rows whose grouping factor is NA (on a 24-participant test file: 23 groups,
+184 of 192 observations). The two-stage approach and the other tabs kept it.
+Each row of a wide file is one curve, so an unnamed row is one participant
+of its own. The import now names it "Row N (no ID)" (N is its row of the data,
+counting from the first row under the header), says so in a notification and
+in the data status, and every analysis sees the same participants.
+`tests/missing_id_app_test.R` fails on the old import (23 participants in the
+mixed fit) and passes on the new one.
+
+## 17. The cosinor's pairwise tables in the exports
+
+Every quantity the "Compare" menu offers, mixed or two-stage, is written to
+one CSV (under the pairwise panel, and on the Export tab). It covers the whole
+design, with the multiplicity adjustment chosen on the tab, and its family is
+the pairs of one quantity, as on screen. Columns: the quantity and its unit,
+the pair, the estimate with its interval, the statistic and its df, p and
+adjusted p, and Cohen's d for the two-stage Welch tests. Joint block tests
+have no single estimate, and their rows say so (joint_test = TRUE). The
+exported R script computes the same tables (traj_pairwise or ts_pairwise)
+instead of naming the function in a comment. `tests/cosinor_export_test.R`
+compares the script's tables with the app's.

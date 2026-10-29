@@ -778,8 +778,15 @@ output$data_status <- renderPrint({
       cat("  also be given the times manually on its own tab.\n")
     }
     if(!is.null(values$group_labels)) {
-      cat("Groups:", length(unique(values$group_labels)), "levels of", values$selected_group_vars[1] %||% "the first scalar variable", "\n")
-      cat("Group distribution:", table(values$group_labels), "\n")
+      # an empty cell is not a level: counted as one, a 2-group variable with
+      # missing values read "3 levels" beside a distribution of two counts
+      gl <- values$group_labels
+      n_miss <- sum(is.na(gl) | !nzchar(trimws(as.character(gl))))
+      cat("Groups:", length(unique(gl[!(is.na(gl) | !nzchar(trimws(as.character(gl))))])), "levels of",
+          values$selected_group_vars[1] %||% "the first scalar variable",
+          if (n_miss) sprintf("(%d row(s) with no value)", n_miss) else "", "\n")
+      tb <- table(gl)
+      cat("Group distribution:", paste(sprintf("%s = %d", names(tb), as.integer(tb)), collapse = ", "), "\n")
     } else {
       cat("No grouping variable selected.\n")
     }

@@ -142,7 +142,7 @@ testServer(server, {
   ff <- values$harmonic_model$traj
   if (!isTRUE(ff$ok)) fail("the app's mixed fit failed:", ff$message %||% "")
   app_tests <- dance_traj_tests_table(harmonic_traj_tests())
-  sc <- run_script(generate_analysis_code(), "mixed", c("traj_fit", "traj_tests"))
+  sc <- run_script(generate_analysis_code(), "mixed", c("traj_fit", "traj_tests", "traj_pairwise"))
   if (!is.null(sc)) {
     tf <- sc$traj_fit
     chk <- function(cond, good, bad) if (isTRUE(cond)) ok(good) else fail(bad)
@@ -162,6 +162,17 @@ testServer(server, {
     same("A, tau and A/tau per cell",
          ff$sat$table[, c("A", "tau", "init_slope")], tf$sat$table[, c("A", "tau", "init_slope")])
     same("one tau vs per cell (likelihood ratio)", ff$sat$lrt$statistic, tf$sat$lrt$statistic)
+    # the script's pairwise tables are the trajectory model's own quantities
+    # (the per-cell A/tau tables are printed above it as sat$table)
+    pw <- harmonic_pairwise_all()
+    pw <- pw[pw$quantity %in% names(sc$traj_pairwise), , drop = FALSE]
+    chk(nrow(pw) > 0 && all(intersect(dance_traj_pair_whats(ff), unique(harmonic_pairwise_all()$quantity)) %in%
+                              names(sc$traj_pairwise)),
+        sprintf("the script computes the pairwise tables (%d quantities)", length(sc$traj_pairwise)),
+        sprintf("pairwise: script %s", paste(names(sc$traj_pairwise), collapse = ",")))
+    same("every pairwise adjusted p",
+         pw$p_adjusted,
+         unlist(lapply(unique(pw$quantity), function(w) sc$traj_pairwise[[w]]$p_adj), use.names = FALSE))
   }
 
   # ====================================================== mixed, AR(1) residuals
@@ -195,7 +206,7 @@ testServer(server, {
   mod <- values$harmonic_model
   sc <- run_script(generate_analysis_code(), "two_stage",
                    c("ts_params", "ts_gate", "ts_df", "ts_model", "ts_components", "ts_boot",
-                     "ts_models", "cosinor_params"))
+                     "ts_models", "cosinor_params", "ts_pairwise"))
   if (!is.null(sc)) {
     num_cols <- names(mod$individual_params)[vapply(mod$individual_params, is.numeric, logical(1))]
     same("the parameter table (every column of every summarised participant)",
@@ -220,6 +231,16 @@ testServer(server, {
          mod$boot_results[c("mesor_ci", "amplitude_ci", "acrophase_ci")],
          sc$ts_boot[c("mesor_ci", "amplitude_ci", "acrophase_ci")])
     same("the nested set's AICc", mod$model_selection$AICc, sc$ts_models$AICc)
+    # every pairwise table: the script's against the app's CSV export
+    pw <- harmonic_pairwise_all()
+    chk <- function(cond, good, bad) if (isTRUE(cond)) ok(good) else fail(bad)
+    chk(!is.null(sc$ts_pairwise) && setequal(names(sc$ts_pairwise), unique(pw$quantity)),
+        sprintf("the script computes every pairwise table (%d quantities)", length(unique(pw$quantity))),
+        "the script's pairwise tables are not the app's")
+    same("every pairwise estimate and adjusted p",
+         pw[, c("estimate", "p_adjusted")],
+         do.call(rbind, lapply(unique(pw$quantity), function(w)
+           data.frame(estimate = sc$ts_pairwise[[w]]$estimate, p_adjusted = sc$ts_pairwise[[w]]$p_adj))))
   }
 })
 

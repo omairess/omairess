@@ -1465,9 +1465,18 @@
           add("print(unlist(traj_fit$sat$lrt[c(\"statistic\", \"df\", \"p\", \"tau_common\")]))")
         }
         add("")
-        add("# Pairwise tables, as on the comparison tab -- one per quantity, e.g.:")
-        add(sprintf("#   dance_traj_contrasts(traj_fit, \"intercept\", adjust = \"holm\", df_method = \"%s\")", dfm))
-        add("# with the quantity any of dance_traj_pair_whats(traj_fit).")
+        add("# Pairwise tables, as on the comparison tab: every quantity, whole design,")
+        add(sprintf("# %s-adjusted within each quantity", input$harmonic_traj_adjust %||% "holm"))
+        add("traj_pairwise <- list()")
+        add("for (w in dance_traj_pair_whats(traj_fit)) {")
+        add(sprintf("  r <- dance_traj_contrasts(traj_fit, w, adjust = \"%s\", df_method = \"%s\")",
+                    input$harmonic_traj_adjust %||% "holm", dfm))
+        add("  if (!isTRUE(r$ok)) next")
+        add("  traj_pairwise[[w]] <- r$table")
+        add("  cat(\"\\n==\", r$label, \"==\\n\", r$unit, \"\\n\")")
+        add("  print(r$table[intersect(c(\"cell1\", \"cell2\", \"estimate\", \"lo\", \"hi\", \"statistic\",")
+        add("                            \"df1\", \"df2\", \"p_raw\", \"p_adj\"), names(r$table))])")
+        add("}")
         add("")
       } else {
         add("# The app's own functions, verbatim:")
@@ -1541,9 +1550,19 @@
           add("  test = r$label, F = if (isTRUE(r$ok)) r$F else NA, df1 = if (isTRUE(r$ok)) r$df1 else NA,")
           add("  df2 = if (isTRUE(r$ok)) r$df2 else NA, p = if (isTRUE(r$ok)) r$p else NA,")
           add("  method = if (isTRUE(r$ok)) r$method else r$message))))")
-          add("# Pairwise tables, as on the comparison tab, e.g.:")
-          add("#   dance_ts_pairwise(ts_df, ts_model, \"intercept\", adjust = \"holm\")")
-          add("# with the quantity any of dance_ts_pair_whats(ts_model).")
+          add("# Pairwise tables, as on the comparison tab: every quantity (Welch t, or")
+          add(sprintf("# Watson-Williams for an acrophase), %s-adjusted within each quantity",
+                      input$harmonic_traj_adjust %||% "holm"))
+          add("ts_pairwise <- list()")
+          add("for (w in dance_ts_pair_whats(ts_model)) {")
+          add(sprintf("  r <- dance_ts_pairwise(ts_df, ts_model, w, adjust = \"%s\")",
+                      input$harmonic_traj_adjust %||% "holm"))
+          add("  if (!isTRUE(r$ok)) next")
+          add("  ts_pairwise[[w]] <- r$table")
+          add("  cat(\"\\n==\", r$label, \"==\\n\", r$unit, \"\\n\")")
+          add("  print(r$table[c(\"cell1\", \"cell2\", \"n1\", \"n2\", \"estimate\", \"lo\", \"hi\",")
+          add("                  \"statistic\", \"df2\", \"p_raw\", \"p_adj\", \"d\")])")
+          add("}")
         }
         if (!is.null(hm$boot_results)) {
           add("")
@@ -1812,6 +1831,12 @@
   # one function writes it, so this file cannot drift from what is on screen.
   # The copy that used to be built here printed the two-stage intercept as
   # "MESOR" and knew nothing of the mixed-effects approach.
+  # Every pairwise table of the fitted cosinor, mixed or two-stage: the same
+  # function as the button under the tab's pairwise panel.
+  output$export_harmonic_pairwise <- downloadHandler(
+    filename = function() sprintf("cosinor_pairwise_%s.csv", Sys.Date()),
+    content = function(file) harmonic_pairwise_csv(file))
+
   output$export_harmonic_summary <- downloadHandler(
     filename = function() paste0("harmonic_summary_", Sys.Date(), ".txt"),
     content = function(file) {

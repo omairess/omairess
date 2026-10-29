@@ -109,6 +109,21 @@ testServer(server, {
   session$setInputs(harmonic_traj_diff_a = "0", harmonic_traj_diff_b = "1", harmonic_traj_diff_sim = TRUE)
   p <- tryCatch(output$harmonic_traj_diff_plot, error = function(e) paste("ERROR", conditionMessage(e)))
   chk(!is.character(p) || !grepl("ERROR", p), "the difference plot renders", sprintf("difference plot: %s", p))
+
+  # every pairwise table of the two-stage fit, in the CSV the tab and the
+  # Export tab download -- the same rows the pairwise panel prints
+  pw <- harmonic_pairwise_all()
+  whats <- dance_ts_pair_whats(harmonic_ts()$mod)
+  one <- dance_ts_pairwise(harmonic_ts()$df, harmonic_ts()$mod, "intercept", adjust = "holm")
+  chk(!is.null(pw) && all(pw$approach == "two-stage") && setequal(unique(pw$quantity), whats) &&
+        isTRUE(all.equal(pw$estimate[pw$quantity == "intercept"], one$table$estimate)) &&
+        isTRUE(all.equal(pw$p_adjusted[pw$quantity == "intercept"], one$table$p_adj)),
+      sprintf("the pairwise export has every two-stage quantity (%d) with the panel's numbers", length(whats)),
+      sprintf("pairwise export: %s", if (is.null(pw)) "NULL" else paste(unique(pw$quantity), collapse = ",")))
+  f <- tryCatch(output$download_harmonic_pairwise, error = function(e) NULL)
+  csv <- if (!is.null(f) && file.exists(f)) utils::read.csv(f) else NULL
+  chk(!is.null(csv) && nrow(csv) == nrow(pw) && all(c("comparison", "estimate", "ci_lo", "p_adjusted") %in% names(csv)),
+      "the CSV downloads with one row per pair and quantity", "the pairwise CSV did not download")
 })
 cat(sprintf("\n%s\n", if (failures == 0) "ALL CHECKS PASSED" else sprintf("%d CHECK(S) FAILED", failures)))
 if (failures > 0) quit(status = 1)

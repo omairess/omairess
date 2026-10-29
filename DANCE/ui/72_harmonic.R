@@ -616,6 +616,9 @@ ui_tab_harmonic <- tabItem(
                                              selected = "holm"))
                      ),
                      uiOutput("harmonic_traj_pairwise"),
+                     downloadButton("download_harmonic_pairwise",
+                                    "Download every pairwise table (CSV)",
+                                    class = "btn-sm"),
 
             )
           )
