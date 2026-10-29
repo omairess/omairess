@@ -733,3 +733,30 @@ Also: a column named ..._24 is read as midnight when the recording carries on
 past it (22, 24, 2, ...), so CORT_10 ... CORT_24, CORT_2 ... CORT_8,
 CORT_10_SD ... CORT_20_SD give 36 h of clock time; a series that merely ends
 at 24 (T1 ... T24) is still not taken for clock time.
+
+## 14. Two-stage estimated trajectories: the mixed model's views and bands
+
+The two-stage panel now offers what the mixed one does, where a two-stage
+counterpart exists:
+
+- **Each harmonic on its own** (with more than one harmonic): harmonic k's
+  cosine and sine coefficients alone, centred on zero.
+- **Simultaneous bands** for the group curves and for the difference between
+  two groups. When the view is a fixed linear combination x(t)'b of the
+  coefficients (no trend, a linear or log trend; any view without the trend),
+  each participant's b_i is one draw, and Hotelling's T^2 gives a band that
+  holds for the whole curve at once: mean curve +/- c SE(t), c^2 = d (n - 1) /
+  (n - d) F(d, n - d), d the coefficients the view uses, SE(t) the SD of the
+  participants' curves at t over sqrt(n) (Scheffe's method with Hotelling's
+  T^2). The difference of two groups: the two-sample version with pooled
+  covariance, c^2 = d (N - 2) / (N - d - 1) F(d, N - d - 1). Simulated (2000
+  data sets each, d = 6): the whole true curve was covered in 1.000, 1.000 and
+  0.995 of them for n = 10, 20, 40 -- conservative, as Scheffe bands are --
+  against 0.66 to 0.75 for the pointwise band. With small groups the band is
+  wide (n = 12, d = 6: c = 6.86). With a saturating trend every participant
+  has their own tau, the curves are not linear in shared coefficients, and the
+  band stays pointwise; the note under the plot says so.
+- The difference plot takes the same pointwise/simultaneous choice as under
+  the mixed approach (`dance_ts_diff_curve`).
+
+`tests/ts_trajectory_views_test.R`.

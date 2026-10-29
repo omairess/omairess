@@ -420,9 +420,21 @@ dance_ts_pairwise <- function(df, mod, what, adjust = c("holm", "bonferroni", "n
 #   "harmonics"     the harmonics alone, centred on zero
 #   "trend"         the non-periodic change from the first observation:
 #                   trend(t) - trend(t0), zero at the start by construction
+#   "harmonicK"     harmonic K alone, centred on zero
 # include_trend is the older switch (FALSE = "baseline_harm"), kept for callers.
+#
+# band -- "pointwise" (mean curve +/- z SE(t)) or "simultaneous": the two-stage
+# counterpart of the mixed model's Scheffe band. When the curve is a fixed
+# linear combination x(t)'b of the coefficients (no trend, or a linear or log
+# one), each participant's b_i is one draw, and Hotelling's T^2 gives a band
+# that holds for every t at once: x(t)'bbar +/- c * sqrt(x(t)' S x(t) / n),
+# c^2 = d (n - 1) / (n - d) F(d, n - d), d the number of coefficients the view
+# uses (Scheffe 1953 with Hotelling's T^2). sqrt(x' S x / n) is the SD of the
+# participants' curves at t over sqrt(n), the pointwise SE. With a saturating
+# trend every participant has their own tau, the curves are not linear in shared
+# coefficients, and the band stays pointwise (simultaneous_ok = FALSE).
 dance_ts_group_curves <- function(mod, group_values, times, include_trend = TRUE,
-                                  conf = 0.95, component = NULL) {
+                                  conf = 0.95, component = NULL, band = "pointwise") {
   df <- dance_ts_frame(mod, group_values)
   if (is.null(df)) return(NULL)
   period <- mod$period %||% 24; K <- mod$n_harmonics %||% 1L
@@ -430,8 +442,20 @@ dance_ts_group_curves <- function(mod, group_values, times, include_trend = TRUE
   component <- component %||% (if (isTRUE(include_trend)) "full" else "baseline_harm")
   if (identical(component, "rhythm")) component <- "baseline_harm"
   t0 <- min(mod$time_vec, na.rm = TRUE)
+  n_tr <- switch(trend, none = 0L, linear = 1L, log = 1L, exp_sat = 2L, 0L)
+  kh <- dance_traj_component_harmonic(component)
+  # coefficients the view uses (for the simultaneous band)
+  d_view <- if (!is.na(kh)) 2L else switch(component,
+    full = 1L + n_tr + 2L * K, baseline_harm = 1L + 2L * K, harmonics = 2L * K,
+    trend = n_tr, 2L * K)
+  linear_view <- !identical(trend, "exp_sat") || component %in% c("baseline_harm", "harmonics") ||
+                 !is.na(kh)
   # one participant's (or one coefficient vector's) curve for the component
   curve_of <- function(coefs, t_offset) {
+    if (!is.na(kh)) {
+      off <- 1L + n_tr; w <- 2 * pi * kh / period
+      return(coefs[off + 2L * kh - 1L] * cos(w * times) + coefs[off + 2L * kh] * sin(w * times))
+    }
     full <- function(tt) dance_rhythm_from_coefs(coefs, tt, period, K, trend,
                                                  include_trend = TRUE, t_offset = t_offset)
     base <- function(tt) dance_rhythm_from_coefs(coefs, tt, period, K, trend,
@@ -446,7 +470,8 @@ dance_ts_group_curves <- function(mod, group_values, times, include_trend = TRUE
   fits <- mod$individual_fits
   g <- droplevels(factor(df$group))
   q <- stats::qnorm(1 - (1 - conf) / 2)
-  out <- list()
+  out <- list(); curves <- list()
+  simultaneous <- identical(band, "simultaneous") && linear_view
   for (lv in levels(g)) {
     rows <- which(g == lv)
     M <- do.call(rbind, lapply(rows, function(i) {
@@ -464,18 +489,39 @@ dance_ts_group_curves <- function(mod, group_values, times, include_trend = TRUE
           else if (identical(lv, "(all)")) mod$pop_mean_fit$mean_coefs else NULL
     line <- if (!is.null(mc)) curve_of(mc, mod$t_offset %||% 0) else colMeans(M)
     se <- apply(M, 2, stats::sd) / sqrt(nrow(M))
+    n <- nrow(M)
+    crit <- q
+    if (simultaneous) {
+      # the band is centred on x(t)'bbar, the mean of the participants' curves
+      line <- colMeans(M)
+      crit <- if (n > d_view) sqrt(d_view * (n - 1) / (n - d_view) *
+                                   stats::qf(conf, d_view, n - d_view)) else NA_real_
+    }
+    curves[[lv]] <- M
     out[[lv]] <- data.frame(cell = lv, t = times, fit = line, se = se,
-                            lo = line - q * se, hi = line + q * se,
-                            mean_of_curves = colMeans(M), n = nrow(M),
+                            lo = line - crit * se, hi = line + crit * se,
+                            mean_of_curves = colMeans(M), n = n, crit = crit,
                             stringsAsFactors = FALSE)
   }
   if (!length(out)) return(NULL)
   tab <- do.call(rbind, out); rownames(tab) <- NULL
   list(ok = TRUE, table = tab, cells = names(out), times = times, conf = conf,
-       band = "pointwise", component = component,
-       note = sprintf(paste("Pointwise %.0f%% band: the group's mean-coefficient curve +/- z * SE(t),",
-                            "with SE(t) the standard error across participants of their own",
-                            "fitted curves. Not simultaneous."), 100 * conf))
+       band = if (simultaneous) "simultaneous" else "pointwise", component = component,
+       curves = curves, d = d_view, simultaneous_ok = linear_view,
+       note = if (simultaneous) sprintf(paste(
+                "Simultaneous %.0f%% band: the mean of the participants' curves +/- c * SE(t),",
+                "c from Hotelling's T^2 over the %d coefficient(s) this view uses (c = %s for",
+                "n = %s) -- it covers the whole group curve at once, as the mixed model's",
+                "Scheffe band does."), 100 * conf, d_view,
+                paste(unique(format(signif(tab$crit, 3))), collapse = "/"),
+                paste(unique(tab$n), collapse = "/"))
+              else paste0(sprintf(paste("Pointwise %.0f%% band: the group's mean-coefficient curve +/- z * SE(t),",
+                                  "with SE(t) the standard error across participants of their own",
+                                  "fitted curves. Not simultaneous."), 100 * conf),
+                          if (identical(band, "simultaneous") && !linear_view) paste(
+                            " A simultaneous band is not available for this view: with a saturating",
+                            "trend every participant has their own tau, so the curves are not a",
+                            "linear combination of shared coefficients.") else ""))
 }
 
 
@@ -489,6 +535,43 @@ dance_ts_group_curves <- function(mod, group_values, times, include_trend = TRUE
 # are functions now, called by the app and written verbatim into the script.
 
 # The parameter table's columns, for an analysis with no successful fit.
+# THE DIFFERENCE OF TWO GROUPS' CURVES, A - B, from dance_ts_group_curves()
+# output (the same component). Pointwise: the two SEs added in quadrature, z.
+# Simultaneous (curves linear in the coefficients only): the two-sample
+# Hotelling T^2 band, pooled covariance, c^2 = d (N - 2) / (N - d - 1)
+# F(d, N - d - 1), SE(t) = sqrt(pooled var(t) (1/nA + 1/nB)).
+dance_ts_diff_curve <- function(gc, a, b, band = "pointwise", conf = 0.95) {
+  if (is.null(gc) || !all(c(a, b) %in% gc$cells))
+    return(list(ok = FALSE, message = "Both groups need at least two converged fits."))
+  MA <- gc$curves[[a]]; MB <- gc$curves[[b]]
+  nA <- nrow(MA); nB <- nrow(MB); N <- nA + nB; d <- gc$d
+  diff <- colMeans(MA) - colMeans(MB)
+  sim <- identical(band, "simultaneous") && isTRUE(gc$simultaneous_ok)
+  if (sim) {
+    vp <- ((nA - 1) * apply(MA, 2, stats::var) + (nB - 1) * apply(MB, 2, stats::var)) / (N - 2)
+    se <- sqrt(vp * (1 / nA + 1 / nB))
+    crit <- if (N - d - 1 > 0) sqrt(d * (N - 2) / (N - d - 1) * stats::qf(conf, d, N - d - 1)) else NA_real_
+  } else {
+    se <- sqrt(apply(MA, 2, stats::var) / nA + apply(MB, 2, stats::var) / nB)
+    crit <- stats::qnorm(1 - (1 - conf) / 2)
+  }
+  lo <- diff - crit * se; hi <- diff + crit * se
+  list(ok = TRUE, cell1 = a, cell2 = b, band = if (sim) "simultaneous" else "pointwise",
+       table = data.frame(t = gc$times, diff = diff, se = se, lo = lo, hi = hi,
+                          excludes_zero = is.finite(lo) & (lo > 0 | hi < 0)),
+       note = if (sim) sprintf(paste(
+                "Difference of the two groups' mean curves with a SIMULTANEOUS %.0f%% band",
+                "(two-sample Hotelling T^2 over %d coefficient(s), pooled covariance; c = %s):",
+                "it can be read across the whole curve as one statement."),
+                100 * conf, d, format(signif(crit, 3)))
+              else paste0(sprintf(paste("Difference of the two groups' mean curves with a POINTWISE",
+                                 "%.0f%% band from the two standard errors added in quadrature",
+                                 "(independent groups). Not simultaneous: it cannot be read across",
+                                 "the whole curve as one statement."), 100 * conf),
+                         if (identical(band, "simultaneous") && !isTRUE(gc$simultaneous_ok))
+                           " A simultaneous band is not available with a saturating trend." else ""))
+}
+
 dance_ts_param_cols <- function(trend_type, n_harmonics) {
   cols <- c("subject", "mesor", "mesor_se", "mesor_adj", "value_at_start", "trend_change")
   cols <- c(cols, switch(as.character(trend_type),

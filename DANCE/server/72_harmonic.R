@@ -4899,12 +4899,12 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
               "curve</b>; the fitted-curve-peak rows give that."))))
   }
 
-  ts_group_curves <- function(component = "full") {
+  ts_group_curves <- function(component = "full", band = input$harmonic_traj_band %||% "pointwise") {
     ts <- harmonic_ts(); if (is.null(ts) || !isTRUE(ts$ok)) return(NULL)
     mod <- ts$mod
     tv <- mod$time_vec
     times <- seq(min(tv, na.rm = TRUE), max(tv, na.rm = TRUE), length.out = 160)
-    dance_ts_group_curves(mod, ts$gvals, times, component = component)
+    dance_ts_group_curves(mod, ts$gvals, times, component = component, band = band)
   }
 
   ts_curves_plot <- function() {
@@ -4950,20 +4950,10 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     ts <- harmonic_ts(); if (is.null(ts) || !isTRUE(ts$ok)) return(list(ok = FALSE, message = ts$message %||% ""))
     a <- input$harmonic_traj_diff_a; b <- input$harmonic_traj_diff_b
     req(a, b)
-    gc <- ts_group_curves("full")
-    if (is.null(gc) || !all(c(a, b) %in% gc$cells))
-      return(list(ok = FALSE, message = "Both groups need at least two converged fits."))
-    da <- gc$table[gc$table$cell == a, ]; db <- gc$table[gc$table$cell == b, ]
-    z <- stats::qnorm(0.975)
-    se <- sqrt(da$se^2 + db$se^2)
-    list(ok = TRUE, cell1 = a, cell2 = b,
-         table = data.frame(t = da$t, diff = da$fit - db$fit, se = se,
-                            lo = da$fit - db$fit - z * se, hi = da$fit - db$fit + z * se),
-         band = "pointwise",
-         note = paste("Difference of the two groups' mean-coefficient curves with a POINTWISE",
-                      "95% band from the two standard errors added in quadrature",
-                      "(independent groups). Not simultaneous: it cannot be read across",
-                      "the whole curve as one statement."))
+    # the same difference the mixed panel draws -- the full trajectory, pointwise
+    # or simultaneous -- from the participants' own curves
+    sim <- if (isTRUE(input$harmonic_traj_diff_sim)) "simultaneous" else "pointwise"
+    dance_ts_diff_curve(ts_group_curves("full", band = sim), a, b, band = sim)
   })
 
   ts_pairwise <- function() {
@@ -5314,7 +5304,8 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     cc <- input$harmonic_traj_component %||% "full"
     if (!harmonic_is_mixed()) {
       mod <- values$harmonic_model
-      ok <- c("full", "harmonics",
+      K <- as.integer(mod$n_harmonics %||% 1L)
+      ok <- c("full", "harmonics", if (K > 1L) sprintf("harmonic%d", seq_len(K)),
               if (!identical(mod$trend_type %||% "none", "none")) c("baseline_harm", "trend"))
       if (identical(cc, "rhythm")) cc <- "baseline_harm"
       return(if (cc %in% ok) cc else "full")
@@ -5332,7 +5323,10 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       # the same views as the mixed approach: with a trend, the trend itself
       # (the non-periodic change from the first observation), the rhythm with
       # the trend removed, and the harmonics alone
-      comps <- c("full", "harmonics",
+      # the same vocabulary dance_traj_components() gives the mixed model,
+      # including each harmonic on its own when there is more than one
+      K <- as.integer(mod$n_harmonics %||% 1L)
+      comps <- c("full", "harmonics", if (K > 1L) sprintf("harmonic%d", seq_len(K)),
                  if (!identical(mod$trend_type %||% "none", "none")) c("baseline_harm", "trend"))
       ch <- stats::setNames(comps, vapply(comps, dance_traj_component_label, character(1),
                                           period = mod$period %||% 24))
@@ -5427,8 +5421,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
   output$harmonic_traj_band_note <- renderUI({
     if (!harmonic_is_mixed()) {
       gc <- ts_group_curves(harmonic_traj_component())
-      return(if (is.null(gc)) NULL else tags$div(style = "font-size:11px;color:#777;margin-top:4px",
-        paste(gc$note, "Simultaneous (Scheffe) bands are not available under two-stage.")))
+      return(if (is.null(gc)) NULL else tags$div(style = "font-size:11px;color:#777;margin-top:4px", gc$note))
     }
     ff <- harmonic_traj(); req(isTRUE(ff$ok))
     cmp <- harmonic_traj_component()

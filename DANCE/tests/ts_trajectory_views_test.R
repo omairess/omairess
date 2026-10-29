@@ -6,7 +6,9 @@
 # from the first observation), the rhythm with the trend removed, and the
 # harmonics alone. It used to offer only the first and third, so trend
 # differences between groups could not be seen; and overlaying the raw data
-# failed with "object 'tv' not found".
+# failed with "object 'tv' not found". With more than one harmonic each one has
+# its own view, and the bands can be simultaneous (Hotelling's T^2), as the mixed
+# model's Scheffe bands are -- except with a saturating trend, where they cannot.
 #
 # Run with:   Rscript tests/ts_trajectory_views_test.R      (from the DANCE directory)
 # ==============================================================================
@@ -74,6 +76,39 @@ testServer(server, {
   # the old name still works
   chk(identical(ts_group_curves("rhythm")$component, "baseline_harm"), "'rhythm' still means trend removed",
       "'rhythm' no longer maps")
+  # a saturating trend: no simultaneous band for the full curve, and it says so
+  g_sat <- ts_group_curves("full", band = "simultaneous")
+  chk(identical(g_sat$band, "pointwise") && grepl("not available for this view", g_sat$note),
+      "with a saturating trend the full-curve band stays pointwise, and says why",
+      "a simultaneous band was claimed for a saturating trend")
+
+  # ---- a linear trend and two harmonics: every view the mixed model offers ----
+  session$setInputs(harmonic_trend_type = "linear", n_harmonics = 2, run_harmonic = 2); session$flushReact()
+  for (cmp in c("harmonic1", "harmonic2")) {
+    session$setInputs(harmonic_traj_component = cmp); session$flushReact()
+    chk(identical(harmonic_traj_component(), cmp), sprintf("the '%s' view is offered under two-stage", cmp),
+        sprintf("the '%s' view is refused", cmp))
+    g <- ts_group_curves(cmp)
+    chk(!is.null(g) && all(is.finite(g$table$fit)) && abs(mean(g$table$fit)) < 1,
+        sprintf("the '%s' view is the harmonic alone, centred on zero", cmp), sprintf("'%s' is wrong", cmp))
+  }
+  gp <- ts_group_curves("full", band = "pointwise"); gs <- ts_group_curves("full", band = "simultaneous")
+  n0 <- gs$table$n[1]; d <- gs$d
+  crit <- sqrt(d * (n0 - 1) / (n0 - d) * qf(0.95, d, n0 - d))
+  chk(identical(gs$band, "simultaneous") && d == 6L &&
+        isTRUE(all.equal(gs$table$crit[1], crit)) &&
+        all(gs$table$hi - gs$table$lo > gp$table$hi - gp$table$lo),
+      sprintf("the simultaneous band is Hotelling's (d = 6, c = %.2f) and wider than the pointwise", crit),
+      "the simultaneous band is not the Hotelling band")
+  dps <- dance_ts_diff_curve(gs, "0", "1", band = "simultaneous")
+  dpp <- dance_ts_diff_curve(gp, "0", "1", band = "pointwise")
+  chk(isTRUE(dps$ok) && identical(dps$band, "simultaneous") &&
+        all(dps$table$hi - dps$table$lo > dpp$table$hi - dpp$table$lo) &&
+        isTRUE(all.equal(dps$table$diff, dpp$table$diff)),
+      "the difference curve has a simultaneous band too", "the simultaneous difference band is wrong")
+  session$setInputs(harmonic_traj_diff_a = "0", harmonic_traj_diff_b = "1", harmonic_traj_diff_sim = TRUE)
+  p <- tryCatch(output$harmonic_traj_diff_plot, error = function(e) paste("ERROR", conditionMessage(e)))
+  chk(!is.character(p) || !grepl("ERROR", p), "the difference plot renders", sprintf("difference plot: %s", p))
 })
 cat(sprintf("\n%s\n", if (failures == 0) "ALL CHECKS PASSED" else sprintf("%d CHECK(S) FAILED", failures)))
 if (failures > 0) quit(status = 1)
