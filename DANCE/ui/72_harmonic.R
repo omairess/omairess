@@ -423,7 +423,13 @@ ui_tab_harmonic <- tabItem(
                               # P6.7: off by default. On a few hundred subjects
                               # the points bury the fitted curve they are there
                               # to support.
-                              checkboxInput("harmonic_show_data", "Show Raw Data Points", FALSE),
+                              checkboxInput("harmonic_show_data", "Show raw data", FALSE),
+                              conditionalPanel(
+                                condition = "input.harmonic_show_data == true",
+                                radioButtons("harmonic_raw_style", NULL,
+                                             choices = c("Points" = "points",
+                                                         "Lines (one per curve; broken at missing values)" = "lines"),
+                                             selected = "points")),
                               conditionalPanel(
                                 condition = "input.harmonic_approach == 'two_stage'",
                                 checkboxInput("harmonic_show_components", "Show Harmonic Components", FALSE),
@@ -540,7 +546,13 @@ ui_tab_harmonic <- tabItem(
                                              choices = c("Pointwise" = "pointwise",
                                                          "Simultaneous (Scheffe)" = "simultaneous"),
                                              selected = "pointwise")),
-                       column(4, checkboxInput("harmonic_traj_raw", "Overlay raw data", FALSE))
+                       column(4, checkboxInput("harmonic_traj_raw", "Overlay raw data", FALSE),
+                              conditionalPanel(
+                                condition = "input.harmonic_traj_raw == true",
+                                radioButtons("harmonic_traj_raw_style", NULL,
+                                             choices = c("Points" = "points",
+                                                         "Lines (one per curve; broken at missing values)" = "lines"),
+                                             selected = "points", inline = TRUE)))
                      ),
                      plotlyOutput("harmonic_traj_curves", height = "440px"),
                      uiOutput("harmonic_traj_band_note"),

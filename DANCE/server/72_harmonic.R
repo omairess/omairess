@@ -3735,9 +3735,9 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
           i <- key == cl
           if (one) i <- i & as.character(dd[[cvn]]) == sel
           if (!any(i)) next
-          p <- p %>% add_markers(x = dd$t[i], y = dd$y[i], name = cl, legendgroup = cl,
-                                 showlegend = FALSE,
-                                 marker = list(color = dance_group_rgba(cols[[cl]], 0.35), size = 4))
+          p <- dance_add_raw(p, dd$t[i], dd$y[i], dd[[cvn]][i], cols[[cl]],
+                             style = input$harmonic_raw_style %||% "points",
+                             legendgroup = cl, name = cl, grid = sort(unique(dd$t)))
         }
       }
     } else {
@@ -3782,10 +3782,18 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
           p <- p %>% add_lines(x = time_fine, y = predict_cosinor(fit_i, time_fine),
                                line = list(color = DANCE_SERIES1, width = 2),
                                name = paste("Subject", i))
-          if (isTRUE(input$harmonic_show_data))
-            p <- p %>% add_markers(x = fit_i$time, y = fit_i$y,
-                                   marker = list(color = DANCE_SERIES1, size = 6),
+          if (isTRUE(input$harmonic_show_data)) {
+            if (identical(input$harmonic_raw_style %||% "points", "lines")) {
+              pth <- dance_raw_paths(fit_i$time, fit_i$y, rep("one", length(fit_i$time)),
+                                     grid = sort(unique(mod$time_vec)))
+              p <- p %>% add_lines(x = pth$x, y = pth$y, connectgaps = FALSE,
+                                   line = list(color = DANCE_SERIES1, width = 1.2),
                                    name = "Observed data")
+            } else
+              p <- p %>% add_markers(x = fit_i$time, y = fit_i$y,
+                                     marker = list(color = DANCE_SERIES1, size = 6),
+                                     name = "Observed data")
+          }
           if (isTRUE(input$harmonic_show_components) && mod$n_harmonics >= 1) {
             components <- get_harmonic_components(fit_i, time_fine)
             ccol <- dance_component_colors(max(mod$n_harmonics, 1))
@@ -3862,13 +3870,22 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
           }
         }
         if (isTRUE(input$harmonic_show_data)) {
+          # one trace per group: points, or one faint line per participant
+          # broken at their missing values
+          grid_t <- sort(unique(mod$time_vec))
+          by_cell <- list()
           for (i in seq_along(mod$individual_fits)) {
             fit_i <- mod$individual_fits[[i]]
             if (is.null(fit_i) || !isTRUE(fit_i$success)) next
             cl <- cell_of(i); if (is.na(cl)) next
-            p <- p %>% add_markers(x = fit_i$time, y = fit_i$y, legendgroup = cl,
-                                   showlegend = FALSE, hoverinfo = "skip",
-                                   marker = list(color = dance_group_rgba(pcol(cl), 0.3), size = 3))
+            by_cell[[cl]] <- rbind(by_cell[[cl]],
+                                   data.frame(t = fit_i$time, y = fit_i$y, curve = i))
+          }
+          for (cl in names(by_cell)) {
+            b <- by_cell[[cl]]
+            p <- dance_add_raw(p, b$t, b$y, b$curve, pcol(cl),
+                               style = input$harmonic_raw_style %||% "points",
+                               legendgroup = cl, name = cl, grid = grid_t)
           }
         }
       }
@@ -4930,9 +4947,10 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
         rows <- sub[g == cl]
         if (!length(rows)) next
         yy <- as.numeric(t(Y[rows, , drop = FALSE])); xx <- rep(mod$time_vec, length(rows))
-        ok <- is.finite(yy)
-        p <- p %>% add_markers(x = xx[ok], y = yy[ok], name = cl, legendgroup = cl, showlegend = FALSE,
-                               marker = list(color = dance_group_rgba(cols[[cl]], 0.35), size = 4))
+        cv <- rep(rows, each = length(mod$time_vec))
+        p <- dance_add_raw(p, xx, yy, cv, cols[[cl]],
+                           style = input$harmonic_traj_raw_style %||% "points",
+                           legendgroup = cl, name = cl, grid = sort(unique(mod$time_vec)))
       }
     }
     co <- dance_clock_origin(mod); P <- mod$period %||% 24
@@ -5376,12 +5394,13 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       key <- if (length(ff$spec$design_terms))
         do.call(paste, c(lapply(ff$spec$design_terms, function(f) as.character(dd[[f]])),
                          list(sep = " x "))) else rep("(all)", nrow(dd))
+      cvn <- if ("curve" %in% names(dd)) "curve" else "subject"
       for (cl in pr$cells) {
         i <- key == cl
         if (!any(i)) next
-        p <- p %>% add_markers(x = dd$t[i], y = dd$y[i], name = cl, legendgroup = cl,
-                               showlegend = FALSE,
-                               marker = list(color = dance_group_rgba(cols[[cl]], 0.35), size = 4))
+        p <- dance_add_raw(p, dd$t[i], dd$y[i], dd[[cvn]][i], cols[[cl]],
+                           style = input$harmonic_traj_raw_style %||% "points",
+                           legendgroup = cl, name = cl, grid = sort(unique(dd$t)))
       }
     }
     cmp <- harmonic_traj_component()

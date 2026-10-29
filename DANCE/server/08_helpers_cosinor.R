@@ -1127,3 +1127,51 @@ dance_param_harmonic <- function(param) {
 # The effective period a parameter lives on: T for a non-harmonic quantity,
 # T / h for harmonic h.
 dance_effective_period <- function(period, param) period / dance_param_harmonic(param)
+
+# ------------------------------------------------------------- raw data as lines
+# One path per curve through its OBSERVED values, in time order, as x/y vectors
+# for a single plotly trace: an NA separates curves, and an NA also breaks a
+# curve wherever a time point of the design is missing between two observations
+# -- a gap is drawn as a gap, never bridged by a straight line between the
+# neighbours. `grid` is the design's time points (all times any curve has).
+dance_raw_paths <- function(t, y, curve, grid = sort(unique(t[is.finite(t)]))) {
+  ok <- is.finite(t)
+  t <- t[ok]; y <- y[ok]; curve <- as.character(curve)[ok]
+  xs <- list(); ys <- list()
+  for (cv in unique(curve)) {
+    i <- which(curve == cv)
+    i <- i[order(t[i])]
+    ti <- t[i]; yi <- y[i]
+    obs <- is.finite(yi)
+    ti <- ti[obs]; yi <- yi[obs]
+    if (!length(ti)) next
+    x_out <- ti[1]; y_out <- yi[1]
+    if (length(ti) > 1) for (k in 2:length(ti)) {
+      # a design time strictly between two consecutive observations is missing
+      if (any(grid > ti[k - 1] + 1e-9 & grid < ti[k] - 1e-9)) {
+        x_out <- c(x_out, NA); y_out <- c(y_out, NA)
+      }
+      x_out <- c(x_out, ti[k]); y_out <- c(y_out, yi[k])
+    }
+    xs[[length(xs) + 1L]] <- c(x_out, NA); ys[[length(ys) + 1L]] <- c(y_out, NA)
+  }
+  list(x = unlist(xs), y = unlist(ys))
+}
+
+# Raw data on a plotly figure, as points or as lines (one per curve, broken at
+# missing values), faint so the fitted curves stay readable.
+dance_add_raw <- function(p, t, y, curve, color_rgb, style = "points", legendgroup = NULL,
+                          name = NULL, grid = NULL) {
+  if (identical(style, "lines")) {
+    pth <- dance_raw_paths(t, y, curve, grid %||% sort(unique(t[is.finite(t)])))
+    if (!length(pth$x)) return(p)
+    plotly::add_lines(p, x = pth$x, y = pth$y, legendgroup = legendgroup, name = name,
+                      showlegend = FALSE, hoverinfo = "skip", connectgaps = FALSE,
+                      line = list(color = dance_group_rgba(color_rgb, 0.25), width = 1))
+  } else {
+    ok <- is.finite(y) & is.finite(t)
+    plotly::add_markers(p, x = t[ok], y = y[ok], legendgroup = legendgroup, name = name,
+                        showlegend = FALSE, hoverinfo = "skip",
+                        marker = list(color = dance_group_rgba(color_rgb, 0.35), size = 4))
+  }
+}

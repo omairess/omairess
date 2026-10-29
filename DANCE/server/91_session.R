@@ -48,7 +48,7 @@ RESTORE_INPUTS <- list(
                "mixed_between", "mixed_within", "mixed_analysis",
                "fanova_mixed_between", "fanova_mixed_within", "fanova_mixed_estimator",
                "harmonic_approach", "harmonic_traj_tau_mode", "harmonic_ts_tau_mode",
-               "harmonic_traj_resid"),
+               "harmonic_traj_resid", "harmonic_raw_style", "harmonic_traj_raw_style"),
   text     = c("harmonic_manual_times")
 )
 
