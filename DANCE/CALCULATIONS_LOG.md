@@ -729,6 +729,17 @@ solve(), as.matrix() and others for sparse matrices, and the mixed model relies
 on those. `tests/base_masking_app_test.R` loads app.R as runApp does with a
 masking `sub` attached; with the old app.R it fails exactly as reported.
 
+The same can happen to DANCE's own packages. "Group Comparison on Component
+Scores" failed with "is.character(txt) is not TRUE": that is the first line of
+jsonlite::validate(). When shiny is already attached in the session and jsonlite
+is attached after it, library(shiny) in app.R does not move shiny, so jsonlite's
+validate() sits in front of shiny's and every validate(need(...)) in the app
+fails. app.R now also binds, for every function a package outside DANCE's set
+masks from one of DANCE's attached packages, the version a fresh session would
+find (the first of DANCE's packages on the search path that exports it), and
+says so at startup ("DANCE: using shiny::validate() (masked by jsonlite) inside
+the app"). The same test attaches shiny and then jsonlite first.
+
 Also: a column named ..._24 is read as midnight when the recording carries on
 past it (22, 24, 2, ...), so CORT_10 ... CORT_24, CORT_2 ... CORT_8,
 CORT_10_SD ... CORT_20_SD give 36 h of clock time; a series that merely ends
@@ -760,3 +771,24 @@ counterpart exists:
   the mixed approach (`dance_ts_diff_curve`).
 
 `tests/ts_trajectory_views_test.R`.
+
+## 15. Mixed cosinor pairwise: the trend coefficient beside the change
+
+The pairwise menu offered the non-periodic change over the recording but not
+the trend coefficient that the model summary reports (the saturating rise A, the
+slope, or the log-trend beta). The two are one hypothesis: the change from the
+first to the last observation is the coefficient times a known constant,
+
+    change = A * (1 - exp(-T / tau))      (saturating; T = last - first observation)
+    change = beta * T                     (linear)
+    change = beta * log(1 + T)            (log)
+
+so the F, the df and the p-value are identical, while the estimates differ by
+that constant. The coefficient is now offered as its own entry ("Saturating rise
+A (the asymptote above the intercept)", "Slope beta (per hour)", "Log-trend
+beta"), immediately before the change, and its unit line states the factor that
+turns it into the change. A is the rise the trend approaches as t grows. It is
+not the rise at t = tau, which is A * (1 - 1/e), about 63% of A. When the
+per-cell nonlinear model (a tau per cell) has been fitted, its A replaces this
+entry, so the menu never shows two different numbers called A.
+

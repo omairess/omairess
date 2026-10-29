@@ -24,6 +24,9 @@ chk <- function(cond, good, bad) if (isTRUE(cond)) cat("ok  :", good, "\n") else
 app_dir <- if (file.exists("app.R")) "." else "DANCE"
 
 suppressPackageStartupMessages(library(Matrix))   # a DANCE dependency, attached by the user first
+# shiny attached first and jsonlite after it: library(shiny) in app.R then does
+# not move shiny, and jsonlite's validate() sits in front of shiny's
+suppressPackageStartupMessages({ library(shiny); library(jsonlite) })
 mask <- new.env()
 assign("sub", function(...) stop("subscript out of bounds (the masking sub was called)"), envir = mask)
 attach(mask, name = "package:fakemask", warn.conflicts = FALSE)
@@ -51,6 +54,12 @@ chk(identical(names(app_env$DANCE_BASE_RESTORED), "sub"),
     sprintf("restored: %s", paste(names(app_env$DANCE_BASE_RESTORED), collapse = ", ")))
 chk(any(grepl("using base R's sub() (masked by fakemask)", msgs, fixed = TRUE)),
     "it says so at startup", "no startup message about the masked function")
+chk(identical(app_env$validate, shiny::validate) &&
+      identical(unname(app_env$DANCE_PKG_RESTORED$validate[["masked_by"]]), "jsonlite"),
+    "app.R binds shiny::validate over jsonlite's",
+    sprintf("restored: %s", paste(names(app_env$DANCE_PKG_RESTORED), collapse = ", ")))
+chk(any(grepl("shiny::validate() (masked by jsonlite)", msgs, fixed = TRUE)),
+    "it says so at startup", "no startup message about validate()")
 
 shiny::testServer(app_env$server, {
   session$setInputs(datafile = list(name = "cort.csv", datapath = csv_path), header = TRUE, sep = ",",

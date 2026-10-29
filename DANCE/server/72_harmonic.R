@@ -6035,6 +6035,9 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
   harmonic_traj_whats <- function(ff) {
     ws <- dance_traj_pair_whats(ff)
     if (!isTRUE(ff$sat$ok)) return(ws)
+    # A from the per-cell model replaces the shared-tau A: two rows called A
+    # with different numbers would be one too many
+    ws <- setdiff(ws, "trend")
     k <- max(c(0L, which(ws %in% DANCE_TRAJ_LEVEL_QUANTITIES)))
     append(ws, DANCE_TRAJ_SAT_PARS, after = k)
   }

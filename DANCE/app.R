@@ -240,6 +240,43 @@ if (base::length(DANCE_BASE_RESTORED))
                                                        collapse = ", ")), collapse = "; "),
                 " inside the app.")
 
+# The same for DANCE's own packages. library(shiny) does not move a shiny that
+# was already attached, so a package attached after it in the user's session
+# stays in front of it: jsonlite exports a validate(), and every
+# validate(need(...)) in the app then reached jsonlite's, failing with
+# "is.character(txt) is not TRUE". Whatever a package outside DANCE's set masks
+# from one of DANCE's packages is bound here to the version a fresh session
+# would find -- the first of DANCE's packages on the search path that has it.
+DANCE_PKG_RESTORED <- local({
+  ours <- base::c(required_packages, base::names(optional_packages))
+  default <- base::c("stats", "graphics", "grDevices", "utils", "datasets", "methods", "base")
+  attached <- base::sub("^package:", "", base::grep("^package:", base::search(), value = TRUE))
+  foreign <- base::setdiff(attached, base::c(ours, default))
+  mine <- base::intersect(attached, ours)
+  pkg_env <- function(p) base::as.environment(base::paste0("package:", p))
+  out <- base::list()
+  cand <- base::intersect(base::unique(base::unlist(base::lapply(foreign, function(p) base::ls(pkg_env(p))))),
+                          base::unique(base::unlist(base::lapply(mine, function(p) base::ls(pkg_env(p))))))
+  for (nm in cand) {
+    has <- attached[base::vapply(attached, function(p)
+      base::exists(nm, envir = pkg_env(p), inherits = FALSE), logical(1))]
+    if (!base::length(has) || !(has[1] %in% foreign)) next
+    own <- base::setdiff(has, foreign)[1]
+    if (base::is.na(own) || !(own %in% mine)) next
+    out[[nm]] <- base::c(from = own, masked_by = has[1])
+  }
+  out
+})
+for (nm in base::names(DANCE_PKG_RESTORED))
+  base::assign(nm, base::get(nm, envir = base::as.environment(
+    base::paste0("package:", DANCE_PKG_RESTORED[[nm]][["from"]]))), envir = base::environment())
+if (base::length(DANCE_PKG_RESTORED))
+  base::message("DANCE: using ",
+                base::paste(base::vapply(base::names(DANCE_PKG_RESTORED), function(nm)
+                  base::sprintf("%s::%s() (masked by %s)", DANCE_PKG_RESTORED[[nm]][["from"]], nm,
+                                DANCE_PKG_RESTORED[[nm]][["masked_by"]]), ""), collapse = "; "),
+                " inside the app.")
+
 # --- Source the UI and remember the server files ----------------------------
 # The UI files run now (they build tab objects).  The server files must run
 # INSIDE the server function, once per session, so they are only listed here.

@@ -380,6 +380,12 @@ dance_traj_pair_label <- function(what, period = 24, n_harmonics = 1L, trend = N
   # same number and are offered once, under both names
   if (identical(what, "intercept") && identical(trend, "none"))
     return("Intercept = MESOR (no trend)")
+  if (identical(what, "trend") && !is.null(trend))
+    return(switch(trend,
+      exp_sat = "Saturating rise A (the asymptote above the intercept)",
+      linear  = "Slope beta (per hour)",
+      log     = "Log-trend beta (per unit of log(1 + hours))",
+      unname(DANCE_TRAJ_PAIR_LABEL["trend"])))
   unname(DANCE_TRAJ_PAIR_LABEL[what]) %||% what
 }
 
@@ -388,8 +394,14 @@ dance_traj_pair_label <- function(what, period = 24, n_harmonics = 1L, trend = N
 # amplitude and acrophase of every harmonic, then the joint blocks only where
 # they have terms and are not duplicates of each other: with no trend, "shape"
 # and "circadian" are the same set of columns, and offering both prints one test
-# twice under two names, which reads as corroboration. The trend's own block is
-# offered as "change", the same hypothesis in the response's units.
+# twice under two names, which reads as corroboration.
+#
+# The trend coefficient itself ("trend": the saturating rise A, the slope, the
+# log-trend beta) is offered next to the change. They are one hypothesis -- the
+# change over the recording is the coefficient times a known constant -- so the
+# p-values agree, but the estimates are different numbers: A is the rise the
+# trend approaches as t grows, the change is how much of it the recording saw.
+# Reporting A beside its own pairwise differences needs the first.
 #
 # The curve value at t0 ("level") is still computed by dance_traj_contrasts() but
 # is not offered: it adds where each rhythm happens to be at the first sample to
@@ -401,6 +413,8 @@ dance_traj_pair_whats <- function(fit) {
   K <- max(1L, as.integer(spec$n_harmonics %||% 1L))
   lv <- Filter(function(q) length(DANCE_TRAJ_BLOCK_COMPONENTS(spec, q)) > 0,
                DANCE_TRAJ_LEVEL_QUANTITIES)
+  if ("change" %in% lv && length(DANCE_TRAJ_BLOCK_COMPONENTS(spec, "trend")))
+    lv <- append(lv, "trend", after = match("change", lv) - 1L)
   # every fitted harmonic gets its own amplitude and acrophase entry
   out <- c(lv, sprintf("amplitude%d", seq_len(K)), sprintf("phase%d", seq_len(K)))
   seen <- list()
@@ -449,7 +463,11 @@ dance_traj_level_unit <- function(fit, what) {
                     "The change is the %s times %s, so its test is the test of that coefficient."),
               win, u, coef_lab, dance_traj_change_factor_text(tw))
       else sprintf("difference in the non-periodic change over the recording, in %s", u),
-    trend     = sprintf("difference in the %s", coef_lab),
+    trend     = if (!is.null(tw) && length(tw$end))
+      sprintf(paste("difference in the %s. The non-periodic change over %s is this",
+                    "coefficient times %s, so the two have the same test and different estimates."),
+              coef_lab, win, dance_traj_change_factor_text(tw))
+      else sprintf("difference in the %s", coef_lab),
     level     = sprintf("difference in the fitted curve value at the first observation, in %s", u),
     sprintf("difference in %s", u))
 }

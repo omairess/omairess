@@ -41,13 +41,12 @@ test_that("the pairwise vocabulary follows the fit, with no duplicate blocks", {
   ws <- e$dance_traj_pair_whats(f2)
   # amplitude and phase are now per harmonic -- see the harmonic block below.
   # The level quantities are the intercept, the MESOR and the non-periodic
-  # change; the change is the trend coefficient's own test in response units,
-  # so the bare trend block is not offered beside it, and the curve value at t0
-  # ("level") is not offered at all.
-  expect_true(all(c("intercept", "mesor", "change", "amplitude1", "phase1", "full",
+  # change, with the trend coefficient itself (slope, log-beta or A) just before
+  # the change it scales; the curve value at t0 ("level") is not offered at all.
+  expect_true(all(c("intercept", "mesor", "trend", "change", "amplitude1", "phase1", "full",
                     "shape", "circadian") %in% ws))
-  expect_false(any(c("level", "trend") %in% ws))
-  expect_identical(ws[1:3], c("intercept", "mesor", "change"))
+  expect_false("level" %in% ws)
+  expect_identical(ws[1:4], c("intercept", "mesor", "trend", "change"))
   f1 <- mk(K = 1, trend = "none"); skip_if_not(isTRUE(f1$ok))
   w1 <- e$dance_traj_pair_whats(f1)
   expect_false(any(c("trend", "mesor", "change", "level") %in% w1))

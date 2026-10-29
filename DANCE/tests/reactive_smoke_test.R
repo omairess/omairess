@@ -125,6 +125,7 @@ server <- function(input, output, session) {
   session$setInputs(run_pca_anova = 1)
   session$flushReact()
   render("pca_anova_results renders", output$pca_anova_results)
+  render("pca_anova_plot renders", output$pca_anova_plot)
 
   # ---------------------------------------------------------------- FoSR ----
   cat("\n-- FoSR, pointwise OLS -------------------------------------------------\n")

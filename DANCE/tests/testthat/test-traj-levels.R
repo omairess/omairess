@@ -120,6 +120,10 @@ test_that("the change is the trend coefficient's own test, in response units", {
   expect_match(chg$unit, "08:00 to 09:00 (+1d)", fixed = TRUE)
   expect_match(chg$unit, "so its test is the test of that coefficient", fixed = TRUE)
   expect_match(chg$unit, "tau held at 18 h", fixed = TRUE)
+  # A itself is offered, under its own name, and says how it relates to the change
+  expect_true("trend" %in% e$dance_traj_pair_whats(ff))
+  expect_identical(trd$label, "Saturating rise A (the asymptote above the intercept)")
+  expect_match(trd$unit, "same test and different estimates", fixed = TRUE)
 })
 
 test_that("pairwise intercept and MESOR differences are differences of the cell values", {
