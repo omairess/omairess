@@ -74,7 +74,8 @@ server <- function(input, output, session) {
   values$time_labels <- sprintf("%02d:00", hrs)
   values$covariates  <- covs
   values$group_labels <- grp
-  values$group_variables <- list(AGEcategory = grp, Sex = covs$Sex)
+  # a data frame, as the import builds it (colnames() of a list is NULL)
+  values$group_variables <- data.frame(AGEcategory = grp, Sex = covs$Sex)
   values$subject_ids <- rownames(raw)
 
   tp <- seq(0, 1, length.out = n_t)
@@ -261,7 +262,8 @@ server <- function(input, output, session) {
   session$setInputs(fanova_groups_to_include = c("YOUTH", "ADULT", "ELDERLY"))
   values$fanova_results <- NULL
   session$setInputs(fanova_group_var = "Sex", run_fanova = 2); session$flushReact()
-  if (is.null(values$fanova_results) || !identical(values$fanova_results$group_var, "Sex"))
+  if (is.null(values$fanova_results) || !identical(values$fanova_results$group_var, "Sex") ||
+      !setequal(levels(as.factor(values$fanova_results$group_labels)), c("F", "M")))
     fail("a 2-group fANOVA after a 4-group selection produced no result (stale group picker)")
   else ok("a 2-group fANOVA ignores the picker left over from a 4-group variable")
   session$setInputs(fanova_group_var = "AGEcategory")

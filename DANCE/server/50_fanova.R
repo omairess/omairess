@@ -1225,6 +1225,7 @@
         current_levels <- unique(as.character(stats::na.omit(current_group_labels)))
         groups_to_include <- if (length(current_levels) > 2)
           intersect(as.character(input$fanova_groups_to_include), current_levels) else NULL
+        if (!length(groups_to_include)) groups_to_include <- NULL   # never set, or all stale: every group
         if(!is.null(groups_to_include) && length(groups_to_include) >= 2) {
           # Find indices of subjects in selected groups
           include_idx <- which(current_group_labels %in% groups_to_include)
