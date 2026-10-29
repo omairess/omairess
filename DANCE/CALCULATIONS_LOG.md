@@ -820,3 +820,20 @@ have no single estimate, and their rows say so (joint_test = TRUE). The
 exported R script computes the same tables (traj_pairwise or ts_pairwise)
 instead of naming the function in a comment. `tests/cosinor_export_test.R`
 compares the script's tables with the app's.
+
+## 18. Header cells formatted as times
+
+Excel stores a time as a fraction of a day (08:00 = 1/3). A header row of
+8:00, 10:00, ..., 0:00, ..., 16:00 formatted as times reached the app through
+readxl as "0.33333333333333331...5", "0.75", "0", "8.3333333333333329E-2",
+..., with "...N" added to the times that recur, and the hour parser read 0.333
+h. At import such names are converted back to the clock time they display
+(minutes = fraction x 1440, rounded to the minute), and a recurring time is
+numbered ("08:00 #2") so that the names stay unique. The conversion is applied
+only when it is clearly what happened: at least two names that are numbers in
+[0, 1) falling on a whole minute, at least one of them with the full binary
+precision Excel writes. Typed decimal hours such as 0.25 or 0.5 are left as
+they are. The import says which columns it converted.
+
+The hour parser also reads "HH:MM" with its minutes. It used to take the first
+number in the name, so 8:30 was 8 and MT_21:30_SD was 21.

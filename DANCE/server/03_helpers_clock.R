@@ -21,6 +21,34 @@
 # tab's shared-time option, and the opt-in real-time smoothing).
 # ==============================================================================
 
+# EXCEL TIMES AS COLUMN NAMES. A header cell formatted as a time (08:00) is
+# stored by Excel as a fraction of a day (1/3), and readxl hands the name over
+# as that number, "0.33333333333333331", with "...5" appended when the same
+# time occurs twice. The hour parser then read 0.333 h. This turns such names
+# back into the clock time they display. Only when it is clearly what happened:
+# at least two names that are numbers in [0, 1) falling on a whole minute of the
+# day, at least one of them carrying the full binary precision Excel writes (a
+# typed decimal hour such as 0.25 or 0.5 does not, and on its own is left as
+# it is). A clock time that recurs is numbered, "08:00 #2", so the names stay
+# unique; the parser reads "08:00 #2" as 8.
+# Returns the names, converted where that applies, and which ones were.
+dance_dayfraction_names <- function(nms) {
+  nms <- as.character(nms)
+  base <- sub("[.][.][.][0-9]+$", "", nms)
+  x <- suppressWarnings(as.numeric(base))
+  mins <- x * 1440
+  cand <- grepl("^[0-9.]+([eE][-+]?[0-9]+)?$", base) & is.finite(x) & x >= 0 & x < 1 &
+    abs(mins - round(mins)) < 1e-6
+  long <- cand & nchar(gsub("[eE].*$", "", gsub("^0[.]?", "", base))) >= 10
+  if (sum(cand) < 2 || !any(long)) return(list(names = nms, converted = rep(FALSE, length(nms))))
+  m <- round(mins[cand])
+  lab <- sprintf("%02d:%02d", m %/% 60, m %% 60)
+  k <- stats::ave(seq_along(lab), lab, FUN = seq_along)
+  lab[k > 1] <- sprintf("%s #%d", lab[k > 1], k[k > 1])
+  out <- nms; out[cand] <- lab
+  list(names = out, converted = cand)
+}
+
 # Per-column clock hours, or NULL when the column names do not give trustworthy
 # ones. "Trustworthy" = every column parses to a finite hour in [0, 24).
 # extract_hour_from_colname() falls back to "any number in the name", which for

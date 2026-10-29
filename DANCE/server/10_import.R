@@ -98,6 +98,17 @@ observeEvent(input$load_data, {
                            quote = "\"")
     }
 
+    # Header cells formatted as times arrive from readxl as fractions of a day
+    # (and a CSV written from such a frame keeps them): read back as clock times.
+    dfn <- dance_dayfraction_names(names(raw_data))
+    if (any(dfn$converted)) {
+      names(raw_data) <- dfn$names
+      msg <- sprintf("%d column names were Excel times (stored as fractions of a day) and are read as clock times: %s.",
+                     sum(dfn$converted), paste(dfn$names[dfn$converted], collapse = ", "))
+      cat(msg, "\n")
+      showNotification(msg, type = "message", duration = 12)
+    }
+
     cat("Read raw file dimensions:", nrow(raw_data), "x", ncol(raw_data), "\n")
 
     # Duplicate column names would break column selection (e.g. "8h" twice).

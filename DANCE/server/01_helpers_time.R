@@ -19,6 +19,15 @@
     # Remove leading X if present (R adds this when column names start with numbers)
     clean_name <- gsub("^X", "", col_name)
 
+    # Clock time "HH:MM" anywhere in the name (08:00, 8:30, MT_21:30_SD). It
+    # used to fall through to "the first number in the name", which dropped the
+    # minutes: 21:30 was read as 21.
+    if(grepl("(^|[^0-9])[0-9]{1,2}:[0-5][0-9]([^0-9]|$)", col_name)) {
+      hm <- regmatches(col_name, regexpr("[0-9]{1,2}:[0-5][0-9]", col_name))
+      parts <- as.numeric(strsplit(hm, ":", fixed = TRUE)[[1]])
+      return(parts[1] + parts[2] / 60)
+    }
+
     # Check if it's a pure decimal number
     if(grepl("^[0-9]+\\.?[0-9]*$", clean_name)) {
       return(as.numeric(clean_name))

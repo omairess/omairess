@@ -48,7 +48,7 @@ reset_clears <- function() {
 # DERIVED from it. Derived things must be cleared; owned things must not be.
 owned_by_data_step <- c(
   "data", "raw_df", "raw_data", "covariates", "time_labels", "time_values",
-  "group_labels", "group_variables", "subject_ids", "fill_status",
+  "group_labels", "group_variables", "subject_ids", "subject_ids_missing", "fill_status",
   "landmark_points", "selected_vars", "file_name", "data_source",
   "n_subjects", "n_timepoints", "clock_hours", "cumulative_hours",
   "sample_data_used", "import_notes", "id_column", "excluded_rows",
