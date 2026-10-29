@@ -199,7 +199,7 @@ test_that("P6.6: the summary reports the smallest attainable p", {
 # ============================================ P6.7 defaults ==================
 test_that("P6.7: the harmonic tab's defaults are the ones you would want", {
   ui <- code_of("ui/72_harmonic.R")
-  expect_true(grepl('checkboxInput("harmonic_show_data", "Show Raw Data Points", FALSE)',
+  expect_true(grepl('checkboxInput("harmonic_show_data", "Show raw data", FALSE)',
                     ui, fixed = TRUE))
   # the server fallbacks must agree, or a session that never touched the control
   # runs a different model from the one the UI shows
