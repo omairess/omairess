@@ -111,6 +111,9 @@ test_that("P8.2: RMS distance from the identity is an artefact on a wrapped shif
 
 test_that("P8.2: the warping parameters for a shift come from the shift itself", {
   source(file.path(app_dir, "server/01c_helpers_norm.R"), local = TRUE)
+  # dance_warp_amplitude() lives here; without it this test passed only when an
+  # earlier test file had sourced it
+  source(file.path(app_dir, "server/04_helpers_fd.R"), local = TRUE)
   source(file.path(app_dir, "server/09_helpers_pcanova.R"), local = TRUE)
   tp <- seq(0, 1, length.out = 100)
   s  <- c(0, 0.05, 0.10, 0.25, -0.15)
