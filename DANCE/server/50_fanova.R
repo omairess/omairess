@@ -1216,7 +1216,15 @@
         current_group_labels <- get_fanova_group_labels()
 
         # Filter by selected groups if user has made a selection
-        groups_to_include <- input$fanova_groups_to_include
+        # The picker exists only for a variable with more than two groups, but
+        # its last value outlives it: pick a 4-group variable, then a 2-group
+        # one, and the old selection (levels of the OTHER variable) was still
+        # applied here, matched no-one, and stopped the run with "not enough
+        # subjects". Only levels of the current variable count, and only while
+        # the picker is on screen.
+        current_levels <- unique(as.character(stats::na.omit(current_group_labels)))
+        groups_to_include <- if (length(current_levels) > 2)
+          intersect(as.character(input$fanova_groups_to_include), current_levels) else NULL
         if(!is.null(groups_to_include) && length(groups_to_include) >= 2) {
           # Find indices of subjects in selected groups
           include_idx <- which(current_group_labels %in% groups_to_include)

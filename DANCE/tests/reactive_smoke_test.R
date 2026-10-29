@@ -254,6 +254,18 @@ server <- function(input, output, session) {
     render("fanova effect summary renders", output$fanova_effect_summary)
   }
 
+  # The group picker (shown only for > 2 groups) keeps its last value after it
+  # disappears. Switching from the 4-level AGEcategory to the 2-level Sex used to
+  # apply the stale AGEcategory selection to Sex, match no-one, and stop with
+  # "Not enough subjects in selected groups!".
+  session$setInputs(fanova_groups_to_include = c("YOUTH", "ADULT", "ELDERLY"))
+  values$fanova_results <- NULL
+  session$setInputs(fanova_group_var = "Sex", run_fanova = 2); session$flushReact()
+  if (is.null(values$fanova_results) || !identical(values$fanova_results$group_var, "Sex"))
+    fail("a 2-group fANOVA after a 4-group selection produced no result (stale group picker)")
+  else ok("a 2-group fANOVA ignores the picker left over from a 4-group variable")
+  session$setInputs(fanova_group_var = "AGEcategory")
+
   # ------------------------------------------------- curve registration -----
   #
   # AUDIT (P11.2). This is the gap that let a severe defect ship. Every warping
