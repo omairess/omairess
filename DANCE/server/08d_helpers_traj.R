@@ -239,7 +239,8 @@ dance_traj_design_kind <- function(cls) {
 dance_traj_basis <- function(d, period = 24, n_harmonics = 1, trend = "none",
                              t0 = NULL, tau = NULL) {
   trend <- match.arg(trend, DANCE_TRAJ_TRENDS)
-  n_harmonics <- max(1L, as.integer(n_harmonics))
+  # 0 harmonics is the trend-only model: no rhythm columns at all
+  n_harmonics <- max(0L, as.integer(n_harmonics))
   if (is.null(t0)) t0 <- min(d$t, na.rm = TRUE)
   tt <- d$t - t0
 
@@ -292,17 +293,18 @@ dance_traj_basis <- function(d, period = 24, n_harmonics = 1, trend = "none",
 dance_traj_trend_window <- function(trend = "none", t0, t_max, tau = NULL) {
   T <- t_max - t0
   if (!is.finite(T) || T <= 0) return(NULL)
-  out <- switch(as.character(trend),
-    none    = list(mean = numeric(0), end = numeric(0)),
-    linear  = list(mean = c(trend_lin = T / 2), end = c(trend_lin = T)),
-    log     = list(mean = c(trend_log = ((T + 1) * log(T + 1) - T) / T),
-                   end  = c(trend_log = log(T + 1))),
-    exp_sat = if (is.null(tau) || !is.finite(tau) || tau <= 0) NULL else
-      list(mean = c(trend_sat = 1 - (tau / T) * (1 - exp(-T / tau))),
-           end  = c(trend_sat = 1 - exp(-T / tau))),
-    NULL)
-  if (is.null(out)) return(NULL)
-  c(out, list(t0 = t0, t_max = t_max, T = T, trend = as.character(trend), tau = tau))
+  trend <- as.character(trend)
+  col <- c(linear = "trend_lin", log = "trend_log", exp_sat = "trend_sat")[trend]
+  if (identical(trend, "none")) {
+    out <- list(mean = numeric(0), end = numeric(0), rate0 = numeric(0), avg_rate = numeric(0))
+  } else {
+    # the factors are defined once, in server/08_helpers_cosinor.R
+    f <- dance_trend_factors(trend, T, tau)
+    if (is.null(f)) return(NULL)
+    out <- list(mean = stats::setNames(f$mean, col), end = stats::setNames(f$end, col),
+                rate0 = stats::setNames(f$rate0, col), avg_rate = stats::setNames(f$avg_rate, col))
+  }
+  c(out, list(t0 = t0, t_max = t_max, T = T, trend = trend, tau = tau))
 }
 
 # What the factor between the trend coefficient and the change IS, in words:
@@ -426,26 +428,37 @@ dance_traj_re_ladder <- function(basis_terms, harm_terms, within_terms = charact
   add <- function(formula, label, terms, corr = TRUE, curve_level = FALSE)
     out[[length(out) + 1L]] <<- list(formula = formula, label = label, terms = terms,
                                      correlated = corr, curve_level = curve_level)
+  # what the participant terms are, in words: a trend-only model has no rhythm
+  trend_terms <- setdiff(basis_terms, harm_terms)
+  both <- paste(c(if (length(trend_terms)) "trend", if (length(harm_terms)) "rhythm"),
+                collapse = " and ")
+  if (!nzchar(both)) both <- "level"
 
   if (!is.na(curve)) {
     add(paste(term(basis_terms, group), "+", term(basis_terms, curve)),
-        "participant trend and rhythm, plus a curve-specific trend and rhythm",
+        sprintf("participant %s, plus a curve-specific %s", both, both),
         basis_terms, curve_level = TRUE)
-    add(paste(term(basis_terms, group), "+", term(harm_terms, curve)),
-        "participant trend and rhythm, plus a curve-specific rhythm",
-        basis_terms, curve_level = TRUE)
+    if (length(harm_terms) && length(trend_terms))
+      add(paste(term(basis_terms, group), "+", term(harm_terms, curve)),
+          sprintf("participant %s, plus a curve-specific rhythm", both),
+          basis_terms, curve_level = TRUE)
     add(paste(term(basis_terms, group), "+", term(character(0), curve)),
-        "participant trend and rhythm, plus a curve-specific level",
+        sprintf("participant %s, plus a curve-specific level", both),
         basis_terms, curve_level = TRUE)
     add(term(c(basis_terms, within_terms), group),
-        "participant trend, rhythm and within-factor effect",
+        sprintf("participant %s and within-factor effect", both),
         c(basis_terms, within_terms))
   }
-  add(term(basis_terms, group), "participant trend and rhythm", basis_terms)
-  if (!identical(basis_terms, harm_terms))
-    add(term(harm_terms, group), "participant rhythm", harm_terms)
-  add(term(harm_terms, group, corr = FALSE), "participant rhythm, uncorrelated",
-      harm_terms, corr = FALSE)
+  add(term(basis_terms, group), sprintf("participant %s", both), basis_terms)
+  if (length(harm_terms)) {
+    if (!identical(basis_terms, harm_terms))
+      add(term(harm_terms, group), "participant rhythm", harm_terms)
+    add(term(harm_terms, group, corr = FALSE), "participant rhythm, uncorrelated",
+        harm_terms, corr = FALSE)
+  } else if (length(trend_terms)) {
+    add(term(trend_terms, group, corr = FALSE), "participant trend, uncorrelated",
+        trend_terms, corr = FALSE)
+  }
   add(term(character(0), group), "participant level only", character(0))
 
   # de-duplicate structurally identical rungs (e.g. trend = "none")

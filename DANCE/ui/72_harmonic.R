@@ -70,17 +70,29 @@ ui_tab_harmonic <- tabItem(
             # 18 h" readable as a period.
             numericInput("harmonic_period", "Fundamental period P:", value = 24, min = 1, max = 168, step = 1),
             helpText("Period in the same units as your time variable (e.g., 24 for circadian)."),
-            sliderInput("n_harmonics", "Number of Harmonics:", min = 1, max = 8, value = 1, step = 1),
-            helpText("1 = fundamental (P), 2 = adds P/2, 3 = adds P/3, etc."),
-            uiOutput("harmonic_warning_ui"),
-            selectInput("harmonic_trend_type", "Non-periodic Trend Model:",
-                        choices = c("None (circadian only)" = "none",
-                                    "Linear" = "linear",
-                                    "Logarithmic" = "log",
-                                    "Saturating exponential" = "exp_sat"),
-                        selected = "none"),
+            # THE MODEL STRUCTURE: three analyses, chosen here, carried into
+            # the fit, the tests, the plots, the comparison, the report and the
+            # export. A rhythm-only model has no trend; a trend-only model has
+            # no harmonics (and so no amplitude, acrophase or rhythm test).
+            radioButtons("harmonic_structure", "Model structure:",
+                         choices = c("Rhythmic component only" = "rhythm",
+                                     "Non-periodic trend only" = "trend",
+                                     "Rhythmic component and non-periodic trend" = "combined"),
+                         selected = "rhythm"),
             conditionalPanel(
-              condition = "input.harmonic_trend_type != 'none'",
+              condition = "input.harmonic_structure != 'trend'",
+              sliderInput("n_harmonics", "Number of Harmonics:", min = 1, max = 8, value = 1, step = 1),
+              helpText("1 = fundamental (P), 2 = adds P/2, 3 = adds P/3, etc."),
+              uiOutput("harmonic_warning_ui")),
+            conditionalPanel(
+              condition = "input.harmonic_structure != 'rhythm'",
+              selectInput("harmonic_trend_type", "Non-periodic Trend Model:",
+                          choices = c("Linear" = "linear",
+                                      "Logarithmic" = "log",
+                                      "Saturating exponential" = "exp_sat"),
+                          selected = "linear")),
+            conditionalPanel(
+              condition = "input.harmonic_structure != 'rhythm'",
               # The control used to be called "Homeostatic Trend Model" and this
               # note called the result a "Two-Process Model". A cosinor plus a
               # trend separates a PERIODIC component from a NON-PERIODIC one.
@@ -95,17 +107,17 @@ ui_tab_harmonic <- tabItem(
                              two-process model."))
             ),
             conditionalPanel(
-              condition = "input.harmonic_trend_type == 'linear'",
+              condition = "input.harmonic_structure != 'rhythm' && input.harmonic_trend_type == 'linear'",
               helpText(HTML("Y(t) = β<sub>0</sub> + β·t + harmonics<br><small>Constant rate of
                              change: β is in response units per hour</small>"))
             ),
             conditionalPanel(
-              condition = "input.harmonic_trend_type == 'log'",
+              condition = "input.harmonic_structure != 'rhythm' && input.harmonic_trend_type == 'log'",
               helpText(HTML("Y(t) = β<sub>0</sub> + β·log(t+1) + harmonics<br><small>Rapid initial
                              change, slowing over time</small>"))
             ),
             conditionalPanel(
-              condition = "input.harmonic_trend_type == 'exp_sat'",
+              condition = "input.harmonic_structure != 'rhythm' && input.harmonic_trend_type == 'exp_sat'",
               helpText(HTML("Y(t) = β<sub>0</sub> + A·(1-e<sup>-t/τ</sup>) + harmonics<br>
                             <small>Asymptotic saturation \u2014 the shape a homeostatic process is
                             often assumed to take, fitted descriptively. A is the rise above
@@ -205,7 +217,7 @@ ui_tab_harmonic <- tabItem(
                                repeats the τ profile when τ is estimated too).</small>")))
             ),
             conditionalPanel(
-              condition = "input.harmonic_trend_type != 'none'",
+              condition = "input.harmonic_structure != 'rhythm'",
               helpText(HTML("<small>β<sub>0</sub> is the <b>intercept</b>: the midline at the
                              first observation, where the trend is zero. The <b>MESOR</b> is the
                              midline β<sub>0</sub> + trend averaged over the recording. Without
@@ -368,7 +380,7 @@ ui_tab_harmonic <- tabItem(
                 numericInput("harmonic_amplitude_min", "Amplitude Min:", value = 0, step = 0.1),
                 numericInput("harmonic_amplitude_max", "Amplitude Max:", value = NA, step = 0.1),
                 conditionalPanel(
-                  condition = "input.harmonic_trend_type == 'exp_sat'",
+                  condition = "input.harmonic_structure != 'rhythm' && input.harmonic_trend_type == 'exp_sat'",
                   hr(),
                   h5("Exponential Saturation Parameters"),
                   numericInput("harmonic_A_sat_min", "A_sat (Asymptote) Min:", value = NA, step = 0.1),
@@ -574,7 +586,7 @@ ui_tab_harmonic <- tabItem(
                      # the per-cell nonlinear model (mixed) or from the
                      # per-participant fits (two-stage).
                      conditionalPanel(
-                       condition = "input.harmonic_trend_type == 'exp_sat'",
+                       condition = "input.harmonic_structure != 'rhythm' && input.harmonic_trend_type == 'exp_sat'",
                        h5(tags$b("Saturating trend: A, \u03c4 and A/\u03c4"), style = "margin-top:14px"),
                        uiOutput("harmonic_traj_sat_header"),
                        radioButtons("harmonic_traj_sat_view", NULL,

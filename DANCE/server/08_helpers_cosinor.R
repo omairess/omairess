@@ -390,6 +390,9 @@ dance_zero_amplitude_test <- function(ss_resid_full, ss_resid_trend_only,
                                     n, n_params_full, n_harmonics) {
   df1 <- 2 * n_harmonics
   df2 <- n - n_params_full
+  # the trend-only model has no rhythm to test
+  if (df1 < 1) return(list(F = NA_real_, df1 = 0, df2 = df2, p = NA_real_,
+                           note = "no harmonics in the model"))
   if (!is.finite(ss_resid_full) || !is.finite(ss_resid_trend_only) ||
       df2 < 1 || ss_resid_full <= 0)
     return(list(F = NA_real_, df1 = df1, df2 = df2, p = NA_real_))
@@ -1175,3 +1178,161 @@ dance_add_raw <- function(p, t, y, curve, color_rgb, style = "points", legendgro
                         marker = list(color = dance_group_rgba(color_rgb, 0.35), size = 4))
   }
 }
+
+
+# ==============================================================================
+# THE SCIENTIFIC OUTCOMES, defined ONCE (kept in this file so every module and
+# every test that loads the cosinor helpers has them)
+#
+# Three questions a researcher asks of a cosinor with a trend, and the numbers
+# that answer them. Both estimators -- the mixed-effects trajectory model and
+# the two-stage per-participant fits -- read these definitions; neither computes
+# its own.
+#
+#   OVERALL RESPONSE LEVEL
+#     fitted mean      Ybar = (1/T) int_0^T Yhat(t) dt   rhythm and trend included
+#     mean midline     Mbar = (1/T) int_0^T [b0 + Tr(t)] dt   (the MESOR here)
+#     initial midline  b0 = b0 + Tr(0), the midline at the first observation
+#
+#   CIRCADIAN-LIKE RHYTHMICITY      (per harmonic: amplitude, acrophase)
+#
+#   HOMEOSTATIC-LIKE ACCUMULATION
+#     total change     dT   = Tr(T) - Tr(0)
+#     average rate     rbar = dT / T                    response units per hour
+#     initial rate     r0   = dTr/dt at t = 0           response units per hour
+#     trend mean       Tbar = (1/T) int_0^T Tr(t) dt
+#
+# TIME. Every model in this app runs on hours since the first observation:
+# the trend is zero there, Tr(0) = 0, and the harmonics are cos/sin of
+# 2 pi h t / period on the same t. The window is [0, T] with T the last
+# observation; the same window for every group and participant.
+#
+# Each trend is ONE coefficient c times a known shape s(t), so every outcome is
+# c times a closed-form factor of T (and, for the saturating trend, tau):
+#
+#                  s(t)                 s(T)            mean of s on [0,T]            s'(0)
+#   linear         t                    T               T / 2                         1
+#   log            log(1 + t)           log(1 + T)      ((1+T) log(1+T) - T) / T      1
+#   exp_sat        1 - exp(-t / tau)    1 - e^(-T/tau)  1 - (tau/T)(1 - e^(-T/tau))   1 / tau
+#
+# None of the three has a singular derivative at the origin: the log trend is
+# log(1 + t), not log(t), so its initial rate is the coefficient itself (per
+# hour, because t is in hours).
+#
+# Given tau these are LINEAR in the coefficients, which is why the mixed model
+# tests them exactly with its L-matrix machinery, and why with a common tau and a
+# common window the change, the average rate, the initial rate and A are one
+# number up to a known factor -- one test, not four findings.
+# ==============================================================================
+
+
+DANCE_TREND_TYPES <- c("none", "linear", "log", "exp_sat")
+
+# The shape s(t) of each trend, t in hours since the first observation.
+dance_trend_shape <- function(trend, t, tau = NULL) {
+  switch(as.character(trend),
+    none    = rep(0, length(t)),
+    linear  = t,
+    log     = log1p(t),
+    exp_sat = if (is.null(tau) || !is.finite(tau) || tau <= 0) rep(NA_real_, length(t))
+              else -expm1(-t / tau),
+    rep(NA_real_, length(t)))
+}
+
+# The factors in the table above, for a window of T hours. NULL when the trend
+# has none (no trend, a window of no length, or a saturating trend without a
+# usable tau).
+dance_trend_factors <- function(trend, T, tau = NULL) {
+  trend <- as.character(trend)
+  if (identical(trend, "none") || !is.finite(T) || T <= 0) return(NULL)
+  f <- switch(trend,
+    linear  = list(end = T, mean = T / 2, rate0 = 1),
+    log     = list(end = log1p(T), mean = ((T + 1) * log1p(T) - T) / T, rate0 = 1),
+    exp_sat = if (is.null(tau) || !is.finite(tau) || tau <= 0) NULL else {
+      e <- -expm1(-T / tau)
+      list(end = e, mean = 1 - (tau / T) * e, rate0 = 1 / tau)
+    },
+    NULL)
+  if (is.null(f)) return(NULL)
+  f$avg_rate <- f$end / T
+  c(f, list(T = T, trend = trend, tau = tau))
+}
+
+# The accumulation outcomes for ONE trend coefficient (A for the saturating
+# trend). Model-specific extras for the saturating trend: the asymptote A, tau,
+# the half-rise time tau ln 2, and how far towards A the window got.
+dance_trend_outcomes <- function(trend, coef, T, tau = NULL) {
+  f <- dance_trend_factors(trend, T, tau)
+  na <- NA_real_
+  if (is.null(f) || !is.finite(coef))
+    return(list(change = na, avg_rate = na, rate0 = na, trend_mean = na,
+                asymptote = na, tau = na, t50 = na, frac_reached = na))
+  sat <- identical(trend, "exp_sat")
+  list(change = coef * f$end, avg_rate = coef * f$avg_rate, rate0 = coef * f$rate0,
+       trend_mean = coef * f$mean,
+       asymptote = if (sat) coef else na,
+       tau = if (sat) tau else na,
+       t50 = if (sat) tau * log(2) else na,
+       frac_reached = if (sat) f$end else na)
+}
+
+# The mean of each harmonic's cos and sin column over [0, T]: what a rhythm
+# adds to the window mean. Exactly zero only over a whole number of cycles.
+dance_harmonic_mean_factors <- function(n_harmonics, period, T) {
+  K <- as.integer(n_harmonics)
+  if (K < 1 || !is.finite(T) || T <= 0) return(list(cos = numeric(0), sin = numeric(0)))
+  w <- 2 * pi * seq_len(K) / period
+  list(cos = sin(w * T) / (w * T), sin = (1 - cos(w * T)) / (w * T))
+}
+
+# The overall-level outcomes of one fitted curve: the intercept b0, the trend
+# coefficient and tau, and the harmonic coefficients (cos, sin) on t since the
+# first observation.
+dance_level_outcomes <- function(intercept, trend = "none", coef = NA_real_, tau = NULL,
+                                 beta_cos = numeric(0), beta_sin = numeric(0),
+                                 period = 24, T) {
+  f <- dance_trend_factors(trend, T, tau)
+  mid <- intercept + if (is.null(f)) 0 else coef * f$mean
+  hm <- dance_harmonic_mean_factors(length(beta_cos), period, T)
+  rhythm_mean <- if (length(beta_cos)) sum(beta_cos * hm$cos + beta_sin * hm$sin) else 0
+  list(initial_midline = intercept, mean_midline = mid,
+       fitted_mean = mid + rhythm_mean, rhythm_window_mean = rhythm_mean)
+}
+
+# The model structure, from the two settings that define it. "intercept" is the
+# null of the model comparison and is not offered as an analysis.
+dance_model_structure <- function(trend, n_harmonics) {
+  has_t <- !identical(as.character(trend), "none")
+  has_h <- isTRUE(as.integer(n_harmonics) >= 1L)
+  if (has_t && has_h) "combined" else if (has_t) "trend" else if (has_h) "rhythm" else "intercept"
+}
+
+DANCE_STRUCTURE_LABEL <- c(
+  rhythm    = "Rhythmic component only",
+  trend     = "Non-periodic trend only",
+  combined  = "Rhythmic component and non-periodic trend",
+  intercept = "Intercept only (no rhythm, no trend)")
+
+# Labels for the three domains and their outcomes, shared by every table,
+# plot, export and the report.
+DANCE_OUTCOME_LABEL <- c(
+  fitted_mean     = "Time-averaged fitted response",
+  mean_midline    = "Mean midline level (MESOR)",
+  initial_midline = "Initial midline (t = 0)",
+  change          = "Total trend change (start to end)",
+  avg_rate        = "Average trend rate",
+  rate0           = "Initial trend rate",
+  asymptote       = "Asymptotic trend change (A)",
+  tau             = "Trend time constant (tau)",
+  t50             = "Half-rise time (tau ln 2)")
+
+DANCE_OUTCOME_DOMAIN <- c(
+  fitted_mean = "level", mean_midline = "level", initial_midline = "level",
+  change = "accumulation", avg_rate = "accumulation", rate0 = "accumulation",
+  asymptote = "accumulation_model", tau = "accumulation_model", t50 = "accumulation_model")
+
+DANCE_DOMAIN_LABEL <- c(
+  level              = "Overall response level",
+  rhythm             = "Circadian-like rhythmicity",
+  accumulation       = "Homeostatic-like accumulation",
+  accumulation_model = "Model-specific parameters")

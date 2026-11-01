@@ -128,9 +128,12 @@ DANCE_TRAJ_BLOCK_LABEL <- c(
   circadian = "Circadian (rhythmic) difference",
   level     = "Curve value at the first observation",
   trend     = "Non-circadian trend difference",
-  intercept = "Intercept (midline at the first observation)",
-  mesor     = "MESOR (midline averaged over the window)",
-  change    = "Non-periodic change over the recording")
+  fitted_mean = "Time-averaged fitted response",
+  intercept = "Initial midline (t = 0)",
+  mesor     = "Mean midline level (MESOR)",
+  change    = "Total trend change (start to end)",
+  avg_rate  = "Average trend rate",
+  rate0     = "Initial trend rate")
 
 DANCE_TRAJ_BLOCK_H0 <- c(
   full      = "H0: no difference in level, in any trend term, or in any harmonic coefficient -- the trajectories coincide.",
@@ -140,13 +143,20 @@ DANCE_TRAJ_BLOCK_H0 <- c(
   trend     = "H0: no difference in any non-circadian trend coefficient.",
   intercept = "H0: no difference in the intercept -- the midline of the rhythm (intercept + trend, harmonics excluded) at the first observation, where every trend term is zero.",
   mesor     = "H0: no difference in the MESOR -- the midline of the rhythm (intercept + trend, harmonics excluded) averaged over the observed window. Without a trend it IS the intercept.",
-  change    = "H0: no difference in the non-periodic change from the first to the last observation. With one trend coefficient per cell this is the same hypothesis as the trend block, expressed in the response's own units.")
+  change    = "H0: no difference in the non-periodic change from the first to the last observation. With one trend coefficient per cell this is the same hypothesis as the trend block, expressed in the response's own units.",
+  fitted_mean = "H0: no difference in the time-averaged fitted response -- the whole fitted curve (midline and rhythm) averaged over the observed window.",
+  avg_rate  = "H0: no difference in the average trend rate, the total trend change divided by the window. Over one common window this is the same hypothesis as the total change.",
+  rate0     = "H0: no difference in the initial trend rate, the slope of the trend at the first observation. Given tau this is the same hypothesis as the total change; it describes the shape of a nonlinear trend, not a separate finding.")
 
 # The per-cell LEVEL quantities. Each is one linear function of the fixed
 # effects per cell (dance_traj_cell_functionals), so each is a one-component
 # "block" for the omnibus and a scalar contrast pairwise, with an estimate and an
 # interval on the same degrees of freedom as its test.
-DANCE_TRAJ_LEVEL_QUANTITIES <- c("intercept", "mesor", "change")
+# In the order of the three domains: overall level (fitted mean, mean midline,
+# initial midline), then accumulation (total change, average rate, initial
+# rate). Each is offered only where it is a distinct quantity -- see
+# DANCE_TRAJ_BLOCK_COMPONENTS().
+DANCE_TRAJ_LEVEL_QUANTITIES <- c("fitted_mean", "mesor", "intercept", "change", "avg_rate", "rate0")
 
 dance_traj_block_terms <- function(fit, which = DANCE_TRAJ_BLOCKS) {
   which <- match.arg(which, DANCE_TRAJ_BLOCKS)
@@ -1046,6 +1056,8 @@ dance_traj_cell_functionals <- function(fit) {
   zero <- stats::setNames(rep(0, length(bt)), bt)
   tw <- dance_traj_trend_window(spec$trend %||% "none", spec$t0,
                                 max(spec$data$t, na.rm = TRUE), spec$tau)
+  hm <- dance_harmonic_mean_factors(length(spec$harm_terms) / 2, spec$period,
+                                    max(spec$data$t, na.rm = TRUE) - spec$t0)
   cells <- lapply(seq_len(nrow(grid)), function(i) {
     cr <- grid[i, , drop = FALSE]
     z <- dance_traj_beta_row(fit, cr, zero)
@@ -1054,13 +1066,21 @@ dance_traj_cell_functionals <- function(fit) {
       dance_traj_beta_row(fit, cr, b) - z
     })
     names(coef) <- bt
-    mesor <- z; change <- z * 0
+    mesor <- z; change <- z * 0; avg_rate <- z * 0; rate0 <- z * 0
     for (j in intersect(names(tw$mean), bt)) {
-      mesor  <- mesor  + tw$mean[[j]] * coef[[j]]
-      change <- change + tw$end[[j]]  * coef[[j]]
+      mesor    <- mesor    + tw$mean[[j]]     * coef[[j]]
+      change   <- change   + tw$end[[j]]      * coef[[j]]
+      avg_rate <- avg_rate + tw$avg_rate[[j]] * coef[[j]]
+      rate0    <- rate0    + tw$rate0[[j]]    * coef[[j]]
+    }
+    # the rhythm's own mean over the window (zero only over whole cycles)
+    fitted_mean <- mesor
+    for (h in seq_along(hm$cos)) {
+      fitted_mean <- fitted_mean + hm$cos[h] * coef[[paste0("c", h)]] + hm$sin[h] * coef[[paste0("s", h)]]
     }
     list(level0 = drop(dance_traj_design_rows(fit, cr, spec$t0)),
-         intercept = z, mesor = mesor, change = change, coef = coef)
+         intercept = z, mesor = mesor, change = change, avg_rate = avg_rate,
+         rate0 = rate0, fitted_mean = fitted_mean, coef = coef)
   })
   list(grid = grid, cells = cells, basis = bt, window = tw)
 }
@@ -1074,6 +1094,9 @@ dance_traj_functional_row <- function(cell, cp) {
     ".intercept" = cell$intercept,
     ".mesor"     = cell$mesor,
     ".change"    = cell$change,
+    ".avg_rate"  = cell$avg_rate,
+    ".rate0"     = cell$rate0,
+    ".fitted_mean" = cell$fitted_mean,
     cell$coef[[cp]])
 }
 
@@ -1086,8 +1109,11 @@ dance_traj_level_summary <- function(fit, conf = 0.95,
   if (!isTRUE(fit$ok)) return(list(ok = FALSE, message = fit$message))
   spec <- fit$spec
   has_trend <- !identical(spec$trend %||% "none", "none")
-  # without a trend the MESOR is the intercept and there is no change to report
-  quantities <- intersect(quantities, if (has_trend) DANCE_TRAJ_LEVEL_QUANTITIES else "intercept")
+  # only the quantities that are distinct for this model (see
+  # DANCE_TRAJ_BLOCK_COMPONENTS: no MESOR or change without a trend, no fitted
+  # mean without a rhythm, no separate initial rate for a straight line)
+  quantities <- Filter(function(q) length(DANCE_TRAJ_BLOCK_COMPONENTS(spec, q)) > 0,
+                       intersect(quantities, DANCE_TRAJ_LEVEL_QUANTITIES))
   fx <- dance_traj_cell_functionals(fit)
   bv <- dance_traj_beta(fit)
   have <- names(bv$beta)[!is.na(bv$beta)]
@@ -1160,6 +1186,11 @@ DANCE_TRAJ_BLOCK_COMPONENTS <- function(spec, block) {
     # blocks exist only where they are distinct quantities
     mesor     = if (has_trend) ".mesor" else character(0),
     change    = if (has_trend) ".change" else character(0),
+    avg_rate  = if (has_trend) ".avg_rate" else character(0),
+    # a straight line's initial rate IS its average rate
+    rate0     = if (has_trend && !identical(spec$trend, "linear")) ".rate0" else character(0),
+    # without a rhythm the fitted mean IS the MESOR
+    fitted_mean = if (length(spec$harm_terms)) ".fitted_mean" else character(0),
     character(0))
 }
 
@@ -1397,9 +1428,16 @@ dance_traj_tests <- function(ff, df_method = "kr", progress = NULL) {
   # The level rows are the intercept and, with a trend, the MESOR. The trend row
   # is the one trend coefficient per cell -- the same hypothesis as the
   # non-periodic change over the recording.
+  # Without a trend there is no trend block and the MESOR is the intercept;
+  # without a rhythm there is no circadian block and the shape block IS the
+  # trend block, so each test is listed once, under its plain name.
+  has_h <- length(ff$spec$harm_terms) > 0
   want <- if (identical(ff$spec$trend, "none"))
-    c("full", "circadian", "intercept") else
-    c("full", "shape", "circadian", "trend", "intercept", "mesor")
+    c("full", "circadian", "fitted_mean", "intercept")
+  else if (!has_h)
+    c("full", "trend", "intercept", "mesor")
+  else
+    c("full", "shape", "circadian", "trend", "fitted_mean", "intercept", "mesor")
   reqs <- c(lapply(effects, function(ef) list(effect = strsplit(ef, ":", fixed = TRUE)[[1]],
                                               block = "full", name = ef)),
             lapply(want, function(w) list(effect = character(0), block = w, name = w)))

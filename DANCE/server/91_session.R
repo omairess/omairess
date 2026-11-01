@@ -48,7 +48,8 @@ RESTORE_INPUTS <- list(
                "mixed_between", "mixed_within", "mixed_analysis",
                "fanova_mixed_between", "fanova_mixed_within", "fanova_mixed_estimator",
                "harmonic_approach", "harmonic_traj_tau_mode", "harmonic_ts_tau_mode",
-               "harmonic_traj_resid", "harmonic_raw_style", "harmonic_traj_raw_style"),
+               "harmonic_traj_resid", "harmonic_raw_style", "harmonic_traj_raw_style",
+               "harmonic_structure"),
   text     = c("harmonic_manual_times")
 )
 
@@ -163,6 +164,16 @@ observeEvent(input$load_session, {
   # Each updater now gets its own setter with the argument name it actually has,
   # and a failure is COLLECTED rather than swallowed, so a future mismatch shows
   # up in the session note instead of disappearing.
+  # A session saved before the model-structure selector existed carries only
+  # the trend, where "none" meant the rhythm-only model. Its structure is read
+  # off that, and "none" is not pushed into a trend list that no longer has it.
+  if (!is.null(saved$settings) && is.null(saved$settings$harmonic_structure) &&
+      !is.null(saved$settings$harmonic_trend_type)) {
+    saved$settings$harmonic_structure <-
+      if (identical(saved$settings$harmonic_trend_type, "none")) "rhythm" else "combined"
+    if (identical(saved$settings$harmonic_trend_type, "none"))
+      saved$settings$harmonic_trend_type <- NULL
+  }
   restored <- character(0)
   failed <- character(0)
   push <- function(names_vec, setter) {

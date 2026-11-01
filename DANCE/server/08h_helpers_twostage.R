@@ -36,7 +36,43 @@ dance_ts_frame <- function(mod, group_values) {
   if (identical(mod$trend_type, "exp_sat") && all(c("A_sat", "tau") %in% names(p)) &&
       !"init_slope" %in% names(p))
     p$init_slope <- p$A_sat / p$tau
+  # the three-domain outcomes of every participant's own curve, through the
+  # definitions both approaches share (server/08_helpers_cosinor.R)
+  dv <- dance_ts_derived_outcomes(mod, p)
+  for (nm in names(dv)) if (!nm %in% names(p) || all(is.na(p[[nm]]))) p[[nm]] <- dv[[nm]]
   p
+}
+
+# Each participant's time-averaged fitted response, average and initial trend
+# rates and half-rise time, from their own coefficients, over the recording
+# window every participant shares: hours 0 to T since the first observation.
+# The harmonic coefficients are recovered from amplitude and acrophase
+# (cos = A cos(phi), sin = A sin(phi)), on the same model time as the fit.
+dance_ts_derived_outcomes <- function(mod, p) {
+  tr <- as.character(mod$trend_type %||% "none")
+  K <- as.integer(mod$n_harmonics %||% 0L)
+  tv <- mod$time_vec
+  n <- nrow(p)
+  na <- rep(NA_real_, n)
+  out <- data.frame(fitted_mean = na, avg_rate = na, rate0 = na, t50 = na)
+  if (is.null(tv) || !any(is.finite(tv)) || !n) return(out)
+  T <- diff(range(tv, na.rm = TRUE))
+  col <- function(nm) if (nm %in% names(p)) p[[nm]] else na
+  for (i in seq_len(n)) {
+    coef <- switch(tr, linear = col("trend_linear")[i], log = col("trend_log")[i],
+                   exp_sat = col("A_sat")[i], NA_real_)
+    tau <- if (identical(tr, "exp_sat")) col("tau")[i] else NULL
+    amp <- vapply(seq_len(K), function(h) col(paste0("amplitude_", h))[i], numeric(1))
+    phi <- vapply(seq_len(K), function(h) col(paste0("acrophase_rad_", h))[i], numeric(1))
+    lv <- dance_level_outcomes(col("mesor")[i], tr, coef, tau, amp * cos(phi), amp * sin(phi),
+                               mod$period %||% 24, T)
+    to <- dance_trend_outcomes(tr, coef, T, tau)
+    out$fitted_mean[i] <- lv$fitted_mean
+    out$avg_rate[i] <- to$avg_rate
+    out$rate0[i] <- to$rate0
+    out$t50[i] <- to$t50
+  }
+  out
 }
 
 # S(last observation) - S(first observation) for every participant, through the
@@ -69,11 +105,26 @@ dance_ts_trend_change <- function(mod, p) {
 # dance_ts_pairwise(), the same Welch tests as the pairwise table.
 dance_ts_level_summary <- function(df, mod, conf = 0.95) {
   has_trend <- !identical(mod$trend_type %||% "none", "none")
-  qs <- c(intercept = "mesor")
-  if (has_trend) qs <- c(qs, mesor = "mesor_adj", change = "trend_change")
+  # the same quantities, in the same order, as the mixed model offers (see
+  # DANCE_TRAJ_BLOCK_COMPONENTS): no fitted mean without a rhythm, no MESOR or
+  # rates without a trend, no separate initial rate for a straight line
+  qs <- dance_ts_level_columns(mod)
   out <- dance_ts_group_means(df, qs, conf)
   if (isTRUE(out$ok)) out$has_trend <- has_trend
   out
+}
+
+# The level and accumulation quantities a two-stage model has, named as the
+# mixed model names them, mapped to the per-participant columns.
+dance_ts_level_columns <- function(mod) {
+  tr <- as.character(mod$trend_type %||% "none")
+  has_trend <- !identical(tr, "none")
+  has_h <- isTRUE(as.integer(mod$n_harmonics %||% 1L) >= 1L)
+  c(if (has_h) c(fitted_mean = "fitted_mean"),
+    if (has_trend) c(mesor = "mesor_adj"),
+    intercept = "mesor",
+    if (has_trend) c(change = "trend_change", avg_rate = "avg_rate"),
+    if (has_trend && !identical(tr, "linear")) c(rate0 = "rate0"))
 }
 
 # The saturating trend's three parameters per group, as means of the
@@ -291,13 +342,14 @@ dance_ts_group_rhythm <- function(df, mod, h) {
 # because each participant's fit estimates both -- unlike the mixed model, which
 # holds tau fixed and estimates only the rise.
 dance_ts_pair_whats <- function(mod) {
-  K <- mod$n_harmonics %||% 1L
+  K <- max(0L, as.integer(mod$n_harmonics %||% 1L))
+  # the model-specific trend parameters, after the outcomes they underlie; the
+  # saturating rise's initial slope A/tau is the initial trend rate (rate0)
   tr <- switch(mod$trend_type %||% "none", linear = "trend_linear", log = "trend_log",
-               exp_sat = c("A_sat", if (!dance_ts_tau_held(mod)) "tau", "init_slope"),
+               exp_sat = c("A_sat", if (!dance_ts_tau_held(mod)) c("tau", "t50")),
                character(0))
-  out <- c("intercept", if (length(tr)) c("mesor", "change"), tr,
-           sprintf("amplitude%d", seq_len(K)), sprintf("phase%d", seq_len(K)), "r_squared")
-  out
+  c(names(dance_ts_level_columns(mod)), sprintf("amplitude%d", seq_len(K)),
+    sprintf("phase%d", seq_len(K)), tr, "r_squared")
 }
 dance_ts_pair_label <- function(what, period = 24, trend = NULL, units = NULL) {
   # only a harmonic name needs parsing; the level and trend labels stand alone
@@ -309,9 +361,13 @@ dance_ts_pair_label <- function(what, period = 24, trend = NULL, units = NULL) {
   u <- if (is.null(units) || !nzchar(units)) "response units" else units
   switch(what,
     level = , intercept = if (identical(trend, "none")) "Intercept = MESOR (no trend)"
-                          else "Intercept (midline at the first observation)",
-    mesor = , mesor_adj = "MESOR (midline averaged over the window)",
-    change = , trend_change = "Non-periodic change over the recording",
+                          else "Initial midline (t = 0)",
+    mesor = , mesor_adj = "Mean midline level (MESOR)",
+    change = , trend_change = "Total trend change (start to end)",
+    fitted_mean = "Time-averaged fitted response",
+    avg_rate = sprintf("Average trend rate (%s per hour)", u),
+    rate0 = sprintf("Initial trend rate (%s per hour)", u),
+    t50 = "Half-rise time tau ln 2 (hours)",
     value_at_start = "Curve value at the first observation",
     trend_linear = sprintf("Slope beta (%s per hour)", u),
     trend_log = sprintf("Log-trend beta (%s per unit of log(1 + hours))", u),
@@ -638,7 +694,7 @@ dance_ts_param_row <- function(i, fit_i, time_vec, period, n_harmonics, trend_ty
                              (fit_i$trend_params$tau$coef %||% NA_real_)
   }
 
-  for(h in 1:n_harmonics) {
+  for(h in seq_len(n_harmonics)) {
     row_data[[paste0("amplitude_", h)]] <- fit_i$amplitudes[h]
     row_data[[paste0("amp_se_", h)]] <- fit_i$amp_se[h]
     row_data[[paste0("acrophase_rad_", h)]] <- fit_i$acrophases[h]

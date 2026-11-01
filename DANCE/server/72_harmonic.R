@@ -77,6 +77,30 @@
   # ==============================================================================
   
   # Variable selection UI for harmonic regression
+  # ---- THE MODEL STRUCTURE ----------------------------------------------------
+  # Rhythmic component only, non-periodic trend only, or both. The two controls
+  # underneath keep their meaning -- the trend family and the harmonic count --
+  # and every read of them goes through these two helpers, so a hidden control
+  # can never leak into a model that does not have that component.
+  # A session saved before the selector existed has no structure: it is read off
+  # the trend it carries ("none" was the rhythm-only model).
+  harmonic_structure <- function() {
+    st <- input$harmonic_structure
+    if (is.null(st) || !st %in% c("rhythm", "trend", "combined"))
+      st <- if (identical(input$harmonic_trend_type %||% "none", "none")) "rhythm" else "combined"
+    st
+  }
+  harmonic_eff_trend <- function() {
+    if (identical(harmonic_structure(), "rhythm")) return("none")
+    tr <- input$harmonic_trend_type %||% "linear"
+    if (identical(tr, "none")) "linear" else tr
+  }
+  harmonic_eff_K <- function() {
+    if (identical(harmonic_structure(), "trend")) return(0L)
+    k <- suppressWarnings(as.integer(input$n_harmonics %||% 1L))
+    if (!length(k) || !is.finite(k) || k < 1L) 1L else k
+  }
+
   output$harmonic_var_select_ui <- renderUI({
     req(values$data)  # Only require data; covariates are optional
 
@@ -385,7 +409,7 @@
     )
 
     # Add exp_sat specific hints if that trend type is selected
-    if(!is.null(input$harmonic_trend_type) && input$harmonic_trend_type == "exp_sat") {
+    if(identical(harmonic_eff_trend(), "exp_sat")) {
       hints_html <- paste0(hints_html, sprintf(
         "<strong>Suggested A_sat bounds:</strong> [%.2f, %.2f] (0.5× to 2× range)<br>
          <strong>τ:</strong> its range is set with the trend under Model Specification<br>",
@@ -413,7 +437,7 @@
     # Build harmonic info table
     harmonic_info <- paste0(
       "<small><b>Harmonic periods:</b> ",
-      paste(sapply(1:n_harmonics, function(h) paste0("H", h, "=", round(period/h, 1), "h")), collapse=", "),
+      paste(vapply(seq_len(n_harmonics), function(h) paste0("H", h, "=", round(period/h, 1), "h"), character(1)), collapse=", "),
       "</small>"
     )
     
@@ -636,7 +660,7 @@
     
     coef_offset <- 1 + length(trend_cols)
     
-    for(h in 1:n_harmonics) {
+    for(h in seq_len(n_harmonics)) {
       omega <- 2 * pi * h / period
       X <- cbind(X, cos(omega * time), sin(omega * time))
       colnames_X <- c(colnames_X, paste0("cos", h), paste0("sin", h))
@@ -683,7 +707,7 @@
     # output which fitter produced their numbers.
     bingham <- vector("list", n_harmonics)
 
-    for(h in 1:n_harmonics) {
+    for(h in seq_len(n_harmonics)) {
       cos_idx <- coef_offset + 2 * (h - 1) + 1
       sin_idx <- coef_offset + 2 * (h - 1) + 2
       
@@ -854,7 +878,7 @@
 
     # Model with circadian only (Process C)
     X_circ <- matrix(1, nrow = n, ncol = 1)
-    for(h in 1:n_harmonics) {
+    for(h in seq_len(n_harmonics)) {
       omega <- 2 * pi * h / period
       X_circ <- cbind(X_circ, cos(omega * time), sin(omega * time))
     }
@@ -873,6 +897,8 @@
     # The marginal R2s are still returned, because they are what the commonality
     # decomposition is computed FROM and dropping them would make the arithmetic
     # unauditable. They are no longer presented as a decomposition.
+    # no rhythm, no rhythm-only model: the decomposition has one block
+    if (n_harmonics < 1) r_squared_C <- NA_real_
     .cm <- dance_commonality(r_squared, r_squared_S, r_squared_C)
     unique_S <- .cm$unique_S
     unique_C <- .cm$unique_C
@@ -1057,7 +1083,9 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
   }
 
   # Add harmonic components
-  harmonic_parts <- sapply(1:n_harmonics, function(h) {
+  # vapply, not sapply: with no harmonics (the trend-only model) sapply
+  # returns list(), which turns the whole formula into a list
+  harmonic_parts <- vapply(seq_len(n_harmonics), function(h) {
     omega <- 2 * pi * h / period
     start_list[[paste0("b_cos", h)]] <<- 0
     start_list[[paste0("b_sin", h)]] <<- 0
@@ -1070,7 +1098,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     upper_bounds[paste0("b_sin", h)] <<- amplitude_max
 
     sprintf("b_cos%d * cos(%f * time) + b_sin%d * sin(%f * time)", h, omega, h, omega)
-  })
+  }, character(1))
   formula_parts <- c(formula_parts, harmonic_parts)
 
   # Build complete formula
@@ -1419,7 +1447,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     Vfull <- tryCatch(stats::vcov(nls_fit), error = function(e) NULL)
     bingham <- vector("list", n_harmonics)
 
-    for(h in 1:n_harmonics) {
+    for(h in seq_len(n_harmonics)) {
       beta_cos <- as.numeric(coefs[paste0("b_cos", h)])
       beta_sin <- as.numeric(coefs[paste0("b_sin", h)])
       amplitudes[h] <- sqrt(beta_cos^2 + beta_sin^2)
@@ -1589,7 +1617,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     # Build a model with MESOR + harmonics only (no trend)
     tryCatch({
       X_circ <- matrix(1, nrow = n, ncol = 1)
-      for(h in 1:n_harmonics) {
+      for(h in seq_len(n_harmonics)) {
         omega <- 2 * pi * h / period
         X_circ <- cbind(X_circ, cos(omega * time), sin(omega * time))
       }
@@ -1601,6 +1629,8 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     })
 
     # AUDIT 1.3: commonality, not two overlapping marginals. See fit_cosinor().
+    # no rhythm, no rhythm-only model: the decomposition has one block
+    if (n_harmonics < 1) r_squared_C <- NA_real_
     .cm <- dance_commonality(r_squared, r_squared_S, r_squared_C)
     unique_S <- .cm$unique_S
     unique_C <- .cm$unique_C
@@ -1731,7 +1761,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     coef_offset <- 1 + n_trend_coefs
 
     if(component == "total" || component == "all") {
-      for(h in 1:n_harmonics) {
+      for(h in seq_len(n_harmonics)) {
         omega <- 2 * pi * h / period
         if(trend_type == "exp_sat") {
           beta_cos <- coefs[paste0("b_cos", h)]
@@ -1801,7 +1831,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       components$trend <- trend_val
     }
 
-    for(h in 1:n_harmonics) {
+    for(h in seq_len(n_harmonics)) {
       omega <- 2 * pi * h / period
       if(trend_type == "exp_sat") {
         beta_cos <- coefs[paste0("b_cos", h)]
@@ -1847,7 +1877,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       pred <- pred + trend_val
     }
     
-    for(h in 1:n_harmonics) {
+    for(h in seq_len(n_harmonics)) {
       omega <- 2 * pi * h / period
       beta_cos <- coefs[coef_offset + 2 * h - 1]
       beta_sin <- coefs[coef_offset + 2 * h]
@@ -1953,8 +1983,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
   # count, and the logarithmic trend was added. Rendering it from the same
   # function that builds the set is the only version that cannot go stale.
   output$harmonic_model_selection_help <- renderUI({
-    k  <- suppressWarnings(as.integer(input$n_harmonics %||% 1))
-    if (!is.finite(k) || k < 1) k <- 1L
+    k  <- harmonic_eff_K()
     ms <- dance_cosinor_model_set(k)
     helpText(HTML(sprintf(
       paste0("Fits every trend the app offers (none, linear, logarithmic, ",
@@ -2009,8 +2038,10 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       n_subjects <- nrow(Y)
       n_time <- ncol(Y)
       period <- input$harmonic_period
-      n_harmonics <- input$n_harmonics
-      trend_type <- input$harmonic_trend_type
+      # the model structure decides both: no trend for a rhythm-only model,
+      # no harmonics for a trend-only model
+      n_harmonics <- harmonic_eff_K()
+      trend_type <- harmonic_eff_trend()
       
       # Calculate number of trend parameters
       n_trend_params <- switch(trend_type,
@@ -2395,7 +2426,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
         mean_acrophases_rad <- numeric(n_harmonics)
         mean_acrophases_time <- numeric(n_harmonics)
         
-        for(h in 1:n_harmonics) {
+        for(h in seq_len(n_harmonics)) {
           beta_cos_col <- paste0("beta_cos_", h)
           beta_sin_col <- paste0("beta_sin_", h)
           amp_col <- paste0("amplitude_", h)
@@ -2443,7 +2474,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
             indiv_means[[paste0(tc, "_sd")]] <- sd(individual_params[[tc]], na.rm = TRUE)
           }
         }
-        for(h in 1:n_harmonics) {
+        for(h in seq_len(n_harmonics)) {
           indiv_means[[paste0("amplitude_", h)]] <- mean(individual_params[[paste0("amplitude_", h)]], na.rm = TRUE)
           indiv_means[[paste0("amplitude_", h, "_sd")]] <- sd(individual_params[[paste0("amplitude_", h)]], na.rm = TRUE)
           indiv_means[[paste0("acrophase_time_", h)]] <- mean(individual_params[[paste0("acrophase_time_", h)]], na.rm = TRUE)
@@ -2669,7 +2700,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
             grp_acrophases_time <- numeric(n_harmonics)
             grp_amp_sd <- numeric(n_harmonics)
             
-            for(h in 1:n_harmonics) {
+            for(h in seq_len(n_harmonics)) {
               beta_cos_col <- paste0("beta_cos_", h)
               beta_sin_col <- paste0("beta_sin_", h)
               amp_col <- paste0("amplitude_", h)
@@ -4443,7 +4474,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     }
     
     # Add columns for each harmonic
-    for(h in 1:mod$n_harmonics) {
+    for(h in seq_len(mod$n_harmonics)) {
       display_df[[paste0("Amp_H", h)]] <- round(params[[paste0("amplitude_", h)]], 3)
       display_df[[paste0("Acro_H", h, "_hrs")]] <- round(params[[paste0("acrophase_time_", h)]], 2)
     }
@@ -4732,7 +4763,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     NULL
   }
   output$harmonic_tau_check <- renderUI({
-    if (!identical(input$harmonic_trend_type, "exp_sat")) return(NULL)
+    if (!identical(harmonic_eff_trend(), "exp_sat")) return(NULL)
     msg <- harmonic_tau_problem(harmonic_tau_inputs(),
                                 identical(input$harmonic_approach %||% "mixed", "mixed"))
     if (is.null(msg)) return(NULL)

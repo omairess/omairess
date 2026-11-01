@@ -410,14 +410,18 @@ dance_traj_pair_label <- function(what, period = 24, n_harmonics = 1L, trend = N
 dance_traj_pair_whats <- function(fit) {
   if (!isTRUE(fit$ok)) return(c("intercept", "amplitude", "phase"))
   spec <- fit$spec
-  K <- max(1L, as.integer(spec$n_harmonics %||% 1L))
+  # 0 harmonics is the trend-only model: no amplitude, no acrophase
+  K <- max(0L, as.integer(spec$n_harmonics %||% 1L))
   lv <- Filter(function(q) length(DANCE_TRAJ_BLOCK_COMPONENTS(spec, q)) > 0,
                DANCE_TRAJ_LEVEL_QUANTITIES)
   if ("change" %in% lv && length(DANCE_TRAJ_BLOCK_COMPONENTS(spec, "trend")))
     lv <- append(lv, "trend", after = match("change", lv) - 1L)
   # every fitted harmonic gets its own amplitude and acrophase entry
   out <- c(lv, sprintf("amplitude%d", seq_len(K)), sprintf("phase%d", seq_len(K)))
-  seen <- list()
+  # without a rhythm the shape block IS the trend, offered above as the trend
+  # coefficient and the change
+  seen <- if (K == 0L) list(paste(sort(DANCE_TRAJ_BLOCK_COMPONENTS(spec, "trend")), collapse = "|"))
+          else list()
   for (b in c("full", "shape", "circadian")) {
     cp <- DANCE_TRAJ_BLOCK_COMPONENTS(spec, b)
     if (!length(cp)) next
@@ -431,9 +435,12 @@ dance_traj_pair_whats <- function(fit) {
 
 DANCE_TRAJ_PAIR_LABEL <- c(
   level     = "Curve value at the first observation",
-  intercept = "Intercept (midline at the first observation)",
-  mesor     = "MESOR (midline averaged over the window)",
-  change    = "Non-periodic change over the recording",
+  fitted_mean = "Time-averaged fitted response",
+  intercept = "Initial midline (t = 0)",
+  mesor     = "Mean midline level (MESOR)",
+  change    = "Total trend change (start to end)",
+  avg_rate  = "Average trend rate",
+  rate0     = "Initial trend rate",
   amplitude = "Amplitude",
   phase     = "Acrophase",
   full      = "Full trajectory (joint)",
@@ -463,6 +470,16 @@ dance_traj_level_unit <- function(fit, what) {
                     "The change is the %s times %s, so its test is the test of that coefficient."),
               win, u, coef_lab, dance_traj_change_factor_text(tw))
       else sprintf("difference in the non-periodic change over the recording, in %s", u),
+    fitted_mean = sprintf("difference in the time-averaged fitted response, in %s: the whole fitted curve (midline and rhythm) averaged over %s",
+                          u, win),
+    avg_rate  = if (!is.null(tw) && length(tw$end))
+      sprintf("difference in the average trend rate, in %s per hour: the total trend change over %s divided by its %.4g hours. Over this one window it is the same test as the total change.",
+              u, win, tw$T)
+      else sprintf("difference in the average trend rate, in %s per hour", u),
+    rate0     = if (!is.null(tw) && length(tw$rate0))
+      sprintf("difference in the initial trend rate, in %s per hour: the slope of the trend at the first observation, the %s times %s. Given tau it is the same test as the total change.",
+              u, coef_lab, format(signif(tw$rate0[[1]], 4)))
+      else sprintf("difference in the initial trend rate, in %s per hour", u),
     trend     = if (!is.null(tw) && length(tw$end))
       sprintf(paste("difference in the %s. The non-periodic change over %s is this",
                     "coefficient times %s, so the two have the same test and different estimates."),
