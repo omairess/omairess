@@ -576,7 +576,20 @@ ui_tab_harmonic <- tabItem(
                                                          "Lines (one per curve; broken at missing values)" = "lines"),
                                              selected = "points", inline = TRUE)))
                      ),
+                     # THE THREE GRAPHS are this plot's three views: the full
+                     # fitted trajectory (overall level), the harmonics (the
+                     # rhythm) and the non-periodic change from the first
+                     # observation (accumulation). The annotations are read off
+                     # the same outcome table as the "By question" panel.
+                     checkboxGroupInput("harmonic_traj_annot", "Annotate (in the view each belongs to):",
+                                        choices = c("Time-averaged fitted response (full view)" = "mean",
+                                                    "Total change and average rate (trend view)" = "change",
+                                                    "Initial trend rate, as a tangent (trend view)" = "tangent",
+                                                    "Asymptote A and the 63.2% point at tau (trend view)" = "asymptote",
+                                                    "Acrophase and amplitude (rhythm views)" = "acro"),
+                                        selected = c("mean", "change", "acro"), inline = TRUE),
                      plotlyOutput("harmonic_traj_curves", height = "440px"),
+                     uiOutput("harmonic_traj_annot_note"),
                      uiOutput("harmonic_traj_band_note"),
 
                      # The level of each trajectory as numbers: the intercept,

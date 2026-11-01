@@ -199,7 +199,7 @@ dance_outcomes_mixed <- function(ff, tests = NULL, conf = 0.95, n_draw = 6000, c
          lr$df, NA_real_, lr$p, "likelihood-ratio chi-square (ML)")
   }
   list(ok = TRUE, approach = "mixed", estimates = dance_outcome_bind(est),
-       tests = dance_outcome_bind(tst), structure = dance_model_structure(trend, K),
+       tests = dance_outcome_bind(tst), structure = dance_model_structure(trend, K), trend = trend,
        conf = conf, units = ff$dv_units, period = spec$period,
        clock_origin = ff$clock_origin %||% 0)
 }
@@ -250,6 +250,15 @@ dance_outcomes_ts <- function(df, mod, conf = 0.95) {
         kind = "mean of participants")
     }
   }
+  # tau held at one value for every participant: a constant, stated as such
+  if (identical(trend, "exp_sat") && dance_ts_tau_held(mod)) {
+    tau_h <- suppressWarnings(as.numeric(mod$tau_spec$value %||% NA))
+    if (is.finite(tau_h)) for (cl in levels(droplevels(factor(df$group)))) {
+      E("accumulation_model", "tau", "Trend time constant tau (hours; held for every participant)", cl,
+        tau_h, kind = "fixed")
+      E("accumulation_model", "t50", "Half-rise time tau ln 2 (hours)", cl, tau_h * log(2), kind = "fixed")
+    }
+  }
   for (h in seq_len(K)) {
     gr <- dance_ts_group_rhythm(df, mod, h); if (is.null(gr)) next
     for (i in seq_len(nrow(gr))) {
@@ -282,7 +291,7 @@ dance_outcomes_ts <- function(df, mod, conf = 0.95) {
     }
   }
   list(ok = TRUE, approach = "two-stage", estimates = dance_outcome_bind(est),
-       tests = dance_outcome_bind(tst), structure = dance_model_structure(trend, K),
+       tests = dance_outcome_bind(tst), structure = dance_model_structure(trend, K), trend = trend,
        conf = conf, units = mod$dv_units, period = period,
        clock_origin = dance_clock_origin(mod))
 }

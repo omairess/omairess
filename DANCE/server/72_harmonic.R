@@ -4989,6 +4989,108 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     dance_ts_group_curves(mod, ts$gvals, times, component = component, band = band)
   }
 
+  # ---- THE ANNOTATIONS OF THE THREE GRAPHS ---------------------------------------
+  # Every number drawn here is read off harmonic_outcomes(), the table the "By
+  # question" panel, its CSV and the report print -- so a line on the plot and a
+  # row in the table cannot disagree. Which annotations: the ones ticked, plus
+  # the one belonging to the quantity chosen under Pairwise comparisons.
+  harmonic_traj_annot_set <- function() {
+    a <- input$harmonic_traj_annot %||% character(0)
+    w <- input$harmonic_traj_what %||% ""
+    implied <- if (w %in% c("fitted_mean", "mesor")) "mean"
+      else if (w %in% c("change", "avg_rate", "sat_change", "sat_avg_rate", "trend")) "change"
+      else if (w %in% c("rate0", "init_slope")) "tangent"
+      else if (w %in% c("A_sat", "tau")) "asymptote"
+      else if (grepl("^(amplitude|phase)", w)) "acro" else character(0)
+    unique(c(a, implied))
+  }
+  harmonic_annotate <- function(p, cmp, cells, cols, t0, t_end, period) {
+    ann <- harmonic_traj_annot_set()
+    if (!length(ann)) return(p)
+    o <- tryCatch(harmonic_outcomes(), error = function(e) NULL)
+    if (is.null(o) || !isTRUE(o$ok) || is.null(o$estimates)) return(p)
+    es <- o$estimates
+    val <- function(q, cl) { r <- es$estimate[es$outcome %in% q & es$cell == cl]; if (length(r)) r[1] else NA_real_ }
+    dash <- function(cl, a = 0.9) list(color = dance_group_rgba(cols[[cl]], a), width = 1.4, dash = "dash")
+    Tw <- t_end - t0
+    for (cl in cells) {
+      if (identical(cmp, "full") && "mean" %in% ann) {
+        m <- val(c("fitted_mean"), cl); if (!is.finite(m)) m <- val("mesor", cl)
+        if (is.finite(m))
+          p <- p %>% add_lines(x = c(t0, t_end), y = c(m, m), legendgroup = cl, showlegend = FALSE,
+                               line = dash(cl), name = sprintf("%s: time-averaged fitted response", cl),
+                               hovertemplate = sprintf("%s time-averaged fitted response %.3f<extra></extra>", cl, m))
+      }
+      if (identical(cmp, "trend")) {
+        ch <- val(c("sat_change", "change"), cl)
+        if ("change" %in% ann && is.finite(ch))
+          p <- p %>%
+            add_lines(x = c(t0, t_end), y = c(0, ch), legendgroup = cl, showlegend = FALSE, line = dash(cl, 0.7),
+                      hovertemplate = sprintf("%s average trend rate %.4g per hour<extra></extra>", cl, ch / Tw)) %>%
+            add_markers(x = t_end, y = ch, legendgroup = cl, showlegend = FALSE,
+                        marker = list(color = cols[[cl]], size = 9, symbol = "diamond"),
+                        hovertemplate = sprintf("%s total trend change %.3f<extra></extra>", cl, ch))
+        r0 <- val(c("init_slope", "rate0", "avg_rate", "sat_avg_rate"), cl)
+        if ("tangent" %in% ann && is.finite(r0)) {
+          # the tangent at the first observation, drawn over the first quarter of
+          # the window (or until it would leave the range of the change)
+          tl <- Tw / 4
+          if (is.finite(ch) && ch != 0 && r0 != 0) tl <- min(tl, abs(ch / r0) * 1.2)
+          p <- p %>% add_lines(x = c(t0, t0 + tl), y = c(0, r0 * tl), legendgroup = cl, showlegend = FALSE,
+                               line = list(color = cols[[cl]], width = 2, dash = "dot"),
+                               hovertemplate = sprintf("%s initial trend rate %.4g per hour<extra></extra>", cl, r0))
+        }
+        # A: the per-cell model's or the per-participant mean, else (tau shared
+        # and held) the saturating trend's own coefficient
+        A <- if (identical(o$trend, "exp_sat")) val(c("A_sat", "trend"), cl) else NA_real_
+        tau <- val("tau", cl)
+        if ("asymptote" %in% ann && is.finite(A) && is.finite(tau)) {
+          p <- p %>%
+            add_lines(x = c(t0, t_end), y = c(A, A), legendgroup = cl, showlegend = FALSE,
+                      line = list(color = dance_group_rgba(cols[[cl]], 0.5), width = 1, dash = "longdash"),
+                      hovertemplate = sprintf("%s asymptote A = %.3f (where the trend is heading)<extra></extra>", cl, A))
+          if (tau <= Tw * 1.5)
+            p <- p %>% add_markers(x = t0 + tau, y = A * (1 - exp(-1)), legendgroup = cl, showlegend = FALSE,
+                                   marker = list(color = cols[[cl]], size = 8, symbol = "circle-open"),
+                                   hovertemplate = sprintf("%s t = tau = %.2f h: 63.2%% of A<extra></extra>", cl, tau))
+        }
+      }
+      kh <- dance_traj_component_harmonic(cmp)
+      if ("acro" %in% ann && (cmp %in% c("harmonics", "baseline_harm") || !is.na(kh))) {
+        hs <- if (!is.na(kh)) kh else 1L
+        for (h in hs) {
+          amp <- val(sprintf("amplitude%d", h), cl); ph <- val(sprintf("phase%d", h), cl)
+          if (!is.finite(amp) || !is.finite(ph)) next
+          eff <- period / h
+          tt <- t0 + ph + eff * seq(-1, ceiling(Tw / eff) + 1)
+          tt <- tt[tt >= t0 & tt <= t_end]
+          base <- if (identical(cmp, "baseline_harm")) val("intercept", cl) else 0
+          if (!is.finite(base)) base <- 0
+          if (length(tt))
+            p <- p %>% add_markers(x = tt, y = rep(base + amp, length(tt)), legendgroup = cl, showlegend = FALSE,
+                                   marker = list(color = cols[[cl]], size = 9, symbol = "triangle-down"),
+                                   hovertemplate = sprintf("%s H%d acrophase, amplitude %.3f<extra></extra>", cl, h, amp))
+        }
+      }
+    }
+    p
+  }
+
+  output$harmonic_traj_annot_note <- renderUI({
+    ann <- harmonic_traj_annot_set(); cmp <- harmonic_traj_component()
+    want <- c(mean = "full", change = "trend", tangent = "trend", asymptote = "trend", acro = "harmonics")
+    off <- ann[!vapply(ann, function(a) identical(want[[a]], cmp) ||
+                         (a == "acro" && (cmp == "baseline_harm" || grepl("^harmonic[0-9]", cmp))), logical(1))]
+    if (!length(off)) return(NULL)
+    lab <- c(mean = "the time-averaged fitted response", change = "the total change and average rate",
+             tangent = "the initial trend rate", asymptote = "the asymptote and tau",
+             acro = "the acrophase and amplitude")
+    view <- c(full = "the full fitted trajectory", trend = "the non-periodic change", harmonics = "a rhythm view")
+    tags$div(style = "font-size:11px;color:#777;margin:2px 0 6px 0",
+             paste0("Not drawn in this view: ", paste(sprintf("%s (choose %s)", lab[off], view[want[off]]),
+                                                      collapse = "; "), "."))
+  })
+
   ts_curves_plot <- function() {
     ts <- harmonic_ts(); if (is.null(ts)) return(NULL)
     if (!isTRUE(ts$ok)) return(plotly_empty() %>% layout(title = list(text = ts$message, font = list(size = 12))))
@@ -5019,6 +5121,8 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       }
     }
     co <- dance_clock_origin(mod); P <- mod$period %||% 24
+    p <- harmonic_annotate(p, harmonic_traj_component(), gc$cells, cols,
+                           min(mod$time_vec, na.rm = TRUE), max(mod$time_vec, na.rm = TRUE), P)
     brk <- pretty(range(gc$times), n = 8); brk <- brk[brk >= min(gc$times) & brk <= max(gc$times)]
     p %>% layout(
       xaxis = list(title = if (co != 0) "Clock time" else "Time", tickmode = "array", tickvals = brk,
@@ -5576,6 +5680,8 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     # axis so the traces do not move; only the labels are converted.
     co <- ff$clock_origin %||% 0
     P <- ff$spec$period %||% 24
+    p <- harmonic_annotate(p, cmp, pr$cells, cols, ff$spec$t0,
+                           max(ff$spec$data$t, na.rm = TRUE), P)
     brk <- pretty(range(pr$times), n = 8)
     brk <- brk[brk >= min(pr$times) & brk <= max(pr$times)]
     p %>% layout(

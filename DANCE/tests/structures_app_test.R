@@ -123,6 +123,35 @@ testServer(server, {
       chk(any(oc$tests$domain == "omnibus"), sprintf("%s: the omnibus trajectory test is reported", tag),
           sprintf("%s: no omnibus test", tag))
     }
+    # the three graphs, every annotation on, and the drawn numbers against the
+    # outcome table they are read from
+    session$setInputs(harmonic_traj_annot = c("mean", "change", "tangent", "asymptote", "acro"))
+    for (cmp in intersect(c("full", "trend", "harmonics"),
+                          if (ap == "mixed") dance_traj_components(hm$traj) else c("full", "harmonics", if (st != "rhythm") "trend"))) {
+      session$setInputs(harmonic_traj_component = cmp)
+      pj <- render(paste(tag, "graph", cmp), output$harmonic_traj_curves)
+      if (is.null(pj) || is.null(oc) || !isTRUE(oc$ok)) next
+      js <- jsonlite::fromJSON(pj, simplifyVector = FALSE)$x$data
+      ht <- vapply(js, function(tr) paste(unlist(tr$hovertemplate), collapse = " "), "")
+      es <- oc$estimates
+      cl1 <- es$cell[1]
+      if (cmp == "full") {
+        m <- es$estimate[es$outcome %in% c("fitted_mean") & es$cell == cl1]
+        if (!length(m)) m <- es$estimate[es$outcome == "mesor" & es$cell == cl1]
+        tr <- js[[which(grepl(sprintf("^%s time-averaged fitted response", cl1), ht))[1]]]
+        chk(!is.null(tr) && isTRUE(all.equal(unlist(tr$y)[1], m[1])),
+            sprintf("%s: the mean line is the table's time-averaged fitted response", tag),
+            sprintf("%s: the mean line does not match the table", tag))
+      }
+      if (cmp == "trend") {
+        ch <- es$estimate[es$outcome %in% c("sat_change", "change") & es$cell == cl1]
+        tr <- js[[which(grepl(sprintf("^%s total trend change", cl1), ht))[1]]]
+        chk(!is.null(tr) && isTRUE(all.equal(unlist(tr$y)[1], ch[1])),
+            sprintf("%s: the end marker is the table's total trend change", tag),
+            sprintf("%s: the end marker does not match the table", tag))
+      }
+    }
+    session$setInputs(harmonic_traj_component = "full")
     pw <- render(paste(tag, "pairwise export"), harmonic_pairwise_all())
     if (!is.null(pw)) {
       chk(!any(grepl("^(amplitude|phase)", pw$quantity)) || st != "trend",
