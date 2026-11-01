@@ -33,14 +33,21 @@
 # generous for a comparison between groups of participants.
 # ==============================================================================
 
-DANCE_TRAJ_SAT_PARS <- c("A_sat", "tau", "init_slope")
+# In the order of the accumulation domain: the outcomes first (total change,
+# average rate, initial rate), then the model-specific parameters (A, tau).
+# Named sat_* where the trajectory model has a quantity of the same meaning:
+# these are the per-cell nonlinear model's, with each cell's tau estimated and
+# its uncertainty carried through, and the two must not be confused.
+DANCE_TRAJ_SAT_PARS <- c("sat_change", "sat_avg_rate", "init_slope", "A_sat", "tau")
 
 dance_traj_sat_label <- function(what, units = NULL) {
   u <- if (is.null(units) || !nzchar(units)) "response units" else units
   switch(what,
-    A_sat      = sprintf("Saturating rise A (%s above the intercept)", u),
-    tau        = "Time constant tau (hours)",
-    init_slope = sprintf("Initial slope A/tau (%s per hour)", u),
+    sat_change   = sprintf("Total trend change, start to end (%s; tau per cell)", u),
+    sat_avg_rate = sprintf("Average trend rate (%s per hour; tau per cell)", u),
+    init_slope   = sprintf("Initial trend rate A/tau (%s per hour)", u),
+    A_sat        = sprintf("Asymptotic trend change A (%s above the intercept)", u),
+    tau          = "Trend time constant tau (hours)",
     what)
 }
 
@@ -120,7 +127,7 @@ dance_traj_sat_fit <- function(ff, progress = NULL, tau_range = NULL,
   d$cell_ <- factor(paste0("g", k), levels = paste0("g", seq_len(G)))
   d$tt <- d$t - sp$t0
   K <- sp$n_harmonics
-  harm <- as.vector(rbind(paste0("a", seq_len(K)), paste0("b", seq_len(K))))
+  harm <- as.vector(rbind(sprintf("a%d", seq_len(K)), sprintf("b%d", seq_len(K))))  # sprintf: paste0("a", integer(0)) is "a"
   map <- dance_traj_sat_tau_map(tau_range)
   form <- stats::as.formula(paste(
     sprintf("y ~ b0 + A * (1 - exp(-tt / %s))", map$expr),
@@ -271,6 +278,15 @@ dance_traj_sat_table <- function(sf, conf = 0.95) {
     vA <- V[na, na]; vx <- V[nl, nl]; cAx <- V[na, nl]
     # A/tau through the delta method: gradient (1/tau, -s * g / tau) in (A, x)
     se_s <- sqrt(max(0, vA / tau^2 + (s * g / tau)^2 * vx - 2 * (s * g / tau^2) * cAx))
+    # THE TOTAL CHANGE and the AVERAGE RATE over the window, with tau's own
+    # uncertainty carried through (not held as a known constant): the change is
+    # A (1 - e^(-T/tau)), with gradient (1 - e^(-T/tau), -A (T/tau^2) e^(-T/tau) g)
+    # in (A, x), and the average rate is the change over T.
+    Tw <- diff(sf$window %||% c(0, NA_real_))
+    e <- exp(-Tw / tau)
+    ch <- A * (1 - e)
+    gr <- c(1 - e, -A * (Tw / tau^2) * e * g)
+    se_ch <- sqrt(max(0, gr[1]^2 * vA + gr[2]^2 * vx + 2 * gr[1] * gr[2] * cAx))
     data.frame(cell = sf$cells[k], n_cells = sf$n_cells,
                A = A, A_se = sqrt(vA), A_lo = A - q * sqrt(vA), A_hi = A + q * sqrt(vA),
                tau = tau, tau_se = g * sqrt(vx),
@@ -279,6 +295,10 @@ dance_traj_sat_table <- function(sf, conf = 0.95) {
                init_slope = s, init_slope_se = se_s,
                init_slope_lo = s - q * se_s, init_slope_hi = s + q * se_s,
                corr_A_logtau = cAx / sqrt(vA * vx),
+               change = ch, change_se = se_ch, change_lo = ch - q * se_ch, change_hi = ch + q * se_ch,
+               avg_rate = ch / Tw, avg_rate_se = se_ch / Tw,
+               avg_rate_lo = (ch - q * se_ch) / Tw, avg_rate_hi = (ch + q * se_ch) / Tw,
+               t50 = tau * log(2), frac_reached = 1 - e,
                stringsAsFactors = FALSE)
   })
   tab <- do.call(rbind, rows); rownames(tab) <- NULL
@@ -307,6 +327,19 @@ dance_traj_sat_vector <- function(sf, what) {
       for (k in seq_len(G)) { J[k, k] <- 1 / tau[k]; J[k, G + k] <- -s[k] * g[k] / tau[k] }
       Vs <- J %*% V[c(nA, nl), c(nA, nl)] %*% t(J)
       list(theta = s, V = Vs, scale = "identity")
+    },
+    # the total change A (1 - e^(-T/tau)) over the window, and the average rate
+    # (the change over T): tau is estimated per cell here, so its uncertainty is
+    # carried through the delta method, not held as known
+    sat_change = , sat_avg_rate = , change = , avg_rate = {
+      A <- unname(fe[nA]); Tw <- diff(sf$window); e <- exp(-Tw / tau)
+      J <- matrix(0, G, 2L * G)
+      for (k in seq_len(G)) {
+        J[k, k] <- 1 - e[k]; J[k, G + k] <- -A[k] * (Tw / tau[k]^2) * e[k] * g[k]
+      }
+      sc <- if (what %in% c("avg_rate", "sat_avg_rate")) 1 / Tw else 1
+      list(theta = sc * A * (1 - e), V = sc^2 * (J %*% V[c(nA, nl), c(nA, nl)] %*% t(J)),
+           scale = "identity")
     },
     stop(sprintf("unknown saturating parameter '%s'", what)))
 }

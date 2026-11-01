@@ -147,7 +147,7 @@ output$density_controls_ui <- renderUI({
       condition = "input.density_what == 'acrophase'",
     if (nh > 1) selectInput("density_harmonic", "Harmonic:",
                             choices = stats::setNames(seq_len(nh),
-                                                      paste0("H", seq_len(nh))),
+                                                      sprintf("H%d", seq_len(nh))),
                             selected = 1),
     radioButtons("density_bw_mode", "Kernel bandwidth:",
                  choices = c("Automatic (Taylor plug-in rule)" = "auto",

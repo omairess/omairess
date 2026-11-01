@@ -46,7 +46,8 @@ test_that("the pairwise vocabulary follows the fit, with no duplicate blocks", {
   expect_true(all(c("intercept", "mesor", "trend", "change", "amplitude1", "phase1", "full",
                     "shape", "circadian") %in% ws))
   expect_false("level" %in% ws)
-  expect_identical(ws[1:4], c("intercept", "mesor", "trend", "change"))
+  # overall level, accumulation, then the trend's own coefficient
+  expect_identical(ws[1:6], c("fitted_mean", "mesor", "intercept", "change", "avg_rate", "trend"))
   f1 <- mk(K = 1, trend = "none"); skip_if_not(isTRUE(f1$ok))
   w1 <- e$dance_traj_pair_whats(f1)
   expect_false(any(c("trend", "mesor", "change", "level") %in% w1))
@@ -229,7 +230,7 @@ test_that("every fitted harmonic gets its own amplitude and acrophase entry", {
   expect_match(e$dance_traj_pair_label("amplitude3", 24, 3), "H3 \\(8 h\\)")
   expect_equal(e$dance_traj_pair_label("level", 24, 2), "Curve value at the first observation")
   expect_equal(e$dance_traj_pair_label("intercept", 24, 2, "linear"),
-               "Intercept (midline at the first observation)")
+               "Initial midline (t = 0)")
 })
 
 test_that("the harmonic in the name is the harmonic compared", {

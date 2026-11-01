@@ -541,9 +541,19 @@ ui_tab_harmonic <- tabItem(
                      uiOutput("harmonic_traj_primary"),
 
                      hr(),
-                     h4("Secondary \u2014 trajectory components"),
-                     helpText("Why they differ. Only rows that apply to the fitted model are shown."),
-                     uiOutput("harmonic_traj_components"),
+                     # THE THREE QUESTIONS, each with its tests and its group
+                     # estimates: overall level, rhythmicity, accumulation. The
+                     # same tables go to the CSV and to the APA report.
+                     h4("By question \u2014 overall level, rhythmicity, accumulation"),
+                     helpText("Why they differ, one scientific question at a time. Primary outcomes
+                               are marked; only what the fitted model contains is shown."),
+                     uiOutput("harmonic_outcomes"),
+                     downloadButton("download_harmonic_outcomes",
+                                    "Download outcomes and tests by question (CSV)", class = "btn-sm"),
+                     tags$details(style = "margin-top:10px",
+                       tags$summary(style = "cursor:pointer;color:#555",
+                                    "Technical: every component block test, and where the fitted curve peaks"),
+                       uiOutput("harmonic_traj_components")),
 
                      hr(),
                      h4("Estimated trajectories"),

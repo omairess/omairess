@@ -55,13 +55,18 @@ dance_cosinor_assumptions <- function(mod, ff = NULL, df_method = "kr") {
     "t = 0 is the first time point of the recording (%s); every trend and every harmonic",
     "is anchored there, for every participant, so the intercept is the midline at that",
     "instant -- also for a participant whose first observation is missing."), clock0))
-  a("Time", sprintf(paste(
-    "The period is fixed at %s h, not estimated; amplitudes and acrophases are",
-    "conditional on it."), f(P)))
-  a("Time", if (K > 1L) sprintf(paste(
-    "The harmonics are cumulative: periods %s h (harmonics 1 to %d), none skipped."),
-    paste(f(P / seq_len(K)), collapse = ", "), K)
-    else sprintf("One harmonic: the fundamental, period %s h.", f(P)))
+  if (K >= 1L) {
+    a("Time", sprintf(paste(
+      "The period is fixed at %s h, not estimated; amplitudes and acrophases are",
+      "conditional on it."), f(P)))
+    a("Time", if (K > 1L) sprintf(paste(
+      "The harmonics are cumulative: periods %s h (harmonics 1 to %d), none skipped."),
+      paste(f(P / seq_len(K)), collapse = ", "), K)
+      else sprintf("One harmonic: the fundamental, period %s h.", f(P)))
+  } else {
+    a("Model", paste("Non-periodic trend only: no harmonics, so the model has no",
+                     "rhythmic component and the period plays no part."))
+  }
   a("Data", paste("Raw observations; a missing observation is left out, not imputed or",
                   "smoothed, and each fit uses the observations present."))
 
@@ -129,11 +134,13 @@ dance_cosinor_assumptions <- function(mod, ff = NULL, df_method = "kr") {
       "comparison tab)."),
       switch(df_method, kr = "Kenward-Roger", satterthwaite = "Satterthwaite", df_method)))
     a("Intervals", paste(
-      "Per-cell intervals for the intercept, MESOR and change: Wald, normal quantile.",
+      "Per-cell intervals for the level and trend quantities: Wald, normal quantile.",
+      if (K >= 1L) paste(
       "Amplitude and acrophase: simulated from the joint normal distribution of each",
       "(cos, sin) pair -- 6,000 draws per cell, 20,000 per pairwise contrast, seed",
       "20240601; an acrophase is undefined when the pair's joint 95% region contains",
-      "the origin (Bingham et al., 1982). Curve bands:",
+      "the origin (Bingham et al., 1982).") else "",
+      "Curve bands:",
       "pointwise (normal quantile) or simultaneous (Scheffe, on the smallest",
       "Satterthwaite df), as chosen on the comparison tab. 95% throughout."))
 
@@ -205,9 +212,11 @@ dance_cosinor_assumptions <- function(mod, ff = NULL, df_method = "kr") {
         " Fewer than 3 fits passed, so ALL returned fits were used in this run." else
         " If fewer than 3 fits pass, all returned fits are used and the summary says so."))
     a("Group summaries", paste(
-      "Intercept, trend, MESOR and change: arithmetic means of the participants' own",
-      "values, with t intervals. Amplitude and acrophase: amplitude-weighted vector means",
-      "of the (cos, sin) pairs (the population-mean cosinor). A group with fewer than 3",
+      "Level and trend quantities (fitted mean, intercept, MESOR, change, rates, trend",
+      "parameters): arithmetic means of the participants' own values, with t intervals.",
+      if (K >= 1L) paste("Amplitude and acrophase: amplitude-weighted vector means",
+      "of the (cos, sin) pairs (the population-mean cosinor).") else "",
+      "A group with fewer than 3",
       "participants is not summarised; a participant without a group label is left out",
       "of the group analyses and kept in the pooled one."))
     a("Tests", paste(
@@ -215,13 +224,17 @@ dance_cosinor_assumptions <- function(mod, ff = NULL, df_method = "kr") {
       "and the participants as independent: a within-participant factor cannot be",
       "expressed. Omnibus: one-way MANOVA, Wilks' lambda, on the coefficient vector",
       "(multivariate normal, equal covariance matrices). Components: one-way ANOVA",
-      "(equal variances). Amplitude and acrophase: Bingham's population-mean cosinor;",
+      "(equal variances).",
+      if (K >= 1L) paste("Amplitude and acrophase: Bingham's population-mean cosinor;",
       "acrophase also by Watson-Williams (von Mises, common concentration; flagged when",
-      "r-bar < 0.45). Pairwise: Welch's t (unequal variances) and Watson-Williams,",
+      "r-bar < 0.45).") else "",
+      if (K >= 1L) "Pairwise: Welch's t (unequal variances) and Watson-Williams,"
+      else "Pairwise: Welch's t (unequal variances),",
       "adjusted within each table (Holm unless changed)."))
-    a("Rhythm detection", paste(
-      "Per participant, the F test of all harmonics given the trend; 'detected' means",
-      "p < .05, with no adjustment across participants."))
+    if (K >= 1L)
+      a("Rhythm detection", paste(
+        "Per participant, the F test of all harmonics given the trend; 'detected' means",
+        "p < .05, with no adjustment across participants."))
     a("Cross-validation", paste(
       "Leave one observation out and refit, per participant (a nonlinear refit starts",
       "from the full-data estimates; one that fails is left out of the average)."))

@@ -109,8 +109,12 @@ test_that("tab 6 does not offer views or rows the fitted model cannot produce", 
   expect_true(length(blk) == 1)
   # the level rows are the intercept and, with a trend, the MESOR -- not the
   # curve value at the first observation, which mixes the rhythm into the level
-  expect_true(grepl('c\\("full", "circadian", "intercept"\\)', blk))
-  expect_true(grepl('"trend", "intercept", "mesor"', blk, fixed = TRUE))
+  # no trend: the rhythm, the time-averaged fitted response and the intercept;
+  # no rhythm (trend only): the trend, the intercept and the MESOR -- no shape
+  # or circadian block, which would repeat the trend or test nothing
+  expect_true(grepl('c\\("full", "circadian", "fitted_mean", "intercept"\\)', blk))
+  expect_true(grepl('c("full", "trend", "intercept", "mesor")', inf, fixed = TRUE))
+  expect_true(grepl('"trend", "fitted_mean", "intercept", "mesor"', inf, fixed = TRUE))
 })
 
 test_that("every control on the cosinor tab is created exactly once", {

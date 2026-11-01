@@ -414,8 +414,10 @@ dance_traj_pair_whats <- function(fit) {
   K <- max(0L, as.integer(spec$n_harmonics %||% 1L))
   lv <- Filter(function(q) length(DANCE_TRAJ_BLOCK_COMPONENTS(spec, q)) > 0,
                DANCE_TRAJ_LEVEL_QUANTITIES)
+  # the trend's own coefficient (A, the slope, the log-beta) is a MODEL-SPECIFIC
+  # parameter: it follows the outcomes it underlies
   if ("change" %in% lv && length(DANCE_TRAJ_BLOCK_COMPONENTS(spec, "trend")))
-    lv <- append(lv, "trend", after = match("change", lv) - 1L)
+    lv <- c(lv, "trend")
   # every fitted harmonic gets its own amplitude and acrophase entry
   out <- c(lv, sprintf("amplitude%d", seq_len(K)), sprintf("phase%d", seq_len(K)))
   # without a rhythm the shape block IS the trend, offered above as the trend
@@ -1310,19 +1312,21 @@ dance_traj_participant_table <- function(fit) {
     cell <- fx$cells[[ci[k]]]
     out <- list(subject = key$subject[k], curve = key$curve[k], cell = key$cell[k])
     out$intercept <- dot(cell$intercept) + mode_of("(Intercept)", k)
+    cterms <- spec$harm_terms[grepl("^c", spec$harm_terms)]   # none in a trend-only model
     out$level_at_t0 <- dot(cell$level0) + mode_of("(Intercept)", k) +
-      sum(vapply(spec$harm_terms[grepl("^c", spec$harm_terms)],
-                 function(tm) mode_of(tm, k), numeric(1)))
+      if (length(cterms)) sum(vapply(cterms, function(tm) mode_of(tm, k), numeric(1),
+                                     USE.NAMES = FALSE)) else 0
     for (tm in spec$trend_terms) out[[tm]] <- dot(cell$coef[[tm]]) + mode_of(tm, k)
     # the participant's own midline summaries, from the same window means the
     # cell MESOR uses (dance_traj_trend_window)
     tw <- fx$window
+    tterms <- intersect(names(tw$mean), spec$trend_terms)
     out$mesor <- out$intercept +
-      sum(vapply(intersect(names(tw$mean), spec$trend_terms),
-                 function(tm) tw$mean[[tm]] * out[[tm]], numeric(1)))
+      if (length(tterms)) sum(vapply(tterms, function(tm) tw$mean[[tm]] * out[[tm]], numeric(1),
+                                     USE.NAMES = FALSE)) else 0
     if (length(spec$trend_terms))
       out$change <- sum(vapply(intersect(names(tw$end), spec$trend_terms),
-                               function(tm) tw$end[[tm]] * out[[tm]], numeric(1)))
+                               function(tm) tw$end[[tm]] * out[[tm]], numeric(1), USE.NAMES = FALSE))
     for (h in seq_len(spec$n_harmonics)) {
       ck <- paste0("c", h); sk <- paste0("s", h)
       a <- dot(cell$coef[[ck]]) + mode_of(ck, k); b <- dot(cell$coef[[sk]]) + mode_of(sk, k)
@@ -1341,7 +1345,7 @@ dance_traj_participant_table <- function(fit) {
               stats::setNames(spec$trend_terms %in% random_terms, spec$trend_terms),
               stats::setNames(vapply(seq_len(spec$n_harmonics), function(h)
                 any(paste0(c("c", "s"), h) %in% random_terms), logical(1)),
-                paste0("H", seq_len(spec$n_harmonics))))
+                sprintf("H%d", seq_len(spec$n_harmonics))))
   list(ok = TRUE, table = tab, shrunken = TRUE, varies = varies,
        re_label = fit$re_label, random_terms = random_terms,
        note = paste(

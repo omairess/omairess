@@ -204,7 +204,9 @@ test_that("the level summary and the pairwise tests read the same per-participan
   df$mesor_adj <- df$mesor + df$trend_linear * 11.5        # the window mean of beta * t
   ls <- e$dance_ts_level_summary(df, m$mod)
   expect_true(isTRUE(ls$ok))
-  expect_identical(ls$quantities, c("intercept", "mesor", "change"))
+  # the mixed model's names and order: fitted mean, MESOR, intercept, change,
+  # average rate (a straight line has no separate initial rate)
+  expect_identical(ls$quantities, c("fitted_mean", "mesor", "intercept", "change", "avg_rate"))
   tb <- ls$table
   for (lv in c("A", "B", "C")) {
     expect_equal(tb$estimate[tb$quantity == "intercept" & tb$cell == lv], mean(df$mesor[df$group == lv]))
@@ -223,10 +225,11 @@ test_that("the level summary and the pairwise tests read the same per-participan
     expect_equal(z$estimate, tb$estimate[tb$quantity == q & tb$cell == z$cell1] -
                    tb$estimate[tb$quantity == q & tb$cell == z$cell2], info = q)
   }
-  # without a trend there is one level quantity, under both names
+  # without a trend: the time-averaged fitted response and the intercept
+  # (which is the MESOR, under both names)
   m0 <- mk_mod()
   ls0 <- e$dance_ts_level_summary(e$dance_ts_frame(m0$mod, m0$g), m0$mod)
-  expect_identical(ls0$quantities, "intercept")
+  expect_identical(ls0$quantities, c("fitted_mean", "intercept"))
   expect_equal(e$dance_ts_pair_label("intercept", 24, "none"), "Intercept = MESOR (no trend)")
   expect_equal(e$dance_ts_pair_label("trend_linear", 24, "linear", "KSS points"),
                "Slope beta (KSS points per hour)")

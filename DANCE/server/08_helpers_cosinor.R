@@ -1092,7 +1092,14 @@ dance_harmonic_label <- function(k) {
   if (k == 1) "H1" else sprintf("H1-H%d", k)
 }
 
-dance_model_label <- function(trend, k) paste0(trend, " + ", dance_harmonic_label(k))
+# A model without harmonics is "linear only" (or "intercept only"); the
+# labels of models WITH harmonics are unchanged, so older tables still match.
+dance_model_label <- function(trend, k) {
+  k <- suppressWarnings(as.integer(k))
+  if (!length(k) || !is.finite(k) || k < 1L)
+    return(if (identical(as.character(trend), "none")) "intercept only" else paste(trend, "only"))
+  paste0(trend, " + ", dance_harmonic_label(k))
+}
 
 # Total free parameters: MESOR + trend + 2 per harmonic. The +1 a caller adds on
 # top is the residual variance, when a fit needs one more observation than

@@ -78,7 +78,8 @@ test_that("P14.2: no harmonic is ever offered without the ones below it", {
 test_that("P14: fit_cosinor's design really is cumulative, as the labels claim", {
   src <- code_of("server/72_harmonic.R")
   # the design loop that makes "H1-H2" an honest label rather than a hope
-  expect_true(grepl("for(h in 1:n_harmonics)", src, fixed = TRUE))
+  # (seq_len: with no harmonics -- the trend-only model -- 1:0 would run twice)
+  expect_true(grepl("for(h in seq_len(n_harmonics))", src, fixed = TRUE))
   expect_true(grepl('paste0("cos", h), paste0("sin", h)', src, fixed = TRUE))
 })
 

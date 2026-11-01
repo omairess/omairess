@@ -36,11 +36,14 @@ names(d)[-(1:2)] <- c(paste0("KSS_", clock[1:12]), paste0("KSS_", clock[13:16], 
 csv <- tempfile(fileext = ".csv"); write.csv(d, csv, row.names = FALSE, na = "")
 
 server <- function(input, output, session) for (f in server_files) dance_source(f, envir = environment())
+# validate() and req() are deliberate: "this does not apply to the model" is a
+# correct answer. Anything else that errors is a failure.
 render <- function(label, expr) {
-  v <- tryCatch(force(expr), error = function(e) structure(conditionMessage(e), class = "render_err"))
-  if (inherits(v, "render_err") && !grepl("^$", v) &&
-      !inherits(attr(v, "condition"), "shiny.silent.error")) {
-    # validate()/req() messages are deliberate refusals, reported as such
+  v <- tryCatch(force(expr),
+                shiny.silent.error = function(e) structure(conditionMessage(e), class = "render_msg"),
+                error = function(e) structure(conditionMessage(e), class = "render_err"))
+  if (inherits(v, "render_msg")) return(invisible(structure(as.character(v), class = "render_msg")))
+  if (inherits(v, "render_err")) {
     cat("FAIL:", label, "->", as.character(v), "\n"); failures <<- failures + 1L
     return(invisible(NULL))
   }
@@ -54,11 +57,18 @@ testServer(server, {
                     subject_id_var = "ID", apply_selection = 1)
   runs <- list(list("rhythm", "none"),
                list("trend", "linear"), list("trend", "log"), list("trend", "exp_sat"),
-               list("combined", "linear"), list("combined", "log"), list("combined", "exp_sat"))
+               list("combined", "linear"), list("combined", "log"), list("combined", "exp_sat"),
+               # tau estimated: per participant (two-stage); profiled, and per cell (mixed)
+               list("combined", "exp_sat", tau = "estimated"))
   k <- 0L
+  # DANCE_STRUCT_ONLY="two_stage/trend" (a regular expression on the tag)
+  # runs a subset while debugging; unset, every combination runs
+  only <- Sys.getenv("DANCE_STRUCT_ONLY", "")
   for (ap in c("two_stage", "mixed")) for (r in runs) {
     st <- r[[1]]; tr <- r[[2]]; k <- k + 1L
-    tag <- sprintf("%s / %s / %s", ap, st, tr)
+    tau_est <- identical(r$tau, "estimated")
+    tag <- sprintf("%s / %s / %s%s", ap, st, tr, if (tau_est) " / tau estimated" else "")
+    if (nzchar(only) && !grepl(only, gsub(" ", "", tag))) next
     cat("\n--", tag, "--\n")
     session$setInputs(harmonic_approach = ap, harmonic_structure = st,
                       harmonic_trend_type = if (tr == "none") "linear" else tr,
@@ -67,8 +77,10 @@ testServer(server, {
                       harmonic_between_var = "group", harmonic_df_method = "satterthwaite",
                       harmonic_traj_adjust = "holm", harmonic_traj_what = "intercept",
                       harmonic_traj_resid = "independent", harmonic_tau_lo = 2, harmonic_tau_hi = 60,
-                      harmonic_traj_tau = 14, harmonic_traj_tau_mode = "fixed",
-                      harmonic_ts_tau_mode = "estimate", harmonic_show_data = TRUE,
+                      harmonic_traj_tau = 14,
+                      harmonic_traj_tau_mode = if (tau_est) "profile" else "fixed",
+                      harmonic_traj_sat_cells = tau_est,
+                      harmonic_ts_tau_mode = if (tau_est) "estimate" else "fixed", harmonic_show_data = TRUE,
                       run_harmonic = k)
     hm <- values$harmonic_model
     K_exp <- if (st == "trend") 0L else 2L
@@ -79,10 +91,14 @@ testServer(server, {
         sprintf("%s: the fit is missing or has K = %s, trend = %s", tag,
                 format(hm$n_harmonics), format(hm$trend_type)))
     if (!ok_fit) next
-    sm <- render(paste(tag, "summary"), paste(capture.output(output$harmonic_summary), collapse = "\n"))
-    if (!is.null(sm) && st == "trend")
-      chk(!grepl("Amplitude|Acrophase|acrophase", sm), sprintf("%s: the summary reports no rhythm", tag),
-          sprintf("%s: the summary of a trend-only model mentions amplitude/acrophase", tag))
+    sm <- render(paste(tag, "summary"), output$harmonic_summary)
+    if (!is.null(sm) && st == "trend") {
+      ln <- strsplit(sm, "\n")[[1]]
+      bad <- grep("Amplitude|Acrophase|acrophase", ln[!grepl("no rhythm", ln)], value = TRUE)
+      chk(!length(bad), sprintf("%s: the summary reports no rhythm", tag),
+          sprintf("%s: the summary of a trend-only model mentions amplitude/acrophase: %s", tag,
+                  paste(head(trimws(bad), 3), collapse = " | ")))
+    }
     for (o in c("harmonic_summary_box", "harmonic_parameters_table", "harmonic_gof_stats",
                 "harmonic_fit_plot", "harmonic_residual_plot", "harmonic_qq_plot",
                 "harmonic_polar_plot", "harmonic_density_plot", "harmonic_density_note",
@@ -94,6 +110,19 @@ testServer(server, {
                 "harmonic_traj_pairwise", "harmonic_traj_sat_header", "harmonic_traj_sat_plot",
                 "harmonic_traj_sat_tests"))
       render(paste(tag, o), output[[o]])
+    # the three questions: only the domains the model has
+    oc <- render(paste(tag, "outcomes"), harmonic_outcomes())
+    render(paste(tag, "outcomes panel"), output$harmonic_outcomes)
+    render(paste(tag, "outcomes CSV"), output$download_harmonic_outcomes)
+    if (!is.null(oc) && isTRUE(oc$ok)) {
+      doms <- unique(c(oc$estimates$domain, oc$tests$domain))
+      chk(("rhythm" %in% doms) == (st != "trend") && ("accumulation" %in% doms) == (st != "rhythm") &&
+            "level" %in% doms,
+          sprintf("%s: the outcome domains are those of the model (%s)", tag, paste(doms, collapse = ", ")),
+          sprintf("%s: outcome domains %s do not match the structure", tag, paste(doms, collapse = ", ")))
+      chk(any(oc$tests$domain == "omnibus"), sprintf("%s: the omnibus trajectory test is reported", tag),
+          sprintf("%s: no omnibus test", tag))
+    }
     pw <- render(paste(tag, "pairwise export"), harmonic_pairwise_all())
     if (!is.null(pw)) {
       chk(!any(grepl("^(amplitude|phase)", pw$quantity)) || st != "trend",

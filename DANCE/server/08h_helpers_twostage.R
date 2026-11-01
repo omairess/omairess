@@ -249,48 +249,68 @@ dance_ts_components <- function(df, mod) {
   period <- mod$period %||% 24; K <- mod$n_harmonics %||% 1L
   rows <- list()
   push <- function(...) rows[[length(rows) + 1L]] <<- list(...)
-  lt_row <- function(label, x, note = NULL) {
+  # every row carries the outcome it tests (key) and its domain, so the three
+  # sections, the CSV and the report read the same rows
+  lt_row <- function(label, x, note = NULL, key = NA_character_, domain = NA_character_,
+                     primary = FALSE) {
     lt <- dance_group_linear_test(x, df$group)
-    if (is.null(lt)) push(label = label, ok = FALSE, message = "not testable (too few usable values)")
+    if (is.null(lt)) push(label = label, ok = FALSE, message = "not testable (too few usable values)",
+                          key = key, domain = domain, primary = primary)
     else push(label = label, ok = TRUE, F = lt$F, df1 = lt$df1, df2 = lt$df2, p = lt$p,
-              omega2 = lt$omega2, method = "one-way ANOVA", note = note)
+              omega2 = lt$omega2, method = "one-way ANOVA", note = note,
+              key = key, domain = domain, primary = primary)
   }
   trend <- mod$trend_type %||% "none"
   has_trend <- !identical(trend, "none")
   lab <- function(w) dance_ts_pair_label(w, period, trend, mod$dv_units)
-  lt_row(lab("intercept"), df$mesor,
-         if (has_trend) "the midline at the first observation, where the trend is zero" else NULL)
+  # ---- overall response level ----
+  if (K >= 1 && "fitted_mean" %in% names(df))
+    lt_row(lab("fitted_mean"), df$fitted_mean, key = "fitted_mean", domain = "level", primary = TRUE)
   if (has_trend && "mesor_adj" %in% names(df))
-    lt_row(lab("mesor"), df$mesor_adj)
+    lt_row(lab("mesor"), df$mesor_adj, key = "mesor", domain = "level", primary = K < 1)
+  lt_row(lab("intercept"), df$mesor,
+         if (has_trend) "the midline at the first observation, where the trend is zero" else NULL,
+         key = "intercept", domain = "level", primary = !has_trend && K < 1)
+  # ---- homeostatic-like accumulation ----
+  # Over the one common window the average rate is the change divided by a
+  # constant, so its test IS the change's; it is not run twice. The log trend's
+  # initial rate is its coefficient, tested below as the trend parameter.
   if (has_trend && "trend_change" %in% names(df))
-    lt_row(lab("change"), df$trend_change)
+    lt_row(lab("change"), df$trend_change,
+           "the same test as the average trend rate (the change over one common window)",
+           key = "change", domain = "accumulation", primary = TRUE)
+  if (identical(trend, "exp_sat") && "rate0" %in% names(df))
+    lt_row(lab("rate0"), df$rate0, "A/tau, from each participant's own A and tau",
+           key = "rate0", domain = "accumulation")
   for (tc in setdiff(dance_ts_coef_cols(mod), c("mesor", grep("^beta_", dance_ts_coef_cols(mod), value = TRUE))))
-    if (tc %in% names(df)) lt_row(lab(tc), df[[tc]])
-  if (identical(trend, "exp_sat") && "init_slope" %in% names(df))
-    lt_row(lab("init_slope"), df$init_slope)
+    if (tc %in% names(df)) lt_row(lab(tc), df[[tc]], key = tc, domain = "accumulation_model",
+                                  note = if (identical(trend, "log") && identical(tc, "trend_log"))
+                                    "also the test of the initial trend rate (the log trend's slope at t = 0)")
   for (h in seq_len(K)) {
     bc <- paste0("beta_cos_", h); bs <- paste0("beta_sin_", h)
     if (!all(c(bc, bs) %in% names(df))) next
     pop <- dance_pop_cosinor(df[[bc]], df[[bs]], df$mesor, df$group, period = period, harmonic = h)
     if (!isTRUE(pop$ok)) {
-      push(label = sprintf("H%d rhythm", h), ok = FALSE, message = pop$message); next
+      push(label = sprintf("H%d rhythm", h), ok = FALSE, message = pop$message,
+           key = sprintf("rhythm%d", h), domain = "rhythm"); next
     }
     j <- pop$joint
     if (!is.null(j) && isTRUE(j$ok))
       push(label = sprintf("H%d rhythm vector (cos, sin) jointly", h), ok = TRUE,
            F = j$F, df1 = j$df1, df2 = j$df2, p = j$p, method = "MANOVA, Wilks' lambda",
-           harmonic = h, kind = "joint")
+           harmonic = h, kind = "joint", key = sprintf("rhythm%d", h), domain = "rhythm",
+           primary = TRUE)
     tt <- pop$tests
     push(label = sprintf("H%d amplitude", h), ok = TRUE,
          F = tt$F[tt$parameter == "Amplitude"], df1 = pop$df1, df2 = pop$df2,
          p = tt$p[tt$parameter == "Amplitude"], method = "population-mean cosinor (Bingham 1982)",
-         harmonic = h, kind = "amplitude",
+         harmonic = h, kind = "amplitude", key = sprintf("amplitude%d", h), domain = "rhythm",
          note = if (!isTRUE(pop$amplitude_interpretable))
            "not interpretable as a difference in rhythm strength: the groups' acrophases differ, or the acrophase test had no power at this separation (Bingham's caution)" else NULL)
     push(label = sprintf("H%d acrophase", h), ok = TRUE,
          F = tt$F[tt$parameter == "Acrophase"], df1 = pop$df1, df2 = pop$df2,
          p = tt$p[tt$parameter == "Acrophase"], method = "population-mean cosinor (Bingham 1982)",
-         harmonic = h, kind = "acrophase",
+         harmonic = h, kind = "acrophase", key = sprintf("phase%d", h), domain = "rhythm",
          note = if (!isTRUE(pop$acrophase_test_supported)) pop$acrophase_test_note else NULL)
     # Watson-Williams on the per-participant phases: every participant counts
     # equally, and it has no half-cycle blind spot
@@ -305,7 +325,8 @@ dance_ts_components <- function(df, mod) {
         as_ <- dance_ww_assumption(ww$r_bar, ww$kappa)
         push(label = sprintf("H%d acrophase (Watson-Williams, unweighted)", h), ok = TRUE,
              F = ww$F, df1 = ww$df1, df2 = ww$df2, p = ww$p, method = "Watson-Williams F",
-             harmonic = h, kind = "ww", note = if (!isTRUE(as_$ok)) as_$msg else NULL)
+             harmonic = h, kind = "ww", key = sprintf("phase%d", h), domain = "rhythm",
+             note = if (!isTRUE(as_$ok)) as_$msg else NULL)
       }
     }
     rows[[length(rows)]]$pop <- pop

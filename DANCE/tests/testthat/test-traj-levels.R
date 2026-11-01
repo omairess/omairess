@@ -74,7 +74,10 @@ test_that("per cell: MESOR = intercept + trend window mean, change = trend at th
   for (tr in c("linear", "exp_sat")) {
     ff <- mk(tr, tau = if (tr == "exp_sat") 18 else NULL); skip_if_not(isTRUE(ff$ok))
     ls <- e$dance_traj_level_summary(ff)
-    expect_identical(ls$quantities, c("intercept", "mesor", "change"))
+    # the three-domain order: level (fitted mean, MESOR, intercept), then
+    # accumulation (change, average rate, and the initial rate where it differs)
+    expect_identical(ls$quantities, c("fitted_mean", "mesor", "intercept", "change", "avg_rate",
+                                      if (tr != "linear") "rate0"))
     ce <- e$dance_traj_cell_equations(ff)
     tw <- ls$window
     for (i in seq_len(nrow(ce$table))) {
@@ -154,8 +157,9 @@ test_that("without a trend the intercept is the MESOR, and only it is offered", 
   skip_if_not_installed("lme4")
   ff <- mk("none"); skip_if_not(isTRUE(ff$ok))
   ls <- e$dance_traj_level_summary(ff)
-  expect_identical(ls$quantities, "intercept")
+  # the fitted mean (midline + rhythm over the window) and the intercept
+  expect_identical(ls$quantities, c("fitted_mean", "intercept"))
   expect_identical(e$DANCE_TRAJ_BLOCK_COMPONENTS(ff$spec, "mesor"), character(0))
   expect_identical(e$DANCE_TRAJ_BLOCK_COMPONENTS(ff$spec, "change"), character(0))
-  expect_identical(e$dance_traj_pair_whats(ff)[1], "intercept")
+  expect_identical(e$dance_traj_pair_whats(ff)[1:2], c("fitted_mean", "intercept"))
 })
