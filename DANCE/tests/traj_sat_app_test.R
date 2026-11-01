@@ -181,9 +181,13 @@ testServer(server, {
         "the tests table has the Wald tests per parameter and the likelihood-ratio test",
         "the tests table is incomplete")
     ws <- harmonic_traj_whats(ff)
-    chk(all(c("A_sat", "tau", "init_slope") %in% ws) &&
-          match("A_sat", ws) == match("change", ws) + 1L,
-        "the pairwise menu offers A, tau and A/tau right after the level quantities",
+    # with tau per cell, the per-cell model's outcomes (change, average rate,
+    # initial rate) and then A and tau follow the level quantities, replacing
+    # the shared-tau ones
+    lvq <- max(which(ws %in% c("fitted_mean", "mesor", "intercept")))
+    chk(identical(ws[lvq + seq_along(DANCE_TRAJ_SAT_PARS)], DANCE_TRAJ_SAT_PARS) &&
+          !any(c("change", "avg_rate", "rate0", "trend") %in% ws),
+        "the pairwise menu offers the per-cell change, rates, A and tau right after the level quantities",
         paste("pairwise menu:", paste(ws, collapse = ", ")))
     session$setInputs(harmonic_traj_what = "tau"); session$flushReact()
     pt <- render("the tau pairwise table renders", text_of(output$harmonic_traj_pairwise))
@@ -292,14 +296,15 @@ testServer(server, {
   session$setInputs(harmonic_traj_sat_view = "cells"); session$flushReact()
   render("the two-stage saturating panel renders", output$harmonic_traj_sat_plot)
   st <- render("the two-stage saturating tests render", text_of(output$harmonic_traj_sat_tests))
-  chk(grepl("Initial slope A/tau (KSS points per hour)", st, fixed = TRUE),
+  chk(grepl("Initial trend rate A/tau (KSS points per hour)", st, fixed = TRUE),
       "A/tau is tested between groups", "A/tau is not tested between groups")
-  session$setInputs(harmonic_traj_what = "init_slope"); session$flushReact()
+  # two-stage: A/tau is the initial trend rate, compared under that name
+  session$setInputs(harmonic_traj_what = "rate0"); session$flushReact()
   pt <- render("the two-stage A/tau pairwise table renders", text_of(output$harmonic_traj_pairwise))
   chk(grepl("in KSS points per hour", pt, fixed = TRUE),
       "the two-stage A/tau pairwise is in KSS points per hour", "the two-stage A/tau pairwise has no units")
   cm <- text_of(output$harmonic_traj_components)
-  chk(grepl("Initial slope A/tau", cm, fixed = TRUE),
+  chk(grepl("Initial trend rate", cm, fixed = TRUE),
       "the component table tests A/tau", "the component table lacks A/tau")
   sm <- text_of(capture.output(.print_harmonic_summary()))
   chk(grepl("Saturating trend per group (means of the per-participant fits)", sm, fixed = TRUE),

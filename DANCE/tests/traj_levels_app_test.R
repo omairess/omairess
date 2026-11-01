@@ -161,8 +161,8 @@ testServer(server, {
       "the change-from-origin view does not point to its statistic")
   session$setInputs(harmonic_traj_component = "full"); session$flushReact()
   cm <- render("the component table renders", text_of(output$harmonic_traj_components))
-  chk(grepl("Intercept (midline at the first observation)", cm, fixed = TRUE) &&
-        grepl("MESOR (midline averaged over the window)", cm, fixed = TRUE) &&
+  chk(grepl("Initial midline (t = 0)", cm, fixed = TRUE) &&
+        grepl("Mean midline level (MESOR)", cm, fixed = TRUE) &&
         grepl("saturating rise A (KSS points above the intercept", cm, fixed = TRUE) &&
         !grepl("Baseline", cm, fixed = TRUE),
       "the component table tests the intercept and the MESOR, and names the trend with its units",
@@ -231,13 +231,16 @@ testServer(server, {
   cat("\n-- no trend: the intercept is the MESOR ------------------------------------\n")
   run(session, "mixed", "none", 4)
   lv <- harmonic_traj_levels()
-  chk(isTRUE(lv$ok) && identical(lv$quantities, "intercept"), "mixed, no trend: one quantity",
+  # without a trend: the time-averaged fitted response (rhythm included) and the
+  # intercept, which is the MESOR
+  chk(isTRUE(lv$ok) && identical(lv$quantities, c("fitted_mean", "intercept")),
+      "mixed, no trend: the fitted mean and the intercept",
       paste("mixed, no trend:", paste(lv$quantities, collapse = ", ")))
   session$setInputs(harmonic_traj_level_view = "cells"); session$flushReact()
   p4 <- render("mixed, no trend: the level plot renders", output$harmonic_traj_levels_plot)
   chk(!is.null(p4) && grepl("Intercept = MESOR (no trend)", p4, fixed = TRUE),
       "the single panel is named Intercept = MESOR", "the no-trend panel is misnamed")
-  chk(identical(dance_traj_pair_whats(values$harmonic_model$traj)[1], "intercept") &&
+  chk(identical(dance_traj_pair_whats(values$harmonic_model$traj)[1:2], c("fitted_mean", "intercept")) &&
         !any(c("mesor", "change", "level") %in% dance_traj_pair_whats(values$harmonic_model$traj)),
       "no MESOR, change or curve-value entry is offered without a trend",
       "the no-trend pairwise menu offers a duplicate level quantity")
@@ -251,7 +254,8 @@ testServer(server, {
       sprintf("mixed pairwise export: %s", if (is.null(pw)) "NULL" else paste(unique(pw$quantity), collapse = ",")))
   run(session, "two_stage", "none", 5)
   lv <- harmonic_traj_levels()
-  chk(isTRUE(lv$ok) && identical(lv$quantities, "intercept"), "two-stage, no trend: one quantity",
+  chk(isTRUE(lv$ok) && identical(lv$quantities, c("fitted_mean", "intercept")),
+      "two-stage, no trend: the fitted mean and the intercept",
       paste("two-stage, no trend:", paste(lv$quantities, collapse = ", ")))
   render("two-stage, no trend: the level plot renders", output$harmonic_traj_levels_plot)
 })

@@ -394,7 +394,7 @@ dance_ts_pair_label <- function(what, period = 24, trend = NULL, units = NULL) {
     trend_log = sprintf("Log-trend beta (%s per unit of log(1 + hours))", u),
     A_sat = sprintf("Saturating rise A (%s above the intercept)", u),
     tau = "Time constant tau of the saturating rise (hours)",
-    init_slope = sprintf("Initial slope A/tau (%s per hour)", u),
+    init_slope = sprintf("Initial trend rate A/tau (%s per hour)", u),
     r_squared = "R-squared of the participant fit", what)
 }
 
@@ -465,10 +465,11 @@ dance_ts_pairwise <- function(df, mod, what, adjust = c("holm", "bonferroni", "n
          sprintf("acrophase difference in hours on an effective period of %.4g h (shortest arc); no interval -- the test is the statement", eff)
        else paste0("difference of group means of the per-participant estimates",
                    if (!is.null(mod$dv_units) && nzchar(mod$dv_units) &&
-                       (what %in% c("intercept", "level", "mesor", "change", "A_sat") ||
+                       (what %in% c("intercept", "level", "mesor", "change", "A_sat", "fitted_mean",
+                                    "trend_linear") ||
                         identical(pp$base, "amplitude"))) paste0(", in ", mod$dv_units)
-                   else if (identical(what, "tau")) ", in hours"
-                   else if (identical(what, "init_slope") && !is.null(mod$dv_units) &&
+                   else if (what %in% c("tau", "t50")) ", in hours"
+                   else if (what %in% c("init_slope", "rate0", "avg_rate") && !is.null(mod$dv_units) &&
                             nzchar(mod$dv_units)) paste0(", in ", mod$dv_units, " per hour")
                    else "",
                    ", with Welch's interval and Cohen's d",

@@ -393,7 +393,8 @@ server <- function(input, output, session) {
                 output$harmonic_model_selection_help)
     if (!is.null(h)) {
       htxt <- paste(as.character(h), collapse = " ")
-      want <- if (k == 1L) "4 fits per subject" else "8 fits per subject"
+      # every structure: 4 trends (none included) x (0 to k harmonics)
+      want <- if (k == 1L) "8 candidate models" else "12 candidate models"
       if (!grepl(want, htxt, fixed = TRUE))
         fail(sprintf("the help text does not say '%s'", want))
       else ok(sprintf("the help text reports the real fit count (%s)", want))
@@ -428,8 +429,9 @@ server <- function(input, output, session) {
     fail("the model-selection diagnostic produced no table")
   } else {
     ok(sprintf("model set fitted in %.1f s: %d candidates", el, nrow(ms)))
-    want <- c("none + H1", "none + H1-H2", "linear + H1", "linear + H1-H2",
-              "log + H1", "log + H1-H2", "exp_sat + H1", "exp_sat + H1-H2")
+    want <- c("intercept only", "none + H1", "none + H1-H2", "linear only", "linear + H1",
+              "linear + H1-H2", "log only", "log + H1", "log + H1-H2", "exp_sat only",
+              "exp_sat + H1", "exp_sat + H1-H2")
     missing <- setdiff(want, ms$model)
     extra   <- setdiff(ms$model, want)
     if (length(missing)) fail(paste("model set is missing:", paste(missing, collapse = ", ")))

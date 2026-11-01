@@ -47,20 +47,23 @@ labels_of <- function(ms) vapply(ms, function(m) m$label, character(1))
 # ================================================= P14.2 the candidate set ====
 test_that("P14.2: the set stops at the number of harmonics selected", {
   e <- cos_env()
+  # every structure: each trend without harmonics ("... only"; "intercept only"
+  # for no trend either), then with the cumulative harmonic sets
   expect_equal(labels_of(e$dance_cosinor_model_set(1)),
-               c("none + H1", "linear + H1", "log + H1", "exp_sat + H1"))
+               c("intercept only", "none + H1", "linear only", "linear + H1",
+                 "log only", "log + H1", "exp_sat only", "exp_sat + H1"))
   # the user's own example: saturating exponential with 2 harmonics
   expect_equal(labels_of(e$dance_cosinor_model_set(2)),
-               c("none + H1", "none + H1-H2",
-                 "linear + H1", "linear + H1-H2",
-                 "log + H1", "log + H1-H2",
-                 "exp_sat + H1", "exp_sat + H1-H2"))
-  expect_equal(length(e$dance_cosinor_model_set(3)), 12L)
+               c("intercept only", "none + H1", "none + H1-H2",
+                 "linear only", "linear + H1", "linear + H1-H2",
+                 "log only", "log + H1", "log + H1-H2",
+                 "exp_sat only", "exp_sat + H1", "exp_sat + H1-H2"))
+  expect_equal(length(e$dance_cosinor_model_set(3)), 16L)
   # nothing beyond the selection, ever
   for (k in 1:3) {
     ks <- vapply(e$dance_cosinor_model_set(k), function(m) m$k, integer(1))
     expect_lte(max(ks), k)
-    expect_equal(sort(unique(ks)), seq_len(k))
+    expect_equal(sort(unique(ks)), 0:k)
   }
 })
 
@@ -69,6 +72,10 @@ test_that("P14.2: no harmonic is ever offered without the ones below it", {
   for (k in 1:4) for (m in e$dance_cosinor_model_set(k)) {
     # the label names a cumulative set, and the design fit_cosinor() builds for
     # n_harmonics = m$k is harmonics 1..m$k, so the two agree by construction
+    if (m$k == 0) {
+      expect_equal(m$label, if (m$trend == "none") "intercept only" else paste(m$trend, "only"))
+      next
+    }
     expect_equal(m$label, paste0(m$trend, " + ",
                                  if (m$k == 1) "H1" else paste0("H1-H", m$k)))
     expect_false(grepl("\\+ H[2-9]$", m$label))
@@ -100,7 +107,7 @@ test_that("P14.1: the hardcoded grid is gone from the diagnostic", {
   src <- paste(code_of("server/72_harmonic.R"), code_of("server/08h_helpers_twostage.R"))
   expect_false(grepl('ms_trends <- c("none", "linear", "exp_sat")', src, fixed = TRUE))
   expect_false(grepl("ms_harms  <- 1:3", src, fixed = TRUE))
-  expect_true(grepl("dance_cosinor_model_set(n_harmonics)", src, fixed = TRUE))
+  expect_true(grepl("dance_cosinor_model_set(k_max)", src, fixed = TRUE))
   # and the parameter count is one rule, not a switch repeated per call site
   expect_false(grepl('switch(trend_type, "none" = 0', src, fixed = TRUE))
   expect_true(grepl("dance_model_npar(", src, fixed = TRUE))

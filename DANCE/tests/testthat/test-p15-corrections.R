@@ -91,11 +91,12 @@ test_that("P15.2: the help text is built from the same set that gets fitted", {
   e <- new.env(parent = globalenv())
   source(file.path(app_dir, "server/08_helpers_cosinor.R"), local = e)
   # what the help text will claim, for each selection
-  expect_equal(length(e$dance_cosinor_model_set(1)), 4L)
-  expect_equal(length(e$dance_cosinor_model_set(2)), 8L)
-  expect_equal(length(e$dance_cosinor_model_set(3)), 12L)
+  # every structure: 4 trends (none included) x (0 to k harmonics)
+  expect_equal(length(e$dance_cosinor_model_set(1)), 8L)
+  expect_equal(length(e$dance_cosinor_model_set(2)), 12L)
+  expect_equal(length(e$dance_cosinor_model_set(3)), 16L)
   labs <- vapply(e$dance_cosinor_model_set(2), function(m) m$label, character(1))
-  expect_true(all(grepl("^(none|linear|log|exp_sat) \\+ H1(-H2)?$", labs)))
+  expect_true(all(grepl("^((none|linear|log|exp_sat) \\+ H1(-H2)?|(linear|log|exp_sat) only|intercept only)$", labs)))
 })
 
 # ============================================ P15.3 an empty tau field =========
