@@ -332,8 +332,6 @@ ui_tab_harmonic <- tabItem(
                              ran is always named in the output."))
               ),
 
-              conditionalPanel(
-              condition = "input.harmonic_approach == 'two_stage'",
               hr(),
               h5("Model comparison and diagnostics"),
               # AUDIT (P15.2). These are TWO INDEPENDENT diagnostics that sat under
@@ -341,14 +339,18 @@ ui_tab_harmonic <- tabItem(
               # if it fed the nested table. It does not: the nested set estimates
               # tau FREELY in its saturating-exponential cells. They are now
               # labelled as separate checks.
+              # The comparison runs under BOTH approaches: per participant (AICc
+              # averaged) for two-stage, by maximum likelihood for mixed-effects.
               tags$p(tags$b("1. Which specification?"), style = "margin-bottom:4px"),
               checkboxInput("harmonic_model_selection",
-                            "Compare nested models (\u0394AICc table)", FALSE),
+                            "Compare models across every structure (\u0394AICc table)", FALSE),
               # P15.2: rendered from the current setting rather than written out by
               # hand. The old text said "{none, linear, saturating} x {1,2,3} ...
               # 9 fits per subject", which stopped being true when the set began
               # following the harmonic count and gained the logarithmic trend.
               uiOutput("harmonic_model_selection_help"),
+              conditionalPanel(
+              condition = "input.harmonic_approach == 'two_stage'",
 
               tags$p(tags$b("2. Is \u03c4 identified?"), style = "margin-top:12px; margin-bottom:4px"),
               numericInput("harmonic_tau_fixed",

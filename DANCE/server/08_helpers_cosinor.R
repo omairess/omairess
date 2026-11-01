@@ -1109,11 +1109,17 @@ dance_model_npar <- function(trend, k) 1L + dance_trend_npar(trend) + 2L * as.in
 # The candidate set for a run that selected `n_harmonics`. Every trend the UI
 # offers, crossed with the CUMULATIVE harmonic sets up to the one selected --
 # never beyond it, and never a higher harmonic without the ones below it.
+# THE CANDIDATE SPACE, made explicit: the intercept-only model, each trend
+# alone (no harmonics), the rhythm alone (cumulative harmonic sets H1, H1-H2,
+# ... up to k_max), and each trend with each harmonic set. Not every pair is
+# nested (a log and a saturating trend are not), which is why the comparison is
+# by information criteria and not by sequential likelihood-ratio tests.
 dance_cosinor_model_set <- function(n_harmonics) {
   k_max <- max(1L, as.integer(n_harmonics))
   out <- list()
-  for (tt in DANCE_TREND_TYPES) for (k in seq_len(k_max))
+  for (tt in DANCE_TREND_TYPES) for (k in 0:k_max)
     out[[length(out) + 1L]] <- list(trend = tt, k = k,
+                                    structure = dance_model_structure(tt, k),
                                     label = dance_model_label(tt, k))
   out
 }

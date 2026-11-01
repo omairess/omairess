@@ -987,3 +987,74 @@ dance_traj_run <- function(d, period = 24, n_harmonics = 1, trend = "none", role
   ff$tau_range <- if (sat && range_ok) c(tau_lo, tau_hi) else NULL
   ff
 }
+
+# ------------------------------------------------------------------------------
+# THE MODEL COMPARISON, MIXED-EFFECTS: every structure, by maximum likelihood
+# ------------------------------------------------------------------------------
+# The candidate space of dance_cosinor_model_set(): the intercept-only model,
+# each trend alone, the rhythm alone (cumulative harmonic sets), and each trend
+# with each harmonic set. Each candidate is the model the app would fit for that
+# specification -- the same design factors, its own random-effects rung from
+# the same ladder -- and is fitted by ML, not REML: REML likelihoods of models
+# with different fixed effects are not comparable. The parameter count is the
+# model's (fixed effects + variance components + residual), plus one where tau
+# is profiled from the same data (a held tau is not a parameter). Residuals are
+# independent here whatever the reported fit assumed; the table says so.
+#   tau_mode  "fixed" (tau_value for every saturating candidate) or "estimate"
+#             (each saturating candidate profiles its own tau within tau_lo..tau_hi)
+dance_traj_model_set <- function(d, period = 24, k_max = 1L, design_terms = NULL, t0 = NULL,
+                                 tau_mode = c("fixed", "estimate"), tau_value = NA_real_,
+                                 tau_lo = NA_real_, tau_hi = NA_real_, roles = NULL,
+                                 selected = NULL, progress = NULL) {
+  tau_mode <- match.arg(tau_mode)
+  cands <- dance_cosinor_model_set(k_max)
+  rows <- list()
+  for (j in seq_along(cands)) {
+    m <- cands[[j]]
+    if (is.function(progress)) progress(j, length(cands), m$label)
+    tau <- NULL; tau_est <- FALSE
+    if (identical(m$trend, "exp_sat")) {
+      if (identical(tau_mode, "fixed")) tau <- tau_value
+      else {
+        grid <- if (all(is.finite(c(tau_lo, tau_hi)))) exp(seq(log(tau_lo), log(tau_hi), length.out = 16)) else NULL
+        pr <- tryCatch(dance_traj_profile_tau(d, period, m$k, design_terms, t0 = t0, tau_grid = grid,
+                                              REML = FALSE, roles = roles),
+                       error = function(e) list(ok = FALSE))
+        if (!isTRUE(pr$ok)) next
+        tau <- pr$tau; tau_est <- TRUE
+      }
+    }
+    sp <- tryCatch(dance_traj_spec(d, period, m$k, m$trend, design_terms, t0 = t0, tau = tau,
+                                   roles = roles), error = function(e) list(ok = FALSE))
+    if (!isTRUE(sp$ok)) next
+    ft <- tryCatch(suppressWarnings(suppressMessages(dance_traj_fit(sp, REML = FALSE))),
+                   error = function(e) list(ok = FALSE))
+    if (!isTRUE(ft$ok)) next
+    ll <- stats::logLik(ft$model)
+    k <- attr(ll, "df") + as.integer(tau_est)
+    n <- stats::nobs(ft$model)
+    aic <- -2 * as.numeric(ll) + 2 * k
+    rows[[length(rows) + 1L]] <- data.frame(
+      model = m$label, structure = m$structure, trend = m$trend, harmonics = m$k,
+      logLik = as.numeric(ll), k = k, n = n, AIC = aic,
+      AICc = if (n - k - 1 > 0) aic + 2 * k * (k + 1) / (n - k - 1) else NA_real_,
+      BIC = -2 * as.numeric(ll) + k * log(n),
+      tau = if (is.null(tau)) NA_real_ else tau, tau_estimated = tau_est,
+      random_effects = ft$re_label %||% "", stringsAsFactors = FALSE)
+  }
+  if (!length(rows)) return(NULL)
+  tab <- do.call(rbind, rows)
+  tab <- tab[is.finite(tab$AICc), , drop = FALSE]
+  if (!nrow(tab)) return(NULL)
+  tab$dAICc <- tab$AICc - min(tab$AICc)
+  w <- exp(-tab$dAICc / 2); tab$weight <- w / sum(w)
+  tab <- tab[order(tab$dAICc), , drop = FALSE]; rownames(tab) <- NULL
+  attr(tab, "selected") <- selected
+  attr(tab, "candidates") <- vapply(cands, function(m) m$label, character(1))
+  attr(tab, "not_fitted") <- setdiff(attr(tab, "candidates"), tab$model)
+  attr(tab, "method") <- "mixed"
+  attr(tab, "tau_note") <- if (identical(tau_mode, "fixed"))
+    sprintf("saturating candidates hold tau at %s h (not counted as a parameter)", format(tau_value))
+    else "saturating candidates profile tau by maximum likelihood (counted as one parameter)"
+  tab
+}

@@ -59,15 +59,18 @@ testServer(server, {
                list("trend", "linear"), list("trend", "log"), list("trend", "exp_sat"),
                list("combined", "linear"), list("combined", "log"), list("combined", "exp_sat"),
                # tau estimated: per participant (two-stage); profiled, and per cell (mixed)
-               list("combined", "exp_sat", tau = "estimated"))
+               list("combined", "exp_sat", tau = "estimated"),
+               # the model comparison over every structure
+               list("trend", "linear", ms = TRUE))
   k <- 0L
   # DANCE_STRUCT_ONLY="two_stage/trend" (a regular expression on the tag)
   # runs a subset while debugging; unset, every combination runs
   only <- Sys.getenv("DANCE_STRUCT_ONLY", "")
   for (ap in c("two_stage", "mixed")) for (r in runs) {
     st <- r[[1]]; tr <- r[[2]]; k <- k + 1L
-    tau_est <- identical(r$tau, "estimated")
-    tag <- sprintf("%s / %s / %s%s", ap, st, tr, if (tau_est) " / tau estimated" else "")
+    tau_est <- identical(r$tau, "estimated"); do_ms <- isTRUE(r$ms)
+    tag <- sprintf("%s / %s / %s%s%s", ap, st, tr, if (tau_est) " / tau estimated" else "",
+                   if (do_ms) " / model comparison" else "")
     if (nzchar(only) && !grepl(only, gsub(" ", "", tag))) next
     cat("\n--", tag, "--\n")
     session$setInputs(harmonic_approach = ap, harmonic_structure = st,
@@ -81,6 +84,7 @@ testServer(server, {
                       harmonic_traj_tau_mode = if (tau_est) "profile" else "fixed",
                       harmonic_traj_sat_cells = tau_est,
                       harmonic_ts_tau_mode = if (tau_est) "estimate" else "fixed", harmonic_show_data = TRUE,
+                      harmonic_model_selection = do_ms,
                       run_harmonic = k)
     hm <- values$harmonic_model
     K_exp <- if (st == "trend") 0L else 2L
@@ -92,6 +96,10 @@ testServer(server, {
                 format(hm$n_harmonics), format(hm$trend_type)))
     if (!ok_fit) next
     sm <- render(paste(tag, "summary"), output$harmonic_summary)
+    if (do_ms && !is.null(sm))
+      chk(grepl("Candidates: intercept only", sm, fixed = TRUE) && grepl("<-- reported", sm, fixed = TRUE),
+          sprintf("%s: the summary lists every candidate structure and marks the reported one", tag),
+          sprintf("%s: the model comparison is missing from the summary", tag))
     if (!is.null(sm) && st == "trend") {
       ln <- strsplit(sm, "\n")[[1]]
       bad <- grep("Amplitude|Acrophase|acrophase", ln[!grepl("no rhythm", ln)], value = TRUE)

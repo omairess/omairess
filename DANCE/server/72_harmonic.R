@@ -1983,18 +1983,23 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
   # count, and the logarithmic trend was added. Rendering it from the same
   # function that builds the set is the only version that cannot go stale.
   output$harmonic_model_selection_help <- renderUI({
-    k  <- harmonic_eff_K()
+    # the candidate space reaches the slider's harmonic count even when the
+    # model being run is trend-only (the run handler does the same)
+    k  <- max(1L, suppressWarnings(as.integer(input$n_harmonics %||% 1L)))
     ms <- dance_cosinor_model_set(k)
+    mixed <- identical(input$harmonic_approach %||% "mixed", "mixed")
     helpText(HTML(sprintf(
-      paste0("Fits every trend the app offers (none, linear, logarithmic, ",
-             "saturating exponential) crossed with the <b>cumulative</b> harmonic ",
-             "sets up to the %d you have selected &mdash; %s &mdash; and reports ",
-             "&Delta;AICc with Akaike weights. Harmonics are cumulative, so H1&ndash;H2 ",
-             "is the model containing harmonics 1 <i>and</i> 2; a higher harmonic is ",
-             "never fitted without the ones below it, and nothing beyond your ",
-             "selection is fitted at all. <b>Slow:</b> %d fits per subject."),
-      k,
-      paste(vapply(ms, function(m) m$label, character(1)), collapse = ", "),
+      paste0("Compares every <b>structure</b>: the intercept-only model, each trend alone ",
+             "(linear, logarithmic, saturating), the rhythm alone and each trend with the ",
+             "rhythm, with the <b>cumulative</b> harmonic sets up to the %d on the slider ",
+             "&mdash; %s &mdash; and reports &Delta;AICc with Akaike weights. Harmonics are ",
+             "cumulative, so H1&ndash;H2 contains harmonics 1 <i>and</i> 2. %s ",
+             "<b>Slow:</b> %d candidate models."),
+      k, paste(vapply(ms, function(m) m$label, character(1)), collapse = ", "),
+      if (mixed) paste("Mixed-effects: each candidate is fitted by maximum likelihood (not REML,",
+                       "whose likelihoods are not comparable across fixed effects), with its own",
+                       "random-effects structure; a profiled tau counts as a parameter.")
+      else "Two-stage: each candidate per participant, AICc averaged over the participants fitted by every one.",
       length(ms))))
   })
 
@@ -2869,11 +2874,14 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       # dance_ts_model_set() (server/08h): every candidate averaged over the
       # participants scorable under every candidate
       model_selection <- NULL
+      # the candidate space reaches the harmonic count on the slider even for a
+      # trend-only run, so the rhythm is among the alternatives it is compared with
+      ms_k_max <- max(1L, suppressWarnings(as.integer(input$n_harmonics %||% 1L)), n_harmonics)
       if(isTRUE(input$harmonic_model_selection) && identical(approach, "two_stage")) {
-        model_selection <- withProgress(message = "Fitting the nested model set...", value = 0,
+        model_selection <- withProgress(message = "Fitting the model comparison set...", value = 0,
           dance_ts_model_set(Y, time_vec_model, period = period, n_harmonics = n_harmonics,
                              trend_type = trend_type, tau_min = tau_min, tau_max = tau_max,
-                             tau_fixed = tau_fixed,
+                             tau_fixed = tau_fixed, k_max = ms_k_max,
                              progress = function(j, n, label) setProgress(j / n, detail = label)))
       }
 
@@ -3022,6 +3030,10 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
         all_individual_params = all_params,   # AUDIT 2.3: before the convergence gate
         fit_audit = fit_audit,
         model_selection = model_selection,
+        # the mixed comparison is fitted on demand (harmonic_traj_model_set());
+        # what was asked for is recorded here
+        model_selection_requested = isTRUE(input$harmonic_model_selection),
+        model_selection_k_max = ms_k_max,
         # AUDIT 1.7: the dependent variable was never named anywhere
         dv_name  = if(nzchar(input$harmonic_dv_name %||% "")) input$harmonic_dv_name else NULL,
         dv_units = if(nzchar(input$harmonic_dv_units %||% "")) input$harmonic_dv_units else NULL,
@@ -3546,25 +3558,14 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       cat("\nCalibration of the omnibus tests: ", if (isTRUE(cal$validated)) "provisional" else "NOT validated", "\n", sep = "")
       cat("  ", cal$calibration, "\n", sep = "")
       cat("The design-factor tests (whole trajectory, shape, circadian, trend, level) and the\n")
-      cat("pairwise comparisons are on the comparison tab; nested fixed-effect comparisons there\n")
-      cat("use ML refits of this model.\n")
+      cat("pairwise comparisons are on the comparison tab.\n")
+      ms <- tryCatch(harmonic_traj_model_set(), error = function(e) NULL)
+      if (!is.null(ms)) { cat("\n"); print_model_set(ms) }
+      else if (!isTRUE(mod$model_selection_requested))
+        cat("Model comparison not run (enable 'Compare nested models' under Advanced).\n")
     } else {
       if (!is.null(mod$model_selection)) {
-        ms <- mod$model_selection; sel <- attr(ms, "selected")
-        n_com <- attr(ms, "n_common"); n_all <- attr(ms, "n_participants")
-        cat(sprintf("Delta-AICc across the nested set (AICc averaged per participant, over the %s\n  participant(s) scorable under every candidate%s):\n",
-                    if (is.null(n_com)) "same" else fmtn(n_com, 0),
-                    if (!is.null(n_all)) sprintf(", of %s", fmtn(n_all, 0)) else ""))
-        if (length(attr(ms, "not_fitted")))
-          cat(sprintf("  Not fitted to any participant, so not in the table: %s\n",
-                      paste(attr(ms, "not_fitted"), collapse = ", ")))
-        cat(sprintf("  %-20s %12s %10s %8s\n", "model", "AICc", "dAICc", "weight"))
-        for (i in seq_len(nrow(ms)))
-          cat(sprintf("  %-20s %12s %10s %8s%s\n", ms$model[i], fmt2(ms$AICc[i]),
-                      fmt2(ms$dAICc[i]), fmt3(ms$weight[i]),
-                      if (!is.null(sel) && identical(ms$model[i], sel)) " <-- reported" else ""))
-        cat("  Harmonics are cumulative (H1-H2 contains harmonics 1 AND 2). Akaike weights\n")
-        cat("  redistribute over this set only: 'best of these', not 'probably correct'.\n")
+        print_model_set(mod$model_selection)
       } else {
         cat("Nested-model comparison not run (enable 'Compare nested models' under Advanced).\n")
       }
@@ -4740,6 +4741,8 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     # carried on the fit so every panel converts the same way
     ff$clock_origin <- dance_clock_origin(mod)
     ff$dv_units <- mod$dv_units
+    # the frame and roles, so the model comparison refits exactly these data
+    ff$long_frame <- d; ff$roles <- roles
     # what the long frame was built from, so the exported script rebuilds the
     # same frame from the fit rather than from whatever the inputs say later
     ff$design_input <- list(subject = subj, factors = fl, roles = roles)
@@ -5305,6 +5308,57 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
   })
 
   # ---- 2. SECONDARY: the component decomposition ----------------------------
+  # ---- THE MODEL COMPARISON, MIXED-EFFECTS ---------------------------------------
+  # Fitted when asked for (Compare nested models), by ML, on the fit's own frame;
+  # see dance_traj_model_set() in server/08e.
+  harmonic_traj_model_set <- reactive({
+    mod <- values$harmonic_model
+    if (is.null(mod) || !harmonic_is_mixed() || !isTRUE(mod$model_selection_requested)) return(NULL)
+    ff <- harmonic_traj(); if (!isTRUE(ff$ok) || is.null(ff$long_frame)) return(NULL)
+    ti <- mod$tau_spec %||% list()
+    withProgress(message = "Fitting the model comparison set (ML)...", value = 0,
+      dance_traj_model_set(ff$long_frame, period = ff$spec$period, k_max = mod$model_selection_k_max %||% 1L,
+                           design_terms = ff$spec$design_terms, t0 = ff$spec$t0,
+                           tau_mode = if (identical(ti$mode, "estimate")) "estimate" else "fixed",
+                           tau_value = ti$value %||% ff$spec$tau %||% NA_real_,
+                           tau_lo = ti$lo %||% NA_real_, tau_hi = ti$hi %||% NA_real_,
+                           roles = ff$roles,
+                           selected = dance_model_label(ff$spec$trend, length(ff$spec$harm_terms) %/% 2L),
+                           progress = function(j, n, label) setProgress(j / n, detail = label)))
+  })
+
+  # One printer for both approaches' comparison tables.
+  print_model_set <- function(ms) {
+    sel <- attr(ms, "selected")
+    mixed_ms <- identical(attr(ms, "method"), "mixed")
+    if (mixed_ms) {
+      cat("AICc of every candidate, each fitted by maximum likelihood (not REML) with its own
+")
+      cat("random-effects structure from the same ladder, on the same observations:
+")
+    } else {
+      n_com <- attr(ms, "n_common"); n_all <- attr(ms, "n_participants")
+      cat(sprintf("Delta-AICc across the candidate set (AICc averaged per participant, over the %s\n  participant(s) scorable under every candidate%s):\n",
+                  if (is.null(n_com)) "same" else fmtn(n_com, 0),
+                  if (!is.null(n_all)) sprintf(", of %s", fmtn(n_all, 0)) else ""))
+    }
+    cat(sprintf("  Candidates: %s\n", paste(attr(ms, "candidates") %||% ms$model, collapse = "; ")))
+    if (length(attr(ms, "not_fitted")))
+      cat(sprintf("  Not fitted, so not in the table: %s\n", paste(attr(ms, "not_fitted"), collapse = ", ")))
+    if (!is.null(attr(ms, "tau_note"))) cat("  ", attr(ms, "tau_note"), "\n", sep = "")
+    cat(sprintf("  %-22s %-10s %12s %10s %8s%s\n", "model", "structure", "AICc", "dAICc", "weight",
+                if (mixed_ms) "      k" else ""))
+    for (i in seq_len(nrow(ms)))
+      cat(sprintf("  %-22s %-10s %12s %10s %8s%s%s\n", ms$model[i], ms$structure[i] %||% "",
+                  fmt2(ms$AICc[i]), fmt2(ms$dAICc[i]), fmt3(ms$weight[i]),
+                  if (mixed_ms) sprintf(" %6s", fmtn(ms$k[i], 0)) else "",
+                  if (!is.null(sel) && identical(ms$model[i], sel)) " <-- reported" else ""))
+    cat("  Harmonics are cumulative (H1-H2 contains harmonics 1 AND 2); 'linear only' is the trend\n")
+    cat("  without a rhythm, 'intercept only' neither. Not every pair is nested, so the models are\n")
+    cat("  compared by AICc, not by likelihood-ratio tests. Akaike weights redistribute over this\n")
+    cat("  set only: 'best of these', not 'probably correct'.\n")
+  }
+
   # ---- THE THREE QUESTIONS ------------------------------------------------------
   # One builder per approach (server/08k_helpers_outcomes.R); this panel, the
   # CSV below and the APA report read the same two tables.

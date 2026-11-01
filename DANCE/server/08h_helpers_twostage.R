@@ -880,9 +880,13 @@ dance_ts_bootstrap <- function(params, B, period = 24, seed = 20240601L, progres
 # candidate. Returns the Akaike table (NULL if no participant is scorable under
 # all of them).
 #   progress   optional function(j, n, label)
+#   k_max      the largest harmonic set in the candidate space (a trend-only
+#              run still compares against the rhythm; default: the run's own
+#              count, at least 1)
 dance_ts_model_set <- function(Y, time_vec, period = 24, n_harmonics = 1, trend_type = "none",
-                               tau_min = 0.5, tau_max = NA, tau_fixed = NA, progress = NULL) {
-  ms_models <- dance_cosinor_model_set(n_harmonics)
+                               tau_min = 0.5, tau_max = NA, tau_fixed = NA, progress = NULL,
+                               k_max = max(1L, as.integer(n_harmonics))) {
+  ms_models <- dance_cosinor_model_set(k_max)
   n_time <- ncol(Y)
   # participants x candidates; NA where the candidate cannot be fitted
   aicc <- matrix(NA_real_, nrow(Y), length(ms_models),
@@ -919,7 +923,14 @@ dance_ts_model_set <- function(Y, time_vec, period = 24, n_harmonics = 1, trend_
     attr(tab, "not_fitted") <- common$not_fitted
     # the specification the run reported, so a reader need not match it by eye
     attr(tab, "selected") <- dance_model_label(trend_type, n_harmonics)
-    attr(tab, "n_harmonics_max") <- n_harmonics
+    attr(tab, "n_harmonics_max") <- k_max
+    attr(tab, "candidates") <- vapply(ms_models, function(m) m$label, character(1))
+    attr(tab, "tau_note") <- if (is.finite(tau_fixed))
+      sprintf("saturating candidates hold tau at %s h (one parameter fewer)", format(tau_fixed))
+      else sprintf("saturating candidates estimate tau per participant within %s to %s h (counted as a parameter)",
+                   format(tau_min), format(if (is.finite(tau_max)) tau_max else "5x the window"))
+    tab$structure <- vapply(tab$model, function(lb) {
+      m <- ms_models[[match(lb, attr(tab, "candidates"))]]; m$structure }, character(1))
   }
   tab
 }
