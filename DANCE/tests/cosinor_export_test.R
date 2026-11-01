@@ -142,7 +142,7 @@ testServer(server, {
   ff <- values$harmonic_model$traj
   if (!isTRUE(ff$ok)) fail("the app's mixed fit failed:", ff$message %||% "")
   app_tests <- dance_traj_tests_table(harmonic_traj_tests())
-  sc <- run_script(generate_analysis_code(), "mixed", c("traj_fit", "traj_tests", "traj_pairwise"))
+  sc <- run_script(generate_analysis_code(), "mixed", c("traj_fit", "traj_tests", "traj_pairwise", "traj_outcomes"))
   if (!is.null(sc)) {
     tf <- sc$traj_fit
     chk <- function(cond, good, bad) if (isTRUE(cond)) ok(good) else fail(bad)
@@ -173,6 +173,14 @@ testServer(server, {
     same("every pairwise adjusted p",
          pw$p_adjusted,
          unlist(lapply(unique(pw$quantity), function(w) sc$traj_pairwise[[w]]$p_adj), use.names = FALSE))
+    # the three questions: the script's tables are the comparison tab's
+    oa <- harmonic_outcomes()
+    lin <- function(x) x[x$kind != "circular", c("outcome", "cell", "estimate", "lo", "hi")]
+    chk(isTRUE(sc$traj_outcomes$ok) && identical(lin(oa$estimates)$outcome, lin(sc$traj_outcomes$estimates)$outcome),
+        "the script builds the same outcome table", "the script's outcome table differs in its rows")
+    same("every outcome estimate and interval (amplitude and acrophase are simulated, so excluded)",
+         lin(oa$estimates)[, c("estimate", "lo", "hi")], lin(sc$traj_outcomes$estimates)[, c("estimate", "lo", "hi")])
+    same("every outcome test", oa$tests$statistic, sc$traj_outcomes$tests$statistic)
   }
 
   # ====================================================== mixed, AR(1) residuals
@@ -206,7 +214,7 @@ testServer(server, {
   mod <- values$harmonic_model
   sc <- run_script(generate_analysis_code(), "two_stage",
                    c("ts_params", "ts_gate", "ts_df", "ts_model", "ts_components", "ts_boot",
-                     "ts_models", "cosinor_params", "ts_pairwise"))
+                     "ts_models", "cosinor_params", "ts_pairwise", "ts_outcomes"))
   if (!is.null(sc)) {
     num_cols <- names(mod$individual_params)[vapply(mod$individual_params, is.numeric, logical(1))]
     same("the parameter table (every column of every summarised participant)",
@@ -237,6 +245,10 @@ testServer(server, {
     chk(!is.null(sc$ts_pairwise) && setequal(names(sc$ts_pairwise), unique(pw$quantity)),
         sprintf("the script computes every pairwise table (%d quantities)", length(unique(pw$quantity))),
         "the script's pairwise tables are not the app's")
+    oa <- harmonic_outcomes()
+    same("every two-stage outcome estimate and interval", oa$estimates[, c("estimate", "lo", "hi")],
+         sc$ts_outcomes$estimates[, c("estimate", "lo", "hi")])
+    same("every two-stage outcome test", oa$tests$statistic, sc$ts_outcomes$tests$statistic)
     same("every pairwise estimate and adjusted p",
          pw[, c("estimate", "p_adjusted")],
          do.call(rbind, lapply(unique(pw$quantity), function(w)

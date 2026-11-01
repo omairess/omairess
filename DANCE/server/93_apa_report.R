@@ -560,9 +560,13 @@ dance_apa_report <- function(values, input, title = NULL) {
       paste0(", with a ", switch(hm$trend_type,
              exp_sat = "saturating-exponential", linear = "linear",
              log = "logarithmic", hm$trend_type), " trend term") else ""
-    harm_txt <- paste0("a cosinor basis of period ", format(hm$period), " with ",
-                       hm$n_harmonics, " harmonic", if (hm$n_harmonics == 1) "" else "s",
-                       trend_txt)
+    # the model structure, in words: a trend-only model has no cosinor basis
+    harm_txt <- if ((hm$n_harmonics %|% 1L) >= 1)
+      paste0("a cosinor basis of period ", format(hm$period), " with ",
+             hm$n_harmonics, " harmonic", if (hm$n_harmonics == 1) "" else "s", trend_txt)
+      else paste0("a non-periodic ", switch(hm$trend_type, exp_sat = "saturating-exponential",
+                                           linear = "linear", log = "logarithmic", hm$trend_type),
+                  " trend without harmonics (a trend-only model)")
     if (hm_mixed) {
       # ONE model, described as one model: what was regressed on what, the
       # random structure actually reached, how the design effects were tested,
@@ -892,6 +896,77 @@ dance_apa_report <- function(values, input, title = NULL) {
       sprintf("*F*(%s, %s) = %s", format(r$df1), dance_apa_num(r$df2, 1),
               dance_apa_num(r$statistic %|% r$F, 2))
       else sprintf("χ²(%s) = %s", format(r$df1), dance_apa_num(r$statistic %|% r$F, 2))
+    # THE THREE QUESTIONS: the tests and the group estimates of the comparison
+    # tab, from the same builder (server/08k_helpers_outcomes.R).
+    q_section <- function() {
+      o <- if (exists("harmonic_outcomes", mode = "function"))
+        tryCatch(harmonic_outcomes(), error = function(e) NULL) else NULL
+      if (is.null(o) || !isTRUE(o$ok)) return(invisible(NULL))
+      add("**Results by question.** Model structure: ",
+          tolower(DANCE_STRUCTURE_LABEL[[o$structure]]), ". The omnibus test asks whether the ",
+          "groups' complete fitted trajectories differ at all; the three domains then ask how: ",
+          "overall response level, circadian-like rhythmicity and homeostatic-like accumulation. ",
+          "These describe a periodic and a non-periodic component of the fitted curve; they do not ",
+          "identify the endogenous processes C and S.")
+      blank()
+      for (dom in c("omnibus", "level", "rhythm", "accumulation", "accumulation_model")) {
+        t_d <- if (!is.null(o$tests)) o$tests[o$tests$domain == dom, , drop = FALSE] else NULL
+        e_d <- if (!is.null(o$estimates)) o$estimates[o$estimates$domain == dom, , drop = FALSE] else NULL
+        if ((is.null(t_d) || !nrow(t_d)) && (is.null(e_d) || !nrow(e_d))) next
+        add("*", DANCE_OUTCOME_DOMAINS[[dom]], ".*"); blank()
+        if (!is.null(t_d) && nrow(t_d)) {
+          rows <- data.frame(
+            Test = paste0(t_d$label, ifelse(t_d$primary, " (primary)", "")),
+            Statistic = vapply(seq_len(nrow(t_d)), function(i) {
+              r <- t_d[i, ]
+              if (!is.finite(r$statistic)) "--"
+              else if (is.finite(r$df2)) sprintf("*F*(%s, %s) = %s", format(r$df1), dance_apa_num(r$df2, 1),
+                                                dance_apa_num(r$statistic, 2))
+              else sprintf("\u03c7\u00b2(%s) = %s", format(r$df1), dance_apa_num(r$statistic, 2)) }, ""),
+            p = vapply(t_d$p, dance_apa_pval, ""), Method = t_d$method,
+            check.names = FALSE, stringsAsFactors = FALSE)
+          L <<- c(L, dance_md_table(rows)); blank()
+        }
+        if (!is.null(e_d) && nrow(e_d)) {
+          cells <- unique(e_d$cell)
+          er <- do.call(rbind, lapply(unique(e_d$outcome), function(q) {
+            sub <- e_d[e_d$outcome == q, , drop = FALSE]
+            vals <- vapply(cells, function(cl) {
+              r <- sub[sub$cell == cl, , drop = FALSE]
+              if (nrow(r)) dance_outcome_value_text(r[1, ], o$period, o$clock_origin, digits = 2) else "" }, "")
+            data.frame(Outcome = paste0(sub$label[1], if (any(sub$primary)) " (primary)" else ""),
+                       t(stats::setNames(vals, cells)), check.names = FALSE, stringsAsFactors = FALSE)
+          }))
+          L <<- c(L, dance_md_table(er)); blank()
+        }
+      }
+      add("Estimates are given with 95% intervals; acrophases as clock times of each harmonic's own ",
+          "maximum, not of the fitted curve's peak. Over one common window the total trend change and ",
+          "the average trend rate are one quantity in two units and share one test.")
+      blank()
+      td <- if (exists("harmonic_tau_diag", mode = "function"))
+        tryCatch(harmonic_tau_diag(), error = function(e) NULL) else NULL
+      if (!is.null(td) && isTRUE(td$ok)) {
+        add("*Is tau identified?* ", paste(sprintf("%s: %s", td$rows$check, td$rows$value), collapse = "; "),
+            ". Verdict: ", td$status, ". ", td$message)
+        blank()
+      }
+      if (hm_mixed && exists("harmonic_traj_model_set", mode = "function")) {
+        ms <- tryCatch(harmonic_traj_model_set(), error = function(e) NULL)
+        if (!is.null(ms) && nrow(ms)) {
+          add("*Model comparison (maximum likelihood).* Candidate space: ",
+              paste(attr(ms, "candidates") %||% ms$model, collapse = "; "), ". ",
+              attr(ms, "tau_note") %||% "", ".")
+          blank()
+          L <<- c(L, dance_md_table(data.frame(
+            Model = ifelse(ms$model == (attr(ms, "selected") %||% ""), paste0(ms$model, " (reported)"), ms$model),
+            Structure = ms$structure, k = ms$k, AICc = dance_apa_num(ms$AICc, 2),
+            `ΔAICc` = dance_apa_num(ms$dAICc, 2), `Akaike weight` = dance_apa_num(ms$weight, 3, bounded = TRUE),
+            check.names = FALSE, stringsAsFactors = FALSE)))
+          blank()
+        }
+      }
+    }
     # Every pairwise table of the fitted approach -- the rows of the CSV the
     # tab and the Export tab download, so the three cannot disagree.
     pw_section <- function() {
@@ -1073,6 +1148,7 @@ dance_apa_report <- function(values, input, title = NULL) {
           L <- c(L, dance_md_table(ers)); blank()
         }
       }
+      q_section()
       pw_section()
       cal <- tryCatch(dance_traj_calibration(ff, input$harmonic_df_method %|% "kr", "full"),
                       error = function(e) NULL)
@@ -1233,6 +1309,7 @@ dance_apa_report <- function(values, input, title = NULL) {
           "distributions with a common, sufficiently high concentration; it is ",
           "unreliable when the phases are widely dispersed.")
       blank()
+      q_section()
       pw_section()
     }
 

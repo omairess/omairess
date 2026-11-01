@@ -45,6 +45,7 @@ ui_tab_export <- tabItem(
       downloadButton("export_harmonic_params", "Download Cosinor Individual Parameters (CSV)", class = "btn-primary"),
       downloadButton("export_harmonic_summary", "Download Cosinor Summary Report (TXT)", class = "btn-primary"),
       downloadButton("export_harmonic_pairwise", "Download Cosinor Pairwise Comparisons (CSV)", class = "btn-primary"),
+      downloadButton("export_harmonic_outcomes", "Download Cosinor Outcomes by Question (CSV)", class = "btn-primary"),
       helpText("The pairwise CSV holds every quantity the cosinor's 'Compare' menu offers",
                "(mixed or two-stage, whichever was fitted), over the whole design, with the",
                "multiplicity adjustment chosen there; the same file downloads under that panel."),

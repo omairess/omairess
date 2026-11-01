@@ -1415,7 +1415,9 @@
                     "dance_traj_residual_statement",
                     "dance_traj_cell_equations", "dance_traj_level_summary",
                     "dance_traj_tests", "dance_traj_tests_table", "dance_traj_contrasts",
-                    "dance_traj_pair_whats"))
+                    "dance_traj_pair_whats", "dance_outcomes_mixed", "dance_outcomes_flat",
+                    if (sat) "dance_tau_diagnostics_mixed",
+                    if (isTRUE(hm$model_selection_requested)) "dance_traj_model_set"))
           emit_kernel(k)
         add("# The design, one entry per curve (row of cosinor_input):")
         add("cosinor_subject <- ", dance_export_vec(as.character(di$subject)))
@@ -1458,6 +1460,27 @@
         add("# and the component blocks of the design, as marginal contrasts")
         add(sprintf("traj_tests <- dance_traj_tests(traj_fit, df_method = \"%s\")", dfm))
         add("print(dance_traj_tests_table(traj_tests))")
+        add("")
+        add("# The three questions -- overall level, rhythmicity, accumulation -- with the")
+        add("# omnibus test above them: the tables of the comparison tab and the report")
+        add("traj_outcomes <- dance_outcomes_mixed(traj_fit, traj_tests)")
+        add("print(dance_outcomes_flat(traj_outcomes)[, c(\"domain\", \"outcome\", \"cell\", \"estimate\", \"lo\", \"hi\",")
+        add("                                            \"statistic\", \"df1\", \"df2\", \"p\")])")
+        if (sat) {
+          add("print(dance_tau_diagnostics_mixed(traj_fit)$rows)   # is tau identified?")
+        }
+        if (isTRUE(hm$model_selection_requested)) {
+          add("")
+          add("# The model comparison over every structure, by maximum likelihood")
+          add(sprintf("traj_models <- dance_traj_model_set(traj_frame, period = period, k_max = %dL,",
+                      as.integer(hm$model_selection_k_max %||% 1L)))
+          add("                                   design_terms = traj_fit$spec$design_terms, t0 = traj_fit$spec$t0,")
+          add("                                   roles = cosinor_roles,")
+          add(sprintf("                                   tau_mode = \"%s\", tau_value = %s, tau_lo = %s, tau_hi = %s)",
+                      if (identical(tsp$mode, "estimate")) "estimate" else "fixed",
+                      num(tsp$value), num(tsp$lo), num(tsp$hi)))
+          add("print(traj_models[, c(\"model\", \"structure\", \"k\", \"AICc\", \"dAICc\", \"weight\")])")
+        }
         if (sat && isTRUE(tsp$sat_cells)) {
           add("")
           add("# A, tau and A/tau per cell (nonlinear mixed model), and one tau vs per cell")
@@ -1483,6 +1506,8 @@
         for (k in c("dance_ts_fit_all", "dance_ts_gate", "dance_ts_frame", "dance_ts_level_summary",
                     "dance_ts_group_rhythm", "dance_ts_coef_cols", "dance_ts_manova",
                     "dance_ts_components", "dance_ts_pairwise", "dance_ts_pair_whats",
+                    "dance_outcomes_ts", "dance_outcomes_flat",
+                    if (sat && !identical(tsp$mode, "fixed")) "dance_tau_diagnostics_ts",
                     if (sat) "dance_ts_sat_summary",
                     if (!is.null(hm$boot_results)) "dance_ts_bootstrap",
                     if (!is.null(hm$model_selection)) "dance_ts_model_set"))
@@ -1546,6 +1571,12 @@
           add("# The comparison tab's tests, on the per-participant estimates")
           add("print(unlist(dance_ts_manova(ts_df, dance_ts_coef_cols(ts_model))[c(\"F\", \"df1\", \"df2\", \"p\", \"method\")]))")
           add("ts_components <- dance_ts_components(ts_df, ts_model)")
+          add("# The three questions, as on the comparison tab and in the report")
+          add("ts_outcomes <- dance_outcomes_ts(ts_df, ts_model)")
+          add("print(dance_outcomes_flat(ts_outcomes)[, c(\"domain\", \"outcome\", \"cell\", \"estimate\", \"lo\", \"hi\",")
+          add("                                          \"statistic\", \"df1\", \"df2\", \"p\")])")
+          if (sat && !identical(tsp$mode, "fixed"))
+            add("print(dance_tau_diagnostics_ts(ts_model)$rows)   # is tau identified?")
           add("print(do.call(rbind, lapply(ts_components, function(r) data.frame(")
           add("  test = r$label, F = if (isTRUE(r$ok)) r$F else NA, df1 = if (isTRUE(r$ok)) r$df1 else NA,")
           add("  df2 = if (isTRUE(r$ok)) r$df2 else NA, p = if (isTRUE(r$ok)) r$p else NA,")
@@ -1836,6 +1867,15 @@
   output$export_harmonic_pairwise <- downloadHandler(
     filename = function() sprintf("cosinor_pairwise_%s.csv", Sys.Date()),
     content = function(file) harmonic_pairwise_csv(file))
+
+  # The three questions' estimates and tests: the same table as the
+  # comparison tab's "By question" panel and its own download.
+  output$export_harmonic_outcomes <- downloadHandler(
+    filename = function() sprintf("cosinor_outcomes_by_question_%s.csv", Sys.Date()),
+    content = function(file) {
+      o <- tryCatch(harmonic_outcomes(), error = function(e) list(ok = FALSE, message = conditionMessage(e)))
+      utils::write.csv(dance_outcomes_flat(o), file, row.names = FALSE, na = "")
+    })
 
   output$export_harmonic_summary <- downloadHandler(
     filename = function() paste0("harmonic_summary_", Sys.Date(), ".txt"),

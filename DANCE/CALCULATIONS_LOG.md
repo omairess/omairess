@@ -870,3 +870,135 @@ delta-method amplitude and acrophase contrasts of the mixed model), signed like
 the difference. A mixed F(1, df) is reported as t(df) = sign x sqrt(F). Joint
 block tests, and the Watson-Williams acrophase test of the two-stage approach,
 are reported as F.
+
+## 21. Three model structures, three scientific questions
+
+### Model structures
+A selector on the cosinor tab chooses one of three analyses:
+
+* **rhythmic component only**: harmonics, no trend;
+* **non-periodic trend only**: a linear, logarithmic or saturating trend, no
+  harmonics;
+* **both**.
+
+The choice sets the trend and the harmonic count (0 for trend-only). Both
+estimators, every output, the report and the exported script follow it. A
+trend-only model has no amplitude, acrophase, rhythm test, polar plot or
+rhythm-detection count; each place that would show one says why not.
+
+### The outcomes, defined once (server/08_helpers_cosinor.R)
+Time is in hours since the first observation, t in [0, T]. The trend is c·s(t)
+with s(0) = 0:
+
+| trend   | s(t)              | s(T)              | mean of s on [0, T]           | s'(0)  |
+|---------|-------------------|-------------------|-------------------------------|--------|
+| linear  | t                 | T                 | T / 2                         | 1      |
+| log     | log(1 + t)        | log(1 + T)        | ((1 + T) log(1 + T) − T) / T  | 1      |
+| exp_sat | 1 − e^(−t/τ)      | 1 − e^(−T/τ)      | 1 − (τ/T)(1 − e^(−T/τ))       | 1/τ    |
+
+* total trend change ΔT = c·s(T)
+* average rate = ΔT / T
+* initial rate = c·s'(0)
+* mean midline (MESOR) = b0 + c·mean(s)
+* time-averaged fitted response = MESOR + Σ_h [β_h sin(ω_h T) + γ_h (1 − cos(ω_h T))] / (ω_h T)
+
+None of the three trends has a singular derivative at 0: the log trend is
+log(1 + t). For a straight line the initial and average rates are one number,
+so only the average rate is offered.
+
+These quantities are:
+
+* linear functions of the mixed model's fixed effects (exact L-matrix tests);
+* computed from each participant's own coefficients in the two-stage fits.
+
+Checked against numerical integration and differentiation for every trend, at
+every harmonic count, in both approaches (tests/testthat/test-outcomes-calculus.R,
+agreement to about 1e-8).
+
+### With τ estimated
+* **Two-stage.** Each participant's ΔT, average rate and A/τ use their own A
+  and τ.
+* **Mixed, one shared τ (profiled).** The quantities are computed at the
+  profiled τ, and the summary says the inference is conditional on it.
+* **Mixed, τ per cell (nlme).** ΔT and the average rate carry τ's uncertainty
+  through the delta method:
+  ∂ΔT/∂A = 1 − e^(−T/τ) and ∂ΔT/∂x = −A (T/τ²) e^(−T/τ) dτ/dx, where x is
+  τ's carrying scale.
+
+### The comparison, by question (server/08k_helpers_outcomes.R)
+Above the three domains sits the **omnibus** test of the complete fitted
+trajectory (mixed: the effect tests; two-stage: the MANOVA on every
+coefficient). Then three domains:
+
+1. **Overall response level.** Time-averaged fitted response (primary), mean
+   midline (MESOR), initial midline.
+2. **Circadian-like rhythmicity.** The joint harmonic-vector test (primary;
+   neither an amplitude nor an acrophase test), then amplitude and acrophase per
+   harmonic.
+3. **Homeostatic-like accumulation.** Total trend change (primary; one test
+   with the average rate), initial rate, then the model-specific parameters
+   (the trend coefficient, A, τ, t50 = τ ln 2).
+
+Group intervals: Wald for the mixed model; t intervals of the participant means
+for two-stage. Two-stage amplitude and acrophase intervals are Bingham et al.'s
+(1982) population-mean region: dance_bingham_ci() with V = S(k − 1)/(k(k − 2))
+on F(2, k − 2). No test was substituted for an existing one.
+
+### Graphs
+The trajectory plot's full, rhythm and trend views carry:
+
+* the time-averaged fitted response line;
+* the total change and the average-rate line;
+* the initial tangent;
+* the asymptote and the 63.2% point at τ;
+* each harmonic's acrophase at its amplitude.
+
+All are read off the same outcome table. tests/structures_app_test.R checks the
+drawn values against it.
+
+### Model comparison
+The candidate space is intercept only, each trend alone, the rhythm alone and
+each trend with each cumulative harmonic set, and it is printed in full.
+
+* **Two-stage:** per-participant AICc, averaged over the participants fitted by
+  every candidate.
+* **Mixed (new):** each candidate fitted by ML (REML likelihoods are not
+  comparable across fixed effects), with its own random-effects rung.
+* **Parameter counts:** a profiled or per-participant τ counts as a parameter;
+  a held τ does not.
+* **Pairs that are not nested** (log against saturating) are compared by AICc,
+  not by likelihood-ratio tests.
+
+### Is τ identified?
+Each approach gets a checklist:
+
+* convergence;
+* estimates at a bound;
+* relative SE of τ;
+* corr(A, τ);
+* τ against the window;
+* free versus held τ;
+* the number of valid estimates.
+
+The verdict is "identified", "weakly identified" or "not identified". Anything
+short of identified recommends a fixed-τ sensitivity analysis. Hierarchical τ
+(an advanced option) adds a participant-level random effect on τ to the
+per-cell nlme model and reports its SD in hours.
+
+### Compatibility mapping
+Nothing exported was redefined: `mesor` (the intercept), `mesor_adj` (the
+MESOR), `trend_change` and `init_slope` keep their meanings and columns. New
+names and changed labels:
+
+| where | before | now |
+|---|---|---|
+| labels | Intercept (midline at the first observation) | Initial midline (t = 0) |
+| labels | MESOR (midline averaged over the window) | Mean midline level (MESOR) |
+| labels | Non-periodic change over the recording | Total trend change (start to end) |
+| per-participant columns | – | `fitted_mean`, `avg_rate`, `rate0`, `t50` (added) |
+| pairwise keys (both) | – | `fitted_mean`, `avg_rate`, `rate0` (added) |
+| pairwise keys, two-stage | `init_slope` | `rate0` (A/τ, the same number); `t50` added |
+| pairwise keys, mixed per-cell | `A_sat`, `tau`, `init_slope` | `sat_change`, `sat_avg_rate`, `init_slope`, `A_sat`, `tau` |
+| model labels | – | `<trend> only`, `intercept only` (labels with harmonics unchanged) |
+| model comparison | trends × H1..HK (two-stage only) | + intercept only and trends alone; mixed by ML too; a `structure` column |
+| session files | trend "none" = rhythm only | restored as structure "rhythm"; any other trend as "combined" |
