@@ -146,21 +146,31 @@
     return(normalized)
   }
   
+  # WHERE EACH COLUMN SITS on the 0-1 axis the curves are drawn on: the
+  # smoothing's own time axis (server/20_smoothing.R). That is the column index,
+  # evenly spaced, unless 'Space time points by their real clock times' was
+  # used, when it is elapsed real time. The tick labels used to be placed by
+  # real time ALWAYS while the curves were drawn by index, so on unevenly spaced
+  # columns (half-hours, then a 20 h gap) the labels did not sit under the data.
+  dance_column_positions <- function() {
+    n <- length(values$time_labels)
+    if (n < 2) return(seq(0, 1, length.out = max(n, 1)))
+    if (identical(values$smooth_fit_metrics$time_axis, "real clock time (hours)")) {
+      cum <- dance_cumulative_hours(values$time_labels)
+      if (!is.null(cum) && length(cum) == n && diff(range(cum)) > 0)
+        return((cum - cum[1]) / diff(range(cum)))
+    }
+    seq(0, 1, length.out = n)
+  }
+
   format_plotly_time_axis <- function(p, time_grid = NULL, tick_step_hours = NULL) {
     if(!is.null(values$time_labels) && length(values$time_labels) > 0) {
       # Get hour labels if available
       hour_labels <- get_hour_labels()
       
-      # Calculate actual time positions (accounting for midnight crossings)
       if(!is.null(hour_labels)) {
-        # Calculate positions based on actual time progression
-        actual_positions <- calculate_time_positions(hour_labels)
-        
-        if(!is.null(actual_positions)) {
-          time_grid <- actual_positions
-        } else if(is.null(time_grid)) {
-          time_grid <- seq(0, 1, length.out = length(values$time_labels))
-        }
+        # one tick per column, where that column's values are drawn
+        time_grid <- dance_column_positions()
         
         # Use actual hour values as labels
         tick_text <- sapply(hour_labels, decimal_to_hhmm)
@@ -240,8 +250,13 @@
   hover_time_labels <- function(x_vals) {
     hl <- get_hour_labels()
     if (is.null(hl)) return(as.character(round(x_vals, 3)))
-    tp <- calculate_time_positions(hl)
-    if (is.null(tp)) return(as.character(round(x_vals, 3)))
-    interp_hours <- approx(tp, hl, xout = x_vals, rule = 2)$y
+    # the columns where they are drawn, and elapsed hours between them, so a
+    # point between 23:30 and 00:00 reads 23:45 and not 11:45
+    tp <- dance_column_positions()
+    cum <- dance_cumulative_hours(values$time_labels)
+    if (length(tp) != length(hl)) return(as.character(round(x_vals, 3)))
+    if (is.null(cum) || length(cum) != length(hl))
+      return(sapply(approx(tp, hl, xout = x_vals, rule = 2)$y, decimal_to_hhmm))
+    interp_hours <- (hl[1] + approx(tp, cum, xout = x_vals, rule = 2)$y) %% 24
     sapply(interp_hours, decimal_to_hhmm)
   }

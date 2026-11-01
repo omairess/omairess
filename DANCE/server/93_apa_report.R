@@ -892,6 +892,62 @@ dance_apa_report <- function(values, input, title = NULL) {
       sprintf("*F*(%s, %s) = %s", format(r$df1), dance_apa_num(r$df2, 1),
               dance_apa_num(r$statistic %|% r$F, 2))
       else sprintf("χ²(%s) = %s", format(r$df1), dance_apa_num(r$statistic %|% r$F, 2))
+    # Every pairwise table of the fitted approach -- the rows of the CSV the
+    # tab and the Export tab download, so the three cannot disagree.
+    pw_section <- function() {
+      pw <- if (exists("harmonic_pairwise_all", mode = "function"))
+        tryCatch(harmonic_pairwise_all(), error = function(e) NULL) else NULL
+      if (is.null(pw) || !nrow(pw)) return(invisible(NULL))
+      two <- identical(pw$approach[1], "two-stage")
+      # A one-df contrast is reported as t (or z without a df), signed like the
+      # difference; a joint test, and Watson-Williams for an acrophase, as F.
+      test_txt <- function(i) {
+        z <- pw[i, ]
+        if (!is.finite(z$statistic)) return("")
+        Fs <- function() if (is.finite(z$df2))
+          sprintf("*F*(%s, %s) = %s", format(z$df1), dance_apa_num(z$df2, 1), dance_apa_num(z$statistic, 2))
+          else sprintf("χ²(%s) = %s", format(z$df1), dance_apa_num(z$statistic, 2))
+        tz <- function(v) if (is.finite(z$df2))
+          sprintf("*t*(%s) = %s", dance_apa_num(z$df2, 1), dance_apa_num(v, 2))
+          else sprintf("*z* = %s", dance_apa_num(v, 2))
+        if (two) return(if (grepl("^phase", z$quantity)) Fs() else tz(z$statistic))
+        if (is.finite(z$df1) && z$df1 > 1) return(Fs())
+        if (is.finite(z$df1) && z$df1 == 1)      # an F or chi-square on one df
+          return(tz(sign(z$estimate %|% 1) * sqrt(max(0, z$statistic))))
+        tz(z$statistic)                           # already a t or z
+      }
+      est_txt <- function(i) {
+        z <- pw[i, ]
+        if (!is.finite(z$estimate)) return("joint test")
+        paste0(dance_apa_num(z$estimate, 2),
+               if (is.finite(z$ci_lo) && is.finite(z$ci_hi))
+                 paste0(" [", dance_apa_num(z$ci_lo, 2), ", ", dance_apa_num(z$ci_hi, 2), "]") else "")
+      }
+      rows <- data.frame(
+        Quantity = ifelse(duplicated(pw$label), "", pw$label),
+        Comparison = pw$comparison,
+        `Difference [95% CI]` = vapply(seq_len(nrow(pw)), est_txt, ""),
+        Test = vapply(seq_len(nrow(pw)), test_txt, ""),
+        p = vapply(pw$p, dance_apa_pval, ""),
+        `p (adj.)` = vapply(pw$p_adjusted, dance_apa_pval, ""),
+        check.names = FALSE, stringsAsFactors = FALSE)
+      add("**Pairwise comparisons.**"); blank()
+      L <<- c(L, dance_md_table(rows)); blank()
+      add("Each quantity's pairs are one family, adjusted with the ",
+          switch(pw$adjustment[1], holm = "Holm", bonferroni = "Bonferroni", none = "no"),
+          " method", if (identical(pw$adjustment[1], "none")) " (unadjusted)" else "",
+          ". ",
+          if (two) paste0("Differences are of the per-participant estimates: Welch *t* tests, ",
+                          "and Watson-Williams *F* tests for an acrophase (difference in hours). ")
+          else paste0("Differences are model-based contrasts between design cells, on the ",
+                      "degrees of freedom of the design tests; a joint test compares several ",
+                      "components at once and has no single difference. "),
+          if (any(grepl(" / ", pw$comparison, fixed = TRUE)))
+            "A time constant is compared as a ratio, cell 1 over cell 2, tested on the log scale. " else "",
+          "Comparisons are over the whole ",
+          "design; comparisons within a level of another factor are on the comparison tab.")
+      blank()
+    }
     if (hm_mixed) {
       h(3, "Cosinor regression (mixed-effects)")
       ff <- hm$traj
@@ -1017,6 +1073,7 @@ dance_apa_report <- function(values, input, title = NULL) {
           L <- c(L, dance_md_table(ers)); blank()
         }
       }
+      pw_section()
       cal <- tryCatch(dance_traj_calibration(ff, input$harmonic_df_method %|% "kr", "full"),
                       error = function(e) NULL)
       add("*What these numbers do not establish.* The *p* values are approximate: ",
@@ -1174,9 +1231,9 @@ dance_apa_report <- function(values, input, title = NULL) {
       add("Group comparisons are on the per-participant point estimates, each ",
           "treated as exact. The Watson-Williams test assumes von Mises ",
           "distributions with a common, sufficiently high concentration; it is ",
-          "unreliable when the phases are widely dispersed. Pairwise comparisons ",
-          "are on the comparison tab.")
+          "unreliable when the phases are widely dispersed.")
       blank()
+      pw_section()
     }
 
     add("*What these numbers do not establish.* Acrophase is a **circular** ",

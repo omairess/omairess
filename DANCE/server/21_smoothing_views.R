@@ -141,8 +141,10 @@
       n_subj <- nrow(data_to_plot)
       time_points_plot <- get_plot_time()
       time_label <- get_time_label()
-      # For calculations, use normalized 0-1
-      time_points <- seq(0, 1, length.out = n_time)
+      # each column where the smoothing put it (index, or real time when that
+      # was chosen) -- the positions the axis labels use too
+      time_points <- dance_column_positions()
+      if (length(time_points) != n_time) time_points <- seq(0, 1, length.out = n_time)
       hover_times <- hover_time_labels(time_points)
 
       # Get currently selected curve (if any)

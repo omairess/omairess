@@ -837,3 +837,36 @@ they are. The import says which columns it converted.
 
 The hour parser also reads "HH:MM" with its minutes. It used to take the first
 number in the name, so 8:30 was 8 and MT_21:30_SD was 21.
+
+## 19. Half-hourly columns, a gap, and where the plots put the hours
+
+A protocol with one evening every 30 min (MT_20h00 ... MT_00h00), then the
+next evening into a night of sleep deprivation (... MT_07h00, MT_16h00): 25
+columns over 44 h, with a 20 h gap.
+
+* The import read every column correctly (20, 20.5, ..., 0, 20, ..., 7, 16).
+* The cosinor tab's "Specify times manually" suggestion ran its own column-name
+  patterns. For MT_20h30 the "trailing number" rule took the minutes and
+  suggested 0, 30, 0, 30, ... It now suggests the import's clock times, so the
+  manual route and "Use shared clock times" start from the same numbers.
+* Manual times are unwrapped at midnight: a time earlier than the one before it
+  is the next day. "00:00 then 20:00" is the same day (+20 h), which is right
+  for this protocol. A list typed out of order (23.5 before 23) adds a whole
+  day at that point, and the fit then spans three days.
+* The plots drew the curves at each column's position on the smoothing's own
+  axis (the column index, unless real clock time was chosen for smoothing), but
+  put the hour labels at REAL-time positions. On unevenly spaced columns the
+  labels did not sit under the data. The labels and the hover times now use the
+  positions the curves are drawn at (dance_column_positions()). The hover text
+  also interpolates elapsed time, so a point between 23:30 and 00:00 reads 23:45
+  and not 11:45.
+
+## 20. Pairwise comparisons in the APA report
+
+Both cosinor approaches report every pairwise table under "Pairwise
+comparisons", built from the same function as the CSV export (section 17).
+A one-df contrast is reported as t (z when the reference is normal, as for the
+delta-method amplitude and acrophase contrasts of the mixed model), signed like
+the difference. A mixed F(1, df) is reported as t(df) = sign x sqrt(F). Joint
+block tests, and the Watson-Williams acrophase test of the two-stage approach,
+are reported as F.

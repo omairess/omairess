@@ -125,6 +125,18 @@
         }
       }
       
+      # The clock times the import parsed (server/03_helpers_clock.R), when it
+      # could vouch for them. This list used to run its own patterns, which
+      # disagreed with the import: for MT_20h00, MT_20h30, ... the "trailing
+      # numbers" rule below took the MINUTES and suggested 0, 30, 0, 30, ...
+      if(is.null(suggested_times)) {
+        ch <- dance_clock_hours(col_names)
+        if(!is.null(ch)) {
+          suggested_times <- ch
+          detected_pattern <- "the clock times read at import"
+        }
+      }
+
       # Pattern 1: Dutch/European hour format with "u" suffix (e.g., KSS_9u_dag1, var_14u_something)
       # The number before "u" or "u_" is the hour
       if(is.null(suggested_times)) {
