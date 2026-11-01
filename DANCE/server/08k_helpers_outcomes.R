@@ -345,3 +345,122 @@ dance_outcomes_flat <- function(o) {
   out <- rbind(a, b); rownames(out) <- NULL
   out
 }
+
+# ------------------------------------------------------------------------------
+# IS TAU IDENTIFIED? One checklist per approach, and a verdict.
+# ------------------------------------------------------------------------------
+# Convergence is not identifiability: a fit can converge at a bound, or along a
+# ridge where A and tau trade off and the data pin down only their combination
+# (the early slope, the change over the window). The checks:
+#   convergence    how many fits converged
+#   boundary       how many tau estimates sit at an end of the search range
+#   precision      the relative standard error of tau (its uncertainty)
+#   dependence     the correlation of A and tau (|r| > 0.9: a ridge)
+#   window         tau beyond the observation window: A is then extrapolated
+#   held tau       the comparison with tau held at a value (Delta-AIC; LRT)
+#   valid n        participants (or cells) contributing an interior, finite estimate
+# The verdict is "identified", "weakly identified" or "not identified"; anything
+# short of identified recommends a sensitivity analysis with tau held.
+dance_tau_verdict <- function(rows, problems, weak) {
+  status <- if (length(problems)) "not identified" else if (length(weak)) "weakly identified" else "identified"
+  list(ok = TRUE, rows = rows, status = status, problems = problems, weak = weak,
+       recommend_fixed = !identical(status, "identified"),
+       message = switch(status,
+         identified = "tau is identified by these data: converged, interior, precise, and not on an A-tau ridge.",
+         paste0("tau is ", status, " by these data (", paste(c(problems, weak), collapse = "; "),
+                "). Report the total change and the average rate, which the data determine, ",
+                "before A or tau; and repeat the analysis with tau HELD at a plausible value ",
+                "(a fixed-tau sensitivity analysis) to show the conclusions do not depend on it.")))
+}
+
+dance_tau_diagnostics_ts <- function(mod) {
+  if (!identical(mod$trend_type, "exp_sat") || dance_ts_tau_held(mod))
+    return(list(ok = FALSE, message = "tau is not estimated in this model."))
+  p <- mod$individual_params; fits <- mod$individual_fits
+  n_att <- mod$fit_audit$n_attempted %||% length(fits)
+  if (is.null(p) || !nrow(p)) return(list(ok = FALSE, message = "No per-participant fits."))
+  T <- diff(range(mod$time_vec, na.rm = TRUE))
+  at_b <- vapply(p$subject, function(s) {
+    f <- fits[[s]]; !is.null(f$bounds_hit) && any(grepl("^tau", f$bounds_hit)) }, logical(1))
+  cr <- vapply(p$subject, function(s) {
+    V <- fits[[s]]$vcov_full
+    if (is.null(V) || !all(c("A_sat", "tau") %in% rownames(V))) return(NA_real_)
+    d <- sqrt(diag(V)[c("A_sat", "tau")]); if (any(!is.finite(d) | d <= 0)) return(NA_real_)
+    V["A_sat", "tau"] / prod(d) }, numeric(1))
+  rse <- p$tau_se / p$tau
+  conv <- if ("converged" %in% names(p)) p$converged else rep(TRUE, nrow(p))
+  valid <- conv & !at_b & is.finite(p$tau) & is.finite(rse)
+  cn <- mod$conditioning
+  f3 <- function(x) format(signif(x, 3))
+  rows <- data.frame(check = c("convergence", "boundary", "precision", "A-tau dependence", "window",
+                               "tau held (Delta-AIC)", "valid n"),
+    value = c(sprintf("%d of %d participants converged", sum(conv), n_att),
+              sprintf("%d at an end of the tau range", sum(at_b)),
+              sprintf("median relative SE of tau %s", f3(stats::median(rse[valid], na.rm = TRUE))),
+              sprintf("median |corr(A, tau)| %s; %d above 0.9", f3(stats::median(abs(cr), na.rm = TRUE)),
+                      sum(abs(cr) > 0.9, na.rm = TRUE)),
+              sprintf("%d with tau beyond the %s h window", sum(p$tau > T, na.rm = TRUE), f3(T)),
+              if (!is.null(cn$tau_fixed_delta_aic))
+                sprintf("free minus held (tau = %s h): %s", f3(cn$tau_fixed_value), f3(cn$tau_fixed_delta_aic))
+              else "not computed (set the held tau under Advanced)",
+              sprintf("%d participants with an interior, finite tau", sum(valid))),
+    stringsAsFactors = FALSE)
+  problems <- c(if (sum(valid) < 3) "fewer than 3 participants have a usable tau",
+                if (mean(at_b) > 0.25) "more than a quarter of the estimates sit on a bound")
+  weak <- c(if (isTRUE(stats::median(abs(cr), na.rm = TRUE) > 0.9)) "A and tau lie on a ridge (median |r| > 0.9)",
+            if (isTRUE(stats::median(rse[valid], na.rm = TRUE) > 0.5)) "tau is imprecise (median relative SE > 0.5)",
+            if (mean(p$tau > T, na.rm = TRUE) > 0.5) "most tau estimates exceed the window, so A is extrapolated",
+            if (isTRUE(cn$tau_fixed_delta_aic > 0)) "holding tau fits as well or better (Delta-AIC > 0)",
+            if (any(at_b) && mean(at_b) <= 0.25) sprintf("%d estimate(s) on a bound", sum(at_b)))
+  out <- dance_tau_verdict(rows, problems, weak)
+  out$approach <- "two-stage"; out$corr <- cr; out$valid <- valid
+  out
+}
+
+dance_tau_diagnostics_mixed <- function(ff) {
+  if (!isTRUE(ff$ok) || !identical(ff$spec$trend, "exp_sat"))
+    return(list(ok = FALSE, message = "No saturating trend in this model."))
+  pr <- ff$tau_profile; sf <- ff$sat
+  if (is.null(pr) && !isTRUE(sf$ok))
+    return(list(ok = FALSE, message = "tau is held, not estimated, in this model."))
+  T <- diff(range(ff$spec$data$t, na.rm = TRUE))
+  f3 <- function(x) format(signif(x, 3))
+  rows <- list(); problems <- character(0); weak <- character(0)
+  add <- function(check, value) rows[[length(rows) + 1L]] <<- data.frame(check = check, value = value,
+                                                                          stringsAsFactors = FALSE)
+  if (!is.null(pr)) {
+    add("profile (one tau)", if (isTRUE(pr$flat)) sprintf("flat: the log-likelihood varies by %s over the grid", f3(pr$logLik_range))
+        else sprintf("tau = %s h, 95%% profile interval [%s, %s]%s", f3(pr$tau), f3(pr$ci[1]), f3(pr$ci[2]),
+                     if (isTRUE(pr$ci_open)) " (open: reaches the grid's end)" else ""))
+    add("boundary", if (isTRUE(pr$at_edge)) "the maximum is at an end of the tau grid" else "interior")
+    add("inference", "the trajectory model's tests are conditional on the profiled tau (its uncertainty is not carried)")
+    if (isTRUE(pr$flat)) problems <- c(problems, "the tau profile is flat")
+    if (isTRUE(pr$at_edge)) problems <- c(problems, "the profile maximum is at the grid's edge")
+    if (isTRUE(pr$ci_open)) weak <- c(weak, "the profile interval is open")
+    if (is.finite(pr$tau) && pr$tau > T) weak <- c(weak, "tau exceeds the window, so A is extrapolated")
+  }
+  if (isTRUE(sf$ok)) {
+    st <- sf$table
+    add("per-cell model", sprintf("converged (%s); random structure: %s", sf$method %||% "ML", sf$re_label))
+    if (isTRUE(sf$hierarchical_tau_requested))
+      add("hierarchical tau", if (isTRUE(sf$hierarchical_tau))
+            sprintf("tau varies between participants: SD %s h around the cell tau",
+                    paste(sprintf("%s %s", st$cell, f3(st$tau_between_sd_h %||% NA)), collapse = ", "))
+          else "requested, but that structure did not converge: participants share their cell's tau")
+    if (isTRUE(sf$hierarchical_tau_requested) && !isTRUE(sf$hierarchical_tau))
+      weak <- c(weak, "the hierarchical-tau structure did not converge")
+    add("A-tau dependence", sprintf("|corr(A, log tau)| per cell: %s",
+                                    paste(sprintf("%s %s", st$cell, f3(abs(st$corr_A_logtau))), collapse = ", ")))
+    add("precision", sprintf("tau 95%% interval per cell: %s",
+                             paste(sprintf("%s [%s, %s]", st$cell, f3(st$tau_lo), f3(st$tau_hi)), collapse = ", ")))
+    if (isTRUE(sf$lrt$ok))
+      add("one tau vs per cell", sprintf("LRT chi2(%d) = %s, p = %s", sf$lrt$df, f3(sf$lrt$statistic), f3(sf$lrt$p)))
+    fl <- tryCatch(dance_traj_sat_flags(sf), error = function(e) character(0))
+    if (any(abs(st$corr_A_logtau) > 0.9)) weak <- c(weak, "A and tau lie on a ridge in at least one cell")
+    if (any(grepl("end of the search range", fl))) problems <- c(problems, "a cell's tau ran to the search range's end")
+    if (any(st$tau > T)) weak <- c(weak, "a cell's tau exceeds the window, so its A is extrapolated")
+  }
+  out <- dance_tau_verdict(do.call(rbind, rows), unique(problems), unique(weak))
+  out$approach <- "mixed"
+  out
+}

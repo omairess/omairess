@@ -3587,6 +3587,12 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     }
 
     # ---- 8. diagnostics ----------------------------------------------------------
+    td <- tryCatch(harmonic_tau_diag(), error = function(e) NULL)
+    if (!is.null(td) && isTRUE(td$ok)) {
+      hdr("Is tau identified?")
+      for (i in seq_len(nrow(td$rows))) cat(sprintf("  %-22s %s\n", td$rows$check[i], td$rows$value[i]))
+      cat("  Verdict: ", td$status, ". ", strwrap(td$message, 86, prefix = "  ", initial = ""), sep = "\n")
+    }
     hdr("Diagnostics")
     if (mixed) {
       m <- ff$model
@@ -4734,6 +4740,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
                      tau_mode = if (identical(ti$mode, "estimate")) "estimate" else "fixed",
                      tau_value = ti$value %||% NA_real_, tau_lo = ti$lo %||% NA_real_,
                      tau_hi = ti$hi %||% NA_real_, sat_cells = isTRUE(ti$sat_cells),
+                     hierarchical_tau = isTRUE(ti$sat_cells) && isTRUE(ti$hierarchical_tau),
                      residuals = mod$resid_model %||% "independent",
                      progress = function(msg, value) setProgress(value, detail = msg)))
     if (!isTRUE(ff$ok)) return(list(ok = FALSE, message = ff$message))
@@ -4768,7 +4775,9 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
          # mixed, estimated: the value is what a FLAT profile holds tau at, so it
          # must lie inside the range like any other value tau can take
          fallback_ok = value_ok && range_ok && value >= lo && value <= hi,
-         sat_cells = mixed && isTRUE(input$harmonic_traj_sat_cells))
+         sat_cells = mixed && isTRUE(input$harmonic_traj_sat_cells),
+         hierarchical_tau = mixed && isTRUE(input$harmonic_traj_sat_cells) &&
+           isTRUE(input$harmonic_traj_sat_hier))
   }
 
   # What is wrong with the tau setting, said as it is typed rather than at Run.
@@ -5372,6 +5381,27 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     }
   })
 
+  # Is tau identified? (server/08k): only when tau is estimated
+  harmonic_tau_diag <- reactive({
+    mod <- values$harmonic_model
+    if (is.null(mod) || !identical(mod$trend_type, "exp_sat")) return(NULL)
+    if (harmonic_is_mixed()) {
+      ff <- harmonic_traj(); if (!isTRUE(ff$ok)) return(NULL)
+      dance_tau_diagnostics_mixed(ff)
+    } else dance_tau_diagnostics_ts(mod)
+  })
+  harmonic_tau_diag_ui <- function() {
+    td <- tryCatch(harmonic_tau_diag(), error = function(e) NULL)
+    if (is.null(td) || !isTRUE(td$ok)) return(NULL)
+    col <- switch(td$status, identified = "#1b7f3b", `weakly identified` = "#b8860b", "#c0392b")
+    tags$div(style = "border-left:3px solid #ddd;padding:4px 10px;margin:8px 0",
+      h5(tags$b("Is \u03c4 identified?"), tags$span(style = sprintf("color:%s;margin-left:6px", col), td$status)),
+      tags$table(tags$tbody(lapply(seq_len(nrow(td$rows)), function(i)
+        tags$tr(tags$td(style = "padding:2px 12px 2px 0;color:#555", td$rows$check[i]),
+                tags$td(style = "padding:2px 0;font-size:12px", td$rows$value[i]))))),
+      tags$div(style = sprintf("font-size:12px;color:%s;margin-top:4px", col), td$message))
+  }
+
   output$harmonic_outcomes <- renderUI({
     o <- harmonic_outcomes()
     validate(need(isTRUE(o$ok), o$message %||% "No outcomes."))
@@ -5417,6 +5447,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
         if (identical(o$approach, "mixed")) "estimates and tests from the one mixed-effects model"
         else "group means of the per-participant estimates, each treated as exact"))),
       lapply(c("omnibus", "level", "rhythm", "accumulation", "accumulation_model"), section),
+      harmonic_tau_diag_ui(),
       tags$div(style = "font-size:11px;color:#777;margin-top:8px", HTML(paste(
         "<b>Read the omnibus first</b>: it asks whether the groups differ at all. The domains then say",
         "how. The <b>time-averaged fitted response</b> is the whole fitted curve averaged over the",

@@ -39,7 +39,7 @@ RESTORE_INPUTS <- list(
                "fanova_mixed_k_time", "fanova_mixed_k_subject"),
   checkbox = c("is_cyclic", "use_real_time", "constrain_bounds",
                "use_bootstrap", "cv_stratified", "mixed_real_time",
-               "harmonic_model_selection", "harmonic_traj_sat_cells",
+               "harmonic_model_selection", "harmonic_traj_sat_cells", "harmonic_traj_sat_hier",
                "fanova_mixed_real_time"),
   select   = c("smooth_method", "pca_type", "fanova_design", "fanova_test_type",
                "fanova_data_source", "fanova_group_var", "harmonic_time_var",

@@ -182,7 +182,18 @@ ui_tab_harmonic <- tabItem(
                 helpText(HTML("<small>Fits A, τ and the initial slope A/τ separately in each
                                design cell (nlme), τ within the same range, with intervals and
                                tests, and tests whether one τ is enough. Shown on the
-                               comparison tab.</small>"))),
+                               comparison tab.</small>")),
+                conditionalPanel(
+                  condition = "input.harmonic_traj_sat_cells",
+                  checkboxInput("harmonic_traj_sat_hier",
+                                "Advanced: let \u03c4 vary between participants too (hierarchical \u03c4)",
+                                FALSE),
+                  helpText(HTML("<small>Adds a participant-level random effect on τ (on its
+                                 carrying scale) to the per-cell model: the population τ per cell,
+                                 and how much participants scatter around it. It needs many
+                                 participants and a recording that reaches well into the rise;
+                                 when it does not converge the next, simpler structure is used
+                                 and the summary says so.</small>")))),
               conditionalPanel(
                 condition = "input.harmonic_approach == 'two_stage'",
                 helpText(HTML("<small><em>Each participant's A and τ are fitted by nonlinear least

@@ -847,7 +847,7 @@ dance_traj_run <- function(d, period = 24, n_harmonics = 1, trend = "none", role
                            t0 = NULL, tau_mode = c("fixed", "estimate"),
                            tau_value = NA_real_, tau_lo = NA_real_, tau_hi = NA_real_,
                            sat_cells = FALSE, residuals = c("independent", "car1"),
-                           progress = NULL) {
+                           progress = NULL, hierarchical_tau = FALSE) {
   tau_mode <- match.arg(tau_mode)
   residuals <- match.arg(residuals)
   car1 <- identical(residuals, "car1")
@@ -982,7 +982,8 @@ dance_traj_run <- function(d, period = 24, n_harmonics = 1, trend = "none", role
   if (sat && isTRUE(sat_cells)) {
     say("Estimating A and tau in every cell (nonlinear mixed model)...", 0.9)
     ff$sat <- dance_traj_sat_fit(ff, tau_range = c(tau_lo, tau_hi),
-                                 progress = function(msg) say(msg, 0.95), phi = ff$phi %||% 0)
+                                 progress = function(msg) say(msg, 0.95), phi = ff$phi %||% 0,
+                                 hierarchical_tau = hierarchical_tau)
   }
   ff$tau_range <- if (sat && range_ok) c(tau_lo, tau_hi) else NULL
   ff

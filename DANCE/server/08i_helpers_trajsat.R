@@ -56,18 +56,27 @@ dance_traj_sat_label <- function(what, units = NULL) {
 # fixed effects only. Diagonal covariances: a nonlinear model with a full
 # unstructured covariance over six random effects rarely converges, and a
 # diagonal one is what Pinheiro & Bates start from.
-dance_traj_sat_ladder <- function(harm_pars, curve_level = FALSE) {
+#   tau_par    the name of the parameter carrying tau (lt or et); when given,
+#              the ladder starts with a rung where tau, too, varies between
+#              participants (hierarchical tau, Option 3): population-level tau per
+#              cell, participant-level deviations on the carrying scale
+dance_traj_sat_ladder <- function(harm_pars, curve_level = FALSE, tau_par = NULL) {
   rhs <- function(p) stats::as.formula(paste(paste(p, collapse = " + "), "~ 1"))
-  subj <- list(
+  subj <- c(if (!is.null(tau_par)) list(
+    list(label = "participant level, rise, TIME CONSTANT and rhythm (diagonal): tau varies between participants",
+         pars = c("b0", "A", tau_par, harm_pars), hier = TRUE)),
+    list(
     list(label = "participant level, rise and rhythm (diagonal)", pars = c("b0", "A", harm_pars)),
     list(label = "participant level and rise (diagonal)", pars = c("b0", "A")),
-    list(label = "participant level only", pars = "b0"))
+    list(label = "participant level only", pars = "b0")))
   out <- lapply(subj, function(r) {
-    if (curve_level)
+    o <- if (curve_level)
       list(label = paste0(r$label, ", plus a curve-specific level"),
            random = list(subject = nlme::pdDiag(rhs(r$pars)), curve = nlme::pdDiag(b0 ~ 1)),
            groups = ~ subject/curve)
     else list(label = r$label, random = nlme::pdDiag(rhs(r$pars)), groups = ~ subject)
+    o$hierarchical_tau <- isTRUE(r$hier)
+    o
   })
   if (curve_level)
     out[[length(out) + 1L]] <- list(label = "participant level only",
@@ -106,7 +115,7 @@ dance_traj_sat_tau_map <- function(range = NULL) {
 dance_traj_sat_fit <- function(ff, progress = NULL, tau_range = NULL,
                                control = list(maxIter = 200, pnlsMaxIter = 20,
                                               msMaxIter = 200),
-                               phi = ff$phi %||% 0) {
+                               phi = ff$phi %||% 0, hierarchical_tau = FALSE) {
   if (!requireNamespace("nlme", quietly = TRUE))
     return(list(ok = FALSE, message = paste(
       "The per-cell saturating model needs the nlme package, which ships with R",
@@ -187,7 +196,8 @@ dance_traj_sat_fit <- function(ff, progress = NULL, tau_range = NULL,
     m
   }, error = function(e) structure(conditionMessage(e), class = "dance_sat_err"))
 
-  ladder <- dance_traj_sat_ladder(harm, isTRUE(sp$has_curve_level))
+  ladder <- dance_traj_sat_ladder(harm, isTRUE(sp$has_curve_level),
+                                  tau_par = if (isTRUE(hierarchical_tau)) map$par else NULL)
   attempts <- list()
   for (i in seq_along(ladder)) {
     rung <- ladder[[i]]
@@ -224,7 +234,24 @@ dance_traj_sat_fit <- function(ff, progress = NULL, tau_range = NULL,
                                                                  unconstrained = FALSE)),
                                          error = function(e) NA_real_) else 0,
                 formula = paste(deparse(form, width.cutoff = 500L), collapse = " "))
+    out$hierarchical_tau_requested <- isTRUE(hierarchical_tau)
+    out$hierarchical_tau <- isTRUE(rung$hierarchical_tau)
+    if (out$hierarchical_tau) {
+      # the between-participant SD of tau's carrying parameter, and what it is in
+      # hours at the population tau (through the map's derivative)
+      vc <- tryCatch(nlme::VarCorr(m), error = function(e) NULL)
+      # nlme names the row "<par>.(Intercept)"
+      sd_x <- tryCatch({
+        rn <- rownames(vc); i <- which(sub("\\..*$", "", rn) == map$par)[1]
+        as.numeric(vc[i, "StdDev"]) }, error = function(e) NA_real_)
+      out$tau_re_sd <- sd_x
+    }
     out$table <- dance_traj_sat_table(out)
+    if (isTRUE(out$hierarchical_tau) && is.finite(out$tau_re_sd %||% NA)) {
+      fe <- nlme::fixef(m)
+      x <- vapply(seq_len(G), function(k) unname(fe[dance_traj_sat_coef(out, "tau", k)]), numeric(1))
+      out$table$tau_between_sd_h <- abs(map$dtau(x)) * out$tau_re_sd
+    }
     return(out)
   }
   # WHY IT FAILED, when a range was set: a cell whose data put tau outside the
