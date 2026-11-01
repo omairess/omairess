@@ -105,8 +105,11 @@ testServer(server, {
   run(session, "mixed", "exp_sat", 2, tau = 18)
   ff <- values$harmonic_model$traj
   lv <- harmonic_traj_levels()
-  chk(isTRUE(lv$ok) && identical(lv$quantities, c("intercept", "mesor", "change")),
-      "three level quantities with a trend: intercept, MESOR, change",
+  # the three-domain order: fitted mean, MESOR, intercept, then the change and
+  # the trend rates (a saturating trend has a distinct initial rate)
+  chk(isTRUE(lv$ok) && identical(lv$quantities, c("fitted_mean", "mesor", "intercept", "change",
+                                                  "avg_rate", "rate0")),
+      "the level and accumulation quantities with a saturating trend, in domain order",
       paste("level quantities:", paste(lv$quantities, collapse = ", ")))
   # the identities, cell by cell
   tw <- lv$window
