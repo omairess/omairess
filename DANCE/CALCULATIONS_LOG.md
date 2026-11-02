@@ -1117,3 +1117,49 @@ density (Molina & Burgess 2011). The test suite checks it explicitly.
   - the CSV, the APA report, and the exported script reproducing every onset
     and phase angle;
   - repeated times refused, and times entered by hand.
+
+### 23a. The hockey-stick, tested with dlmoR installed (dlmoR 0.2.0)
+
+- **A bug found and fixed.** dlmoR returns the onset as an `hms`, which is
+  always held in seconds and ignores `as.numeric(units = "hours")`. The app
+  was showing seconds modulo 24 as the onset, e.g. 11:00 where dlmoR said
+  20:20. The time is now read from its stored value and unit.
+- **A related fix.** A time of day is always placed on the day that falls
+  within the sampled window, so a 07:00 onset in an 18:00–07:00 profile is
+  the next morning.
+- **Agreement with dlmoR.** Every profile dlmoR ships was run two ways: dlmoR
+  called directly on the original date-times, and the app's route (hours on a
+  reference date, read back). Fine search, threshold 5 pg/mL, interval limit
+  2 h.
+
+| profile | samples | dlmoR | app | fine-search time |
+|---|---|---|---|---|
+| sample | 19 | 20:20 | 20:20 | 150 s |
+| b | 12 | 00:42 | 00:42 | 398 s |
+| c | 12 | 20:07 | 20:07 | 246 s |
+| d | 11 | error "no dynamic part" | status "failed", dlmoR's message as the note | – |
+| e | 12 | 21:35 | 21:35 | 565 s |
+| f | 9 | 20:06 | 20:06 | 70 s |
+| g | 12 | 21:16 | 21:16 | 508 s |
+| h | 12 | 19:42 | 19:42 | 187 s |
+| i | 12 | 21:00 | 21:00 | 459 s |
+
+  Every determined onset is identical to the minute, including b, whose onset
+  falls after midnight.
+- **Run time.** The fine search takes 1–10 minutes per profile, so the run
+  shows progress per profile. The fine search can be switched off: coarse
+  only, a few seconds per profile. The settings text states which search was
+  used.
+- **The app test** (`tests/dlmo_app_test.R`) runs the hockey-stick through the
+  app when dlmoR is installed. It checks that the app's onsets equal dlmoR's,
+  that they are within 1 h of the generating onsets, and that the report cites
+  Danilenko and dlmoR. It also checks that the exported script reproduces the
+  onsets.
+- **What the hockey-stick estimates** on synthetic convex rises (a power 1.6
+  rise starting at 20:30, 21:00 and 21:30, half-hourly samples, coarse
+  search): 21:27, 21:51 and 21:57. These are 0.5–1 h after the start of the
+  generating rise. The hockey-stick onset is where its fitted baseline and
+  ascending segments meet, not where the curve first departs from baseline,
+  so on a slowly accelerating rise it is later than the rise's start. It is a
+  different definition from a threshold crossing, and the two are not
+  interchangeable; the report says so.
