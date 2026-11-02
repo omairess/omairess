@@ -1002,3 +1002,30 @@ names and changed labels:
 | model labels | – | `<trend> only`, `intercept only` (labels with harmonics unchanged) |
 | model comparison | trends × H1..HK (two-stage only) | + intercept only and trends alone; mixed by ML too; a `structure` column |
 | session files | trend "none" = rhythm only | restored as structure "rhythm"; any other trend as "combined" |
+
+## 22. The mixed model comparison follows the reported fit's residuals; the table's rows link to the graph
+
+**Residuals in the comparison.** Before, `dance_traj_model_set()` fitted every
+candidate with independent residuals, even when the reported fit used
+continuous-time AR(1). It said so in its output, but the result was a comparison
+of models other than the one being reported. Now, when the reported fit has
+φ > 0, every candidate is fitted by ML at that same φ (the whitened fit of §8).
+- **Log-likelihood:** the data's log-likelihood, that is the whitened fit's
+  log-likelihood + log|det W| (`dance_car1_logdet`). This makes it comparable
+  across candidates, which share W.
+- **Parameter count:** φ counts as one parameter in every candidate.
+- **What φ is:** φ is held at the reported value, not re-estimated per
+  candidate. The note printed with the table (summary, APA report, script)
+  says so.
+- **Test:** `tests/testthat/test-model-comparison.R` checks k(φ) = k(0) + 1
+  and checks the log-likelihood against a direct whitened refit.
+
+**Rows linked to the graph.** Clicking a row of the "By question" panel does
+three things:
+- it selects that quantity in the Compare menu, when the menu offers it;
+- it moves the graph to the view the quantity's annotation is drawn in (full
+  fitted response, trend component, or the harmonic);
+- it switches that annotation on.
+
+Choosing another quantity in the menu by hand ends the row's selection.
+- **Test:** `tests/structures_app_test.R`, all 16 structure × approach runs.

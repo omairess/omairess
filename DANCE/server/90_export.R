@@ -1475,7 +1475,7 @@
           add(sprintf("traj_models <- dance_traj_model_set(traj_frame, period = period, k_max = %dL,",
                       as.integer(hm$model_selection_k_max %||% 1L)))
           add("                                   design_terms = traj_fit$spec$design_terms, t0 = traj_fit$spec$t0,")
-          add("                                   roles = cosinor_roles,")
+          add("                                   roles = cosinor_roles, phi = traj_fit$phi %||% 0,")
           add(sprintf("                                   tau_mode = \"%s\", tau_value = %s, tau_lo = %s, tau_hi = %s)",
                       if (identical(tsp$mode, "estimate")) "estimate" else "fixed",
                       num(tsp$value), num(tsp$lo), num(tsp$hi)))

@@ -5009,12 +5009,14 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
   harmonic_traj_annot_set <- function() {
     a <- input$harmonic_traj_annot %||% character(0)
     w <- input$harmonic_traj_what %||% ""
-    implied <- if (w %in% c("fitted_mean", "mesor")) "mean"
+    cl <- harmonic_outcome_selected() %||% ""
+    wc <- if (nzchar(cl)) (if (cl %in% c("intercept", "full")) "mesor" else harmonic_outcome_target(cl)$what) else ""
+    implied_of <- function(w) if (w %in% c("fitted_mean", "mesor")) "mean"
       else if (w %in% c("change", "avg_rate", "sat_change", "sat_avg_rate", "trend")) "change"
       else if (w %in% c("rate0", "init_slope")) "tangent"
       else if (w %in% c("A_sat", "tau")) "asymptote"
       else if (grepl("^(amplitude|phase)", w)) "acro" else character(0)
-    unique(c(a, implied))
+    unique(c(a, implied_of(w), implied_of(wc %||% "")))
   }
   harmonic_annotate <- function(p, cmp, cells, cols, t0, t_end, period) {
     ann <- harmonic_traj_annot_set()
@@ -5331,7 +5333,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
                            tau_mode = if (identical(ti$mode, "estimate")) "estimate" else "fixed",
                            tau_value = ti$value %||% ff$spec$tau %||% NA_real_,
                            tau_lo = ti$lo %||% NA_real_, tau_hi = ti$hi %||% NA_real_,
-                           roles = ff$roles,
+                           roles = ff$roles, phi = ff$phi %||% 0,
                            selected = dance_model_label(ff$spec$trend, length(ff$spec$harm_terms) %/% 2L),
                            progress = function(j, n, label) setProgress(j / n, detail = label)))
   })
@@ -5355,6 +5357,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     if (length(attr(ms, "not_fitted")))
       cat(sprintf("  Not fitted, so not in the table: %s\n", paste(attr(ms, "not_fitted"), collapse = ", ")))
     if (!is.null(attr(ms, "tau_note"))) cat("  ", attr(ms, "tau_note"), "\n", sep = "")
+    if (!is.null(attr(ms, "residual_note"))) cat("  ", attr(ms, "residual_note"), "\n", sep = "")
     cat(sprintf("  %-22s %-10s %12s %10s %8s%s\n", "model", "structure", "AICc", "dAICc", "weight",
                 if (mixed_ms) "      k" else ""))
     for (i in seq_len(nrow(ms)))
@@ -5402,19 +5405,73 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       tags$div(style = sprintf("font-size:12px;color:%s;margin-top:4px", col), td$message))
   }
 
+  # ---- FROM THE TABLE TO THE GRAPH ---------------------------------------------
+  # A click on a row of the "By question" panel: the quantity is selected under
+  # Pairwise comparisons (which also switches on its annotation) and the plot
+  # moves to the view that annotation is drawn in.
+  harmonic_outcome_selected <- reactiveVal(NULL)
+  harmonic_outcome_request <- reactiveVal(NULL)   # what the click asked of the menus
+  harmonic_outcome_target <- function(q) {
+    h <- suppressWarnings(as.integer(sub("^(amplitude|phase|rhythm)([0-9]+)$", "\\2", q)))
+    what <- switch(q,
+      full = NULL, circadian = "amplitude1", t50 = "tau", tau_lrt = "tau",
+      trend_linear = , trend_log = if (harmonic_is_mixed()) "trend" else q,
+      if (grepl("^rhythm[0-9]+$", q)) sprintf("amplitude%d", h) else q)
+    view <- if (q %in% c("fitted_mean", "mesor", "intercept", "full")) "full"
+      else if (grepl("^(amplitude|phase|rhythm)[0-9]+$", q) || identical(q, "circadian"))
+        (if (!is.na(h)) sprintf("harmonic%d", h) else "harmonics")
+      else "trend"
+    list(what = what, view = view)
+  }
+  observeEvent(input$harmonic_outcome_click, {
+    q <- input$harmonic_outcome_click$outcome %||% ""
+    if (!nzchar(q)) return()
+    harmonic_outcome_selected(q)
+    tg <- harmonic_outcome_target(q)
+    # only a quantity the menu offers is selected; only a view the model has
+    ch_w <- if (harmonic_is_mixed()) { ff <- harmonic_traj(); if (isTRUE(ff$ok)) harmonic_traj_whats(ff) }
+            else { ts <- harmonic_ts(); if (!is.null(ts)) dance_ts_pair_whats(ts$mod) }
+    if (!is.null(tg$what) && tg$what %in% ch_w)
+      updateSelectInput(session, "harmonic_traj_what", selected = tg$what)
+    comps <- if (harmonic_is_mixed()) { ff <- harmonic_traj(); if (isTRUE(ff$ok)) dance_traj_components(ff) }
+             else { mod <- values$harmonic_model; K <- as.integer(mod$n_harmonics %||% 1L)
+                    c("full", "harmonics", if (K > 1L) sprintf("harmonic%d", seq_len(K)),
+                      if (!identical(mod$trend_type %||% "none", "none")) c("baseline_harm", "trend")) }
+    view <- if (tg$view %in% comps) tg$view else if (grepl("^harmonic", tg$view) && "harmonics" %in% comps) "harmonics" else NULL
+    if (!is.null(view)) updateSelectInput(session, "harmonic_traj_component", selected = view)
+    harmonic_outcome_request(list(what = if (!is.null(tg$what) && tg$what %in% ch_w) tg$what, view = view))
+  })
+  # choosing another quantity in the menu by hand ends the row's selection
+  observeEvent(input$harmonic_traj_what, {
+    q <- harmonic_outcome_selected()
+    if (is.null(q)) return()
+    rq <- harmonic_outcome_request()
+    if (!identical(input$harmonic_traj_what, rq$what %||% input$harmonic_traj_what)) {
+      harmonic_outcome_selected(NULL); harmonic_outcome_request(NULL)
+    }
+  }, ignoreInit = TRUE)
+
   output$harmonic_outcomes <- renderUI({
     o <- harmonic_outcomes()
     validate(need(isTRUE(o$ok), o$message %||% "No outcomes."))
     es <- o$estimates; ts <- o$tests
     cells <- if (!is.null(es)) unique(es$cell) else character(0)
     td <- function(..., style = "") tags$td(style = paste("padding:3px 12px 3px 0;", style), ...)
+    # A ROW IS A LINK TO THE GRAPH: clicking it selects the quantity (which
+    # switches on its annotation) and the view the annotation belongs to
+    click <- function(q) sprintf(
+      "Shiny.setInputValue('harmonic_outcome_click', {outcome: '%s', nonce: Math.random()}, {priority: 'event'})", q)
+    sel_q <- harmonic_outcome_selected()
+    row_style <- function(q) paste0("cursor:pointer;", if (identical(q, sel_q)) "background:#fff3cd;" else "")
     section <- function(dom) {
       t_d <- if (!is.null(ts)) ts[ts$domain == dom, , drop = FALSE] else NULL
       e_d <- if (!is.null(es)) es[es$domain == dom, , drop = FALSE] else NULL
       if ((is.null(t_d) || !nrow(t_d)) && (is.null(e_d) || !nrow(e_d))) return(NULL)
       trows <- if (!is.null(t_d) && nrow(t_d)) lapply(seq_len(nrow(t_d)), function(i) {
         r <- t_d[i, ]
-        tags$tr(td(if (isTRUE(r$primary)) tags$b(r$label) else r$label),
+        q <- if (is.na(r$outcome)) "" else r$outcome
+        tags$tr(style = row_style(q), onclick = click(q), title = "Show this on the graph",
+                td(if (isTRUE(r$primary)) tags$b(r$label) else r$label),
                 td(dance_outcome_stat_text(r), style = "font-family:monospace"),
                 td(dance_fmt_p(r$p), style = "font-family:monospace"),
                 td(r$method, style = "color:#777;font-size:11px"),
@@ -5423,7 +5480,8 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       erows <- if (!is.null(e_d) && nrow(e_d)) lapply(unique(e_d$outcome), function(q) {
         sub <- e_d[e_d$outcome == q, , drop = FALSE]
         lab <- sub$label[1]
-        tags$tr(td(if (any(sub$primary)) tags$b(lab) else lab),
+        tags$tr(style = row_style(q), onclick = click(q), title = "Show this on the graph",
+                td(if (any(sub$primary)) tags$b(lab) else lab),
                 lapply(cells, function(cl) {
                   r <- sub[sub$cell == cl, , drop = FALSE]
                   td(if (nrow(r)) dance_outcome_value_text(r[1, ], o$period, o$clock_origin) else "",

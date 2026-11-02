@@ -956,7 +956,7 @@ dance_apa_report <- function(values, input, title = NULL) {
         if (!is.null(ms) && nrow(ms)) {
           add("*Model comparison (maximum likelihood).* Candidate space: ",
               paste(attr(ms, "candidates") %||% ms$model, collapse = "; "), ". ",
-              attr(ms, "tau_note") %||% "", ".")
+              attr(ms, "tau_note") %||% "", "; ", attr(ms, "residual_note") %||% "", ".")
           blank()
           L <<- c(L, dance_md_table(data.frame(
             Model = ifelse(ms$model == (attr(ms, "selected") %||% ""), paste0(ms$model, " (reported)"), ms$model),

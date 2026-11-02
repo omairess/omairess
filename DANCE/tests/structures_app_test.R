@@ -131,6 +131,26 @@ testServer(server, {
       chk(any(oc$tests$domain == "omnibus"), sprintf("%s: the omnibus trajectory test is reported", tag),
           sprintf("%s: no omnibus test", tag))
     }
+    # a row of the table, clicked: its quantity is selected, its annotation drawn,
+    # the graph moved to its view; choosing another quantity by hand ends it
+    if (!is.null(oc) && isTRUE(oc$ok)) {
+      es <- oc$estimates
+      q <- es$outcome[es$domain == (if (st == "rhythm") "rhythm" else "accumulation")][1]
+      session$setInputs(harmonic_traj_annot = character(0))
+      session$setInputs(harmonic_outcome_click = list(outcome = q, nonce = k))
+      rq <- harmonic_outcome_request()
+      ann <- harmonic_traj_annot_set()
+      chk(identical(harmonic_outcome_selected(), q) && !is.null(rq$view) && length(ann) > 0,
+          sprintf("%s: clicking '%s' selects it (menu: %s), shows view '%s' and annotation %s", tag, q,
+                  format(rq$what %||% "-"), format(rq$view %||% "-"), paste(ann, collapse = "+")),
+          sprintf("%s: clicking '%s' did nothing (view %s, annotation %s)", tag, q,
+                  format(rq$view %||% "-"), paste(ann, collapse = "+")))
+      session$setInputs(harmonic_traj_what = "mesor")
+      chk(is.null(harmonic_outcome_selected()) || identical(rq$what, "mesor"),
+          sprintf("%s: a hand-picked quantity ends the row's selection", tag),
+          sprintf("%s: the clicked row stays selected after another quantity is chosen", tag))
+      session$setInputs(harmonic_traj_what = "intercept")
+    }
     # the three graphs, every annotation on, and the drawn numbers against the
     # outcome table they are read from
     session$setInputs(harmonic_traj_annot = c("mean", "change", "tangent", "asymptote", "acro"))
