@@ -115,6 +115,12 @@ test_that("a dlmoR result is read back as hours on the profile's clock", {
   expect_equal(e$dance_dlmo_as_hours(o + 24.5 * 3600, o, c(18, 26)), 24.5)
   expect_equal(e$dance_dlmo_as_hours("00:30:00", o, c(18, 26)), 24.5)
   expect_equal(e$dance_dlmo_as_hours(as.difftime(21.25, units = "hours"), o, c(18, 26)), 21.25)
+  # dlmoR 0.2.0 returns a time of day (hms): 07:00 in an 18:00-07:00 profile is
+  # the next morning, not the evening before the window
+  expect_equal(e$dance_dlmo_as_hours(structure(7 * 3600, class = c("hms", "difftime"), units = "secs"),
+                                     o, c(18, 31)), 31)
+  expect_equal(e$dance_dlmo_as_hours(structure(20.5 * 3600, class = c("hms", "difftime"), units = "secs"),
+                                     o, c(18, 31)), 20.5)
   # a date-time on some other day is a time of day
   expect_equal(e$dance_dlmo_as_hours(as.POSIXct("2024-05-03 21:00", tz = "UTC"), o, c(18, 26)), 21)
 })

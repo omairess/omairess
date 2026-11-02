@@ -124,18 +124,27 @@ dance_dlmo_variable_threshold <- function(y, n_base = 3L, k = 2) {
 dance_dlmo_as_hours <- function(x, origin, t_range) {
   if (is.null(x) || !length(x)) return(NA_real_)
   x <- x[1]
-  h <- if (inherits(x, "POSIXt")) as.numeric(difftime(x, origin, units = "hours"))
-       else if (inherits(x, "difftime")) as.numeric(x, units = "hours")
+  # the day that puts a time of day nearest the sampled window
+  on_window <- function(h) {
+    cand <- (h %% 24) + 24 * (floor(t_range[1] / 24) + (-1:2))
+    dist <- pmax(t_range[1] - cand, cand - t_range[2], 0)
+    cand[which.min(dist)]
+  }
+  if (inherits(x, "POSIXt")) {
+    h <- as.numeric(difftime(x, origin, units = "hours"))
+    if (!is.finite(h)) return(NA_real_)
+    # on the reference dates: as it is; on any other date: a time of day
+    return(if (h >= t_range[1] - 24 && h <= t_range[2] + 24) h else on_window(h))
+  }
+  # everything else is a time of day: hms/difftime (dlmoR 0.2.0 returns hms),
+  # "hh:mm:ss", or decimal hours
+  h <- if (inherits(x, "difftime")) as.numeric(x, units = "hours")
        else if (is.character(x)) {
          p <- suppressWarnings(as.numeric(strsplit(trimws(x), ":")[[1]]))
          if (length(p) < 2L || any(!is.finite(p))) NA_real_ else sum(p * c(1, 1 / 60, 1 / 3600)[seq_along(p)])
        } else suppressWarnings(as.numeric(x))
   if (!is.finite(h)) return(NA_real_)
-  if (h >= t_range[1] - 12 && h <= t_range[2] + 12) return(h)
-  # a time of day: the day that puts it nearest the window
-  cand <- (h %% 24) + 24 * (floor(t_range[1] / 24) + (-1:2))
-  dist <- pmax(t_range[1] - cand, cand - t_range[2], 0)
-  cand[which.min(dist)]
+  on_window(h)
 }
 
 dance_dlmo_hockey <- function(t, y, threshold, interval_limit = 2, fine = TRUE) {
