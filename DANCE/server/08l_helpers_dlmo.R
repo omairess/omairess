@@ -138,7 +138,11 @@ dance_dlmo_as_hours <- function(x, origin, t_range) {
   }
   # everything else is a time of day: hms/difftime (dlmoR 0.2.0 returns hms),
   # "hh:mm:ss", or decimal hours
-  h <- if (inherits(x, "difftime")) as.numeric(x, units = "hours")
+  # an hms is always in seconds and ignores units = "hours" (it returned the
+  # seconds), so the duration is read from its stored value and unit
+  h <- if (inherits(x, "difftime"))
+         as.numeric(unclass(x)) * c(secs = 1 / 3600, mins = 1 / 60, hours = 1, days = 24,
+                                    weeks = 168)[[attr(x, "units") %||% "secs"]]
        else if (is.character(x)) {
          p <- suppressWarnings(as.numeric(strsplit(trimws(x), ":")[[1]]))
          if (length(p) < 2L || any(!is.finite(p))) NA_real_ else sum(p * c(1, 1 / 60, 1 / 3600)[seq_along(p)])
@@ -337,14 +341,16 @@ dance_dlmo_agreement <- function(tab) {
 # opt: threshold, confirm, max_gap, n_base, k_sd, lloq, lloq_rule,
 # interval_limit, fine, anchor; bedtime: NULL, or a time of day per row of the
 # original data (NA where unknown).
-dance_dlmo_run <- function(profiles, methods, opt, bedtime = NULL) {
+dance_dlmo_run <- function(profiles, methods, opt, bedtime = NULL, progress = NULL) {
   anchor <- opt$anchor %||% floor(min(vapply(profiles, function(p) min(p$t) %% 24, numeric(1))))
-  tab <- do.call(rbind, lapply(profiles, function(p) {
+  tab <- do.call(rbind, lapply(seq_along(profiles), function(i) {
+    p <- profiles[[i]]
     sh <- dance_dlmo_day_shift(min(p$t), anchor)
     p$t <- p$t - sh
     r <- do.call(rbind, lapply(methods, function(m) dance_dlmo_estimate(p, m, opt)))
     r$bedtime_h <- if (!is.null(bedtime)) bedtime[p$row] else NA_real_
     r$day_shift <- sh
+    if (is.function(progress)) progress(i, length(profiles))
     r
   }))
   tab$dlmo_clock <- dance_clock_label(tab$dlmo_h, 24, show_day = FALSE)
@@ -371,8 +377,9 @@ dance_dlmo_settings_text <- function(r) {
     if (any(c("fixed", "variable") %in% r$methods))
       sprintf("Crossing: the first sample above the threshold with %d following sample(s) also above it; onset interpolated linearly between the two observed samples bracketing the crossing, if they are at most %s h apart. Missing samples are not filled in.",
               as.integer(o$confirm), format(o$max_gap)),
-    if ("hockey" %in% r$methods) sprintf("Hockey-stick: dlmoR %s (Thalji & Spitschan, 2026), threshold %s %s, repeated crossings within %s h treated as one rise, fine grid search.",
-                                          r$dlmoR_version %||% "(not installed)", format(o$threshold), u, format(o$interval_limit)),
+    if ("hockey" %in% r$methods) sprintf("Hockey-stick: dlmoR %s (Thalji & Spitschan, 2026), threshold %s %s, repeated crossings within %s h treated as one rise, %s.",
+                                          r$dlmoR_version %||% "(not installed)", format(o$threshold), u, format(o$interval_limit),
+                                          if (isTRUE(o$fine)) "coarse then fine grid search" else "coarse grid search only (the fine search was switched off)"),
     if (is.finite(o$lloq %||% NA_real_)) sprintf("Values below the LLOQ (%s %s) set to %s.", format(o$lloq), u,
                                                  switch(o$lloq_rule, half = "LLOQ/2", lloq = "the LLOQ", zero = "0"))
     else "No limit of quantification given: values used as entered.",

@@ -121,6 +121,10 @@ test_that("a dlmoR result is read back as hours on the profile's clock", {
                                      o, c(18, 31)), 31)
   expect_equal(e$dance_dlmo_as_hours(structure(20.5 * 3600, class = c("hms", "difftime"), units = "secs"),
                                      o, c(18, 31)), 20.5)
+  # with the hms package itself: as.numeric(units = "hours") on an hms gives seconds
+  skip_if_not_installed("hms")
+  expect_equal(e$dance_dlmo_as_hours(hms::hms(hours = 21, minutes = 3), o, c(18, 26)), 21.05)
+  expect_equal(e$dance_dlmo_as_hours(hms::hms(minutes = 42), o, c(10, 32)), 24.7)
   # a date-time on some other day is a time of day
   expect_equal(e$dance_dlmo_as_hours(as.POSIXct("2024-05-03 21:00", tz = "UTC"), o, c(18, 26)), 21)
 })

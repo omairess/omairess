@@ -107,9 +107,13 @@ observeEvent(input$run_dlmo, {
                 max_gap = input$dlmo_max_gap %||% 2, n_base = as.integer(input$dlmo_n_base %||% 3L),
                 k_sd = input$dlmo_k_sd %||% 2, lloq = if (isTRUE(is.finite(lloq))) lloq else NA_real_,
                 lloq_rule = input$dlmo_lloq_rule %||% "half",
-                interval_limit = input$dlmo_interval_limit %||% 2, fine = TRUE)
+                interval_limit = input$dlmo_interval_limit %||% 2,
+                fine = isTRUE(input$dlmo_hockey_fine %||% TRUE))
     bed <- dlmo_bedtime()
-    tab <- dance_dlmo_run(prof, meth, opt, bed)
+    tab <- withProgress(message = "Estimating DLMO", value = 0, {
+      dance_dlmo_run(prof, meth, opt, bed, progress = function(i, n)
+        setProgress(i / n, detail = sprintf("profile %d of %d", i, n)))
+    })
     anchor <- attr(tab, "anchor")
     prof <- lapply(prof, function(p) { p$t <- p$t - dance_dlmo_day_shift(min(p$t), anchor); p })
     list(ok = TRUE, tab = tab, profiles = prof, methods = meth, opt = opt, anchor = anchor,

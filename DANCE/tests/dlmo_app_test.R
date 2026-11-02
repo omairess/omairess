@@ -167,5 +167,59 @@ testServer(server, {
       sprintf("manual times failed: %s", values$dlmo_results$message %||% ""))
 })
 
+# The hockey-stick through the app, when dlmoR is installed: three
+# participants, one night, coarse search (each fine search takes minutes).
+# The app's onsets must be dlmoR's own, called directly on the same samples.
+if (requireNamespace("dlmoR", quietly = TRUE)) {
+  cat("\n-- hockey-stick (dlmoR) --\n")
+  t5 <- seq(17, 25, by = 0.5); c5 <- t5 %% 24
+  set.seed(11); on5 <- c(20.5, 21, 21.5)
+  Y5 <- t(sapply(on5, function(on) round(1 + 0.15 * rnorm(length(t5)) + 3 * pmax(0, t5 - on)^1.6, 3)))
+  d5 <- data.frame(ID = sprintf("H%d", 1:3), group = "A", Y5)
+  names(d5)[-(1:2)] <- sprintf("Mel_%02dh%02d", floor(c5), round(60 * (c5 %% 1)))
+  csv5 <- tempfile(fileext = ".csv"); write.csv(d5, csv5, row.names = FALSE)
+  testServer(server, {
+    session$setInputs(datafile = list(name = "hs.csv", datapath = csv5), header = TRUE, sep = ",",
+                      data_format = "wide", load_data = 1)
+    session$setInputs(sel_data_vars = names(d5)[-(1:2)], sel_cov_vars = "group", subject_id_var = "ID",
+                      apply_selection = 1)
+    session$setInputs(dlmo_time_src = "_shared_", dlmo_night_var = "_none_", dlmo_group_var = "_none_",
+                      dlmo_methods = c("fixed", "hockey"), dlmo_threshold = 3, dlmo_interval_limit = 2,
+                      dlmo_hockey_fine = FALSE, dlmo_bed_src = "value", dlmo_bed_value = "23:00",
+                      dlmo_confirm = 1, dlmo_max_gap = 2, dlmo_lloq = NA, run_dlmo = 1)
+    r <- values$dlmo_results
+    chk(isTRUE(r$ok), "hockey-stick: the run succeeded", sprintf("hockey-stick: the run failed: %s", r$message))
+    if (isTRUE(r$ok)) {
+      hk <- r$tab[r$tab$method == "hockey", ]
+      direct <- vapply(1:3, function(i) {
+        dd <- data.frame(datetime = as.POSIXct("2024-03-01", tz = "UTC") + t5 * 3600, melatonin = Y5[i, ])
+        f <- suppressWarnings(suppressMessages(dlmoR::calculate_dlmo(data = dd, threshold = 3, fine_flag = FALSE)))
+        as.numeric(unclass(f$dlmo$coarse$time)) / 3600
+      }, numeric(1))
+      dmin <- 60 * (((hk$dlmo_h %% 24) - direct + 12) %% 24 - 12)
+      chk(all(hk$status == "determined") && max(abs(dmin)) < 0.01,
+          sprintf("hockey-stick: the app's onsets are dlmoR's own (%s)", paste(hk$dlmo_clock, collapse = ", ")),
+          sprintf("hockey-stick: the app differs from dlmoR by up to %.1f min", max(abs(dmin))))
+      chk(all(abs(hk$dlmo_h - on5) < 1), "hockey-stick: onsets within 1 h of the generating ones",
+          sprintf("hockey-stick: onsets %s vs %s", paste(round(hk$dlmo_h, 2), collapse = ","), paste(on5, collapse = ",")))
+      chk(any(grepl("coarse grid search only", dance_dlmo_settings_text(r))),
+          "hockey-stick: the settings say the fine search was off", "hockey-stick: the search used is not stated")
+      for (o in c("dlmo_profile_plot", "dlmo_table", "dlmo_summary", "dlmo_compare_ui", "dlmo_desc_table",
+                  "dlmo_agree_table", "dlmo_pa_desc_table"))
+        render(paste("hockey-stick", o), output[[o]])
+      session$setInputs(dlmo_compare_method = "hockey")
+      render("hockey-stick comparison", output$dlmo_desc_table)
+      rep <- render("hockey-stick report", dance_apa_report(values, input, "T"))
+      chk(any(grepl("Danilenko", rep)) && any(grepl("dlmoR", rep)), "hockey-stick: the report cites the method and the package",
+          "hockey-stick: the report does not cite the hockey-stick")
+      code <- render("hockey-stick script", generate_analysis_code())
+      env <- new.env(parent = globalenv()); env$dance_input_data <- values$data
+      ok <- tryCatch({ eval(parse(text = code), envir = env); TRUE }, error = function(e) { cat("   script error:", conditionMessage(e), "\n"); FALSE })
+      chk(ok && isTRUE(all.equal(env$dlmo_tab$dlmo_h, r$tab$dlmo_h)),
+          "hockey-stick: the exported script reproduces the onsets", "hockey-stick: the script does not reproduce them")
+    }
+  })
+}
+
 cat(sprintf("\n%s\n", if (failures == 0) "ALL CHECKS PASSED" else sprintf("%d CHECK(S) FAILED", failures)))
 if (failures > 0) quit(status = 1)

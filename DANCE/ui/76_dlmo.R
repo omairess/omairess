@@ -51,7 +51,9 @@ ui_tab_dlmo <- tabItem(
         helpText("The first samples of each profile, which should precede the rise.")),
       conditionalPanel("input.dlmo_methods.indexOf('hockey') > -1",
         numericInput("dlmo_interval_limit", "Hockey-stick: repeated crossings within (h) are one rise:",
-                     value = 2, min = 0.25, step = 0.25)),
+                     value = 2, min = 0.25, step = 0.25),
+        checkboxInput("dlmo_hockey_fine", "Fine grid search after the coarse one (dlmoR's default)", TRUE),
+        helpText(HTML("The hockey-stick takes about 1&ndash;2 minutes per profile with the fine search."))),
 
       h5(tags$b("Crossing rules (threshold methods)")),
       numericInput("dlmo_confirm", "Samples after the crossing that must also be above the threshold:",
