@@ -36,7 +36,9 @@ RESTORE_INPUTS <- list(
                "mixed_k_time", "mixed_k_subject", "mixed_period",
                "mixed_harmonics", "harmonic_traj_tau", "harmonic_tau_lo", "harmonic_tau_hi",
                # P19: the mixed analyses moved into the fANOVA and Cosinor tabs
-               "fanova_mixed_k_time", "fanova_mixed_k_subject"),
+               "fanova_mixed_k_time", "fanova_mixed_k_subject",
+               "dlmo_gap_h", "dlmo_threshold", "dlmo_n_base", "dlmo_k_sd", "dlmo_interval_limit",
+               "dlmo_confirm", "dlmo_max_gap", "dlmo_lloq"),
   checkbox = c("is_cyclic", "use_real_time", "constrain_bounds",
                "use_bootstrap", "cv_stratified", "mixed_real_time",
                "harmonic_model_selection", "harmonic_traj_sat_cells", "harmonic_traj_sat_hier",
@@ -49,8 +51,10 @@ RESTORE_INPUTS <- list(
                "fanova_mixed_between", "fanova_mixed_within", "fanova_mixed_estimator",
                "harmonic_approach", "harmonic_traj_tau_mode", "harmonic_ts_tau_mode",
                "harmonic_traj_resid", "harmonic_raw_style", "harmonic_traj_raw_style",
-               "harmonic_structure"),
-  text     = c("harmonic_manual_times")
+               "harmonic_structure",
+               "dlmo_time_src", "dlmo_night_var", "dlmo_group_var", "dlmo_methods",
+               "dlmo_lloq_rule", "dlmo_bed_src", "dlmo_bed_var"),
+  text     = c("harmonic_manual_times", "dlmo_manual_times", "dlmo_units", "dlmo_bed_value")
 )
 
 DANCE_SESSION_FORMAT <- 1L
@@ -226,7 +230,8 @@ observeEvent(input$load_session, {
     if (!is.null(values$pairwise_results))  "post-hoc tests",
     if (!is.null(values$clustering_results))"clustering",
     if (!is.null(values$reg_model))         "FoSR",
-    if (!is.null(values$harmonic_model))    "cosinor")
+    if (!is.null(values$harmonic_model))    "cosinor",
+    if (!is.null(values$dlmo_results))      "DLMO")
 
   session_note(paste(c(
     sprintf("Loaded session saved %s", format(saved$saved_at, "%Y-%m-%d %H:%M:%S")),

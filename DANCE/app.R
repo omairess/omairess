@@ -72,8 +72,17 @@ optional_packages <- c(
   emmeans      = "per-cell amplitude and acrophase, and every contrast built on them",
   pbkrtest     = "Kenward-Roger degrees of freedom (inference falls back to Satterthwaite)",
   lmerTest     = "Satterthwaite degrees of freedom (inference falls back to a likelihood-ratio test)",
-  glmmTMB      = "residual correlation structures (AR(1) and continuous-time OU)"
+  glmmTMB      = "residual correlation structures (AR(1) and continuous-time OU)",
+  # The DLMO tab's hockey-stick method (Danilenko et al. 2014), which the app
+  # does not reimplement. On GitHub only, so it is installed from there.
+  dlmoR        = "the hockey-stick DLMO method (the threshold methods do not need it)",
+  remotes      = "installing dlmoR from GitHub"
 )
+# Optional packages that are not on CRAN: where they are installed from.
+github_packages <- c(dlmoR = "tscnlab/dlmoR")
+# Called with pkg::, never attached: dlmoR exports generic names (fit,
+# objective, constraints) that would mask anything else so named.
+no_attach_packages <- c("dlmoR", "remotes")
 
 # AUDIT (P2.2): this block used to call install.packages() at startup -- for the
 # required packages unconditionally, and for each missing optional one inside a
@@ -150,7 +159,13 @@ dance_offer_install <- function(pkgs, why = NULL) {
             paste(sprintf('"%s"', pkgs), collapse = ", "), "))")
     return(pkgs)
   }
-  utils::install.packages(pkgs)
+  cran <- setdiff(pkgs, names(github_packages)); gh <- intersect(pkgs, names(github_packages))
+  if (length(cran)) utils::install.packages(cran)
+  if (length(gh)) {
+    if (!requireNamespace("remotes", quietly = TRUE)) utils::install.packages("remotes")
+    for (p in gh) tryCatch(remotes::install_github(github_packages[[p]], upgrade = "never"),
+                           error = function(e) message("Could not install ", p, ": ", conditionMessage(e)))
+  }
   still <- pkgs[!vapply(pkgs, requireNamespace, logical(1), quietly = TRUE)]
   got <- setdiff(pkgs, still)
   if (length(got))
@@ -185,7 +200,7 @@ missing_optional <- names(optional_packages)[
 # feature it costs, before any analysis starts.
 if (length(missing_optional))
   missing_optional <- dance_offer_install(missing_optional, optional_packages)
-invisible(lapply(setdiff(names(optional_packages), missing_optional), function(p)
+invisible(lapply(setdiff(names(optional_packages), c(missing_optional, no_attach_packages)), function(p)
   suppressPackageStartupMessages(
     suppressWarnings(require(p, character.only = TRUE, quietly = TRUE)))))
 
@@ -194,8 +209,12 @@ if (length(missing_optional)) {
   for (pkg in missing_optional)
     message(sprintf("  %-12s -> disables: %s", pkg, optional_packages[[pkg]]))
   message("Everything else works. Install with:")
-  message(sprintf("  install.packages(c(%s))\n",
-                  paste(sprintf('"%s"', missing_optional), collapse = ", ")))
+  .cran <- setdiff(missing_optional, names(github_packages))
+  .gh <- intersect(missing_optional, names(github_packages))
+  if (length(.cran)) message(sprintf("  install.packages(c(%s))",
+                                     paste(sprintf('"%s"', .cran), collapse = ", ")))
+  for (.p in .gh) message(sprintf("  remotes::install_github(\"%s\")", github_packages[[.p]]))
+  message("")
 }
 
 # --- Base R is base R inside the app -----------------------------------------
@@ -333,6 +352,7 @@ ui <- dashboardPage(
       menuItem("Function-on-Scalar (FoSR)", tabName = "fosr",
                icon = icon("chart-line")),
       menuItem("Harmonic Regression", tabName = "harmonic", icon = icon("sync")),
+      menuItem("Melatonin Onset (DLMO)", tabName = "dlmo", icon = icon("moon")),
 
       # ---- K: clustering (from WaPaa) -------------------------------------
       menuItem("Functional Clustering", tabName = "kmeans",
@@ -354,6 +374,7 @@ ui <- dashboardPage(
       ui_tab_posthoc,
       ui_tab_fosr,
       ui_tab_harmonic,
+      ui_tab_dlmo,
       ui_tab_clustering,
       ui_tab_export
     )

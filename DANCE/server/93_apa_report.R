@@ -1610,6 +1610,18 @@ dance_apa_report <- function(values, input, title = NULL) {
     blank()
   }
 
+  dl <- values$dlmo_results
+  if (isTRUE(dl$ok)) {
+    any_result <- TRUE
+    h(3, "Dim-light melatonin onset")
+    for (ln in dance_dlmo_apa(dl)) add(ln)
+    add("*What these numbers do not establish.* A DLMO is defined by the threshold ",
+        "and method: onsets from different thresholds or methods are not ",
+        "interchangeable, and a profile with no determined onset is missing, not ",
+        "early or late, so the means describe the determined profiles only.")
+    blank()
+  }
+
   if (!any_result) {
     add("No analysis had been run when this report was generated. Run an ",
         "analysis and regenerate it.")
@@ -1618,7 +1630,7 @@ dance_apa_report <- function(values, input, title = NULL) {
   # -------------------------------------------------------- reproducibility --
   h(2, "Reproducibility")
   pkgs <- c("shiny", "fda", "mgcv", "minpack.lm", "cluster", "fda.usc",
-            "rmfanova", "plotly", "ggplot2", "dplyr", "DT", "readxl")
+            "rmfanova", "plotly", "ggplot2", "dplyr", "DT", "readxl", "dlmoR")
   rows <- do.call(rbind, c(
     list(data.frame(Package = "R", Version = as.character(getRversion()),
                     stringsAsFactors = FALSE)),

@@ -99,6 +99,7 @@ values <- reactiveValues(
   # ---- C: functional / circadian regression (from CIRCAREG) ----------------
   reg_model             = NULL,   # function-on-scalar
   harmonic_model        = NULL,   # cosinor
+  dlmo_results          = NULL,   # dim-light melatonin onset (server/76_dlmo.R)
   mixed_results         = NULL,   # mixed (between x within) model
   pca_anova             = NULL,   # component-score ANOVA -- also read by the report
   fanova_selected_groups = NULL,
@@ -141,6 +142,7 @@ dance_reset_analyses <- function(values, keep_smoothing = FALSE) {
     # dataset or a new variable selection does
     values$mixed_results <- NULL
     values$shift_model <- NULL     # the warping tab's shift model, on the raw data
+    values$dlmo_results <- NULL    # DLMO: estimated on the raw samples too
   }
   values$pca_results <- NULL
   values$warping_results <- NULL

@@ -1802,6 +1802,45 @@
       add("")
     }
 
+    # ---- SECTION 13: DIM-LIGHT MELATONIN ONSET ----
+    # The estimators are the app's own (server/08l_helpers_dlmo.R), written out
+    # by emit_kernel(); the hockey-stick is dlmoR's, called the same way.
+    dl <- values$dlmo_results
+    if (isTRUE(dl$ok)) {
+      add("# -----------------------------------------------------------------------------")
+      add("# 13. DIM-LIGHT MELATONIN ONSET (DLMO)")
+      add("# -----------------------------------------------------------------------------")
+      for (ln in dance_dlmo_settings_text(dl)) add("#   ", ln)
+      if ("hockey" %in% dl$methods)
+        add("if (!requireNamespace('dlmoR', quietly = TRUE)) stop('Install dlmoR: remotes::install_github(\"tscnlab/dlmoR\")')")
+      if (dl$has_night || dl$has_group) add("library(lmerTest)   # the within-participant comparisons")
+      add("")
+      emit_kernel("dance_dlmo_run")
+      emit_kernel("dance_dlmo_profiles")
+      emit_kernel("dance_dlmo_comparisons")
+      emit_kernel("dance_dlmo_agreement")
+      add("dlmo_times  <- ", dance_export_vec(dl$times), "   # hours; after midnight > 24")
+      add("dlmo_ids    <- ", dance_export_vec(values$subject_ids %||% as.character(seq_len(nrow(values$data)))))
+      add("dlmo_night  <- ", if (dl$has_night_var) dance_export_vec(values$covariates[[dl$night_var]]) else "NULL")
+      add("dlmo_group  <- ", if (dl$has_group) dance_export_vec(values$covariates[[dl$group_var]]) else "NULL")
+      add("dlmo_bed    <- ", if (dl$has_bed) dance_export_vec(dl$bedtime) else "NULL", "   # habitual bedtime, hours of the day")
+      add("dlmo_opt    <- ", paste(deparse(dl$opt, width.cutoff = 500), collapse = "\n"))
+      add("dlmo_prof   <- dance_dlmo_profiles(raw_data, dlmo_times, dlmo_ids, night = dlmo_night,")
+      add("                                   group = dlmo_group, gap_h = ", format(dl$gap_h), ")")
+      add("dlmo_tab    <- dance_dlmo_run(dlmo_prof, ", dance_export_vec(dl$methods), ", dlmo_opt, dlmo_bed)")
+      add("print(dlmo_tab[, c('id', 'night', 'method', 'threshold', 'dlmo_clock', 'status', 'phase_angle_h')])")
+      add("dlmo_run <- list(tab = dlmo_tab, has_group = ", dl$has_group, ", has_night = ", dl$has_night,
+          ", has_bed = ", dl$has_bed, ")")
+      add("for (m in ", dance_export_vec(dl$methods), ") {")
+      add("  cp <- dance_dlmo_comparisons(dlmo_run, m)")
+      add("  cat('\\n==', m, '==\\n'); print(cp$desc)")
+      add("  if (isTRUE(cp$test$ok)) print(cp$test$tests) else cat(cp$test$message, '\\n')")
+      add("  if (!is.null(cp$pa_test) && isTRUE(cp$pa_test$ok)) print(cp$pa_test$tests)")
+      add("}")
+      add("print(dance_dlmo_agreement(dlmo_tab))")
+      add("")
+    }
+
     add("# =============================================================================")
     add("# END OF ANALYSIS CODE")
     add("# =============================================================================")

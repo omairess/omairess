@@ -1029,3 +1029,91 @@ three things:
 
 Choosing another quantity in the menu by hand ends the row's selection.
 - **Test:** `tests/structures_app_test.R`, all 16 structure × approach runs.
+
+## 23. Dim-light melatonin onset (DLMO)
+
+The new tab "Melatonin Onset (DLMO)" works on whatever data are selected at
+Data Import: each row is a recording, each column a sample. The code is in
+`server/08l_helpers_dlmo.R` (pure functions) and `server/76_dlmo.R` (the tab).
+
+**Packages checked first.**
+- **CRAN:** no package estimates DLMO.
+- **GitHub:** **dlmoR** (Thalji & Spitschan 2026, *J Biol Rhythms* 41:301;
+  MIT licence; tscnlab/dlmoR) implements the hockey-stick method of Danilenko
+  et al. (2014, *Chronobiol Int* 31:349), and only that method.
+- **How the hockey-stick runs:** it is called through dlmoR and is not
+  reimplemented. Without dlmoR the method is refused with the install command,
+  and the threshold methods still run.
+- **Startup:** dlmoR is declared as an optional package to install from
+  GitHub. It is never attached, because it exports generic names.
+- **dlmoR's own default threshold** is 2.3 pg/mL. The app passes the user's
+  threshold instead.
+
+**In-house calculations** (no package does them; each is a textbook rule):
+
+| Step | Rule | Source |
+|---|---|---|
+| Fixed threshold | Onset is the first sample *strictly above* the threshold whose next `confirm` samples (default 1) are above it too. The sample before it must be at or below the threshold. A rise that falls back sooner is skipped and counted. | Lewy & Sack 1989; Benloucif et al. 2008 |
+| Interpolation | Linear, between the two **observed** samples that bracket the crossing. A missing sample is never filled in; the line spans its observed neighbours. If they are more than `max_gap` hours apart (default 2), the onset is not used ("gap"). | Benloucif et al. 2008 |
+| Variable threshold | Mean + k·SD (default k = 2) of the first n **observed** samples of each profile (default n = 3). With n ≤ 5 these samples cannot themselves exceed it. | Voultsios, Kennaway & Dawson 1997 |
+| LLOQ | Optional. A value below the LLOQ is set to LLOQ/2, the LLOQ, or 0 (the user chooses), and counted. Without an LLOQ, values are used as entered. | stated in the output |
+| Phase angle | Bedtime − DLMO, in hours; positive when the onset precedes bedtime. The bedtime used is the one within 12 h of the onset. Computed **only** when a habitual bedtime is given (one time for everyone, or a column); otherwise there is no phase angle anywhere. | |
+
+**Profiles and nights.**
+- A gap longer than `gap_h` (default 6 h) between scheduled sample times
+  starts a new profile. That makes "two nights in one row" two profiles,
+  "Night 1" and "Night 2".
+- With one row per night, a column names the night.
+- Each profile is moved by whole days onto one evening clock: its first sample
+  falls in [anchor, anchor + 24), where the anchor is the earliest start hour.
+  So 01:00 is 25, after 23:00, and both nights are read on the same clock.
+- Column names that read as the same time are refused, and the user is told
+  to enter the times by hand: the hour comes from a name's first number, so
+  "Mel_N2_18" reads as 2.
+
+**Censoring: nothing gets a time it does not have.**
+- **Before the window:** above the threshold from the first sample.
+- **No onset:** never a sustained rise.
+- **Unconfirmed:** a crossing too close to the last sample to confirm.
+- **Gap:** the bracketing samples are too far apart.
+- **Too few baseline samples** for the variable threshold.
+
+Every one of these is reported and counted per cell, and none enters a mean
+or a test. If being undetermined depends on the condition (an onset pushed
+past the window after sleep deprivation, for instance), the comparison is
+biased. The counts are shown so a reader can judge that.
+
+**Comparisons** (`dance_dlmo_compare`), on determined onsets only:
+
+| Factors | Test |
+|---|---|
+| Nights only, two nights | Paired t test on participants with an onset on both nights; the unpaired participants are counted. |
+| Nights with groups, or more than two nights | `lmerTest::lmer(dlmo ~ group * night + (1 \| id))`: Satterthwaite F tests, and the night difference within each group as a model contrast (`lmerTest::contest`). |
+| Groups only | Welch's t test (two groups) or Welch's one-way ANOVA. Refused if participants contribute several profiles. |
+
+The phase angle is compared the same way.
+
+When more than one method is run, their agreement is reported: the mean, SD
+and largest absolute difference over the profiles where both determined an
+onset.
+
+**A property of the method, not a defect.** When the rise starts between two
+sparse samples, the straight line between them crosses the threshold early.
+For example, hourly samples of a rise starting at 20:30 put the 3 pg/mL
+crossing at 20:40 instead of 20:50. This is why the onset depends on sampling
+density (Molina & Burgess 2011). The test suite checks it explicitly.
+
+**Tests.**
+- `tests/testthat/test-dlmo.R`:
+  - exact crossings, spikes, both censorings, unconfirmed, gaps;
+  - variable threshold, LLOQ rules, night splitting, crossings after midnight;
+  - phase angle and bedtime parsing, and dlmoR result conversion;
+  - the hockey-stick refused without dlmoR, and checked against a known onset
+    when dlmoR is installed;
+  - recovery on simulated profiles, the paired and mixed comparisons with a
+    known night × group effect, and method agreement.
+- `tests/dlmo_app_test.R`:
+  - both layouts through the app, with every output rendered;
+  - the CSV, the APA report, and the exported script reproducing every onset
+    and phase angle;
+  - repeated times refused, and times entered by hand.
