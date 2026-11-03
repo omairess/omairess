@@ -170,7 +170,8 @@ testServer(server, {
         grepl("The residuals were autocorrelated within curves", rp, fixed = TRUE),
       "the report's Methods and Results describe the AR(1)", "the report omits the AR(1)")
   code <- paste(generate_analysis_code(), collapse = "\n")
-  chk(grepl('residuals = "car1")', code, fixed = TRUE),
+  # the argument, whatever follows it in the call (hierarchical_tau now does)
+  chk(grepl('residuals = "car1"[,)]', code),
       "the exported script fits the same residual model", "the export drops the residual model")
 
   # ====================================================== tau profiled, jointly with phi
