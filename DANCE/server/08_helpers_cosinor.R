@@ -349,7 +349,10 @@ dance_bingham_ci <- function(beta_cos, beta_sin, V, n, n_params, level = 0.95,
     (sum((c(0, 0) - c(beta_cos, beta_sin)) *
            solve(V, c(0, 0) - c(beta_cos, beta_sin)))) <= cval
 
-  amp_lo <- min(radii); amp_hi <- max(radii)
+  # A region that contains the origin contains amplitude 0, so the lower bound is
+  # 0 -- not the smallest radius on its boundary, which lies on the far side of
+  # the origin and could exceed the estimate itself (Bingham et al. 1982).
+  amp_lo <- if (contains_origin) 0 else min(radii); amp_hi <- max(radii)
 
   if (contains_origin) {
     return(list(level = level, amplitude = c(amp_lo, amp_hi),

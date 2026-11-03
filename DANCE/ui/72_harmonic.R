@@ -36,6 +36,27 @@ ui_tab_harmonic <- tabItem(
             helpText(HTML("Fitted values outside this range are flagged: a curve whose
                            trough dips below zero, for instance, is impossible on a
                            non-negative scale.")),
+            # THE SCALE OF THE ANALYSIS: a choice the user makes, stated
+            # everywhere it applies, never applied behind their back.
+            radioButtons("harmonic_scale", "Scale of the analysis:",
+                         choices = c("Original values" = "original",
+                                     "Natural log, ln(y + c)" = "log"),
+                         selected = "original", inline = TRUE),
+            conditionalPanel(
+              condition = "input.harmonic_scale == 'log'",
+              numericInput("harmonic_log_offset", "c, added before the log (0 unless there are zeros):",
+                           value = 0, min = 0, step = 0.1),
+              helpText(HTML("For positive, right-skewed outcomes such as cortisol or melatonin.
+                             The model, its tests, bounds and tables are on the log scale; on the
+                             original scale the fitted curve can never fall below &minus;c,
+                             the MESOR becomes a geometric mean (when c = 0) and an amplitude
+                             A the peak-to-trough ratio e<sup>2A</sup> of its harmonic."))),
+            h5(tags$b("Unsampled intervals")),
+            numericInput("harmonic_gap_h", "A gap between sampling times longer than (h):",
+                         value = NA, min = 0, step = 0.5),
+            helpText(HTML("Blank: twice the median interval between sampling times. The curve is
+                           drawn dashed over such a gap, which is shaded, and a time reported
+                           there (an acrophase, the curve's minimum) is flagged as extrapolated.")),
 
             hr(),
             # ================================================================
@@ -445,6 +466,10 @@ ui_tab_harmonic <- tabItem(
                               h4("Display Options"),
                               uiOutput("harmonic_subject_selector"),
                               checkboxInput("harmonic_show_ci", "Show Confidence Bands", TRUE),
+                              conditionalPanel(
+                                condition = "input.harmonic_scale == 'log'",
+                                checkboxInput("harmonic_show_original",
+                                              "Show on the original scale (back-transformed, exp(fit) \u2212 c)", TRUE)),
                               # P6.7: off by default. On a few hundred subjects
                               # the points bury the fitted curve they are there
                               # to support.
@@ -582,6 +607,10 @@ ui_tab_harmonic <- tabItem(
                                                          "Simultaneous (Scheffe)" = "simultaneous"),
                                              selected = "pointwise")),
                        column(4, checkboxInput("harmonic_traj_raw", "Overlay raw data", FALSE),
+                              conditionalPanel(
+                                condition = "input.harmonic_scale == 'log'",
+                                checkboxInput("harmonic_traj_original",
+                                              "Full trajectory on the original scale (back-transformed)", TRUE)),
                               conditionalPanel(
                                 condition = "input.harmonic_traj_raw == true",
                                 radioButtons("harmonic_traj_raw_style", NULL,

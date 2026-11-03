@@ -55,6 +55,16 @@ dance_cosinor_assumptions <- function(mod, ff = NULL, df_method = "kr") {
     "t = 0 is the first time point of the recording (%s); every trend and every harmonic",
     "is anchored there, for every participant, so the intercept is the midline at that",
     "instant -- also for a participant whose first observation is missing."), clock0))
+  # the scale, and where nothing was sampled (server/08m_helpers_scale.R)
+  sc <- mod$scale %||% dance_scale_spec()
+  a("Scale", dance_scale_statement(sc, mod$dv_name))
+  gp <- mod$gaps
+  if (!is.null(gp))
+    a("Unsampled intervals", if (nrow(gp))
+      sprintf(paste("%s (%s): the fitted curve there is set by the model's form, not by data;",
+                    "it is drawn dashed, and a time reported inside it is flagged as extrapolated."),
+              dance_gap_text(gp, as.numeric(mod$origin_shift %||% 0)), attr(gp, "rule"))
+      else sprintf("none (%s).", attr(gp, "rule")))
   if (K >= 1L) {
     a("Time", sprintf(paste(
       "The period is fixed at %s h, not estimated; amplitudes and acrophases are",

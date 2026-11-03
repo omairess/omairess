@@ -273,6 +273,10 @@ test_that("Bingham refuses to quote a phase when the region covers the origin", 
   b <- dance_bingham_ci(0.2, 0.1, diag(c(100, 100)), n = 16, n_params = 8)
   expect_false(isTRUE(b$identified))
   expect_null(b$acrophase_rad)
+  # the region contains amplitude 0, so the lower bound is 0 -- not the nearest
+  # boundary point, which lay beyond the origin and above the estimate
+  expect_equal(b$amplitude[1], 0)
+  expect_gte(b$amplitude[2], sqrt(0.2^2 + 0.1^2))
 })
 
 test_that("Bingham gives finite limits for a well-determined rhythm", {

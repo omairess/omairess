@@ -1399,6 +1399,21 @@
                   if(isTRUE(hm$using_smoothed)) "smooth_curves" else "raw_data",
                   if(isTRUE(hm$using_smoothed)) "the smoothed curves"
                   else "the raw observations, as the app fits them"))
+      # THE SCALE, as chosen on the settings panel (server/08m_helpers_scale.R)
+      emit_kernel("dance_scale_apply"); emit_kernel("dance_scale_spec")
+      emit_kernel("dance_unsampled_intervals"); emit_kernel("dance_outcomes_annotate")
+      sc_x <- hm$scale %||% dance_scale_spec()
+      add(sprintf('cosinor_scale <- dance_scale_spec("%s", %s)   # %s', sc_x$type, format(sc_x$offset),
+                  if (dance_scale_is_log(sc_x)) "the analysis is on the natural-log scale, ln(y + c)" else "original values"))
+      if (dance_scale_is_log(sc_x)) {
+        add("cosinor_scaled <- dance_scale_apply(cosinor_input, cosinor_scale)")
+        add("if (!cosinor_scaled$ok) stop(cosinor_scaled$message)")
+        add("cosinor_input <- cosinor_scaled$Y   # every fit, test and table below is on the log scale")
+      }
+      add("# where nothing was sampled (model time); a time reported there is flagged")
+      add(sprintf("cosinor_gaps <- dance_unsampled_intervals(time_vec, cosinor_input, %s)",
+                  { g <- suppressWarnings(as.numeric(hm$gap_h %||% NA)); if (length(g) == 1L && is.finite(g)) format(g, digits = 15) else "NA" }))
+      add(sprintf("origin_shift  <- %s   # clock time of model time 0", format(as.numeric(hm$origin_shift %||% 0))))
       add("")
 
       if (mixed) {
@@ -1447,6 +1462,7 @@
                     if (identical(hm$resid_model, "car1")) "car1" else "independent",
                     if (isTRUE(ff$sat$hierarchical_tau_requested)) "TRUE" else "FALSE"))
         add("if (!isTRUE(traj_fit$ok)) stop(traj_fit$message)")
+        add("traj_fit$clock_origin <- origin_shift   # model time 0 on the clock, as the app sets it")
         add("cat(dance_traj_fit_report(traj_fit), \"\\n\")")
         add("cat(dance_traj_residual_statement(traj_fit), \"\\n\")")
         if (sat)
@@ -1465,6 +1481,7 @@
         add("# The three questions -- overall level, rhythmicity, accumulation -- with the")
         add("# omnibus test above them: the tables of the comparison tab and the report")
         add("traj_outcomes <- dance_outcomes_mixed(traj_fit, traj_tests)")
+        add("traj_outcomes <- dance_outcomes_annotate(traj_outcomes, cosinor_scale, cosinor_gaps, origin_shift, time_vec, period)")
         add("print(dance_outcomes_flat(traj_outcomes)[, c(\"domain\", \"outcome\", \"cell\", \"estimate\", \"lo\", \"hi\",")
         add("                                            \"statistic\", \"df1\", \"df2\", \"p\")])")
         if (sat) {
@@ -1549,7 +1566,7 @@
         add("")
         add("ts_model <- list(individual_params = ts_params, individual_fits = ts_fit$fits,")
         add("                 period = period, n_harmonics = n_harmonics, trend_type = trend_type,")
-        add("                 time_vec = time_vec, t_offset = 0,")
+        add("                 time_vec = time_vec, t_offset = 0, origin_shift = origin_shift,")
         add(sprintf("                 tau_spec = list(mode = \"%s\", value = %s, lo = %s, hi = %s),",
                     if (identical(tsp$mode, "fixed")) "fixed" else "estimate",
                     num(tsp$value), num(tsp$lo), num(tsp$hi)))
@@ -1574,6 +1591,7 @@
           add("ts_components <- dance_ts_components(ts_df, ts_model)")
           add("# The three questions, as on the comparison tab and in the report")
           add("ts_outcomes <- dance_outcomes_ts(ts_df, ts_model)")
+          add("ts_outcomes <- dance_outcomes_annotate(ts_outcomes, cosinor_scale, cosinor_gaps, origin_shift, time_vec, period)")
           add("print(dance_outcomes_flat(ts_outcomes)[, c(\"domain\", \"outcome\", \"cell\", \"estimate\", \"lo\", \"hi\",")
           add("                                          \"statistic\", \"df1\", \"df2\", \"p\")])")
           if (sat && !identical(tsp$mode, "fixed"))

@@ -379,7 +379,12 @@
 
     # The raw observations, which is what the fit will use: a bounds hint read
     # off a smoothed copy describes a different range from the one being fitted
+    # -- and on the scale it will use: the bounds apply on the log scale when
+    # that is chosen
     Y <- values$data
+    sa <- dance_scale_apply(Y, dance_scale_spec(input$harmonic_scale %||% "original",
+                                                input$harmonic_log_offset %||% 0))
+    if (isTRUE(sa$ok)) Y <- sa$Y
 
     # Calculate data statistics
     y_min <- min(Y, na.rm = TRUE)
@@ -2034,6 +2039,12 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       # wrong one; removing it is the honest version of that warning.
       # ======================================================================
       Y <- values$data
+      # THE SCALE (server/08m_helpers_scale.R): the user's choice, applied here
+      # once, so every fit, test, bound and table below is on that scale
+      scale <- dance_scale_spec(input$harmonic_scale %||% "original", input$harmonic_log_offset %||% 0)
+      sa <- dance_scale_apply(Y, scale)
+      if (!isTRUE(sa$ok)) { showNotification(sa$message, type = "error", duration = 15); return() }
+      Y <- sa$Y
       # WHICH ESTIMATOR. Everything downstream reads mod$approach and shows the
       # output of that estimator only. The per-participant fits below run under
       # both approaches: under mixed-effects they are not displayed, but they
@@ -3071,6 +3082,11 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
         t_center = t_center_global,
         subjects_with_nas = subjects_with_nas,
         Y = Y,
+        scale = scale,
+        gap_h = suppressWarnings(as.numeric(input$harmonic_gap_h %||% NA)),
+        # where nothing was sampled, in model time (time_vec)
+        gaps = dance_unsampled_intervals(time_vec_model, Y,
+                                         suppressWarnings(as.numeric(input$harmonic_gap_h %||% NA))),
         # the tau setting this run used (Model Specification), for every reader
         tau_spec = if (identical(trend_type, "exp_sat")) tau_in else NULL,
         # the residual model of the mixed-effects fit (Model Specification)
@@ -3383,15 +3399,27 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
         cat(sprintf("  H%d: amplitude %s, acrophase %s%s\n", h, fmt3(amps[h]),
                     acro_clock(acros_rad[h], h),
                     if (h > 1) sprintf(" (%d maxima per day, all shown)", h) else ""))
-      if (!is.null(peak))
-        cat(sprintf("  Complete fitted curve: maximum %s at %s, minimum %s at %s%s\n",
-                    fmt2(peak$max_value), dance_clock_label(peak$max_clock, period, show_day = FALSE),
-                    fmt2(peak$min_value), dance_clock_label(peak$min_clock, period, show_day = FALSE),
+      if (!is.null(peak)) {
+        # on a log-scale run the value is also read back; a turning point where
+        # nothing was sampled is the model's form, not an observation
+        sc <- mod$scale %||% dance_scale_spec()
+        v <- function(x) if (dance_scale_is_log(sc)) sprintf("%s (original scale %s)", fmt2(x), fmt2(dance_scale_back(x, sc)))
+                         else fmt2(x)
+        gp <- mod$gaps
+        g <- function(t) if (!is.null(gp) && is.finite(t %||% NA_real_) && dance_in_gap(t, gp))
+          " [in an unsampled interval: extrapolated, not observed]" else ""
+        cat(sprintf("  Complete fitted curve: maximum %s at %s%s, minimum %s at %s%s%s\n",
+                    v(peak$max_value), dance_clock_label(peak$max_clock, period, show_day = FALSE), g(peak$max_t),
+                    v(peak$min_value), dance_clock_label(peak$min_clock, period, show_day = FALSE), g(peak$min_t),
                     if (isTRUE(peak$edge)) " [maximum on the window edge: not a turning point]" else ""))
+      }
     }
     check_range <- function(yy, what) {
       if (!(is.finite(mod$dv_min) || is.finite(mod$dv_max))) return(invisible(NULL))
-      bc <- dance_check_bounds(yy, mod$dv_min, mod$dv_max)
+      # the admissible range is on the original scale: a log-scale fit is read back first
+      lg <- dance_scale_is_log(mod$scale %||% list())
+      bc <- dance_check_bounds(dance_scale_back(yy, mod$scale %||% list()), mod$dv_min, mod$dv_max)
+      if (lg) what <- paste(what, "(read back on the original scale)")
       if (!bc$ok)
         cat(sprintf("  ! %s leaves the admissible range: fitted min %s, max %s. A model that predicts\n    impossible values is misspecified, not merely imprecise.\n",
                     what, fmt2(bc$min), fmt2(bc$max)))
@@ -3405,7 +3433,9 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       cat("These are the curves drawn on the fitted-curves tab and on the comparison tab:\n")
       cat("the same fixed effects of the same model, with no participant deviation.\n")
       ce <- dance_traj_cell_equations(ff)
-      pk <- tryCatch(dance_traj_curve_peaks(ff, "full"), error = function(e) NULL)
+      # the helper returns list(ok, table, ...): the rows are its $table (reading
+      # the list as the table meant no mixed summary ever printed the extremes)
+      pk <- tryCatch(dance_traj_curve_peaks(ff, "full")$table, error = function(e) NULL)
       pr_full <- tryCatch(dance_traj_predict(ff, component = "full", n_time = 200), error = function(e) NULL)
       for (i in seq_len(nrow(ce$table))) {
         r <- ce$table[i, ]; cname <- r$cell
@@ -3415,8 +3445,9 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
                                                          r$n_participants, r$n_obs) else NULL
         peak <- if (!is.null(pk) && cname %in% pk$cell) {
           q <- pk[pk$cell == cname, ][1, ]
-          list(max_value = q$peak_fit, max_clock = q$peak_clock,
-               min_value = q$trough_fit, min_clock = q$trough_clock, edge = !isTRUE(q$peak_interior))
+          list(max_value = q$peak_fit, max_clock = q$peak_clock, max_t = q$peak_t,
+               min_value = q$trough_fit, min_clock = q$trough_clock, min_t = q$trough_t,
+               edge = !isTRUE(q$peak_interior))
         } else NULL
         show_curve(if (identical(cname, "(all)")) "Whole sample" else paste0("Cell ", cname),
                    r$intercept, ce$trend_coefs[[i]], amps, acr, n_txt, peak = peak,
@@ -3443,8 +3474,9 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       peak_of <- function(coefs) {
         cpk <- dance_curve_peak_clock(coefs, mod)
         if (is.null(cpk)) return(NULL)
-        list(max_value = cpk$peak_value, max_clock = cpk$peak_clock,
-             min_value = cpk$trough_value, min_clock = cpk$trough_clock, edge = isTRUE(cpk$peak_at_edge))
+        list(max_value = cpk$peak_value, max_clock = cpk$peak_clock, max_t = cpk$peak_model,
+             min_value = cpk$trough_value, min_clock = cpk$trough_clock, min_t = cpk$trough_model,
+             edge = isTRUE(cpk$peak_at_edge))
       }
       show_curve("Pooled", pop$intercept, pop$trend_coefs, pop$mean_amplitudes,
                  pop$mean_acrophases_rad, sprintf("%d participants", nrow(params)),
@@ -3741,7 +3773,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
   })
   
   # Fitted curves plot
-  output$harmonic_fit_plot <- renderPlotly({
+  harmonic_fit_plot_build <- function() {
     req(values$harmonic_model)
     mod <- values$harmonic_model
     
@@ -4045,7 +4077,9 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       hovermode = "closest",
       showlegend = TRUE
     )
-  })
+  }
+  output$harmonic_fit_plot <- renderPlotly(
+    harmonic_plot_finish(harmonic_fit_plot_build(), isTRUE(input$harmonic_show_original %||% TRUE)))
   
   # Polar plot for acrophase
   # ---------------------------------------------------------------------------
@@ -4696,7 +4730,8 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     if (is.null(mod)) return(list(ok = FALSE, message = "Press Run Harmonic Regression first."))
     dt <- harmonic_design_terms()
     chosen <- c(dt$between, dt$within)
-    Y <- values$data
+    # the data on the run's scale (log when chosen), as the run stored them
+    Y <- mod$Y %||% values$data
     if (is.null(Y)) return(list(ok = FALSE, message = "No data."))
     # the model-elapsed axis the fit was built on, and the offset back to clock
     tv <- mod$time_vec
@@ -5374,15 +5409,51 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
   # ---- THE THREE QUESTIONS ------------------------------------------------------
   # One builder per approach (server/08k_helpers_outcomes.R); this panel, the
   # CSV below and the APA report read the same two tables.
+  # ---- THE SCALE AND THE GAPS ON THE PLOTS --------------------------------------
+  # Applied to the finished figure (server/08m_helpers_scale.R), so every curve,
+  # band, point and reference line is read back together: on a log-scale run,
+  # the original scale when asked (the full response only -- a component is a
+  # log ratio, and stays on the log scale, saying so); and on every run the
+  # unsampled intervals shaded, the fitted curve dashed across them.
+  harmonic_plot_finish <- function(p, original) {
+    mod <- values$harmonic_model
+    if (is.null(mod) || !inherits(p, "plotly")) return(p)
+    sc <- mod$scale %||% dance_scale_spec()
+    if (dance_scale_is_log(sc)) {
+      nm <- mod$dv_name %||% "Response"
+      p <- if (isTRUE(original))
+        dance_plot_backtransform(p, sc, sprintf("%s%s, read back from the log scale", nm,
+                                                if (!is.null(mod$dv_units)) paste0(" (", mod$dv_units, ")") else ""))
+      else {
+        b <- plotly::plotly_build(p)
+        yt <- b$x$layout$yaxis$title
+        yt <- if (is.list(yt)) yt$text %||% "" else yt %||% ""
+        # the response itself is ln(name), whose units are not the name's; a
+        # component keeps its own title and says which scale it is on
+        whole <- !nzchar(yt) || identical(yt, "Response") || startsWith(yt, nm)
+        b$x$layout$yaxis$title <- list(text = if (whole) dance_scale_label(nm, sc)
+                                              else sprintf("%s, on the %s scale", yt, dance_scale_label(nm, sc)))
+        b
+      }
+    }
+    dance_plot_mark_gaps(p, mod$gaps, mod$time_vec)
+  }
+
   harmonic_outcomes <- reactive({
-    if (harmonic_is_mixed()) {
+    o <- if (harmonic_is_mixed()) {
       ff <- harmonic_traj(); req(isTRUE(ff$ok))
       dance_outcomes_mixed(ff, harmonic_traj_tests(), coefs = harmonic_traj_coefs())
     } else {
       ts <- harmonic_ts(); req(!is.null(ts), isTRUE(ts$ok))
       dance_outcomes_ts(ts$df, ts$mod)
     }
+    harmonic_outcomes_annotate(o, values$harmonic_model)
   })
+  # the original-scale reading (log runs) and the acrophases that fall only
+  # where nothing was sampled -- the same two steps the exported script takes
+  harmonic_outcomes_annotate <- function(o, mod)
+    dance_outcomes_annotate(o, mod$scale, mod$gaps, mod$origin_shift, mod$time_vec, mod$period %||% 24)
+
 
   # Is tau identified? (server/08k): only when tau is estimated
   harmonic_tau_diag <- reactive({
@@ -5762,7 +5833,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
                       selected = if (sel %in% comps) sel else "full")
   })
 
-  output$harmonic_traj_curves <- renderPlotly({
+  harmonic_traj_curves_build <- function() {
     if (!harmonic_is_mixed()) return(ts_curves_plot())
     ff <- harmonic_traj(); req(isTRUE(ff$ok))
     pr <- dance_traj_predict(ff, conf = 0.95,
@@ -5836,7 +5907,11 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       yaxis = list(title = ylab),
       hovermode = "x unified",
       legend = list(orientation = "h", y = -0.18))
-  })
+  }
+  output$harmonic_traj_curves <- renderPlotly(
+    harmonic_plot_finish(harmonic_traj_curves_build(),
+                         isTRUE(input$harmonic_traj_original %||% TRUE) &&
+                           identical(harmonic_traj_component(), "full")))
 
   output$harmonic_traj_band_note <- renderUI({
     if (!harmonic_is_mixed()) {

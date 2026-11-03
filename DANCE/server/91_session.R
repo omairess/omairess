@@ -38,11 +38,12 @@ RESTORE_INPUTS <- list(
                # P19: the mixed analyses moved into the fANOVA and Cosinor tabs
                "fanova_mixed_k_time", "fanova_mixed_k_subject",
                "dlmo_gap_h", "dlmo_threshold", "dlmo_n_base", "dlmo_k_sd", "dlmo_interval_limit",
-               "dlmo_confirm", "dlmo_max_gap", "dlmo_lloq"),
+               "dlmo_confirm", "dlmo_max_gap", "dlmo_lloq", "harmonic_log_offset", "harmonic_gap_h"),
   checkbox = c("is_cyclic", "use_real_time", "constrain_bounds",
                "use_bootstrap", "cv_stratified", "mixed_real_time",
                "harmonic_model_selection", "harmonic_traj_sat_cells", "harmonic_traj_sat_hier",
-               "fanova_mixed_real_time", "dlmo_hockey_fine"),
+               "fanova_mixed_real_time", "dlmo_hockey_fine", "harmonic_show_original",
+               "harmonic_traj_original"),
   select   = c("smooth_method", "pca_type", "fanova_design", "fanova_test_type",
                "fanova_data_source", "fanova_group_var", "harmonic_time_var",
                "harmonic_trend_type", "harmonic_group_var", "reg_method",
@@ -53,7 +54,7 @@ RESTORE_INPUTS <- list(
                "harmonic_traj_resid", "harmonic_raw_style", "harmonic_traj_raw_style",
                "harmonic_structure",
                "dlmo_time_src", "dlmo_night_var", "dlmo_group_var", "dlmo_methods",
-               "dlmo_lloq_rule", "dlmo_bed_src", "dlmo_bed_var"),
+               "dlmo_lloq_rule", "dlmo_bed_src", "dlmo_bed_var", "harmonic_scale"),
   text     = c("harmonic_manual_times", "dlmo_manual_times", "dlmo_units", "dlmo_bed_value")
 )
 

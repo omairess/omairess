@@ -1163,3 +1163,92 @@ density (Molina & Burgess 2011). The test suite checks it explicitly.
   so on a slowly accelerating rise it is later than the rise's start. It is a
   different definition from a threshold crossing, and the two are not
   interchangeable; the report says so.
+
+## 24. The log scale, and intervals in which nothing was sampled (cosinor)
+
+Raised on cortisol: a two-harmonic fit with no samples between 18:00 and 06:00
+dipped to −1.7 overnight, which is impossible. Constraining the curve to the
+observed range was considered and rejected:
+- The true nadir lies inside the gap and is lower than any daytime sample, so
+  that constraint would force a wrong nadir and bias the amplitude and the
+  acrophase.
+- An estimate held on a constraint has no valid standard error or test.
+- There is no validated cosinor method with a shape constraint.
+
+Two established remedies were added instead. Both are in
+`server/08m_helpers_scale.R`.
+
+**The log scale (the user's choice, never applied silently).** This is
+"Scale of the analysis" in the settings, with a constant c (default 0).
+- **What is fitted:** the model is fitted to ln(y + c). Every fit, test,
+  bound and table is on that scale.
+- **Non-positive values:** if any observed y + c ≤ 0, the run is refused
+  with the count.
+- **Read back on the original scale:** exp(x) − c.
+  - The fitted curve cannot fall below −c.
+  - A level (intercept, MESOR, time-averaged response) is a geometric mean
+    when c = 0.
+  - An amplitude A is the peak-to-trough ratio e^(2A) of its harmonic.
+  - A trend change is a ratio e^(change), and a group difference in a level
+    is a log ratio.
+- **Intervals:** read back the same way. The transformation is monotone, so
+  this is exact for the limits.
+- **In the outcome tables:** the readings go in each row's note. The app
+  panel, its CSV, the APA report (a Note column) and the exported script all
+  carry them.
+- **In the plots:** the fitted-curves tab and the full trajectory view show
+  the original scale by default, with a checkbox to stay on the log scale.
+  The finished figure is transformed as a whole: curves, bands, raw points
+  (drawn as observed), reference lines, annotations and the hover value.
+  Component views (harmonics, trend) are log ratios; they stay on the log
+  scale and say so.
+- **Admissible range:** checked on the original scale.
+- **Parameter bounds:** these apply on the log scale, and the bounds hint
+  shows log-scale values.
+- **Stated** in "What this run assumed" (summary, report, script).
+
+**Unsampled intervals.**
+- **Definition:** a gap between consecutive sampling times longer than the
+  user's threshold, or by default twice the median interval. Only times at
+  which someone was observed count.
+- **On the plots:** each gap is shaded and labelled "no samples", and each
+  fitted curve is dashed across it. Raw-data lines are left solid.
+- **Acrophases:** an acrophase is flagged when every occurrence within the
+  window (every period/h for harmonic h) falls in a gap.
+- **The fitted curve's maximum and minimum** in the summary are flagged when
+  they lie in a gap.
+- **Stated** in "What this run assumed".
+
+**Three existing errors found on the way, and fixed.**
+1. **Bingham amplitude interval.** When the joint (cos, sin) region contains
+   the origin, it contains amplitude 0, so the lower bound is 0. The code took
+   the smallest radius on the region's boundary instead. That point lies
+   beyond the origin and gave a lower bound above the estimate itself, for
+   example an estimate of 0.13 with an interval of [0.20, 0.59]. The
+   acrophase was already, correctly, reported as not identified in that case.
+   - Test: `tests/testthat/test-cosinor-audit.R`.
+2. **Mixed summary extremes.** `dance_traj_curve_peaks()` returns
+   `list(ok, table, ...)`, but the mixed summary read the list as the table.
+   So it never printed the fitted curve's maximum and minimum. It now reads
+   `$table`.
+3. **Clock origin in the exported script.** The script's models carried no
+   clock origin: the two-stage `ts_model` lacked `origin_shift`, and
+   `traj_fit` lacked `clock_origin`. So every acrophase the script converted
+   to clock time was off by the recording's start time (8 h for a recording
+   starting at 08:00). The estimates themselves were right. Both models now
+   carry it.
+   - The round-trip test compares the clock times as well as the numbers.
+
+**Tests.** `tests/scale_gap_app_test.R` uses cortisol-like data with an
+18:00–06:00 gap and two groups, A peaking in the morning and B at midnight. It
+runs both approaches on both scales and checks:
+- the original-scale dip below zero, and that it is flagged;
+- the log-scale fit on ln(y), with the read-back curve positive, raw data as
+  observed, and the hover value matching the drawn value;
+- the log-scale view on request;
+- geometric means and peak/trough ratios that equal exp(x) and exp(2A);
+- the gap shaded and the curve dashed only across it;
+- B's acrophase flagged and A's not;
+- the report;
+- the exported script reproducing every estimate, note and clock time;
+- a zero refused with c = 0, and accepted with c = 0.5.

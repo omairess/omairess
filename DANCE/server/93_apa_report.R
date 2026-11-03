@@ -934,9 +934,16 @@ dance_apa_report <- function(values, input, title = NULL) {
             vals <- vapply(cells, function(cl) {
               r <- sub[sub$cell == cl, , drop = FALSE]
               if (nrow(r)) dance_outcome_value_text(r[1, ], o$period, o$clock_origin, digits = 2) else "" }, "")
+            # the note says what the number means on the original scale (log
+            # runs) or that it lies where nothing was sampled
+            nt <- sub[!is.na(sub$note) & nzchar(sub$note), , drop = FALSE]
             data.frame(Outcome = paste0(sub$label[1], if (any(sub$primary)) " (primary)" else ""),
-                       t(stats::setNames(vals, cells)), check.names = FALSE, stringsAsFactors = FALSE)
+                       t(stats::setNames(vals, cells)),
+                       Note = paste(if (nrow(nt)) sprintf("%s: %s", nt$cell, nt$note) else character(0),
+                                    collapse = "; "),
+                       check.names = FALSE, stringsAsFactors = FALSE)
           }))
+          if (all(!nzchar(er$Note))) er$Note <- NULL
           L <<- c(L, dance_md_table(er)); blank()
         }
       }
