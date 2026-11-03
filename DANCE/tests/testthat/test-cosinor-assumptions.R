@@ -19,7 +19,7 @@ app_dir <- if (dir.exists("server")) "." else if (dir.exists("../../server")) ".
 srv <- function(f) file.path(app_dir, "server", f)
 for (f in c("01_helpers_time.R", "01b_kernel_contracts.R", "03_helpers_clock.R",
             "07_helpers_circular.R", "08_helpers_cosinor.R", "08c_helpers_circstat.R",
-            "08j_helpers_assumptions.R"))
+            "08j_helpers_assumptions.R", "08m_helpers_scale.R"))
   if (file.exists(srv(f))) eval(parse(srv(f), encoding = "UTF-8"), envir = environment())
 # the two fitters, out of the server file they live in
 for (e in parse(srv("72_harmonic.R"), encoding = "UTF-8"))
