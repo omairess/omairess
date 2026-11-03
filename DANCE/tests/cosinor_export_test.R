@@ -135,6 +135,27 @@ run_script <- function(code, tag, keep) {
 saveRDS(raw, file.path(tmp, "raw.rds"))
 
 testServer(server, {
+  # ============================================ mixed-effects, hierarchical tau
+  # tau with a random effect per participant in the per-cell fit: the script
+  # must ask for it too, or its numbers are a different model's
+  cat("\n-- mixed-effects: A and tau per cell, tau varying between participants ----\n")
+  run(session, "mixed", 1, harmonic_traj_tau_mode = "profile", harmonic_traj_tau = 18,
+      harmonic_tau_lo = 2, harmonic_tau_hi = 48, harmonic_traj_sat_cells = TRUE,
+      harmonic_traj_sat_hier = TRUE)
+  fh <- values$harmonic_model$traj
+  if (isTRUE(fh$ok) && isTRUE(fh$sat$ok)) {
+    sh <- run_script(generate_analysis_code(), "mixed-hier", "traj_fit")
+    if (!is.null(sh)) {
+      th <- sh$traj_fit
+      if (identical(isTRUE(fh$sat$hierarchical_tau), isTRUE(th$sat$hierarchical_tau)))
+        ok(sprintf("hierarchical tau: the script fits the same model (tau random per participant: %s)",
+                   isTRUE(fh$sat$hierarchical_tau)))
+      else fail("hierarchical tau: the script fits a different per-cell model from the app")
+      same("hierarchical tau: A and tau per cell", fh$sat$table[, c("A", "tau")], th$sat$table[, c("A", "tau")])
+    }
+  } else fail("the app's hierarchical-tau fit failed:", fh$sat$message %||% fh$message %||% "")
+  session$setInputs(harmonic_traj_sat_hier = FALSE)
+
   # ====================================================== mixed-effects
   cat("\n-- mixed-effects: tau profiled within 2 to 48 h, A and tau per cell ----\n")
   run(session, "mixed", 1, harmonic_traj_tau_mode = "profile", harmonic_traj_tau = 18,

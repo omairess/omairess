@@ -1443,8 +1443,9 @@
         add(sprintf("                           tau_lo = %s, tau_hi = %s, sat_cells = %s,",
                     num(if (sat) tsp$lo else NA), num(if (sat) tsp$hi else NA),
                     if (sat && isTRUE(tsp$sat_cells)) "TRUE" else "FALSE"))
-        add(sprintf("                           residuals = \"%s\")",
-                    if (identical(hm$resid_model, "car1")) "car1" else "independent"))
+        add(sprintf("                           residuals = \"%s\", hierarchical_tau = %s)",
+                    if (identical(hm$resid_model, "car1")) "car1" else "independent",
+                    if (isTRUE(ff$sat$hierarchical_tau_requested)) "TRUE" else "FALSE"))
         add("if (!isTRUE(traj_fit$ok)) stop(traj_fit$message)")
         add("cat(dance_traj_fit_report(traj_fit), \"\\n\")")
         add("cat(dance_traj_residual_statement(traj_fit), \"\\n\")")
