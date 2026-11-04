@@ -149,6 +149,14 @@ testServer(server, {
             if (!grepl(dance_outcome_value_text(fm, oc$period, oc$clock_origin, digits = 2), svt, fixed = TRUE))
               paste("fm", dance_outcome_value_text(fm, oc$period, oc$clock_origin, digits = 2)),
             if (!grepl("Non-periodic trend", svt)) "trend row", if (!grepl("RHYTHM DESCRIPTORS", svt)) "rhythm"), collapse = "; ")))
+      # the overview and the detailed table carry the same tests: every
+      # level/accumulation primary and every rhythm test of the table
+      want <- oc$tests[(oc$tests$domain == "rhythm" & oc$tests$outcome %in% c("circadian", sprintf("rhythm%d", 1:5))) |
+                         (oc$tests$domain %in% c("level", "accumulation") & oc$tests$primary), , drop = FALSE]
+      miss <- want$label[!vapply(seq_len(nrow(want)), function(i)
+        grepl(dance_outcome_stat_text(want[i, ]), svt, fixed = TRUE), TRUE)]
+      chk(!length(miss), sprintf("%s: every rhythm and primary test of the table is in the overview (%d)", tag, nrow(want)),
+          sprintf("%s: the overview lacks %s", tag, paste(miss, collapse = "; ")))
       # every quantity reported has its own equation, written for this model
       ctx <- dance_eq_context(hm)
       keys <- unique(c(oc$estimates$outcome, paste0("test:", stats::na.omit(oc$tests$outcome))))
@@ -156,6 +164,16 @@ testServer(server, {
         q <- dance_equation(k, ctx); grepl("No equation recorded", q$html) || identical(q$title, sub("^test:", "", k)) }, TRUE)]
       chk(!length(bad), sprintf("%s: every reported quantity has its equation (%d keys)", tag, length(keys)),
           sprintf("%s: no equation for %s", tag, paste(bad, collapse = ", ")))
+      # the individual tables: every row and column has its equation
+      for (o in c("harmonic_parameters_table", "harmonic_individual_eq")) {
+        v <- render(paste(tag, o), output[[o]])
+        vv <- gsub("&#39;", "'", paste(unlist(v), collapse = " "), fixed = TRUE)
+        ks <- regmatches(vv, gregexpr("key: '[^']+'", vv))[[1]]
+        ks <- unique(sub("key: '([^']+)'", "\\1", ks))
+        bad <- ks[vapply(ks, function(k) { q <- dance_equation(k, ctx); grepl("No equation recorded", q$html) || identical(q$title, k) }, TRUE)]
+        chk(length(ks) > 2 && !length(bad), sprintf("%s: %s has an equation for every entry (%d)", tag, o, length(ks)),
+            sprintf("%s: %s: %d links, without an equation: %s", tag, o, length(ks), paste(bad, collapse = ", ")))
+      }
       ok_modal <- tryCatch({ session$setInputs(dance_eq = list(key = "mesor", nonce = k)); TRUE }, error = function(e) conditionMessage(e))
       chk(isTRUE(ok_modal), sprintf("%s: an (i) click opens its equation", tag), sprintf("%s: the (i) click failed: %s", tag, ok_modal))
     }

@@ -54,9 +54,12 @@ ui_tab_harmonic <- tabItem(
             h5(tags$b("Unsampled intervals")),
             numericInput("harmonic_gap_h", "A gap between sampling times longer than (h):",
                          value = NA, min = 0, step = 0.5),
-            helpText(HTML("Blank: twice the median interval between sampling times. The curve is
-                           drawn dashed over such a gap, which is shaded, and a time reported
-                           there (an acrophase, the curve's minimum) is flagged as extrapolated.")),
+            helpText(HTML("Blank: twice the median interval between sampling times; 0: never mark.
+                           A gap is two consecutive sampling times (columns with at least one
+                           observation) further apart than this. The curve is drawn dashed over
+                           it, it is shaded, and a time reported there (an acrophase, the curve's
+                           minimum) is flagged as extrapolated. The summary names the two
+                           columns either side.")),
 
             hr(),
             # ================================================================
@@ -546,6 +549,7 @@ ui_tab_harmonic <- tabItem(
                        column(12,
                               h4("Individual Subject Parameters"),
                               helpText("R-squared and other parameters for each subject. Use the export button to download."),
+                              uiOutput("harmonic_individual_eq"),
                               DT::dataTableOutput("harmonic_individual_table"),
                               br(),
                               downloadButton("export_harmonic_individual", "Export Individual Parameters (CSV)", class = "btn-success")

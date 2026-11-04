@@ -135,6 +135,14 @@ DANCE_TRAJ_BLOCK_LABEL <- c(
   avg_rate  = "Average trend rate",
   rate0     = "Initial trend rate")
 
+# The label of any block, the per-harmonic ones included (harmonic1, ...):
+# looked up through this, never with [[ ]], which stops on a name it lacks.
+dance_traj_block_label <- function(nm) {
+  if (nm %in% names(DANCE_TRAJ_BLOCK_LABEL)) return(DANCE_TRAJ_BLOCK_LABEL[[nm]])
+  if (grepl("^harmonic[0-9]+$", nm)) return(sprintf("Harmonic %s rhythm (cos, sin) difference", sub("^harmonic", "", nm)))
+  nm
+}
+
 DANCE_TRAJ_BLOCK_H0 <- c(
   full      = "H0: no difference in level, in any trend term, or in any harmonic coefficient -- the trajectories coincide.",
   shape     = "H0: no difference in any trend term or harmonic coefficient. A pure vertical shift is EXCLUDED, so this asks whether the curves are the same shape at possibly different heights.",
@@ -1191,7 +1199,12 @@ DANCE_TRAJ_BLOCK_COMPONENTS <- function(spec, block) {
     rate0     = if (has_trend && !identical(spec$trend, "linear")) ".rate0" else character(0),
     # without a rhythm the fitted mean IS the time-averaged midline level
     fitted_mean = if (length(spec$harm_terms)) ".fitted_mean" else character(0),
-    character(0))
+    # ONE HARMONIC's (cos, sin) pair: harmonic1, harmonic2, ... -- the per-
+    # harmonic rhythm test the two-stage approach also reports
+    if (grepl("^harmonic[0-9]+$", block)) {
+      h <- sub("^harmonic", "", block)
+      intersect(c(paste0("c", h), paste0("s", h)), spec$harm_terms)
+    } else character(0))
 }
 
 # L for "effect E has no influence on component set J", as one joint hypothesis.
@@ -1438,6 +1451,10 @@ dance_traj_tests <- function(ff, df_method = "kr", progress = NULL) {
     c("full", "trend", "intercept", "mesor")
   else
     c("full", "shape", "circadian", "trend", "fitted_mean", "intercept", "mesor")
+  # each harmonic on its own, when there is more than one (with one, it is the
+  # circadian block itself)
+  K_h <- length(ff$spec$harm_terms) %/% 2L
+  if (K_h > 1L) want <- c(want, sprintf("harmonic%d", seq_len(K_h)))
   reqs <- c(lapply(effects, function(ef) list(effect = strsplit(ef, ":", fixed = TRUE)[[1]],
                                               block = "full", name = ef)),
             lapply(want, function(w) list(effect = character(0), block = w, name = w)))

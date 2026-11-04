@@ -174,6 +174,13 @@ dance_outcomes_mixed <- function(ff, tests = NULL, conf = 0.95, n_draw = 6000, c
       Tt("rhythm", "circadian", "Rhythmic component, all harmonics jointly (cos, sin)", r$statistic,
          r$df1, r$df2, r$p, r$method, primary = TRUE,
          note = "the overall harmonic-vector difference; neither an amplitude nor an acrophase test alone")
+    # each harmonic's (cos, sin) pair on its own, as the two-stage approach
+    # reports it (only with more than one harmonic: with one it is the row above)
+    for (h in seq_len(K)) {
+      r <- blk(sprintf("harmonic%d", h)); if (is.null(r)) next
+      Tt("rhythm", sprintf("rhythm%d", h), sprintf("H%d rhythm vector (cos, sin) jointly", h), r$statistic,
+         r$df1, r$df2, r$p, r$method)
+    }
     r <- blk("trend")
     if (!is.null(r) && !sat)
       Tt("accumulation", "change", "Total trend change (start to end)", r$statistic, r$df1, r$df2, r$p,

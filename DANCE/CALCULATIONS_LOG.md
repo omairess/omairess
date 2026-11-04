@@ -1381,3 +1381,41 @@ formula computed, written for the fitted model:
   approach, that every outcome and test key the tables report has its own
   equation (no fallback text), that the streamlined view shows the table's
   own omnibus statistic and level estimate, and that an (i) click opens.
+
+## 28. The overview and the detailed table carry the same tests; the unsampled intervals name their columns
+
+**A mismatch between the overview and the detailed table.**
+- **The mixed model:** it reported one rhythm test, all harmonics jointly.
+  The overview looked for one test per harmonic, so it showed "—" for the
+  24 h and 12 h rows.
+- **Now under mixed-effects:** the model also tests each harmonic's
+  (cos, sin) pair on its own, with more than one harmonic. These are
+  `dance_traj_tests` blocks `harmonic1`, `harmonic2`, ..., each the same Wald
+  F of the cell contrasts restricted to that pair. The outcome table lists
+  them as `rhythm1`, `rhythm2`, ..., as two-stage already did.
+- **The overview's rhythm rows** are built from the table's rhythm tests:
+  the joint test (mixed-effects), then each harmonic's own.
+- **Test:** `tests/structures_app_test.R` now checks that every rhythm test
+  and every primary level and accumulation test of the table appears, with
+  its statistic, in the overview.
+- **A label fix:** block labels are now looked up through
+  `dance_traj_block_label()`. The report's `[[ ]]` lookup stopped on the new
+  names.
+
+**Unsampled intervals, made checkable.** A gap is two consecutive sampling
+times, among the columns with at least one observation, further apart than
+the threshold. The threshold is the user's, or by default twice the median
+interval.
+- **Columns named:** each gap now carries the two column names either side.
+  The summary's assumption line reads "10:00 (+1d)-15:00 (+1d) (no column
+  between 'X' and 'Y')", and hovering over "no samples" on the plot says the
+  same.
+- **Times with the day:** the times show the day, so 10:00 on the second day
+  is not read as 10:00 on the first.
+- **Switching it off:** a threshold of 0 switches the marking off.
+
+**(i) on the individual tables.**
+- **The parameter summary table:** every row has its equation.
+- **The individual-results table:** a row of (i) links, one per column,
+  including R², % variance and the per-participant zero-amplitude F test.
+- **Test:** the harness checks that every link has an equation.

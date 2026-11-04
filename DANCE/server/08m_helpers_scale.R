@@ -84,17 +84,23 @@ dance_outcomes_backtransform <- function(o, scale, digits = 3) {
 # ---- UNSAMPLED INTERVALS -------------------------------------------------------
 # times: the sampling times on a linear axis; Y (optional): the data, so a time
 # column where nobody was observed is not counted as sampled.
-dance_unsampled_intervals <- function(times, Y = NULL, gap_h = NA_real_) {
+dance_unsampled_intervals <- function(times, Y = NULL, gap_h = NA_real_, names = NULL) {
   t <- as.numeric(times)
-  if (!is.null(Y)) t <- t[colSums(is.finite(as.matrix(Y))) > 0]
-  t <- sort(unique(t[is.finite(t)]))
-  empty <- data.frame(start = numeric(0), end = numeric(0))
+  nm <- if (!is.null(names) && length(names) == length(t)) as.character(names) else rep(NA_character_, length(t))
+  if (!is.null(Y)) { keep <- colSums(is.finite(as.matrix(Y))) > 0; t <- t[keep]; nm <- nm[keep] }
+  o <- order(t); t <- t[o]; nm <- nm[o]
+  ok <- is.finite(t) & !duplicated(t); t <- t[ok]; nm <- nm[ok]
+  empty <- data.frame(start = numeric(0), end = numeric(0), start_col = character(0), end_col = character(0))
+  # 0 switches the marking off; blank (NA) is the default rule
+  if (length(gap_h) == 1L && is.finite(gap_h) && gap_h == 0)
+    return(structure(empty, threshold = Inf, rule = "marking switched off (threshold 0)"))
   if (length(t) < 3L) return(structure(empty, threshold = NA_real_, rule = "fewer than three sampling times"))
   d <- diff(t)
   user <- length(gap_h) == 1L && is.finite(gap_h) && gap_h > 0
   thr <- if (user) gap_h else 2 * stats::median(d)
   k <- which(d > thr + 1e-9)
-  structure(data.frame(start = t[k], end = t[k + 1L]), threshold = thr,
+  structure(data.frame(start = t[k], end = t[k + 1L], start_col = nm[k], end_col = nm[k + 1L],
+                       stringsAsFactors = FALSE), threshold = thr,
             rule = if (user) sprintf("a gap longer than %s h (set by the user)", format(thr))
                    else sprintf("a gap longer than twice the median sampling interval (2 x %s = %s h)",
                                 format(stats::median(d)), format(thr)))
@@ -117,10 +123,14 @@ dance_clock_in_gap <- function(clock_h, gaps, window, step = 24) {
   length(occ) > 0 && all(dance_in_gap(occ, gaps))
 }
 
-dance_gap_text <- function(gaps, shift = 0) {
+dance_gap_text <- function(gaps, shift = 0, columns = FALSE) {
   if (!nrow(gaps)) return("none")
-  paste(sprintf("%s-%s", dance_clock_label(gaps$start + shift, 24, show_day = FALSE),
-                dance_clock_label(gaps$end + shift, 24, show_day = FALSE)), collapse = ", ")
+  # the day is shown: 10:00 on the second day is not 10:00 on the first
+  lab <- function(t) dance_clock_label(c(shift, t + shift), 24, show_day = TRUE)[-1]
+  txt <- sprintf("%s-%s", lab(gaps$start), lab(gaps$end))
+  if (columns && !is.null(gaps$start_col) && any(!is.na(gaps$start_col)))
+    txt <- sprintf("%s (no column between '%s' and '%s')", txt, gaps$start_col, gaps$end_col)
+  paste(txt, collapse = ", ")
 }
 
 # Acrophases that fall only in unsampled intervals get a note.
@@ -205,7 +215,8 @@ dance_plot_mark_gaps <- function(p, gaps, sample_times) {
                                   layer = "below")
     an[[length(an) + 1L]] <- list(x = (gaps$start[i] + gaps$end[i]) / 2, y = 1, xref = "x", yref = "paper",
                                   text = "no samples", showarrow = FALSE, yanchor = "bottom",
-                                  font = list(size = 10, color = "#777"))
+                                  font = list(size = 10, color = "#777"),
+                                  hovertext = attr(gaps, "hover")[i] %||% "no sampling time in this interval")
   }
   b$x$layout$shapes <- sh
   b$x$layout$annotations <- an

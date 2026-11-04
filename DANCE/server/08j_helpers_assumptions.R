@@ -75,7 +75,7 @@ dance_cosinor_assumptions <- function(mod, ff = NULL, df_method = "kr") {
     a("Unsampled intervals", if (nrow(gp))
       sprintf(paste("%s (%s): the fitted curve there is set by the model's form, not by data;",
                     "it is drawn dashed, and a time reported inside it is flagged as extrapolated."),
-              dance_gap_text(gp, as.numeric(mod$origin_shift %||% 0)), attr(gp, "rule"))
+              dance_gap_text(gp, as.numeric(mod$origin_shift %||% 0), columns = TRUE), attr(gp, "rule"))
       else sprintf("none (%s).", attr(gp, "rule")))
   a("Data", paste("Raw observations; a missing observation is left out, not imputed or",
                   "smoothed, and each fit uses the observations present."))

@@ -1153,9 +1153,9 @@ dance_apa_report <- function(values, input, title = NULL) {
           lapply(names(tests$blocks), function(nm)
             trow(nm, tests$blocks[[nm]],
                  if (nm %in% DANCE_TRAJ_LEVEL_QUANTITIES)
-                   paste0("Any cell difference in the ", DANCE_TRAJ_BLOCK_LABEL[[nm]] %|% nm)
+                   paste0("Any cell difference in the ", dance_traj_block_label(nm))
                  else paste0("Any cell difference in the ",
-                             tolower(DANCE_TRAJ_BLOCK_LABEL[[nm]] %|% nm), " block")))))
+                             tolower(dance_traj_block_label(nm)), " block")))))
         if (!is.null(ers) && nrow(ers)) {
           add("**Design effects.**"); blank()
           L <- c(L, dance_md_table(ers)); blank()

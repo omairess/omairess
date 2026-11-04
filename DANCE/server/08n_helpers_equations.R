@@ -103,6 +103,14 @@ dance_equation <- function(key, ctx = dance_eq_context()) {
     tau = list("Time constant tau", paste0(.eq("<i>f</i>(<i>&tau;</i>) = <i>A</i>(1 &minus; e<sup>&minus;1</sup>) &asymp; 0.632&middot;<i>A</i>"),
       .p(if (identical(ctx$tau_mode, "fixed")) "Held at the value set, not estimated." else "Estimated (profile likelihood or per participant, as the run states)."))),
     t50 = list("Half-rise time", .eq("<i>t</i><sub>50</sub> = <i>&tau;</i>&middot;ln 2")),
+    r_squared = list("R-squared (per participant)", paste0(
+      .eq("<i>R</i><sup>2</sup> = 1 &minus; SS<sub>res</sub> / SS<sub>tot</sub>"),
+      .p("Of this participant's fit: residual against total sum of squares about their mean. Undefined when there is no variation."))),
+    pct_rhythm = list("Percent of variance explained", paste0(.eq("100&middot;<i>R</i><sup>2</sup>"),
+      .p("The whole fitted model (trend included), in percent; not the rhythm's share alone."))),
+    zero_amp = list("p-value: no rhythm (per participant)", paste0(
+      .eq("<i>F</i> = [(SS<sub>res,trend only</sub> &minus; SS<sub>res</sub>) / 2<i>K</i>] / [SS<sub>res</sub> / (<i>n</i> &minus; <i>p</i>)]"),
+      .p("H<sub>0</sub>: every harmonic's amplitude is zero given the trend: the full fit against the fit with the trend alone, on 2<i>K</i> and <i>n</i> &minus; <i>p</i> df (<i>p</i> = parameters of the full model)."))),
     trend = , test_trend = list("Trend coefficient", paste0(.eq(dance_eq_trend_term(ctx$trend)),
       .p("The coefficient of the non-periodic trend (", switch(ctx$trend, linear = "<i>b</i>, per hour", log = "<i>b</i>",
          exp_sat = "<i>A</i>, the rise above the intercept", "none"), "); ",
@@ -118,6 +126,12 @@ dance_equation <- function(key, ctx = dance_eq_context()) {
       .eq("<i>&phi;</i><sub>", h, "</sub> = atan2(", .b("s", h), ", ", .b("c", h), "),&nbsp;&nbsp; clock time = <i>t</i><sub>0</sub> + <i>&phi;</i><sub>",
           h, "</sub>&middot;<i>P</i>/(2&pi;&middot;", h, ") (mod <i>P</i>/", h, ")"),
       .p("The time of the first maximum of harmonic ", h, " alone, not of the complete fitted curve. Not estimable when the joint (cos, sin) confidence region contains the origin."))),
+    test_circadian = , circadian = list("Rhythmic component, all harmonics jointly", paste0(
+      .eq("H<sub>0</sub>: (", .b("c", "1"), ", ", .b("s", "1"), ", &hellip;, ", .b("c", "<i>K</i>"), ", ", .b("s", "<i>K</i>"),
+          ") equal in every group"),
+      .p("A 2<i>K</i>-df joint test of every harmonic's cosine and sine coefficients (here <i>K</i> = ", ctx$K, "): ",
+         if (identical(ctx$approach, "mixed")) "a Wald F test of the cell contrasts." else "a MANOVA on the participants' coefficients.",
+         " The overall rhythm difference; neither an amplitude nor an acrophase test alone."))),
     test_rhythm = , rhythm = list(sprintf("%s h rhythmic component, joint test", format(ctx$period / h)), paste0(
       .eq("H<sub>0</sub>: (", .b("c", h), ", ", .b("s", h), ") equal in every group"),
       .p("A 2-df joint test of the cosine and sine coefficients of harmonic ", h, ": ",

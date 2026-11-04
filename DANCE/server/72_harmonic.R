@@ -3086,7 +3086,8 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
         gap_h = suppressWarnings(as.numeric(input$harmonic_gap_h %||% NA)),
         # where nothing was sampled, in model time (time_vec)
         gaps = dance_unsampled_intervals(time_vec_model, Y,
-                                         suppressWarnings(as.numeric(input$harmonic_gap_h %||% NA))),
+                                         suppressWarnings(as.numeric(input$harmonic_gap_h %||% NA)),
+                                         names = colnames(values$data)),
         # the tau setting this run used (Model Specification), for every reader
         tau_spec = if (identical(trend_type, "exp_sat")) tau_in else NULL,
         # the residual model of the mixed-effects fit (Model Specification)
@@ -3707,11 +3708,11 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     .co <- dance_clock_origin(mod)
     .to_clock <- function(v) (v + .co) %% mod$period
     rows <- list()
-    push <- function(name, x, clock = FALSE) {
+    push <- function(name, x, clock = FALSE, key = NA_character_) {
       x <- suppressWarnings(as.numeric(x)); x <- x[is.finite(x)]
       if (!length(x)) return(invisible(NULL))
       rows[[length(rows) + 1L]] <<- data.frame(
-        Parameter = name,
+        key = key, Parameter = name,
         Mean = round(if (clock) .to_clock(mean(x)) else mean(x), 3),
         SD = round(stats::sd(x), 3),
         Min = round(if (clock) .to_clock(min(x)) else min(x), 3),
@@ -3724,18 +3725,18 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       tb <- pt$table
       has_tr <- !identical(ff$spec$trend %||% "none", "none")
       push(if (has_tr) "Intercept (midline at the first observation)" else "Intercept = time-averaged midline level (no trend)",
-           tb$intercept)
+           tb$intercept, key = "intercept")
       if (has_tr) {
-        push("Time-averaged midline level", tb$mesor)
-        push("Non-periodic change over the recording", tb$change)
+        push("Time-averaged midline level", tb$mesor, key = "mesor")
+        push("Non-periodic change over the recording", tb$change, key = "change")
       }
       for (tm in ff$spec$trend_terms)
         push(paste0("Trend: ", dance_traj_trend_coef_label(ff$spec$trend, ff$spec$tau, ff$dv_units,
                                                  estimated = isTRUE(ff$tau_estimated))),
-             tb[[tm]])
+             tb[[tm]], key = "trend")
       for (h in seq_len(ff$spec$n_harmonics)) {
-        push(paste0("Amplitude H", h), tb[[paste0("amplitude_", h)]])
-        push(paste0("Acrophase H", h, " (clock h)"), tb[[paste0("acrophase_time_", h)]], clock = TRUE)
+        push(paste0("Amplitude H", h), tb[[paste0("amplitude_", h)]], key = sprintf("amplitude%d", h))
+        push(paste0("Acrophase H", h, " (clock h)"), tb[[paste0("acrophase_time_", h)]], clock = TRUE, key = sprintf("phase%d", h))
       }
       title <- sprintf("Participant estimates (conditional modes of the one model, %d curves)", nrow(tb))
       note <- pt$note
@@ -3743,31 +3744,38 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       params <- mod$individual_params
       tr2 <- mod$trend_type %||% "none"
       lab2 <- function(w) dance_ts_pair_label(w, mod$period %||% 24, tr2, mod$dv_units)
-      push(lab2("intercept"), params$mesor)
+      push(lab2("intercept"), params$mesor, key = "intercept")
       if (!identical(tr2, "none")) {
-        push(lab2("mesor"), params$mesor_adj)
+        push(lab2("mesor"), params$mesor_adj, key = "mesor")
         push(lab2("change"), params$trend_change %||%
-               dance_ts_trend_change(mod, params))
+               dance_ts_trend_change(mod, params), key = "change")
         for (tc in switch(tr2, linear = "trend_linear", log = "trend_log",
                           exp_sat = c("A_sat", "tau", "init_slope"), character(0)))
           push(paste0("Trend: ", lab2(tc)),
-               params[[tc]] %||% if (identical(tc, "init_slope")) params$A_sat / params$tau)
+               params[[tc]] %||% if (identical(tc, "init_slope")) params$A_sat / params$tau, key = tc)
       }
       for (h in seq_len(mod$n_harmonics)) {
-        push(paste0("Amplitude H", h), params[[paste0("amplitude_", h)]])
-        push(paste0("Acrophase H", h, " (clock h)"), params[[paste0("acrophase_time_", h)]], clock = TRUE)
+        push(paste0("Amplitude H", h), params[[paste0("amplitude_", h)]], key = sprintf("amplitude%d", h))
+        push(paste0("Acrophase H", h, " (clock h)"), params[[paste0("acrophase_time_", h)]], clock = TRUE, key = sprintf("phase%d", h))
       }
-      push("R\u00b2", params$r_squared)
-      push("% Rhythm", params$percent_rhythm)
+      push("R\u00b2", params$r_squared, key = "r_squared")
+      push("% Rhythm", params$percent_rhythm, key = "pct_rhythm")
       title <- sprintf("Per-participant fits (%d participants)", nrow(params))
       note <- paste("Arithmetic spread of the independent per-participant estimates. The",
                     "acrophase mean here is arithmetic; the circular (vector) mean is in",
                     "the summary above.")
     }
     summary_df <- do.call(rbind, rows)
+    # the table with each row's equation one click away
+    cell <- function(x, mono = TRUE) tags$td(style = paste0("padding:4px 12px;border:1px solid #ddd;", if (mono) "font-family:monospace;" else ""), x)
     tagList(
       h4(title),
-      renderTable(summary_df, striped = TRUE, hover = TRUE, bordered = TRUE),
+      tags$table(style = "border-collapse:collapse;margin-bottom:6px",
+        tags$thead(tags$tr(lapply(c("Parameter", "Mean", "SD", "Min", "Max"), function(h)
+          tags$th(style = "padding:4px 12px;border:1px solid #ddd;background:#f5f5f5", h)))),
+        tags$tbody(lapply(seq_len(nrow(summary_df)), function(i) { r <- summary_df[i, ]
+          tags$tr(cell(tagList(r$Parameter, if (!is.na(r$key)) dance_eq_link(r$key)), mono = FALSE),
+                  cell(format(r$Mean)), cell(format(r$SD)), cell(format(r$Min)), cell(format(r$Max))) }))),
       helpText(note)
     )
   })
@@ -4481,6 +4489,24 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     }
     list(display = disp, raw = tb, note = pt$note, re_label = pt$re_label)
   }
+
+  # THE EQUATION OF EACH COLUMN of the individual table, in the table's order
+  output$harmonic_individual_eq <- renderUI({
+    mod <- values$harmonic_model
+    if (is.null(mod)) return(NULL)
+    K <- as.integer(mod$n_harmonics %||% 0L); tr <- mod$trend_type %||% "none"
+    ks <- c(c("Intercept" = "intercept"),
+            if (tr != "none") c("Midline level (time-averaged)" = "mesor", "Change" = "change"),
+            switch(tr, linear = c("Trend (linear)" = "trend_linear"), log = c("Trend (log)" = "trend_log"),
+                   exp_sat = c("A" = "A_sat", "\u03c4" = "tau", "A/\u03c4" = "init_slope"), NULL),
+            unlist(lapply(seq_len(K), function(h) stats::setNames(c(sprintf("amplitude%d", h), sprintf("phase%d", h)),
+                                                                 c(sprintf("Amp H%d", h), sprintf("Acro H%d", h))))),
+            if (!harmonic_is_mixed()) c("R\u00b2" = "r_squared", "% variance" = "pct_rhythm", "p (no rhythm)" = "zero_amp"))
+    tags$div(style = "margin:4px 0 8px 0;color:#555", "Equations:",
+             lapply(seq_along(ks), function(i) tags$span(style = "margin-right:10px", dance_eq_link(ks[[i]], names(ks)[i]))),
+             if (harmonic_is_mixed()) tags$span(style = "color:#777;font-size:12px",
+               " (participant values are the model's shrunken predictions: the cell's fixed effects plus the participant's random deviation)"))
+  })
 
   output$harmonic_individual_table <- DT::renderDataTable({
     req(values$harmonic_model)
@@ -5436,7 +5462,15 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
         b
       }
     }
-    dance_plot_mark_gaps(p, mod$gaps, mod$time_vec)
+    gp <- mod$gaps
+    if (!is.null(gp) && nrow(gp)) {
+      sh <- as.numeric(mod$origin_shift %||% 0)
+      lab <- function(t) dance_clock_label(c(sh, t + sh), 24, show_day = TRUE)[-1]
+      attr(gp, "hover") <- sprintf("No sampling time between %s%s and %s%s: %s. Set the threshold under Unsampled intervals (0 = off).",
+        lab(gp$start), if (!is.na(gp$start_col[1] %||% NA)) sprintf(" ['%s']", gp$start_col) else "",
+        lab(gp$end), if (!is.na(gp$end_col[1] %||% NA)) sprintf(" ['%s']", gp$end_col) else "", attr(gp, "rule"))
+    }
+    dance_plot_mark_gaps(p, gp, mod$time_vec)
   }
 
   harmonic_outcomes <- reactive({
@@ -5666,9 +5700,18 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     if (trend != "none")
       srows[[length(srows) + 1L]] <- row_for(if (any(es$outcome == "sat_change")) "sat_change" else "change",
                                              "Non-periodic trend", sprintf("Change over the observation window (~%s h)", format(round(Twin))))
-    for (h in seq_len(K))
-      srows[[length(srows) + 1L]] <- row_for(sprintf("rhythm%d", h), sprintf("%s h rhythmic component", format(P / h)),
-                                             "joint cosine + sine", est = FALSE)
+    # THE RHYTHM ROWS ARE THE TABLE'S RHYTHM TESTS, no more and no fewer: the
+    # joint test of all harmonics (mixed-effects) and each harmonic's own
+    # (cos, sin) test (both approaches, with more than one harmonic)
+    rk <- if (!is.null(ts)) intersect(c("circadian", sprintf("rhythm%d", seq_len(K))),
+                                      ts$outcome[ts$domain == "rhythm"]) else character(0)
+    for (q in rk) {
+      h <- if (q == "circadian") NA_integer_ else as.integer(sub("^rhythm", "", q))
+      ttl <- if (q == "circadian") (if (K == 1L) sprintf("%s h rhythmic component", format(P)) else "Rhythmic component, all harmonics")
+             else sprintf("%s h rhythmic component", format(P / h))
+      srows[[length(srows) + 1L]] <- row_for(q, ttl, if (q == "circadian" && K > 1L) "every harmonic's cosine + sine jointly"
+                                                    else "joint cosine + sine", est = FALSE)
+    }
     secondary <- tags$table(style = "width:100%;border-collapse:collapse",
       tags$thead(tags$tr(th("Question / Outcome"), lapply(cells, function(cl) th(sprintf("%s (95%% CI)", cl))),
                          if (multi) th("Between-group test"))),
