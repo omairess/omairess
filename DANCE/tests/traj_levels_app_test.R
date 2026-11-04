@@ -127,7 +127,7 @@ testServer(server, {
       "the window is 0 to 25 h on the model axis, tau 18 h",
       sprintf("the window summaries are off: end %.6f, mean %.6f", tw$end[[1]], tw$mean[[1]]))
   p1 <- render("the level plot renders per cell", output$harmonic_traj_levels_plot)
-  chk(!is.null(p1) && grepl("error_y", p1, fixed = TRUE) && grepl("MESOR (08:00 to 09:00 (+1d))", p1, fixed = TRUE),
+  chk(!is.null(p1) && grepl("error_y", p1, fixed = TRUE) && grepl("Time-averaged midline level (08:00 to 09:00 (+1d))", p1, fixed = TRUE),
       "per-cell panels carry intervals and name the window on the clock",
       "the per-cell plot lacks intervals or the clock window")
   nt <- render("the level note renders", text_of(output$harmonic_traj_levels_note))
@@ -165,20 +165,20 @@ testServer(server, {
   session$setInputs(harmonic_traj_component = "full"); session$flushReact()
   cm <- render("the component table renders", text_of(output$harmonic_traj_components))
   chk(grepl("Initial midline (t = 0)", cm, fixed = TRUE) &&
-        grepl("Mean midline level (MESOR)", cm, fixed = TRUE) &&
+        grepl("Time-averaged midline level", cm, fixed = TRUE) &&
         grepl("saturating rise A (KSS points above the intercept", cm, fixed = TRUE) &&
         !grepl("Baseline", cm, fixed = TRUE),
       "the component table tests the intercept and the MESOR, and names the trend with its units",
       "the component table still uses the old level rows or an unlabelled trend")
   sm <- text_of(capture.output(.print_harmonic_summary()))
   chk(grepl("Intercept (midline at 08:00)", sm, fixed = TRUE) &&
-        grepl("MESOR (midline averaged over 08:00 to 09:00 (+1d))", sm, fixed = TRUE) &&
+        grepl("Time-averaged midline level (over 08:00 to 09:00 (+1d))", sm, fixed = TRUE) &&
         grepl("Non-periodic change, 08:00 to 09:00 (+1d)", sm, fixed = TRUE) &&
         !grepl("Level at the first observation", sm, fixed = TRUE),
       "the summary prints intercept, MESOR and change per cell",
       "the summary still prints the old level line or lacks the new ones")
   r1 <- ce$table[1, ]
-  chk(grepl(sprintf("MESOR (midline averaged over 08:00 to 09:00 (+1d)): %.3f", r1$mesor), sm, fixed = TRUE),
+  chk(grepl(sprintf("Time-averaged midline level (over 08:00 to 09:00 (+1d)): %.3f", r1$mesor), sm, fixed = TRUE),
       "the summary's cell MESOR is the plotted one", "the summary's MESOR differs from the plot")
 
   # ======================================================== TWO-STAGE, saturating
@@ -222,7 +222,7 @@ testServer(server, {
       "the two-stage note says the change uses both saturating parameters",
       "the two-stage note does not explain the change")
   sm <- text_of(capture.output(.print_harmonic_summary()))
-  chk(grepl(sprintf("MESOR (midline averaged over 08:00 to 09:00 (+1d)): %.3f", gf$rhythm_adjusted_mean), sm, fixed = TRUE),
+  chk(grepl(sprintf("Time-averaged midline level (over 08:00 to 09:00 (+1d)): %.3f", gf$rhythm_adjusted_mean), sm, fixed = TRUE),
       "the two-stage summary prints the group MESOR the tests compare",
       "the two-stage summary prints a different group MESOR")
   session$setInputs(harmonic_traj_what = "intercept"); session$flushReact()
@@ -241,7 +241,7 @@ testServer(server, {
       paste("mixed, no trend:", paste(lv$quantities, collapse = ", ")))
   session$setInputs(harmonic_traj_level_view = "cells"); session$flushReact()
   p4 <- render("mixed, no trend: the level plot renders", output$harmonic_traj_levels_plot)
-  chk(!is.null(p4) && grepl("Intercept = MESOR (no trend)", p4, fixed = TRUE),
+  chk(!is.null(p4) && grepl("Intercept = time-averaged midline level (no trend)", p4, fixed = TRUE),
       "the single panel is named Intercept = MESOR", "the no-trend panel is misnamed")
   chk(identical(dance_traj_pair_whats(values$harmonic_model$traj)[1:2], c("fitted_mean", "intercept")) &&
         !any(c("mesor", "change", "level") %in% dance_traj_pair_whats(values$harmonic_model$traj)),

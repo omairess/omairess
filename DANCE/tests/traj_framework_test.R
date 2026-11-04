@@ -263,8 +263,8 @@ chk(isTRUE(set3$ok) && nrow(set3$table) == 3 &&
     "the set runs all three and puts the FULL trajectory difference first",
     "the omnibus set is not ordered with the primary question first")
 chk(all(nzchar(vapply(set3$results, function(r) r$hypothesis %||% "", character(1)))) &&
-      grepl("NOT the MESOR", e$DANCE_TRAJ_BLOCK_H0[["level"]], fixed = TRUE),
-    "each block states its own H0, and the level block says it is not a MESOR",
+      grepl("NOT the time-averaged midline level", e$DANCE_TRAJ_BLOCK_H0[["level"]], fixed = TRUE),
+    "each block states its own H0, and the level block says it is not the time-averaged midline level",
     "a block came back without its null hypothesis spelled out")
 
 # A PURE VERTICAL SHIFT: the case that motivated adding the full block at all.
