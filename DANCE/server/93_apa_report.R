@@ -788,7 +788,13 @@ dance_apa_report <- function(values, input, title = NULL) {
           dance_apa_num(fa$L2_stat, 3),
           if (is.finite(fa$p_value_L2 %|% NA))
             paste0(", ", dance_apa_p(fa$p_value_L2), ".")
-          else ". This procedure computes no global *p* value for a repeated-measures design; the optional global test is that of Kurylo and Smaga (2023).")
+          else if (identical(fa$design, "within"))
+            ". This procedure computes no global *p* value for a repeated-measures design; the optional global test is that of Kurylo and Smaga (2023)."
+          else "; its *p* value could not be computed, because no permutation gave a defined statistic.")
+    if (isTRUE((fa$n_dropped %|% 0) > 0))
+      add(" ", as.integer(fa$n_dropped), " curve(s) with a missing ",
+          if (identical(fa$design, "within")) "subject or condition" else "group",
+          " value were left out of the test.")
     blank()
     add("*What these numbers do not establish.* The pointwise procedure ",
         "answers *where* the curves differ, not *whether* they differ overall. ",

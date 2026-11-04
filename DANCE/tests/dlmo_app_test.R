@@ -96,6 +96,35 @@ run_layout <- function(label, d, sel, night_var, csv_name) {
       render(paste(label, o), output[[o]])
     session$setInputs(dlmo_profile_id = "_all_")
     render(paste(label, "plot, all participants"), output$dlmo_profile_plot)
+    # each group x night cell's mean and median onset, per method, on the plot:
+    # the same numbers as the Comparisons tab's descriptives
+    seg_x <- function() {
+      js <- jsonlite::fromJSON(render(paste(label, "summary plot"), output$dlmo_profile_plot), simplifyVector = FALSE)$x$data
+      unlist(lapply(js, function(t) if (identical(t$legendgroup, "summary")) unlist(t$x)[1]))
+    }
+    for (st in c("mean", "median")) {
+      session$setInputs(dlmo_summary_stat = st)
+      xs <- seg_x()
+      want <- unlist(lapply(c("fixed", "variable"), function(m) {
+        ds <- dance_dlmo_describe(r$tab[r$tab$method == m, ], "dlmo_h", c("group", "night"))
+        ds[[st]] }))
+      chk(length(xs) == 8 && isTRUE(all.equal(sort(xs), sort(want))),
+          sprintf("%s: the plot draws each group x night %s onset for each method (%d lines)", label, st, length(xs)),
+          sprintf("%s: the %s onset lines (%d) differ from the descriptives", label, st, length(xs)))
+    }
+    session$setInputs(dlmo_profile_id = "_g_B", dlmo_summary_stat = "mean")
+    xs <- seg_x()
+    wantB <- unlist(lapply(c("fixed", "variable"), function(m) {
+      tb <- r$tab[r$tab$method == m & r$tab$group == "B", ]
+      dance_dlmo_describe(tb, "dlmo_h", "night")$mean }))
+    nt <- render(paste(label, "summary table"), output$dlmo_profile_note)
+    chk(length(xs) == 4 && isTRUE(all.equal(sort(xs), sort(wantB))) && grepl("of 8", paste(nt, collapse = "")),
+        sprintf("%s: group B alone, with its two nights' mean onsets per method, and the table under the plot", label),
+        sprintf("%s: the group view's summary is wrong (%d lines)", label, length(xs)))
+    session$setInputs(dlmo_summary_stat = "none")
+    chk(length(seg_x()) == 0, sprintf("%s: no summary lines when none is asked for", label),
+        sprintf("%s: summary lines drawn with 'None'", label))
+    session$setInputs(dlmo_profile_id = "_all_", dlmo_summary_stat = "mean")
     session$setInputs(dlmo_compare_method = "variable")
     render(paste(label, "comparison, variable threshold"), output$dlmo_test_table)
     f <- render(paste(label, "CSV"), output$dlmo_download)

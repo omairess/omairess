@@ -464,3 +464,26 @@ dance_dlmo_apa <- function(r) {
                 ag$comparison[i], dance_dlmo_fmt_diff(ag$mean_diff_h[i]), ag$sd_diff_h[i], ag$n_both[i]))
   L
 }
+
+# The onset summary drawn on the profile plot: per method and per cell (group
+# x night when a group is defined, else night), the mean or median of the
+# DETERMINED onsets on the common evening axis -- the same numbers as the
+# Comparisons tab's descriptives -- with how many profiles it rests on.
+dance_dlmo_onset_summary <- function(tab, stat = c("mean", "median"), by_group = TRUE) {
+  stat <- match.arg(stat)
+  g <- if (by_group && any(!is.na(tab$group))) ifelse(is.na(tab$group), "(no group)", tab$group) else NA_character_
+  key <- data.frame(method = tab$method, group = g, night = tab$night, stringsAsFactors = FALSE)
+  ck <- unique(key)
+  out <- do.call(rbind, lapply(seq_len(nrow(ck)), function(i) {
+    k <- ck[i, ]
+    s <- tab[tab$method == k$method & tab$night == k$night & (is.na(k$group) | g == k$group), , drop = FALSE]
+    v <- s$dlmo_h[s$status == "determined" & is.finite(s$dlmo_h)]
+    data.frame(method = k$method, group = k$group, night = k$night,
+               cell = if (is.na(k$group)) k$night else paste(k$group, k$night, sep = " / "),
+               stat = stat, value = if (!length(v)) NA_real_ else if (stat == "mean") mean(v) else stats::median(v),
+               n = length(v), n_profiles = nrow(s), stringsAsFactors = FALSE)
+  }))
+  out$clock <- dance_clock_label(out$value, 24, show_day = FALSE)
+  rownames(out) <- NULL
+  out
+}

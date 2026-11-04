@@ -1252,3 +1252,70 @@ runs both approaches on both scales and checks:
 - the report;
 - the exported script reproducing every estimate, note and clock time;
 - a zero refused with c = 0, and accepted with c = 0.5.
+
+## 25. Functional ANOVA: a curve without a group; the criterion the plots use
+
+**The defect (found on real data).** A curve whose group value was missing
+entered the between-groups functional ANOVA, with these consequences:
+- **Observed F:** it left the curve out of the group sums, but counted it in
+  the degrees of freedom (df within 28 instead of 27).
+- **Permutations:** the curve's missing label was shuffled with the rest, so
+  every permuted statistic came out undefined. As a result:
+  - every pointwise p-value was missing: the p-value plot was empty and had no
+    legend entries;
+  - no region could be significant;
+  - the L2 p was computed as (1 + 0)/(1 + 0) = 1, which reads as "no
+    difference" when no comparison was made.
+- **Reproduced:** on simulated data this gives exactly that screen, while the
+  same data without the curve give L2 p = 0.005.
+
+**The fixes.**
+1. **Drop and count.** Both kernels (`perform_functional_anova`,
+   `perform_rm_fanova`) drop a curve with a missing or blank group, subject
+   or condition value before anything is computed, and count it
+   (`dance_fanova_complete`). The readout, a notification and the APA report
+   state how many. The result is identical to running without that curve
+   (test).
+2. **No permutation, no p-value.** `dance_perm_p()` returns NA when there are
+   no valid permutations (B = 0), so the readout says "not computed". It
+   never shows p = 1 in that case.
+3. **Which criterion "significant" uses.**
+   - The red line on the F plot is the uncorrected parametric critical F at
+     one time point, and is now labelled so.
+   - The stretches that are significant under the test's own criterion are
+     shaded on the F plot, as on the mean-function plot: pointwise
+     permutation p-values, FDR-adjusted (Benjamini-Hochberg) across the 100
+     evaluation points.
+   - The readout states that criterion.
+   - An empty p-value plot says why.
+4. **The exported script.**
+   - **Labels:** it now passes the fANOVA tab's own grouping variable, with NA
+     where a curve has no group or is outside the compared groups. It used to
+     pass the first grouping variable selected at import, whatever the tab
+     used, and wrote a missing group as the text 'NA', i.e. a group called
+     "NA".
+   - **Curves:** with no smoothing step, the app's analyses use the data
+     points joined by straight lines (`dance_ensure_fd_obj`). The script
+     fitted a 20-basis GCV smooth instead, so its functional analyses were on
+     different curves. It now builds the app's representation.
+
+**Tests.**
+- `tests/testthat/test-fanova-missing-group.R`: the kernel and
+  `dance_perm_p`.
+- `tests/fanova_missing_group_app_test.R`: through the app, the readout, both
+  plots, the report, and the exported script reproducing the same F.
+
+## 26. DLMO: each group's mean or median onset on the profile plot
+
+The profile plot's "Show" menu now offers all participants, each group (when
+a group variable is defined) and each participant.
+- **Summary lines:** with all participants or one group, a thick vertical line
+  per method (solid fixed, dashed variable, dotted hockey-stick) marks each
+  cell's mean or median onset (the user's choice, or none).
+- **What a cell is:** a group × night combination for all participants; a
+  night within one group.
+- **What enters the summary:** determined onsets only. The values are the
+  Comparisons tab's descriptives (`dance_dlmo_onset_summary`), and a table
+  under the plot gives each value with "k of n profiles".
+- This is display only: no number in the CSV, report or script changes.
+- **Test:** `tests/dlmo_app_test.R`.

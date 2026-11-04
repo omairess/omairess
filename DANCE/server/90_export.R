@@ -714,7 +714,8 @@
         add("group_labels <- factor(c(")
         gl <- as.character(values$group_labels)
         for (ci in split(seq_along(gl), ceiling(seq_along(gl) / 12))) {
-          add("  ", paste0("'", gl[ci], "'", collapse = ", "),
+          # a missing group stays missing (NA), not a group called 'NA'
+          add("  ", paste(ifelse(is.na(gl[ci]), "NA", paste0("'", gl[ci], "'")), collapse = ", "),
               if (max(ci) < length(gl)) "," else "")
         }
         add("))")
@@ -860,6 +861,18 @@
         add("# Smoothed values were clamped to [min_bound, max_bound]")
         add("")
       }
+    } else if (!is.null(values$fd_obj)) {
+      # NO SMOOTHING STEP, BUT AN ANALYSIS RAN: the app then built its curves
+      # as the data points joined by straight lines (dance_ensure_fd_obj), and
+      # the script must build the same curves. It used to fit a 20-basis GCV
+      # smooth here instead, so every functional analysis it reran was on
+      # different curves from the app's.
+      add("# No smoothing step was applied in the app: each curve is its data points")
+      add("# joined by straight lines (an order-2 B-spline basis with a knot at every")
+      add("# time point), the representation the app's analyses used.")
+      emit_kernel("dance_fd_no_smoothing")
+      add("fd_obj <- dance_fd_no_smoothing(data_matrix, time_points)")
+      add("")
     } else {
       # P3.5b: this fallback carried the same false label as the auto branch --
       # "# REML optimization" on lambda = 0, which is the UNPENALISED fit.
@@ -1197,7 +1210,17 @@
         } else {
           add("fd_to_analyze <- fd_obj")
         }
-        add(sprintf("fanova_results <- perform_functional_anova(fd_to_analyze, group_labels, n_permutations = %d, alpha = %s)",
+        # THE LABELS THE TEST WAS GIVEN, one per curve: the fANOVA tab's own
+        # group variable, NA where a curve has no group or is outside the
+        # chosen groups (the kernel leaves those out). Written with deparse,
+        # so a missing value stays missing rather than becoming a group "NA".
+        fl <- values$fanova_results$labels_for_export
+        if (!is.null(fl)) {
+          add("# group of each curve for this test (", values$fanova_results$group_var_used %||% "group",
+              "); NA = no group, or not among the groups compared")
+          add("fanova_group_labels <- factor(", dance_export_vec(fl), ")")
+        } else add("fanova_group_labels <- group_labels")
+        add(sprintf("fanova_results <- perform_functional_anova(fd_to_analyze, fanova_group_labels, n_permutations = %d, alpha = %s)",
                     values$fanova_results$n_permutations %||% 5000,
                     format(values$fanova_results$alpha %||% 0.05)))
         add("")

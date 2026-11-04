@@ -202,7 +202,30 @@ dance_perm_p <- function(exceedances, B) {
             all(is.finite(B)), all(B >= 0),
             all(is.finite(exceedances)), all(exceedances >= 0),
             all(exceedances <= B))
-  (1 + exceedances) / (1 + B)
+  p <- (1 + exceedances) / (1 + B)
+  # NO VALID PERMUTATION, NO TEST. With B = 0 the formula gives (1 + 0)/(1 + 0)
+  # = 1, which reads as "no difference at all" when nothing was compared. That
+  # is how a curve with a missing group label showed L2 p = 1: every permuted
+  # statistic was undefined. It is reported as not computed.
+  p[rep_len(B, length(p)) == 0] <- NA_real_
+  p
+}
+
+# THE CURVES A TEST CAN USE: a curve whose group (or subject, or condition) is
+# missing or blank cannot be assigned, so it is dropped before the test and
+# counted -- it must not enter n, the degrees of freedom or the permutations.
+# labels: a named list of vectors, one value per curve. Returns the fd object
+# and labels restricted to the complete curves, and how many were dropped.
+dance_fanova_complete <- function(fd_obj, labels) {
+  ok <- Reduce(`&`, lapply(labels, function(v) {
+    v <- as.character(v); !is.na(v) & nzchar(trimws(v))
+  }))
+  n_drop <- sum(!ok)
+  if (n_drop > 0) {
+    fd_obj <- fd_obj[which(ok)]
+    labels <- lapply(labels, function(v) if (is.factor(v)) droplevels(v[ok]) else v[ok])
+  }
+  list(fd = fd_obj, labels = labels, n_dropped = n_drop, kept = which(ok))
 }
 
 # The smallest p either kernel can return, for labelling the resolution floor.
@@ -243,4 +266,14 @@ dance_studentise <- function(numerator, denominator) {
   # a variance is finite); NA propagates from missing input and is left alone.
   out[is.nan(out)] <- 0
   out
+}
+
+# Shaded bands over the FDR-significant stretches of a pointwise test.
+dance_fanova_sig_shapes <- function(sig, time_points, fill = "rgba(46,139,87,0.15)") {
+  sig <- !is.na(sig) & sig
+  if (!any(sig)) return(list())
+  st <- which(diff(c(FALSE, sig)) == 1); en <- which(diff(c(sig, FALSE)) == -1)
+  lapply(seq_along(st), function(i) list(type = "rect", xref = "x", yref = "paper",
+    x0 = time_points[st[i]], x1 = time_points[en[i]], y0 = 0, y1 = 1,
+    fillcolor = fill, line = list(width = 0), layer = "below"))
 }

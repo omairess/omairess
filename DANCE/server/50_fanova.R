@@ -262,6 +262,11 @@
     # which the code then never successfully called. The procedure below has no
     # such dependency.
     
+    # a curve without a subject or a condition is dropped and counted
+    cc <- dance_fanova_complete(fd_obj, list(subject = subject_id, condition = rm_factor))
+    fd_obj <- cc$fd; subject_id <- cc$labels$subject; rm_factor <- cc$labels$condition
+    n_dropped <- cc$n_dropped
+
     n_time <- 100
     time_points <- seq(0, 1, length.out = n_time)
     
@@ -767,6 +772,7 @@
         p_values_pointwise = p_values_pointwise,
         p_values_adjusted = p_values_adjusted,
         sig_regions = sig_regions,
+        n_dropped = n_dropped,
         L2_stat = L2_stat,
         p_value_L2 = p_value_L2,
         rm_global = rm_global,     # P2.6: optional rmfanova global test, or NULL
@@ -796,7 +802,11 @@
   # Functional ANOVA function - ENHANCED
   perform_functional_anova <- function(fd_obj, group_labels, n_permutations = 200, 
                                        test_type = "both", alpha = 0.05) {
-    
+    # a curve without a group is dropped and counted (server/06_helpers_posthoc.R)
+    cc <- dance_fanova_complete(fd_obj, list(group = group_labels))
+    fd_obj <- cc$fd; group_labels <- cc$labels$group
+    n_dropped <- cc$n_dropped
+
     n_curves <- ncol(fd_obj$coefs)
     n_time <- 100
     time_points <- seq(0, 1, length.out = n_time)
@@ -926,6 +936,7 @@
 
     p_value_L2 <- dance_perm_p(sum(L2_stat_perm >= L2_stat, na.rm = TRUE),
                                sum(is.finite(L2_stat_perm)))
+    n_valid_perm <- sum(is.finite(L2_stat_perm))
     
     p_values_adjusted <- p.adjust(p_values_pointwise, method = "fdr")
     # P4.7: a time point with no defined test is not significant, and is not
@@ -985,6 +996,8 @@
       n_undefined = n_undefined,
       L2_stat = L2_stat,
       p_value_L2 = p_value_L2,
+      n_valid_perm = n_valid_perm,
+      n_dropped = n_dropped,
       eta_squared = eta_squared,
       eta_squared_type = "classical",
       df_between = df_between,
@@ -1214,6 +1227,10 @@
 
         # Get current group labels from the selected fANOVA group variable
         current_group_labels <- get_fanova_group_labels()
+        # what the test is given, one label per curve, for the exported script:
+        # a curve outside the chosen groups or without a group is NA there,
+        # and the kernel leaves it out exactly as the app does
+        labels_for_export <- as.character(current_group_labels)
 
         # Filter by selected groups if user has made a selection
         # The picker exists only for a variable with more than two groups, but
@@ -1229,6 +1246,7 @@
         if(!is.null(groups_to_include) && length(groups_to_include) >= 2) {
           # Find indices of subjects in selected groups
           include_idx <- which(current_group_labels %in% groups_to_include)
+          labels_for_export[-include_idx] <- NA
 
           if(length(include_idx) < 2) {
             showNotification("Not enough subjects in selected groups!", type = "error", duration = 5)
@@ -1267,6 +1285,11 @@
         )
 
         values$fanova_results$design <- "between"
+        values$fanova_results$labels_for_export <- labels_for_export
+        values$fanova_results$group_var_used <- input$fanova_group_var
+        if (isTRUE(values$fanova_results$n_dropped > 0))
+          showNotification(sprintf("%d curve(s) with no value of the group variable were left out of the test.",
+                                   as.integer(values$fanova_results$n_dropped)), type = "warning", duration = 10)
         
       } else if(input$fanova_design == "within") {
         # Within-subjects (repeated measures) ANOVA
@@ -1343,6 +1366,9 @@
           ))
 
         values$fanova_results$design <- "within"
+        if (isTRUE(values$fanova_results$n_dropped > 0))
+          showNotification(sprintf("%d curve(s) with no subject or condition value were left out of the test.",
+                                   as.integer(values$fanova_results$n_dropped)), type = "warning", duration = 10)
         # P3.8: the exported script referenced subject_id and rm_factor without
         # ever defining them, so the within-design section could not run. Keep
         # the design vectors the fit actually used so the export can write them.
@@ -1404,13 +1430,26 @@
       cat("Group sizes:", paste(res$group_sizes, collapse = ", "), "\n")
     }
     
+    # curves the test could not use, and why
+    if (isTRUE((res$n_dropped %||% 0) > 0))
+      cat(sprintf("Curves left out: %d, with a missing %s value (not counted in n, df or the permutations)\n",
+                  as.integer(res$n_dropped), if (identical(res$design, "within")) "subject or condition" else "group"))
+
     cat("\nL2 statistic:", round(res$L2_stat, 4), "\n")
     
     if(!is.na(res$p_value_L2)) {
-      cat("L2 p-value:", round(res$p_value_L2, 4), "\n")
+      cat("L2 p-value:", round(res$p_value_L2, 4),
+          sprintf("(%d permutations)", as.integer(res$n_valid_perm %||% res$n_permutations)), "\n")
     } else if (identical(res$design, "within")) {
       cat("L2 p-value: not computed by the pointwise procedure.\n")
+    } else {
+      cat("L2 p-value: not computed -- no permutation gave a defined statistic.\n")
     }
+    # what "significant" means on the plots below
+    cat(sprintf(paste0("\nSignificant regions: pointwise permutation p-values, FDR-adjusted (Benjamini-Hochberg)\n",
+                       "  across the %d evaluation points, at alpha = %s. The red line on the F plot is the\n",
+                       "  UNCORRECTED parametric critical F at one time point, for orientation only.\n"),
+                length(res$time_points), format(res$alpha)))
 
     # P2.6: the optional global repeated-measures test
     if (!is.null(res$rm_global)) {
@@ -1606,10 +1645,14 @@
                 customdata = hover_times) %>%
       add_trace(x = c(0, 1), y = c(crit_val, crit_val),
                 line = list(color = 'red', width = 2, dash = 'dash'),
-                name = paste('Critical value (α =', res$alpha, ')'),
-                hovertemplate = paste("Critical F =", round(crit_val, 2), "<extra></extra>")) %>%
+                name = paste0('Uncorrected critical F (\u03b1 = ', res$alpha, ', one time point)'),
+                hovertemplate = paste("Uncorrected critical F =", round(crit_val, 2),
+                                      "(parametric, one time point; not the FDR criterion)<extra></extra>")) %>%
       layout(title = paste("Pointwise F-statistics (", res$n_groups, "groups)"),
-             yaxis = list(title = "F-statistic"))
+             yaxis = list(title = "F-statistic"),
+             # THE CRITERION THE TEST USES: shaded where the FDR-adjusted
+             # permutation p is below alpha. F above the red line is not that.
+             shapes = dance_fanova_sig_shapes(res$sig_regions, res$time_points))
 
     p <- format_plotly_time_axis(p, res$time_points, tick_step_hours = as.numeric(input$tick_freq_fanova))
     p
@@ -1648,7 +1691,12 @@
                 hoverinfo = 'skip') %>%
       layout(title = paste("Pointwise p-values (", res$n_groups, "groups)"),
              yaxis = list(title = "p-value", type = 'log',
-                          range = c(log10(0.0001), log10(1))))
+                          range = c(log10(0.0001), log10(1))),
+             # an empty plot must say why, not look like a rendering fault
+             annotations = if (all(is.na(res$p_values_pointwise)))
+               list(list(x = 0.5, y = 0.5, xref = "paper", yref = "paper", showarrow = FALSE,
+                         text = "No pointwise p-values: no permutation gave a defined statistic.",
+                         font = list(color = "#8a5a12"))) else list())
     p <- format_plotly_time_axis(p, res$time_points, tick_step_hours = as.numeric(input$tick_freq_fanova))
     p
   })

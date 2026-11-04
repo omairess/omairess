@@ -143,35 +143,65 @@ output$dlmo_profile_select_ui <- renderUI({
   r <- values$dlmo_results
   if (!isTRUE(r$ok)) return(NULL)
   ids <- unique(vapply(r$profiles, `[[`, "", "id"))
-  selectInput("dlmo_profile_id", "Participant:", choices = c("All participants" = "_all_", ids),
-              selected = isolate(input$dlmo_profile_id) %||% ids[1])
+  gl <- if (isTRUE(r$has_group)) sort(unique(stats::na.omit(r$tab$group))) else character(0)
+  ch <- c("All participants" = "_all_",
+          stats::setNames(paste0("_g_", gl), sprintf("Group: %s", gl)), stats::setNames(ids, ids))
+  fluidRow(
+    column(6, selectInput("dlmo_profile_id", "Show:", choices = ch,
+                          selected = isolate(input$dlmo_profile_id) %||% ids[1])),
+    column(6, radioButtons("dlmo_summary_stat", "Onset summary (all participants / a group):",
+                           choices = c("Mean" = "mean", "Median" = "median", "None" = "none"),
+                           selected = isolate(input$dlmo_summary_stat) %||% "mean", inline = TRUE)))
 })
 
 DLMO_METHOD_DASH <- c(fixed = "solid", variable = "dash", hockey = "dot")
 
-output$dlmo_profile_plot <- renderPlotly({
+# What the plot shows: one participant, everyone, or one group; the cells it is
+# coloured by; and the onset summary of those cells (server/08l_helpers_dlmo.R).
+dlmo_plot_view <- reactive({
   r <- dlmo_result()
   sel <- input$dlmo_profile_id %||% r$profiles[[1]]$id
-  all <- identical(sel, "_all_")
-  pr <- if (all) r$profiles else Filter(function(p) identical(p$id, sel), r$profiles)
-  validate(need(length(pr) > 0, "No profile for this participant."))
-  nights <- unique(vapply(r$profiles, `[[`, "", "night"))
-  cols <- dance_group_colors(nights)
-  names(cols) <- nights
+  grp_sel <- if (startsWith(sel, "_g_")) sub("^_g_", "", sel) else NULL
+  many <- identical(sel, "_all_") || !is.null(grp_sel)
+  pr <- if (identical(sel, "_all_")) r$profiles
+        else if (!is.null(grp_sel)) Filter(function(p) identical(p$group, grp_sel), r$profiles)
+        else Filter(function(p) identical(p$id, sel), r$profiles)
+  # with everyone and a group variable, a cell is group x night; otherwise the night
+  by_group <- isTRUE(r$has_group) && identical(sel, "_all_")
+  cell_of <- function(p) if (by_group) paste(p$group %||% "(no group)", p$night, sep = " / ") else p$night
+  stat <- input$dlmo_summary_stat %||% "mean"
+  summ <- NULL
+  if (many && stat != "none") {
+    tb <- r$tab
+    if (!is.null(grp_sel)) tb <- tb[!is.na(tb$group) & tb$group == grp_sel, , drop = FALSE]
+    summ <- dance_dlmo_onset_summary(tb, stat, by_group = by_group)
+  }
+  list(r = r, sel = sel, grp = grp_sel, many = many, profiles = pr, by_group = by_group,
+       cell_of = cell_of, stat = stat, summary = summ)
+})
+
+output$dlmo_profile_plot <- renderPlotly({
+  v <- dlmo_plot_view(); r <- v$r; pr <- v$profiles; all <- v$many
+  validate(need(length(pr) > 0, "No profile for this selection."))
+  cells <- unique(vapply(if (v$by_group) r$profiles else pr, v$cell_of, ""))
+  cols <- dance_group_colors(cells)
+  names(cols) <- cells
   u <- r$units %||% "pg/mL"
   p <- plotly::plot_ly()
   shown <- character(0)
+  ymax <- max(unlist(lapply(pr, function(q) q$y)), na.rm = TRUE)
   for (q in pr) {
-    cl <- cols[[q$night]]
+    ce <- v$cell_of(q); cl <- cols[[ce]]
     ok <- is.finite(q$y)
     p <- plotly::add_trace(p, x = q$t[ok], y = q$y[ok], type = "scatter",
                            mode = if (all) "lines" else "lines+markers",
                            line = list(color = cl, width = if (all) 1 else 2), marker = list(color = cl),
-                           name = q$night, legendgroup = q$night, showlegend = !(q$night %in% shown),
-                           text = sprintf("%s, %s<br>%s: %.2f %s", q$id, q$night,
+                           opacity = if (all && !is.null(v$summary)) 0.5 else 1,
+                           name = ce, legendgroup = ce, showlegend = !(ce %in% shown),
+                           text = sprintf("%s, %s<br>%s: %.2f %s", q$id, ce,
                                           dance_clock_label(q$t[ok], 24, show_day = FALSE), q$y[ok], u),
                            hoverinfo = "text")
-    shown <- c(shown, q$night)
+    shown <- c(shown, ce)
     rows <- r$tab[r$tab$id == q$id & r$tab$night == q$night, , drop = FALSE]
     for (j in seq_len(nrow(rows))) {
       rw <- rows[j, ]
@@ -197,6 +227,17 @@ output$dlmo_profile_plot <- renderPlotly({
                                                                    dance_clock_label(bt, 24, show_day = FALSE)))
     }
   }
+  # THE ONSET SUMMARY of each cell, one line per method in the method's dash
+  sm <- v$summary
+  if (!is.null(sm)) for (i in which(is.finite(sm$value))) {
+    s <- sm[i, ]; cl <- cols[[s$cell]] %||% "#333"
+    lab <- sprintf("%s onset, %s (%s): %s<br>from %d of %d profiles", tools::toTitleCase(s$stat), s$cell,
+                   DANCE_DLMO_METHOD_LABEL[[s$method]], s$clock, s$n, s$n_profiles)
+    p <- plotly::add_segments(p, x = s$value, xend = s$value, y = 0, yend = ymax,
+                              line = list(color = cl, dash = DLMO_METHOD_DASH[[s$method]], width = 3),
+                              name = sprintf("%s onset", tools::toTitleCase(s$stat)), legendgroup = "summary",
+                              showlegend = FALSE, hoverinfo = "text", text = lab)
+  }
   xr <- range(unlist(lapply(pr, `[[`, "t")), na.rm = TRUE)
   tk <- dance_clock_ticks(xr)
   shapes <- if ("fixed" %in% r$methods || "hockey" %in% r$methods)
@@ -205,19 +246,35 @@ output$dlmo_profile_plot <- renderPlotly({
   plotly::layout(p, shapes = shapes,
                  xaxis = c(list(title = "Clock time"), if (!is.null(tk)) list(tickvals = tk$vals, ticktext = tk$text)),
                  yaxis = list(title = sprintf("Melatonin (%s)", u), rangemode = "tozero"),
-                 legend = list(title = list(text = "Night")))
+                 legend = list(title = list(text = if (v$by_group) "Group / night" else "Night")))
 })
 
 output$dlmo_profile_note <- renderUI({
   r <- values$dlmo_results
   if (!isTRUE(r$ok)) return(NULL)
-  helpText(HTML(paste0(
-    "Red dotted line: the threshold (", format(r$opt$threshold), " ", r$units, "). ",
-    "Vertical lines: the onset by each method &mdash; solid fixed threshold, dashed variable threshold ",
-    "(its per-profile threshold drawn as a thin dashed line), dotted hockey-stick.",
-    if (r$has_bed) " Dash-dot: habitual bedtime." else "",
-    " Each profile is drawn on the same evening clock. With all participants, the markers are the onsets.")))
-})
+  v <- tryCatch(dlmo_plot_view(), error = function(e) NULL)
+  sm <- v$summary
+  tagList(
+    helpText(HTML(paste0(
+      "Red dotted line: the threshold (", format(r$opt$threshold), " ", r$units, "). ",
+      "Vertical lines: the onset by each method &mdash; solid fixed threshold, dashed variable threshold ",
+      "(its per-profile threshold drawn as a thin dashed line), dotted hockey-stick.",
+      if (r$has_bed) " Dash-dot: habitual bedtime." else "",
+      " Each profile is drawn on the same evening clock. With all participants or a group, the markers ",
+      "are the individual onsets and the thick lines each cell's ",
+      if (!is.null(sm)) sm$stat[1] else "mean or median",
+      " onset, of the determined onsets only (the same numbers as the Comparisons tab)."))),
+    if (!is.null(sm) && nrow(sm))
+      tags$table(style = "font-size:12px;margin-top:4px",
+        tags$thead(tags$tr(lapply(c("Cell", "Method", tools::toTitleCase(sm$stat[1]), "Determined"),
+                                  function(h) tags$th(style = "padding:2px 14px 2px 0", h)))),
+        tags$tbody(lapply(seq_len(nrow(sm)), function(i) tags$tr(
+          tags$td(style = "padding:2px 14px 2px 0", sm$cell[i]),
+          tags$td(style = "padding:2px 14px 2px 0", DANCE_DLMO_METHOD_LABEL[[sm$method[i]]]),
+          tags$td(style = "padding:2px 14px 2px 0;font-family:monospace", if (is.finite(sm$value[i])) sm$clock[i] else "--"),
+          tags$td(style = "padding:2px 14px 2px 0", sprintf("%d of %d", sm$n[i], sm$n_profiles[i])))))))
+}
+)
 
 # ---- 2. ONSETS --------------------------------------------------------------------
 dlmo_table_frame <- function(r) {
