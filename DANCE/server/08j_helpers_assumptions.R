@@ -86,7 +86,7 @@ dance_cosinor_assumptions <- function(mod, ff = NULL, df_method = "kr") {
                      "is a convention, not an estimate."))
   if (!identical(trend, "none"))
     a("Trend", sprintf(paste(
-      "MESOR = the midline (intercept + trend) averaged over t = 0 to %s h, the first to",
+      "Time-averaged midline level = the midline (intercept + trend) averaged over t = 0 to %s h, the first to",
       "the last time point; change = the trend at the last time point (it is 0 at t = 0)."),
       f(span)))
 
@@ -222,7 +222,7 @@ dance_cosinor_assumptions <- function(mod, ff = NULL, df_method = "kr") {
         " Fewer than 3 fits passed, so ALL returned fits were used in this run." else
         " If fewer than 3 fits pass, all returned fits are used and the summary says so."))
     a("Group summaries", paste(
-      "Level and trend quantities (fitted mean, intercept, MESOR, change, rates, trend",
+      "Level and trend quantities (fitted mean, intercept, time-averaged midline level, change, rates, trend",
       "parameters): arithmetic means of the participants' own values, with t intervals.",
       if (K >= 1L) paste("Amplitude and acrophase: amplitude-weighted vector means",
       "of the (cos, sin) pairs (the population-mean cosinor).") else "",

@@ -52,7 +52,7 @@ test_that("the pairwise vocabulary follows the fit, with no duplicate blocks", {
   w1 <- e$dance_traj_pair_whats(f1)
   expect_false(any(c("trend", "mesor", "change", "level") %in% w1))
   expect_true("intercept" %in% w1)
-  expect_equal(e$dance_traj_pair_label("intercept", 24, 1, "none"), "Intercept = MESOR (no trend)")
+  expect_equal(e$dance_traj_pair_label("intercept", 24, 1, "none"), "Intercept = time-averaged midline level (no trend)")
   # with no trend, shape and circadian are the SAME columns: one entry, not two
   expect_equal(sum(c("shape", "circadian") %in% w1), 1L)
   expect_true("full" %in% w1)

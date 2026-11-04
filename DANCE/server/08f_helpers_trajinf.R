@@ -130,7 +130,7 @@ DANCE_TRAJ_BLOCK_LABEL <- c(
   trend     = "Non-circadian trend difference",
   fitted_mean = "Time-averaged fitted response",
   intercept = "Initial midline (t = 0)",
-  mesor     = "Mean midline level (MESOR)",
+  mesor     = "Time-averaged midline level",
   change    = "Total trend change (start to end)",
   avg_rate  = "Average trend rate",
   rate0     = "Initial trend rate")
@@ -139,10 +139,10 @@ DANCE_TRAJ_BLOCK_H0 <- c(
   full      = "H0: no difference in level, in any trend term, or in any harmonic coefficient -- the trajectories coincide.",
   shape     = "H0: no difference in any trend term or harmonic coefficient. A pure vertical shift is EXCLUDED, so this asks whether the curves are the same shape at possibly different heights.",
   circadian = "H0: every difference in a cos/sin coefficient is zero -- same rhythm, whatever the level or the trend does.",
-  level     = "H0: no difference in the fitted CURVE VALUE at the first observation t0: the intercept plus every cosine coefficient, since cos(0) = 1. It is NOT the intercept and NOT the MESOR -- it includes where each rhythm happens to be at t0.",
+  level     = "H0: no difference in the fitted CURVE VALUE at the first observation t0: the intercept plus every cosine coefficient, since cos(0) = 1. It is NOT the intercept and NOT the time-averaged midline level -- it includes where each rhythm happens to be at t0.",
   trend     = "H0: no difference in any non-circadian trend coefficient.",
   intercept = "H0: no difference in the intercept -- the midline of the rhythm (intercept + trend, harmonics excluded) at the first observation, where every trend term is zero.",
-  mesor     = "H0: no difference in the MESOR -- the midline of the rhythm (intercept + trend, harmonics excluded) averaged over the observed window. Without a trend it IS the intercept.",
+  mesor     = "H0: no difference in the time-averaged midline level -- the midline of the rhythm (intercept + trend, harmonics excluded) averaged over the observed window. Without a trend it IS the intercept.",
   change    = "H0: no difference in the non-periodic change from the first to the last observation. With one trend coefficient per cell this is the same hypothesis as the trend block, expressed in the response's own units.",
   fitted_mean = "H0: no difference in the time-averaged fitted response -- the whole fitted curve (midline and rhythm) averaged over the observed window.",
   avg_rate  = "H0: no difference in the average trend rate, the total trend change divided by the window. Over one common window this is the same hypothesis as the total change.",
@@ -1182,14 +1182,14 @@ DANCE_TRAJ_BLOCK_COMPONENTS <- function(spec, block) {
     trend     = spec$trend_terms,
     level     = lvl,
     intercept = ".intercept",
-    # without a trend the MESOR is the intercept and there is no change: the
+    # without a trend the time-averaged midline level is the intercept and there is no change: the
     # blocks exist only where they are distinct quantities
     mesor     = if (has_trend) ".mesor" else character(0),
     change    = if (has_trend) ".change" else character(0),
     avg_rate  = if (has_trend) ".avg_rate" else character(0),
     # a straight line's initial rate IS its average rate
     rate0     = if (has_trend && !identical(spec$trend, "linear")) ".rate0" else character(0),
-    # without a rhythm the fitted mean IS the MESOR
+    # without a rhythm the fitted mean IS the time-averaged midline level
     fitted_mean = if (length(spec$harm_terms)) ".fitted_mean" else character(0),
     character(0))
 }
@@ -1425,10 +1425,10 @@ dance_traj_tests <- function(ff, df_method = "kr", progress = NULL) {
   dts <- ff$spec$design_terms
   effects <- unlist(lapply(seq_along(dts), function(k)
     utils::combn(dts, k, paste, collapse = ":")), use.names = FALSE)
-  # The level rows are the intercept and, with a trend, the MESOR. The trend row
+  # The level rows are the intercept and, with a trend, the time-averaged midline level. The trend row
   # is the one trend coefficient per cell -- the same hypothesis as the
   # non-periodic change over the recording.
-  # Without a trend there is no trend block and the MESOR is the intercept;
+  # Without a trend there is no trend block and the time-averaged midline level is the intercept;
   # without a rhythm there is no circadian block and the shape block IS the
   # trend block, so each test is listed once, under its plain name.
   has_h <- length(ff$spec$harm_terms) > 0

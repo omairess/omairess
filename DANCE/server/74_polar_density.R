@@ -118,7 +118,7 @@ output$density_controls_ui <- renderUI({
                      open arc covering only the hours recorded, and the gap
                      between its two ends IS the trend.<br>
                      <b>The rhythm only</b> drops the trend and keeps
-                     MESOR + harmonics. That closes into a ring, but its values
+                     midline + harmonics. That closes into a ring, but its values
                      are lower or higher than the fit plot's by exactly the
                      trend at that time. With no trend in the model the two are
                      the same curve and this choice does nothing."))
@@ -188,7 +188,7 @@ output$density_controls_ui <- renderUI({
     helpText(HTML("From the smallest value, the shape is stretched to fill the
                    circle and small differences are easy to see. <b>From zero the
                    radius is proportional to the value</b>, which is the honest
-                   scale but flattens a rhythm whose MESOR is far from zero.")),
+                   scale but flattens a rhythm whose midline is far from zero.")),
     sliderInput("density_inner", "Inner radius (0 = the shape may reach the centre):",
                 min = 0, max = 0.6, value = 0.15, step = 0.05),
     helpText(HTML("An inner radius keeps a low-density stretch of the clock from
@@ -219,7 +219,7 @@ output$density_controls_ui <- renderUI({
 #
 # Same coefficients, same CI construction, so this IS that plot in polar
 # coordinates rather than a second opinion about the same data. The band is
-# the app's own approximation -- the curve rescaled about the MESOR by the
+# the app's own approximation -- the curve rescaled about the time-averaged midline level by the
 # relative standard error of the first harmonic's amplitude, which is what the
 # fit plot draws and calls a 95% CI. It is not a pointwise interval, and the
 # note says so.
@@ -933,10 +933,10 @@ output$harmonic_density_note <- renderText({
                 format(fr$agreement, digits = 3, scientific = TRUE))
       else "",
       if (isTRUE(fr$closed))
-        "A cosinor drawn in polar coordinates is a limacon: r = MESOR + amplitude*cos(angle - acrophase) traces an OFF-CENTRE RING, widest towards the acrophase. That offset is the rhythm, not a plotting artefact.\n"
+        "A cosinor drawn in polar coordinates is a limacon: r = midline + amplitude*cos(angle - acrophase) traces an OFF-CENTRE RING, widest towards the acrophase. That offset is the rhythm, not a plotting artefact.\n"
       else "",
       if (isTRUE(input$harmonic_show_ci))
-        "The band is the approximation tab 1 draws -- the curve rescaled about the MESOR by the relative standard error of the first harmonic's amplitude. It is not a pointwise confidence interval.\n"
+        "The band is the approximation tab 1 draws -- the curve rescaled about the time-averaged midline level by the relative standard error of the first harmonic's amplitude. It is not a pointwise confidence interval.\n"
       else "",
       tail_note))
   }

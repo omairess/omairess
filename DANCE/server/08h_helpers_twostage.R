@@ -99,7 +99,7 @@ dance_ts_trend_change <- function(mod, p) {
 }
 
 # The level quantities per group, as means of the per-participant estimates with
-# a t interval: the intercept (each fit's constant), and with a trend the MESOR
+# a t interval: the intercept (each fit's constant), and with a trend the time-averaged midline level
 # (each fit's midline averaged over the window, mesor_adj) and the non-periodic
 # change over the recording. The pairwise differences come from
 # dance_ts_pairwise(), the same Welch tests as the pairwise table.
@@ -381,9 +381,9 @@ dance_ts_pair_label <- function(what, period = 24, trend = NULL, units = NULL) {
   }
   u <- if (is.null(units) || !nzchar(units)) "response units" else units
   switch(what,
-    level = , intercept = if (identical(trend, "none")) "Intercept = MESOR (no trend)"
+    level = , intercept = if (identical(trend, "none")) "Intercept = time-averaged midline level (no trend)"
                           else "Initial midline (t = 0)",
-    mesor = , mesor_adj = "Mean midline level (MESOR)",
+    mesor = , mesor_adj = "Time-averaged midline level",
     change = , trend_change = "Total trend change (start to end)",
     fitted_mean = "Time-averaged fitted response",
     avg_rate = sprintf("Average trend rate (%s per hour)", u),
@@ -667,7 +667,7 @@ dance_ts_param_cols <- function(trend_type, n_harmonics) {
 }
 
 # One participant's row of the parameter table, from their own fit: the
-# intercept, the MESOR (the midline averaged over the window), the value at
+# intercept, the time-averaged midline level (the midline averaged over the window), the value at
 # the first time point, the non-periodic change, the trend parameters (and
 # A/tau), every harmonic's amplitude and acrophase, and the fit statistics.
 # `time_vec` is the model axis (t = 0 at the recording's first time point).

@@ -214,7 +214,8 @@ ui_tab_fanova <- tabItem(
             width = 12,
             plotlyOutput("fanova_fstat_plot", height = "400px"),
             hr(),
-            plotlyOutput("fanova_pvalue_plot", height = "400px")
+            plotlyOutput("fanova_pvalue_plot", height = "400px"),
+            uiOutput("fanova_eq_links")
           )
         ),
         fluidRow(

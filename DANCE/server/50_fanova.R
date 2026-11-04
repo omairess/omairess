@@ -1658,6 +1658,15 @@
     p
   })
   
+  # the equations behind every number on this tab (server/08n_helpers_equations.R)
+  output$fanova_eq_links <- renderUI({
+    req(values$fanova_results)
+    tags$div(style = "margin-top:6px;color:#555", "Equations:",
+             lapply(list(c("fanova_F", "pointwise F"), c("fanova_p", "permutation p and FDR"),
+                         c("fanova_L2", "global L2"), c("fanova_eta", "eta-squared")),
+                    function(k) tags$span(style = "margin-right:12px", dance_eq_link(k[1], k[2]))))
+  })
+
   output$fanova_pvalue_plot <- renderPlotly({
     req(values$fanova_results)
     

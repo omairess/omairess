@@ -343,6 +343,7 @@ dance_outcomes_flat <- function(o) {
                                     statistic = ts$statistic, df1 = ts$df1, df2 = ts$df2, p = ts$p,
                                     method = ts$method, stringsAsFactors = FALSE)
   out <- rbind(a, b); rownames(out) <- NULL
+  out <- dance_public_frame(out)
   out
 }
 
@@ -463,4 +464,15 @@ dance_tau_diagnostics_mixed <- function(ff) {
   out <- dance_tau_verdict(do.call(rbind, rows), unique(problems), unique(weak))
   out$approach <- "mixed"
   out
+}
+
+# THE NAMES A READER SEES in a downloaded table. Internally the time-averaged
+# midline level is keyed "mesor" (and "mesor_adj"); in every file that leaves
+# the app it is "midline_level", in column names and in key values alike.
+dance_public_frame <- function(df) {
+  if (is.null(df) || !is.data.frame(df)) return(df)
+  pub <- function(x) gsub("(?<![A-Za-z])mesor(_adj)?(?![A-Za-z])", "midline_level", x, perl = TRUE)
+  names(df) <- pub(names(df))
+  for (j in seq_along(df)) if (is.character(df[[j]]) || is.factor(df[[j]])) df[[j]] <- pub(as.character(df[[j]]))
+  df
 }

@@ -336,6 +336,11 @@ dlmo_test_frame <- function(cp) {
 output$dlmo_compare_ui <- renderUI({
   r <- dlmo_result()
   tagList(
+    # the equation of each method and of the phase angle (server/08n_helpers_equations.R)
+    tags$div(style = "margin-bottom:8px;color:#555", "Equations:",
+             lapply(r$methods, function(m) tags$span(style = "margin-right:12px",
+               dance_eq_link(paste0("dlmo_", m), DANCE_DLMO_METHOD_LABEL[[m]]))),
+             if (r$has_bed) dance_eq_link("phase_angle", "Phase angle")),
     if (length(r$methods) > 1L)
       selectInput("dlmo_compare_method", "Method:", choices = setNames(r$methods, DANCE_DLMO_METHOD_LABEL[r$methods]),
                   selected = isolate(input$dlmo_compare_method)),

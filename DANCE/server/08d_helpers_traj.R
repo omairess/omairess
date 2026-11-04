@@ -278,7 +278,7 @@ dance_traj_basis <- function(d, period = 24, n_harmonics = 1, trend = "none",
 # numbers per column summarise it over the window [t0, t_max]:
 #
 #   mean  its time average. The MIDLINE of the rhythm is intercept + trend, and
-#         the MESOR is that midline averaged over the window:
+#         the time-averaged midline level is that midline averaged over the window:
 #             MESOR  = b0 + sum_j c_j * mean_j
 #   end   its value at the last observation, which turns a coefficient into the
 #         NON-PERIODIC CHANGE over the recording (the right-hand end of the

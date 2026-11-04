@@ -1492,7 +1492,7 @@
           add("cat(\"tau used by the trajectory model:\", traj_fit$spec$tau, \"h (\", traj_fit$tau_mode, \")\\n\")")
         add("print(summary(traj_fit$model)$coefficients)   # the fixed effects")
         add("")
-        add("# Per design cell: the fitted equation, and the intercept, MESOR and change")
+        add("# Per design cell: the fitted equation, and the intercept, time-averaged midline level and change")
         add("print(dance_traj_cell_equations(traj_fit)$table)")
         add("print(dance_traj_level_summary(traj_fit)$table)")
         add("")
@@ -1602,7 +1602,7 @@
         add("ts_groups <- ", if (is.null(gvals)) "NULL" else dance_export_vec(gvals))
         add("ts_df <- dance_ts_frame(ts_model, ts_groups)")
         add("")
-        add("# Intercept, MESOR and change per group (means with t intervals), and each")
+        add("# Intercept, midline level and change per group (means with t intervals), and each")
         add("# harmonic's vector-mean amplitude and acrophase")
         add("print(dance_ts_level_summary(ts_df, ts_model)$table)")
         add("for (h in seq_len(n_harmonics)) print(dance_ts_group_rhythm(ts_df, ts_model, h))")
@@ -1643,7 +1643,8 @@
                       as.integer(hm$boot_results$B), format(hm$boot_results$seed %||% 20240601L)))
           add(sprintf("ts_boot <- dance_ts_bootstrap(ts_params, B = %d, period = period, seed = %sL)",
                       as.integer(hm$boot_results$B), format(hm$boot_results$seed %||% 20240601L)))
-          add("print(ts_boot[c(\"mesor_ci\", \"amplitude_ci\", \"acrophase_ci\")])")
+          add("print(stats::setNames(ts_boot[c(\"mesor_ci\", \"amplitude_ci\", \"acrophase_ci\")],")
+          add("                      c(\"midline_level_ci\", \"amplitude_ci\", \"acrophase_ci\")))")
         }
         if (!is.null(hm$model_selection)) {
           add("")
@@ -1668,7 +1669,7 @@
         add("  f  <- cosinor_fits[[i]]")
         add("  g1 <- function(x) if (length(x)) as.numeric(x)[1] else NA_real_")
         add("  data.frame(subject        = i,")
-        add("             mesor          = g1(f$mesor),")
+        add("             midline_level  = g1(f$mesor),")
         add("             amplitude      = g1(f$amplitudes),")
         add("             acrophase_rad  = g1(f$acrophases),")
         add("             acrophase_hour = g1(f$acrophases_time),")
@@ -1935,7 +1936,7 @@
     filename = function() paste0("harmonic_individual_params_", Sys.Date(), ".csv"),
     content = function(file) {
       req(values$harmonic_model)
-      write.csv(values$harmonic_model$individual_params, file, row.names = FALSE)
+      write.csv(dance_public_frame(values$harmonic_model$individual_params), file, row.names = FALSE)
     }
   )
   

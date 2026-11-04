@@ -1319,3 +1319,65 @@ a group variable is defined) and each participant.
   under the plot gives each value with "k of n profiles".
 - This is display only: no number in the CSV, report or script changes.
 - **Test:** `tests/dlmo_app_test.R`.
+
+## 27. A streamlined comparison view; no "MESOR"; the equation behind each number
+
+**The streamlined view is the default** of tab 6, Group / Condition
+Comparison. It reads the same outcome table as the full output, so no number
+in it is computed anywhere else:
+- **Header:** the approach, the harmonics, the trend (with τ fixed or
+  estimated) and, when chosen, the log scale.
+- **Primary analysis:** the omnibus test of the complete fitted trajectory.
+- **Secondary comparisons,** one row per question, each with its group
+  estimates [95% CI] and its unadjusted test:
+  - the overall response level (the time-averaged fitted response, or the
+    time-averaged midline level for a trend-only model);
+  - the non-periodic trend (the change over the window);
+  - each harmonic's joint (cos, sin) test.
+- **Rhythm descriptors (exploratory):** amplitude and component acrophase
+  per harmonic. "Not estimable" is shown when the joint region contains the
+  origin.
+- **Quality checks:** only those that apply to the run. For example:
+  - with τ fixed, the rate and asymptote tests repeat the change test;
+  - the intervals are per group, not for differences;
+  - the denominator degrees of freedom differ between tests;
+  - bounds were applied;
+  - the log scale;
+  - unsampled intervals;
+  - τ not identified.
+- **Rows** select their quantity on the graph, as in "By question".
+
+Everything else is kept, unchanged, under **Detailed statistics**: the
+omnibus block, "By question", the component tests, the level, saturating-
+trend and difference plots, and the pairwise tables. The estimated-
+trajectories plot stays in view between the two.
+
+**"MESOR" is gone from everything a reader sees:** the interface, tables,
+plots, summary, downloads (column names and keys are written as
+`midline_level`), the report, and the comments and printed labels of the
+exported script.
+- **The name used:** the time-averaged midline level, which is what the app
+  computes. The midline (intercept + trend, harmonics excluded) is averaged
+  over the window.
+- **Where the old term remains:** only in the README's terminology note,
+  which says the time-averaged midline level generalizes the classical MESOR
+  to a time-varying baseline.
+- **Internally,** the key stays "mesor", so no estimator changed.
+- **Guard test:** `tests/no_mesor_app_test.R` renders every cosinor output,
+  the report and the downloads under both approaches, and fails if the word
+  is visible anywhere. A menu's option values are not visible text.
+
+**The (i) buttons.** Every reported quantity has an (i) that opens the
+formula computed, written for the fitted model:
+- **Where:** the streamlined view, "By question", the DLMO comparisons tab
+  and the functional ANOVA tab.
+- **What it shows:** the trend term chosen, the harmonics fitted, the log
+  scale when on, and whether the group value is a model contrast (mixed) or
+  a mean of participants (two-stage).
+- **One dictionary,** `server/08n_helpers_equations.R`, restates the code's
+  own formulas (for example `dance_trend_factors`) and is not a second
+  implementation. The modal comes from `server/95_equations.R`.
+- **Test:** `tests/structures_app_test.R` checks, for every structure and
+  approach, that every outcome and test key the tables report has its own
+  equation (no fallback text), that the streamlined view shows the table's
+  own omnibus statistic and level estimate, and that an (i) click opens.

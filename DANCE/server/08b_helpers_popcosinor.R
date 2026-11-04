@@ -213,7 +213,7 @@ dance_pop_cosinor <- function(beta, gamma, mesor, group, period = 24, harmonic =
       acrophase_time = as.numeric(phij) / (2 * pi * harmonic / period),
       stringsAsFactors = FALSE),
     tests = data.frame(
-      parameter = c("MESOR", "Amplitude", "Acrophase"),
+      parameter = c("Midline level", "Amplitude", "Acrophase"),
       F = c(fM[1], fA[1], fP[1]), df1 = df1, df2 = df2,
       p = c(fM[2], fA[2], fP[2]), stringsAsFactors = FALSE),
     pooled = list(s2_beta = s2b, s2_gamma = s2g, cov_beta_gamma = sbg,

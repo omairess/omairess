@@ -240,7 +240,7 @@ dance_rhythm_from_coefs <- function(coefs, time_vec, period, n_harmonics,
   n_trend <- switch(trend_type,
                     "none" = 0, "linear" = 1, "log" = 1, "exp_sat" = 2, 0)
   off <- 1 + n_trend
-  pred <- rep(coefs[1], length(time_vec))          # MESOR
+  pred <- rep(coefs[1], length(time_vec))          # intercept
 
   # Same arithmetic as predict_from_coefs() in server/72_harmonic.R. Kept in
   # step with it deliberately: if these two ever disagree, the fit plot and its

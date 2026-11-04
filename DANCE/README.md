@@ -170,7 +170,7 @@ if any of these were missing):
    interval), or smoothed OLS via `mgcv::gam`; coefficient, p-value, R² and
    residual curves.
 9. **Harmonic Regression** — cosinor with 1–3 harmonics, optional linear/log/
-    exponential-saturation trend, MESOR / amplitude / acrophase per subject,
+    exponential-saturation trend, time-averaged midline level / amplitude / acrophase per subject,
     polar plots, circular statistics, group comparisons. The **Polar Density**
     tab draws a filled shape on a clock face — noon at the top, midnight at the
     bottom, night shaded — carrying the fitted cosinor curves from the
@@ -210,6 +210,14 @@ if any of these were missing):
     every analysis family, and **save/restore of the whole session** as a
     single `.rds` (data, smoothing, every fitted model, and the package
     versions they were computed under).
+
+## Terminology: the time-averaged midline level
+
+The app reports the **time-averaged midline level**: the midline of the fitted
+curve (intercept + non-periodic trend, harmonics excluded) averaged over the
+observed window. It generalizes the classical cosinor MESOR to models with a
+time-varying baseline; without a trend the midline is flat, and it equals the
+intercept and the MESOR. The term MESOR is not used anywhere in the app.
 
 ## Data contract
 

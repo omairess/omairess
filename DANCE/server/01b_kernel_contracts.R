@@ -24,10 +24,10 @@ DANCE_CONTRACTS <- list(
 
   fit_cosinor = list(
     file        = "server/72_harmonic.R",
-    model       = "y(t) = MESOR + trend(t) + sum_h [b_cos_h cos(w_h t) + b_sin_h sin(w_h t)] + e",
+    model       = "y(t) = beta_0 + trend(t) + sum_h [b_cos_h cos(w_h t) + b_sin_h sin(w_h t)] + e",
     orientation = "one subject at a time: y and time are vectors of equal length",
     time_units  = "MODEL time (hours since the chosen origin), never clock time. Clock conversion happens only for display, through dance_model_to_clock().",
-    estimand    = "per-subject MESOR, trend parameters, and amplitude/acrophase per harmonic",
+    estimand    = "per-subject time-averaged midline level, trend parameters, and amplitude/acrophase per harmonic",
     estimator   = "OLS on the linear-in-parameters design",
     assumptions = "Gaussian errors, independent within subject, trend correctly specified",
     missing     = "rows with NA in y or time are dropped before fitting",

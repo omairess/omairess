@@ -88,15 +88,15 @@ test_that("the component tests come from the named kernels and answer the plante
   df <- e$dance_ts_frame(m$mod, m$g)
   rows <- e$dance_ts_components(df, m$mod)
   lab <- vapply(rows, function(r) r$label, character(1))
-  expect_true("Intercept = MESOR (no trend)" %in% lab)
+  expect_true("Intercept = time-averaged midline level (no trend)" %in% lab)
   expect_true("H1 amplitude" %in% lab); expect_true("H1 acrophase" %in% lab)
   expect_true(any(grepl("Watson-Williams", lab)))
   get <- function(l) rows[[match(l, lab)]]
-  expect_equal(get("Intercept = MESOR (no trend)")$method, "one-way ANOVA")
+  expect_equal(get("Intercept = time-averaged midline level (no trend)")$method, "one-way ANOVA")
   expect_match(get("H1 amplitude")$method, "Bingham")
   expect_equal(get("H1 acrophase (Watson-Williams, unweighted)")$method, "Watson-Williams F")
   # equal constants: not rejected; different phases: rejected on both phase tests
-  expect_gt(get("Intercept = MESOR (no trend)")$p, 0.05)
+  expect_gt(get("Intercept = time-averaged midline level (no trend)")$p, 0.05)
   expect_lt(get("H1 acrophase")$p, 1e-3)
   expect_lt(get("H1 acrophase (Watson-Williams, unweighted)")$p, 1e-3)
   # Bingham's caution: with the phases differing, the amplitude row is flagged
@@ -109,7 +109,7 @@ test_that("the component tests come from the named kernels and answer the plante
   expect_null(amp2$note); expect_lt(amp2$p, 1e-3)
   # the ANOVA on the constant is the one-way F from the app's own kernel
   lt <- e$dance_group_linear_test(df$mesor, df$group)
-  expect_equal(get("Intercept = MESOR (no trend)")$F, lt$F)
+  expect_equal(get("Intercept = time-averaged midline level (no trend)")$F, lt$F)
 })
 
 test_that("pairwise: Welch's t for scalars, Watson-Williams for phase, Holm across the family", {
@@ -230,7 +230,7 @@ test_that("the level summary and the pairwise tests read the same per-participan
   m0 <- mk_mod()
   ls0 <- e$dance_ts_level_summary(e$dance_ts_frame(m0$mod, m0$g), m0$mod)
   expect_identical(ls0$quantities, c("fitted_mean", "intercept"))
-  expect_equal(e$dance_ts_pair_label("intercept", 24, "none"), "Intercept = MESOR (no trend)")
+  expect_equal(e$dance_ts_pair_label("intercept", 24, "none"), "Intercept = time-averaged midline level (no trend)")
   expect_equal(e$dance_ts_pair_label("trend_linear", 24, "linear", "KSS points"),
                "Slope beta (KSS points per hour)")
   expect_equal(e$dance_ts_pair_label("A_sat", 24, "exp_sat", "KSS points"),

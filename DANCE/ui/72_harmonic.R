@@ -8,7 +8,7 @@
 # CHANGELOG - 2026-09-03 cosinor audit (this file is NO LONGER verbatim)
 # Adds the DV name/units/bounds inputs (1.7), the raw-vs-smoothed data source
 # (2.1), the time-origin selector (1.4.3 / 2.2), the nested-model comparison and
-# fixed-tau controls (2.4 / 2.2), and renames the MESOR bound inputs to what
+# fixed-tau controls (2.4 / 2.2), and renames the time-averaged midline level bound inputs to what
 # they actually bound: the intercept (1.4).
 # ==========================================================================
 ui_tab_harmonic <- tabItem(
@@ -49,7 +49,7 @@ ui_tab_harmonic <- tabItem(
               helpText(HTML("For positive, right-skewed outcomes such as cortisol or melatonin.
                              The model, its tests, bounds and tables are on the log scale; on the
                              original scale the fitted curve can never fall below &minus;c,
-                             the MESOR becomes a geometric mean (when c = 0) and an amplitude
+                             the time-averaged midline level becomes a geometric mean (when c = 0) and an amplitude
                              A the peak-to-trough ratio e<sup>2A</sup> of its harmonic."))),
             h5(tags$b("Unsampled intervals")),
             numericInput("harmonic_gap_h", "A gap between sampling times longer than (h):",
@@ -251,7 +251,7 @@ ui_tab_harmonic <- tabItem(
             conditionalPanel(
               condition = "input.harmonic_structure != 'rhythm'",
               helpText(HTML("<small>β<sub>0</sub> is the <b>intercept</b>: the midline at the
-                             first observation, where the trend is zero. The <b>MESOR</b> is the
+                             first observation, where the trend is zero. The <b>Time-averaged midline level</b> is the
                              midline β<sub>0</sub> + trend averaged over the recording. Without
                              a trend the two are the same number.</small>"))
             ),
@@ -571,28 +571,11 @@ ui_tab_harmonic <- tabItem(
             tabPanel("6. Group / Condition Comparison", icon = icon("users"),
                      uiOutput("harmonic_traj_header"),
 
-                     h4("Primary \u2014 full trajectory difference"),
-                     helpText(HTML("Does the fitted trajectory differ? Intercept, non-periodic trend
-                                    and every harmonic, tested <b>jointly</b>. A group that is
-                                    simply higher all day counts as different even when its
-                                    amplitude and acrophase are identical.")),
-                     uiOutput("harmonic_traj_primary"),
-
-                     hr(),
-                     # THE THREE QUESTIONS, each with its tests and its group
-                     # estimates: overall level, rhythmicity, accumulation. The
-                     # same tables go to the CSV and to the APA report.
-                     h4("By question \u2014 overall level, rhythmicity, accumulation"),
-                     helpText("Why they differ, one scientific question at a time. Primary outcomes
-                               are marked; only what the fitted model contains is shown."),
-                     uiOutput("harmonic_outcomes"),
-                     downloadButton("download_harmonic_outcomes",
-                                    "Download outcomes and tests by question (CSV)", class = "btn-sm"),
-                     tags$details(style = "margin-top:10px",
-                       tags$summary(style = "cursor:pointer;color:#555",
-                                    "Technical: every component block test, and where the fitted curve peaks"),
-                       uiOutput("harmonic_traj_components")),
-
+                     # THE STREAMLINED VIEW, the default: the primary test, the
+                     # secondary comparisons by question, the rhythm descriptors
+                     # and the quality checks, each value with its equation one
+                     # click away. Everything else is under Detailed statistics.
+                     uiOutput("harmonic_streamlined"),
                      hr(),
                      h4("Estimated trajectories"),
                      fluidRow(
@@ -634,11 +617,39 @@ ui_tab_harmonic <- tabItem(
                      uiOutput("harmonic_traj_annot_note"),
                      uiOutput("harmonic_traj_band_note"),
 
+                     tags$details(class = "dance-detailed", style = "margin-top:16px",
+                       tags$summary(style = "cursor:pointer;font-size:16px;font-weight:600;color:#1f5f7a",
+                                    "Detailed statistics"),
+                       tags$div(style = "margin-top:10px",
+                     h4("Primary \u2014 full trajectory difference"),
+                     helpText(HTML("Does the fitted trajectory differ? Intercept, non-periodic trend
+                                    and every harmonic, tested <b>jointly</b>. A group that is
+                                    simply higher all day counts as different even when its
+                                    amplitude and acrophase are identical.")),
+                     uiOutput("harmonic_traj_primary"),
+
+                     hr(),
+                     # THE THREE QUESTIONS, each with its tests and its group
+                     # estimates: overall level, rhythmicity, accumulation. The
+                     # same tables go to the CSV and to the APA report.
+                     h4("By question \u2014 overall level, rhythmicity, accumulation"),
+                     helpText("Why they differ, one scientific question at a time. Primary outcomes
+                               are marked; only what the fitted model contains is shown."),
+                     uiOutput("harmonic_outcomes"),
+                     downloadButton("download_harmonic_outcomes",
+                                    "Download outcomes and tests by question (CSV)", class = "btn-sm"),
+                     tags$details(style = "margin-top:10px",
+                       tags$summary(style = "cursor:pointer;color:#555",
+                                    "Technical: every component block test, and where the fitted curve peaks"),
+                       uiOutput("harmonic_traj_components")),
+
+                     hr(),
+
                      # The level of each trajectory as numbers: the intercept,
-                     # the MESOR and (with a trend) the non-periodic change over
+                     # the time-averaged midline level and (with a trend) the non-periodic change over
                      # the recording -- per cell, or as pairwise differences with
                      # the same tests as the pairwise table below.
-                     h5(tags$b("Intercept, MESOR and change"), style = "margin-top:14px"),
+                     h5(tags$b("Intercept, midline level and change"), style = "margin-top:14px"),
                      radioButtons("harmonic_traj_level_view", NULL,
                                   choices = c("Estimates per cell" = "cells",
                                               "Pairwise differences" = "pairs"),
@@ -696,6 +707,7 @@ ui_tab_harmonic <- tabItem(
                      downloadButton("download_harmonic_pairwise",
                                     "Download every pairwise table (CSV)",
                                     class = "btn-sm"),
+                     )),
 
             )
           )

@@ -131,6 +131,34 @@ testServer(server, {
       chk(any(oc$tests$domain == "omnibus"), sprintf("%s: the omnibus trajectory test is reported", tag),
           sprintf("%s: no omnibus test", tag))
     }
+    # THE STREAMLINED VIEW, the default: the omnibus test as the primary
+    # analysis, a row per question, and the same numbers as the outcome table
+    sv <- render(paste(tag, "streamlined view"), output$harmonic_streamlined)
+    if (!is.null(oc) && isTRUE(oc$ok) && !is.null(sv)) {
+      svt <- gsub("\\s+", " ", gsub("<[^>]+>", " ", paste(unlist(sv), collapse = " ")))
+      om <- oc$tests[oc$tests$domain == "omnibus", ][1, ]
+      lvp <- oc$estimates[oc$estimates$domain == "level" & oc$estimates$primary & is.finite(oc$estimates$estimate), ]
+      fm <- lvp[1, ]
+      chk(grepl("PRIMARY ANALYSIS", svt) && grepl(dance_outcome_stat_text(om), svt, fixed = TRUE) &&
+            grepl(dance_outcome_value_text(fm, oc$period, oc$clock_origin, digits = 2), svt, fixed = TRUE) &&
+            grepl("Overall response level", svt) && (st == "rhythm" || grepl("Non-periodic trend", svt)) &&
+            (st == "trend" || grepl("RHYTHM DESCRIPTORS", svt)),
+          sprintf("%s: the streamlined view shows the omnibus test and the table's own estimates", tag),
+          sprintf("%s: the streamlined view disagrees with the outcome table [%s]", tag, paste(c(
+            if (!grepl("PRIMARY ANALYSIS", svt)) "primary", if (!grepl(dance_outcome_stat_text(om), svt, fixed = TRUE)) dance_outcome_stat_text(om),
+            if (!grepl(dance_outcome_value_text(fm, oc$period, oc$clock_origin, digits = 2), svt, fixed = TRUE))
+              paste("fm", dance_outcome_value_text(fm, oc$period, oc$clock_origin, digits = 2)),
+            if (!grepl("Non-periodic trend", svt)) "trend row", if (!grepl("RHYTHM DESCRIPTORS", svt)) "rhythm"), collapse = "; ")))
+      # every quantity reported has its own equation, written for this model
+      ctx <- dance_eq_context(hm)
+      keys <- unique(c(oc$estimates$outcome, paste0("test:", stats::na.omit(oc$tests$outcome))))
+      bad <- keys[vapply(keys, function(k) {
+        q <- dance_equation(k, ctx); grepl("No equation recorded", q$html) || identical(q$title, sub("^test:", "", k)) }, TRUE)]
+      chk(!length(bad), sprintf("%s: every reported quantity has its equation (%d keys)", tag, length(keys)),
+          sprintf("%s: no equation for %s", tag, paste(bad, collapse = ", ")))
+      ok_modal <- tryCatch({ session$setInputs(dance_eq = list(key = "mesor", nonce = k)); TRUE }, error = function(e) conditionMessage(e))
+      chk(isTRUE(ok_modal), sprintf("%s: an (i) click opens its equation", tag), sprintf("%s: the (i) click failed: %s", tag, ok_modal))
+    }
     # a row of the table, clicked: its quantity is selected, its annotation drawn,
     # the graph moved to its view; choosing another quantity by hand ends it
     if (!is.null(oc) && isTRUE(oc$ok)) {

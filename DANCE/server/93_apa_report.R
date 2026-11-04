@@ -1073,7 +1073,7 @@ dance_apa_report <- function(values, input, title = NULL) {
                            Intercept = dance_apa_num(tb$intercept, 2),
                            check.names = FALSE, stringsAsFactors = FALSE)
         if (has_tr) {
-          rows$MESOR <- dance_apa_num(tb$mesor, 2)
+          rows$`Midline level` <- dance_apa_num(tb$mesor, 2)
           rows$Change <- dance_apa_num(tb$change, 2)
         }
         for (k in seq_len(ce$n_harmonics)) {
@@ -1089,9 +1089,9 @@ dance_apa_report <- function(values, input, title = NULL) {
             "curve without its harmonics (intercept plus trend); the intercept is the ",
             "midline at the first observation",
             if (has_tr && !is.null(wc)) paste0(
-              " (", wc$start, "); the MESOR is that midline averaged over the ",
+              " (", wc$start, "); the time-averaged midline level is that midline averaged over the ",
               "recording (", wc$text, "), and the change is how far the trend moves ",
-              "it over the same window") else "; without a trend it is the MESOR",
+              "it over the same window") else "; without a trend it is the time-averaged midline level",
             ". Amplitudes and acrophases are read off each cell's (cosine, sine) ",
             "coefficients, and acrophases are clock times.",
             if (identical(ff$spec$trend, "exp_sat")) paste0(
@@ -1182,10 +1182,10 @@ dance_apa_report <- function(values, input, title = NULL) {
     if (sum(ok) > 0) {
       ip <- hm$individual_params
       has_tr <- !identical(hm$trend_type %|% "none", "none")
-      add(if (has_tr) " Intercept " else " Intercept (= MESOR, no trend) ",
+      add(if (has_tr) " Intercept " else " Intercept (= time-averaged midline level, no trend) ",
           dance_apa_M(g1("mesor")),
           if (has_tr && !is.null(ip$mesor_adj))
-            paste0("; MESOR ", dance_apa_M(ip$mesor_adj)) else "",
+            paste0("; time-averaged midline level ", dance_apa_M(ip$mesor_adj)) else "",
           if (has_tr && !is.null(ip$trend_change))
             paste0("; non-periodic change over the recording ", dance_apa_M(ip$trend_change)) else "",
           "; amplitude ", dance_apa_M(g1("amplitudes")), "; acrophase ",
@@ -1275,7 +1275,7 @@ dance_apa_report <- function(values, input, title = NULL) {
           Group      = nm,
           `n`        = g$n %|% NA,
           `Intercept` = dance_apa_num(g$intercept %|% NA_real_, 2),
-          `MESOR`    = dance_apa_num(g$rhythm_adjusted_mean %|% g$intercept %|% NA_real_, 2),
+          `Midline level` = dance_apa_num(g$rhythm_adjusted_mean %|% g$intercept %|% NA_real_, 2),
           `Change`   = if (gtr) dance_apa_num(g$trend_change %|% NA_real_, 2) else "",
           `Amplitude`= paste0(dance_apa_num(g$mean_amplitude %|% NA_real_, 2), " (",
                               dance_apa_num(g$sd_amplitude %|% NA_real_, 2), ")"),
@@ -1283,13 +1283,13 @@ dance_apa_report <- function(values, input, title = NULL) {
           check.names = FALSE, stringsAsFactors = FALSE)
       }))
       if (!gtr) grows$Change <- NULL
-      if (!gtr) grows$MESOR <- NULL
+      if (!gtr) grows$`Midline level` <- NULL
       L <- c(L, dance_md_table(grows)); blank()
-      add(if (gtr) paste0("Intercept is the midline at the first observation; MESOR is the ",
+      add(if (gtr) paste0("Intercept is the midline at the first observation; the time-averaged midline level is the ",
                           "mean of the participants' midlines averaged over the recording ",
                           "(the rhythm-adjusted mean); Change is the mean non-periodic ",
                           "change from the first to the last observation. ")
-          else "Without a trend the intercept is the MESOR. ",
+          else "Without a trend the intercept is the time-averaged midline level. ",
           "Amplitude is given as *M* (*SD*) ",
           "of the per-participant estimates. Acrophase is a group mean of a ",
           "circular quantity and is reported for description only; the test ",
@@ -1431,7 +1431,7 @@ dance_apa_report <- function(values, input, title = NULL) {
       cl <- mx$cells
       rows <- data.frame(
         Cell = paste(cl$within, cl$between, sep = " x "),
-        MESOR = dance_apa_num(cl$mesor, 2),
+        `Midline level` = dance_apa_num(cl$mesor, 2),
         Amplitude = dance_apa_num(cl[["amplitude_1"]], 2),
         `Acrophase` = dance_apa_num(cl[["acrophase_1"]], 2),
         check.names = FALSE, stringsAsFactors = FALSE)

@@ -25,7 +25,7 @@
 #                           The genuine rhythm-adjusted mean: the time-average
 #                           of the non-oscillating part over the observation
 #                           window, by integration. The quantity the report used
-#                           to call the MESOR is not this. (audit 1.4)
+#                           to call the time-averaged midline level is not this. (audit 1.4)
 #   dance_amp_se(), dance_acro_se()
 #                           Delta-method SEs that use the full covariance block,
 #                           not sqrt(se_c^2 + se_s^2)/sqrt(2). (audit, extra c)
@@ -1074,7 +1074,7 @@ dance_gaussian_loglik <- function(ss_resid, n, y_scale = NULL) {
 # The trend types the UI offers, in the order it offers them.
 DANCE_TREND_TYPES <- c("none", "linear", "log", "exp_sat")
 
-# Free parameters each trend contributes, beyond the MESOR.
+# Free parameters each trend contributes, beyond the time-averaged midline level.
 dance_trend_npar <- function(trend) {
   switch(trend, "none" = 0L, "linear" = 1L, "log" = 1L, "exp_sat" = 2L, 0L)
 }
@@ -1207,7 +1207,7 @@ dance_add_raw <- function(p, t, y, curve, color_rgb, style = "points", legendgro
 #
 #   OVERALL RESPONSE LEVEL
 #     fitted mean      Ybar = (1/T) int_0^T Yhat(t) dt   rhythm and trend included
-#     mean midline     Mbar = (1/T) int_0^T [b0 + Tr(t)] dt   (the MESOR here)
+#     mean midline     Mbar = (1/T) int_0^T [b0 + Tr(t)] dt   (the time-averaged midline level here)
 #     initial midline  b0 = b0 + Tr(0), the midline at the first observation
 #
 #   CIRCADIAN-LIKE RHYTHMICITY      (per harmonic: amplitude, acrophase)
@@ -1333,7 +1333,7 @@ DANCE_STRUCTURE_LABEL <- c(
 # plot, export and the report.
 DANCE_OUTCOME_LABEL <- c(
   fitted_mean     = "Time-averaged fitted response",
-  mean_midline    = "Mean midline level (MESOR)",
+  mean_midline    = "Time-averaged midline level",
   initial_midline = "Initial midline (t = 0)",
   change          = "Total trend change (start to end)",
   avg_rate        = "Average trend rate",

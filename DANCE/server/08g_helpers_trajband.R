@@ -376,10 +376,10 @@ dance_traj_pair_label <- function(what, period = 24, n_harmonics = 1L, trend = N
     return(sprintf("%s — H%d (%s h)", nm, pp$harmonic,
                    format(round(period / pp$harmonic, 2), trim = TRUE)))
   }
-  # without a trend the midline is flat, so the intercept and the MESOR are the
+  # without a trend the midline is flat, so the intercept and the time-averaged midline level are the
   # same number and are offered once, under both names
   if (identical(what, "intercept") && identical(trend, "none"))
-    return("Intercept = MESOR (no trend)")
+    return("Intercept = time-averaged midline level (no trend)")
   if (identical(what, "trend") && !is.null(trend))
     return(switch(trend,
       exp_sat = "Saturating rise A (the asymptote above the intercept)",
@@ -390,7 +390,7 @@ dance_traj_pair_label <- function(what, period = 24, n_harmonics = 1L, trend = N
 }
 
 # Which comparisons this fit can actually answer. The level quantities first --
-# intercept, and with a trend the MESOR and the non-periodic change -- then the
+# intercept, and with a trend the time-averaged midline level and the non-periodic change -- then the
 # amplitude and acrophase of every harmonic, then the joint blocks only where
 # they have terms and are not duplicates of each other: with no trend, "shape"
 # and "circadian" are the same set of columns, and offering both prints one test
@@ -405,7 +405,7 @@ dance_traj_pair_label <- function(what, period = 24, n_harmonics = 1L, trend = N
 #
 # The curve value at t0 ("level") is still computed by dance_traj_contrasts() but
 # is not offered: it adds where each rhythm happens to be at the first sample to
-# the intercept, and the intercept and the MESOR are the level quantities asked
+# the intercept, and the intercept and the time-averaged midline level are the level quantities asked
 # for.
 dance_traj_pair_whats <- function(fit) {
   if (!isTRUE(fit$ok)) return(c("intercept", "amplitude", "phase"))
@@ -439,7 +439,7 @@ DANCE_TRAJ_PAIR_LABEL <- c(
   level     = "Curve value at the first observation",
   fitted_mean = "Time-averaged fitted response",
   intercept = "Initial midline (t = 0)",
-  mesor     = "Mean midline level (MESOR)",
+  mesor     = "Time-averaged midline level",
   change    = "Total trend change (start to end)",
   avg_rate  = "Average trend rate",
   rate0     = "Initial trend rate",
@@ -466,7 +466,7 @@ dance_traj_level_unit <- function(fit, what) {
   switch(what,
     intercept = sprintf("difference in the intercept, in %s (the midline at the first observation%s)",
                         u, if (is.null(wc)) "" else paste0(", ", wc$start)),
-    mesor     = sprintf("difference in the MESOR, in %s (the midline averaged over %s)", u, win),
+    mesor     = sprintf("difference in the time-averaged midline level, in %s (the midline averaged over %s)", u, win),
     change    = if (!is.null(tw) && length(tw$end))
       sprintf(paste("difference in the non-periodic change from %s, in %s.",
                     "The change is the %s times %s, so its test is the test of that coefficient."),
@@ -853,7 +853,7 @@ dance_traj_group_fits <- function(fit, conf = 0.95) {
       group = cell, is_unassigned = FALSE,
       n = unname(n_per_cell[cell]),
       mean_mesor = b0, intercept = b0,
-      # the MESOR from the same window means as the cell functionals; the
+      # the time-averaged midline level from the same window means as the cell functionals; the
       # legacy integrator was handed the saturating trend without its tau and
       # without the t0 anchoring, and returned NA or an unanchored mean
       rhythm_adjusted_mean = local({
