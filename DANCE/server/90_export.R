@@ -1607,16 +1607,17 @@
         add("print(dance_ts_level_summary(ts_df, ts_model)$table)")
         add("for (h in seq_len(n_harmonics)) print(dance_ts_group_rhythm(ts_df, ts_model, h))")
         if (sat) add("print(dance_ts_sat_summary(ts_df, ts_model)$table)   # A, tau, A/tau per group")
+        # The three questions, as on the comparison tab and in the report --
+        # with one group, its estimates and its tests against zero
+        add("ts_outcomes <- dance_outcomes_ts(ts_df, ts_model)")
+        add("ts_outcomes <- dance_outcomes_annotate(ts_outcomes, cosinor_scale, cosinor_gaps, origin_shift, time_vec, period)")
+        add("print(dance_outcomes_flat(ts_outcomes)[, c(\"domain\", \"outcome\", \"cell\", \"estimate\", \"lo\", \"hi\",")
+        add("                                          \"statistic\", \"df1\", \"df2\", \"p\")])")
         if (!is.null(gvals)) {
           add("")
           add("# The comparison tab's tests, on the per-participant estimates")
           add("print(unlist(dance_ts_manova(ts_df, dance_ts_coef_cols(ts_model))[c(\"F\", \"df1\", \"df2\", \"p\", \"method\")]))")
           add("ts_components <- dance_ts_components(ts_df, ts_model)")
-          add("# The three questions, as on the comparison tab and in the report")
-          add("ts_outcomes <- dance_outcomes_ts(ts_df, ts_model)")
-          add("ts_outcomes <- dance_outcomes_annotate(ts_outcomes, cosinor_scale, cosinor_gaps, origin_shift, time_vec, period)")
-          add("print(dance_outcomes_flat(ts_outcomes)[, c(\"domain\", \"outcome\", \"cell\", \"estimate\", \"lo\", \"hi\",")
-          add("                                          \"statistic\", \"df1\", \"df2\", \"p\")])")
           if (sat && !identical(tsp$mode, "fixed"))
             add("print(dance_tau_diagnostics_ts(ts_model)$rows)   # is tau identified?")
           add("print(do.call(rbind, lapply(ts_components, function(r) data.frame(")

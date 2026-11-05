@@ -48,6 +48,20 @@ dance_eq_model <- function(ctx) {
 # key: an outcome key as the tables use it (fitted_mean, mesor, change,
 # amplitude1, phase2, rhythm1, full, ...) or a test of one ("test:<key>").
 dance_equation <- function(key, ctx = dance_eq_context()) {
+  # zero:<key> -- a single trajectory's test against zero
+  if (startsWith(key, "zero:")) {
+    k0 <- sub("^zero:", "", key)
+    what <- if (k0 == "circadian") paste0("every harmonic coefficient (", .b("c", "1"), ", ", .b("s", "1"), ", &hellip;)")
+            else if (grepl("^rhythm[0-9]+$", k0)) { h0 <- sub("^rhythm", "", k0); paste0("(", .b("c", h0), ", ", .b("s", h0), ")") }
+            else "the trend coefficient (the change over the window)"
+    return(list(title = "Test against zero (one trajectory)", html = paste0(
+      .eq("H<sub>0</sub>: ", what, " = 0"),
+      .p(if (identical(ctx$approach, "mixed"))
+           "A Wald F test of those fixed effects against zero (Satterthwaite or Kenward-Roger df): is there a rhythm, or a trend, at all?"
+         else paste0("Population-mean cosinor (Bingham et al. 1982): a one-sample Hotelling <i>T</i><sup>2</sup> on the participants' coefficients, ",
+                     "<i>F</i> = (<i>n</i> &minus; <i>p</i>)<i>T</i><sup>2</sup>/[<i>p</i>(<i>n</i> &minus; 1)] on <i>p</i> and <i>n</i> &minus; <i>p</i> df; ",
+                     "for the trend, a one-sample <i>t</i> test of the participants' changes.")))))
+  }
   test <- startsWith(key, "test:"); k <- sub("^test:", "", key)
   # a harmonic number only on the per-harmonic keys (rate0 and t50 end in digits too)
   harm_key <- grepl("^(amplitude|phase|rhythm)[0-9]+$", k)

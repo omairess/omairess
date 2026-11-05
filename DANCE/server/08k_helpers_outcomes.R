@@ -181,6 +181,20 @@ dance_outcomes_mixed <- function(ff, tests = NULL, conf = 0.95, n_draw = 6000, c
       Tt("rhythm", sprintf("rhythm%d", h), sprintf("H%d rhythm vector (cos, sin) jointly", h), r$statistic,
          r$df1, r$df2, r$p, r$method)
     }
+    # one trajectory: is there a rhythm, a trend, at all (tests against zero)
+    if (!is.null(tests$zero)) {
+      z <- function(k) { r <- tests$zero[[k]]; if (is.null(r) || !isTRUE(r$ok)) NULL else r }
+      if (!is.null(r <- z("circadian")))
+        Tt("rhythm", "circadian", "Rhythmic component, all harmonics: different from zero?", r$statistic,
+           r$df1, r$df2, r$p, r$method, primary = TRUE,
+           note = "one trajectory: H0 every harmonic coefficient is zero (no rhythm)")
+      for (h in seq_len(K)) if (!is.null(r <- z(sprintf("harmonic%d", h))))
+        Tt("rhythm", sprintf("rhythm%d", h), sprintf("H%d rhythm (cos, sin): different from zero?", h), r$statistic,
+           r$df1, r$df2, r$p, r$method, note = sprintf("one trajectory: H0 harmonic %d's amplitude is zero", h))
+      if (!is.null(r <- z("trend")))
+        Tt("accumulation", "change", "Non-periodic trend: different from zero?", r$statistic, r$df1, r$df2, r$p,
+           r$method, primary = TRUE, note = "one trajectory: H0 the trend coefficient is zero (no change)")
+    }
     r <- blk("trend")
     if (!is.null(r) && !sat)
       Tt("accumulation", "change", "Total trend change (start to end)", r$statistic, r$df1, r$df2, r$p,
@@ -286,6 +300,40 @@ dance_outcomes_ts <- function(df, mod, conf = 0.95) {
     }
   }
   # ---- tests ----
+  # ONE GROUP: tests against zero, the population-mean cosinor's own (Bingham
+  # et al. 1982): a one-sample Hotelling T^2 on the participants' (cos, sin)
+  # coefficients, and a one-sample t test of the trend change
+  if (nlevels(droplevels(factor(df$group))) == 1L) {
+    hot <- function(cols) {
+      X <- as.matrix(df[, cols, drop = FALSE]); X <- X[stats::complete.cases(X), , drop = FALSE]
+      n <- nrow(X); p <- ncol(X)
+      if (n <= p) return(NULL)
+      xb <- colMeans(X); S <- stats::cov(X)
+      T2 <- tryCatch(as.numeric(n * t(xb) %*% solve(S, xb)), error = function(e) NA_real_)
+      if (!is.finite(T2)) return(NULL)
+      Fv <- (n - p) / (p * (n - 1)) * T2
+      list(F = Fv, df1 = p, df2 = n - p, p = stats::pf(Fv, p, n - p, lower.tail = FALSE))
+    }
+    if (K >= 1L) {
+      cs <- unlist(lapply(seq_len(K), function(h) paste0(c("beta_cos_", "beta_sin_"), h)))
+      if (!is.null(r <- hot(cs)))
+        Tt("rhythm", "circadian", "Rhythmic component, all harmonics: different from zero?", r$F, r$df1, r$df2, r$p,
+           "one-sample Hotelling T\u00b2", primary = TRUE,
+           note = "one group: H0 every harmonic's mean coefficient vector is zero (no rhythm)")
+      if (K > 1L) for (h in seq_len(K)) if (!is.null(r <- hot(paste0(c("beta_cos_", "beta_sin_"), h))))
+        Tt("rhythm", sprintf("rhythm%d", h), sprintf("H%d rhythm (cos, sin): different from zero?", h), r$F, r$df1, r$df2,
+           r$p, "one-sample Hotelling T\u00b2", note = sprintf("one group: H0 harmonic %d's mean amplitude is zero", h))
+    }
+    if (trend != "none" && "trend_change" %in% names(df)) {
+      v <- df$trend_change[is.finite(df$trend_change)]
+      if (length(v) >= 3L) {
+        tt <- stats::t.test(v)
+        Tt("accumulation", "change", "Non-periodic trend: change different from zero?", unname(tt$statistic)^2, 1,
+           unname(tt$parameter), tt$p.value, "one-sample t test (F = t\u00b2)", primary = TRUE,
+           note = "one group: H0 the mean change over the window is zero")
+      }
+    }
+  }
   if (nlevels(droplevels(factor(df$group))) >= 2) {
     mv <- dance_ts_manova(df, dance_ts_coef_cols(mod))
     if (isTRUE(mv$ok))

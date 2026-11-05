@@ -508,21 +508,23 @@ dance_traj_cell_coefs <- function(fit, harmonic = 1) {
   ck <- paste0("c", h); sk <- paste0("s", h)
   if (!all(c(ck, sk) %in% spec$harm_terms))
     return(list(ok = FALSE, message = sprintf("Harmonic %d was not fitted.", h)))
-  if (!length(spec$design_terms))
-    return(list(ok = FALSE, message = "No design factors: there are no cells to compare."))
-
-  specs <- stats::as.formula(paste("~", paste(spec$design_terms, collapse = " * ")))
+  # ONE TRAJECTORY (no design factor) is one cell, "(all)": the overall trend of
+  # each harmonic term, so a single trajectory has its amplitude and acrophase
+  # with intervals like any cell
+  single <- !length(spec$design_terms)
+  specs <- if (single) ~ 1 else stats::as.formula(paste("~", paste(spec$design_terms, collapse = " * ")))
   grab <- function(term) {
     e <- dance_emtrends(fit, specs, term)
     if (is.null(e)) return(NULL)
     list(est = summary(e)[[paste0(term, ".trend")]],
-         V = stats::vcov(e), grid = as.data.frame(e)[, spec$design_terms, drop = FALSE])
+         V = stats::vcov(e),
+         grid = if (single) data.frame(.cell = "(all)") else as.data.frame(e)[, spec$design_terms, drop = FALSE])
   }
   A <- grab(ck); B <- grab(sk)
   if (is.null(A) || is.null(B))
     return(list(ok = FALSE, message = "emmeans could not extract the harmonic coefficients."))
 
-  cells <- do.call(paste, c(A$grid, list(sep = " x ")))
+  cells <- if (single) "(all)" else do.call(paste, c(A$grid, list(sep = " x ")))
   jc <- dance_traj_joint_cov(fit, ck, sk, specs)
   list(ok = TRUE, harmonic = h, period = spec$period,
        effective_period = spec$period / h,
@@ -1472,14 +1474,43 @@ dance_traj_tests <- function(ff, df_method = "kr", progress = NULL) {
   names(keys) <- vapply(reqs, function(r) r$name, character(1))
   get1 <- function(nm) if (nzchar(keys[[nm]])) computed[[keys[[nm]]]] else NULL
   ok_runs <- Filter(function(r) isTRUE(r$ok), computed)
+  # ONE TRAJECTORY: no groups to compare, so the questions are whether there is
+  # a rhythm and a trend at all -- each coefficient set tested against zero
+  zero <- if (!length(dts)) dance_traj_zero_tests(ff, df_method) else NULL
   list(effects = stats::setNames(lapply(effects, get1), effects),
        blocks  = stats::setNames(lapply(want, get1), want),
+       zero = zero,
        n_computed = length(uniq), n_requested = length(keys),
        # THE METHOD IS PER TEST, NOT PER TABLE: Kenward-Roger falls through to
        # Satterthwaite when KRmodcomp fails on one particular reduced model, so
        # a table can carry two approximations and must say so
        methods_all = unique(vapply(ok_runs, function(r) r$method %||% "F test", character(1))),
        method = if (length(ok_runs)) ok_runs[[1]]$method %||% "F test" else "F test")
+}
+
+# Tests AGAINST ZERO for a single trajectory: every harmonic jointly, each
+# harmonic's (cos, sin) pair, and the trend coefficient(s). The same Wald F
+# machinery as every other block (dance_traj_L_test), with L selecting the
+# coefficients: H0 is that they are all zero.
+dance_traj_zero_tests <- function(ff, df_method = "auto") {
+  if (!isTRUE(ff$ok)) return(NULL)
+  nm <- names(lme4::fixef(ff$model))
+  Lof <- function(terms) {
+    terms <- intersect(terms, nm)
+    if (!length(terms)) return(NULL)
+    L <- matrix(0, length(terms), length(nm), dimnames = list(terms, nm))
+    for (i in seq_along(terms)) L[i, terms[i]] <- 1
+    L
+  }
+  K <- length(ff$spec$harm_terms) %/% 2L
+  sets <- c(if (K >= 1L) list(circadian = ff$spec$harm_terms),
+            if (K > 1L) stats::setNames(lapply(seq_len(K), function(h) paste0(c("c", "s"), h)), sprintf("harmonic%d", seq_len(K))),
+            if (length(ff$spec$trend_terms)) list(trend = ff$spec$trend_terms))
+  dfm <- if (df_method %in% c("auto", "kr", "satterthwaite")) df_method else "auto"
+  lapply(sets, function(tm) {
+    L <- Lof(tm); if (is.null(L)) return(NULL)
+    tryCatch(dance_traj_L_test(ff, L, "zero", dfm), error = function(e) NULL)
+  })
 }
 
 # The tests above as one table, for a script or a report.

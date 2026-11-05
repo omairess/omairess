@@ -5642,6 +5642,8 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     es <- o$estimates; ts <- o$tests
     cells <- if (!is.null(es)) unique(es$cell) else character(0)
     multi <- length(cells) >= 2L
+    # one trajectory: its tests are against zero (is there a rhythm, a trend)
+    show_tests <- multi || (!is.null(ts) && any(ts$domain %in% c("rhythm", "accumulation")))
     K <- as.integer(mod$n_harmonics %||% 0L); P <- mod$period %||% 24
     trend <- mod$trend_type %||% "none"
     alpha <- 0.05
@@ -5686,8 +5688,9 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
         td(tags$b(title), dance_eq_link(if (est) q else paste0("test:", q)),
            if (!is.null(subtitle)) tags$div(style = "color:#666;font-size:12px", subtitle)),
         lapply(cells, function(cl) td(if (est) est_txt(q, cl) else "—", style = "font-family:monospace")),
-        if (multi) td(if (!is.null(tr) && nrow(tr)) tagList(stat(tr[1, ]), dance_eq_link(paste0("test:", q)),
-                                                           tags$div(style = "color:#777;font-size:11px;font-style:italic", "(unadjusted secondary)"))
+        if (show_tests) td(if (!is.null(tr) && nrow(tr)) tagList(stat(tr[1, ]), dance_eq_link(paste0(if (multi) "test:" else "zero:", q)),
+                                                           tags$div(style = "color:#777;font-size:11px;font-style:italic",
+                                                                    if (multi) "(unadjusted secondary)" else "(against zero)"))
                       else "—"))
     }
     Twin <- diff(range(mod$time_vec %||% c(0, 0)))
@@ -5714,7 +5717,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     }
     secondary <- tags$table(style = "width:100%;border-collapse:collapse",
       tags$thead(tags$tr(th("Question / Outcome"), lapply(cells, function(cl) th(sprintf("%s (95%% CI)", cl))),
-                         if (multi) th("Between-group test"))),
+                         if (show_tests) th(if (multi) "Between-group test" else "Test against zero"))),
       tags$tbody(srows))
     # ---- rhythm descriptors ----
     rhythm <- if (K >= 1L) {
@@ -5768,6 +5771,67 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       if (!is.null(primary)) tagList(sec("PRIMARY ANALYSIS"), primary),
       sec(if (multi) "SECONDARY COMPARISONS" else "ESTIMATES"), secondary,
       rhythm, checks)
+  })
+
+  # ---- ONE TRAJECTORY: estimates, intervals, tests against zero ---------------
+  # The same outcome table as everywhere else (harmonic_outcomes()), shown in
+  # full when the design has no factor, with the variance components the model
+  # estimated; with factors the per-group results live on tab 6.
+  output$harmonic_single_traj <- renderUI({
+    mod <- values$harmonic_model
+    if (is.null(mod)) return(NULL)
+    o <- tryCatch(harmonic_outcomes(), error = function(e) NULL)
+    if (is.null(o) || !isTRUE(o$ok)) return(NULL)
+    es <- o$estimates; ts <- o$tests
+    if (length(unique(es$cell)) > 1L)
+      return(helpText(style = "margin-top:10px",
+        "Per-group estimates, intervals and tests are on tab 6 (Group / Condition Comparison)."))
+    td <- function(..., style = "") tags$td(style = paste("padding:4px 14px 4px 0;vertical-align:top;", style), ...)
+    th <- function(x) tags$th(style = "padding:4px 14px 4px 0;text-align:left;border-bottom:1px solid #ccc", x)
+    fp <- function(p) if (!is.finite(p)) "" else if (p < .001) "< .001" else sub("^0", "", sprintf("%.3f", p))
+    est_rows <- lapply(seq_len(nrow(es)), function(i) { r <- es[i, ]
+      tags$tr(td(r$label, dance_eq_link(r$outcome)),
+              td(dance_outcome_value_text(r, o$period, o$clock_origin, digits = 3), style = "font-family:monospace"),
+              td(if (is.na(r$note)) "" else r$note, style = "color:#8a5a12;font-size:12px")) })
+    tst <- if (!is.null(ts)) ts[ts$domain %in% c("rhythm", "accumulation", "level"), , drop = FALSE] else NULL
+    tst_rows <- if (!is.null(tst) && nrow(tst)) lapply(seq_len(nrow(tst)), function(i) { r <- tst[i, ]
+      tags$tr(td(r$label, if (!is.na(r$outcome)) dance_eq_link(paste0("zero:", r$outcome))),
+              td(dance_outcome_stat_text(r), style = "font-family:monospace"), td(fp(r$p), style = "font-family:monospace"),
+              td(r$method, style = "color:#777;font-size:12px")) })
+    # the variance components: how much participants differ
+    vc <- if (harmonic_is_mixed()) {
+      ff <- harmonic_traj()
+      v <- tryCatch(as.data.frame(lme4::VarCorr(ff$model)), error = function(e) NULL)
+      if (!is.null(v)) {
+        v <- v[is.na(v$var2), , drop = FALSE]
+        tagList(h5(tags$b("Variance components (standard deviations)")),
+          tags$table(tags$thead(tags$tr(th("Level"), th("Term"), th("SD"))),
+            tags$tbody(lapply(seq_len(nrow(v)), function(i) tags$tr(td(v$grp[i]),
+              td(if (is.na(v$var1[i])) "residual" else v$var1[i]), td(sprintf("%.4f", v$sdcor[i]), style = "font-family:monospace"))))),
+          helpText("Participant level: how far participants' own coefficients spread around the trajectory (a random effect per term)."))
+      }
+    } else {
+      df <- harmonic_ts()$df
+      cols <- intersect(c("fitted_mean", "mesor_adj", "mesor", "trend_change", sprintf("amplitude_%d", seq_len(mod$n_harmonics %||% 0L))), names(df))
+      lab <- c(fitted_mean = "Time-averaged fitted response", mesor_adj = "Time-averaged midline level", mesor = "Intercept",
+               trend_change = "Total trend change", stats::setNames(sprintf("Amplitude H%d", seq_len(mod$n_harmonics %||% 0L)),
+                                                                   sprintf("amplitude_%d", seq_len(mod$n_harmonics %||% 0L))))
+      tagList(h5(tags$b(sprintf("Between-participant spread (%d participants)", nrow(df)))),
+        tags$table(tags$thead(tags$tr(th("Quantity"), th("SD across participants"), th("Range"))),
+          tags$tbody(lapply(cols, function(cl) { x <- df[[cl]][is.finite(df[[cl]])]
+            tags$tr(td(lab[[cl]] %||% cl), td(sprintf("%.4f", stats::sd(x)), style = "font-family:monospace"),
+                    td(sprintf("%.3f to %.3f", min(x), max(x)), style = "font-family:monospace")) }))))
+    }
+    tags$div(style = "margin-top:14px",
+      h4("The single trajectory: estimates, intervals and tests"),
+      helpText(if (harmonic_is_mixed()) "From the one mixed-effects model: the fixed effects, with model-based 95% intervals."
+               else "From the per-participant fits: means of the participants' values with t intervals; amplitude and acrophase from the population-mean cosinor."),
+      tags$table(style = "margin-bottom:10px", tags$thead(tags$tr(th("Quantity"), th("Estimate [95% interval]"), th(""))),
+                 tags$tbody(est_rows)),
+      if (length(tst_rows)) tagList(h5(tags$b("Tests against zero: is there a rhythm, a trend, at all?")),
+        tags$table(style = "margin-bottom:10px", tags$thead(tags$tr(th("Hypothesis"), th("Statistic"), th("p"), th("Method"))),
+                   tags$tbody(tst_rows))),
+      vc)
   })
 
   output$download_harmonic_outcomes <- downloadHandler(

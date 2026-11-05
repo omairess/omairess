@@ -1419,3 +1419,54 @@ interval.
 - **The individual-results table:** a row of (i) links, one per column,
   including R², % variance and the per-participant zero-amplitude F test.
 - **Test:** the harness checks that every link has an equation.
+
+## 29. One trajectory (no between or within factor): estimates, intervals and tests against zero
+
+With no factor there is nothing to compare between groups. The questions
+become: what is the trajectory, how precisely is it estimated, and is there
+a rhythm or a trend at all.
+
+**Estimates.**
+- **Mixed-effects amplitudes and acrophases:** with no design factor the
+  mixed model gave none, because `dance_traj_cell_coefs` refused. One
+  trajectory is now one cell, "(all)", via emmeans `~ 1`, so it has its
+  amplitudes and acrophases with intervals, as every cell does.
+- **Agreement:** mixed-effects and two-stage estimates of the same trajectory
+  agree, for example a 24 h amplitude of 1.168 vs 1.163 on the test data.
+
+**Tests against zero.** Both are established procedures:
+- **Mixed-effects:** a Wald F test (Satterthwaite or Kenward-Roger df, the
+  same `dance_traj_L_test` as every block) of the fixed effects against
+  zero. It covers all harmonics jointly, each harmonic's (cos, sin) pair,
+  and the trend coefficient.
+- **Two-stage:** the population-mean cosinor's own tests (Bingham et al.
+  1982):
+  - a one-sample Hotelling T² on the participants' coefficients,
+    F = (n − p)T²/[p(n − 1)] on p and n − p df, all harmonics jointly and
+    per harmonic;
+  - for the trend, a one-sample t test of the participants' changes.
+- **Where they go:** the outcome table carries them, keyed circadian,
+  rhythmK and change, so the overview shows them under "Test against zero",
+  each with its (i) equation.
+
+**The residual-diagnostics tab** (tab 5) now lists, for one trajectory:
+- every estimate with its 95% interval and notes;
+- the tests against zero;
+- for mixed-effects, the variance components (the random-effect SDs and the
+  residual SD);
+- for two-stage, the between-participant spread (SD and range) of each
+  quantity.
+
+With factors, it points to tab 6.
+
+**A fix in the exported script.** It computed the two-stage outcome table
+only when there were groups, so a single trajectory got none. It now
+computes it in both cases.
+
+**Test:** `tests/single_traj_app_test.R` runs both approaches and checks:
+- the intervals, and the tests against zero recovering a simulated 24 h
+  rhythm and trend while finding no 12 h rhythm;
+- the tab 5 panel and the overview;
+- the equations;
+- agreement between the approaches;
+- the script reproducing every estimate and test.

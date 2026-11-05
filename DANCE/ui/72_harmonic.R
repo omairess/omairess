@@ -563,7 +563,11 @@ ui_tab_harmonic <- tabItem(
                      ),
                      fluidRow(
                        column(12, verbatimTextOutput("harmonic_gof_stats"))
-                     )
+                     ),
+                     # ONE TRAJECTORY (no between or within factor): its
+                     # estimates with intervals, its tests against zero and its
+                     # variance components; with factors, a pointer to tab 6
+                     uiOutput("harmonic_single_traj")
             ),
             # ==========================================================
             # 6. GROUP / CONDITION COMPARISON  (P21 phase 4)
