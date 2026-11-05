@@ -47,7 +47,7 @@ rate <- function(param, nsim = 2000, ...) {
 }
 
 cat("-- calibration under the null (nominal .05, 2000 simulations) ----------\n")
-for (prm in c("MESOR", "Amplitude", "Acrophase")) {
+for (prm in c("Midline level", "Amplitude", "Acrophase")) {
   r <- rate(prm)
   chk(abs(r[["rate"]] - .05) < .02 && r[["ks"]] > .01,
       sprintf("%-9s rejects at %.3f under its null (KS p = %.3f)", prm, r[["rate"]], r[["ks"]]),

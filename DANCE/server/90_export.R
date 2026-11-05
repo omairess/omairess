@@ -1649,7 +1649,7 @@
           add(sprintf("ts_boot <- dance_ts_bootstrap(ts_params, B = %d, period = period, seed = %sL)",
                       as.integer(hm$boot_results$B), format(hm$boot_results$seed %||% 20240601L)))
           add("print(stats::setNames(ts_boot[c(\"mesor_ci\", \"amplitude_ci\", \"acrophase_ci\")],")
-          add("                      c(\"midline_level_ci\", \"amplitude_ci\", \"acrophase_ci\")))")
+          add("                      c(\"intercept_ci\", \"amplitude_ci\", \"acrophase_ci\")))")
         }
         if (!is.null(hm$model_selection)) {
           add("")
@@ -1676,7 +1676,7 @@
         add("  f  <- cosinor_fits[[i]]")
         add("  g1 <- function(x) if (length(x)) as.numeric(x)[1] else NA_real_")
         add("  data.frame(subject        = i,")
-        add("             midline_level  = g1(f$mesor),")
+        add("             intercept      = g1(f$mesor),")
         add("             amplitude      = g1(f$amplitudes),")
         add("             acrophase_rad  = g1(f$acrophases),")
         add("             acrophase_hour = g1(f$acrophases_time),")

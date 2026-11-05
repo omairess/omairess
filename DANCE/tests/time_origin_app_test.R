@@ -56,12 +56,22 @@ testServer(server, {
         sprintf("%s: %s are unchanged by the origin", lab, paste(same, collapse = ", ")),
         sprintf("%s: moved by the origin: %s", lab, paste(sprintf("%s %.2g", same, dev)[dev >= tol], collapse = ", ")))
     # the tests over the sampled window are the same tests
+    # Mixed: the random-slope variance of the simulated data is near zero (lme4
+    # reports a boundary fit while fitting), and near that boundary the
+    # optimiser's stopping point -- and with it the Satterthwaite df -- depends
+    # on the parameterisation. The F statistics then agree to about 1%, the
+    # estimates to 1e-4. Two-stage refits are exact. The deviation is printed.
     t1 <- o1$tests; t2 <- o2$tests
     tk <- intersect(c("mesor", "change", "rhythm1", "circadian", "fitted_mean"), t1$outcome)
-    chk(all(vapply(tk, function(q) abs(t1$statistic[t1$outcome == q][1] - t2$statistic[t2$outcome == q][1]) <
-                         tol * max(1, abs(t1$statistic[t1$outcome == q][1])) * 10, TRUE)),
-        sprintf("%s: the group tests of %s are unchanged", lab, paste(tk, collapse = ", ")),
-        sprintf("%s: a group test changed with the origin", lab))
+    sing <- ap == "mixed"
+    stol <- if (sing) 0.02 else 10 * tol
+    rel <- vapply(tk, function(q) { a <- t1$statistic[t1$outcome == q][1]; b <- t2$statistic[t2$outcome == q][1]
+                                    abs(a - b) / max(1, abs(a)) }, numeric(1))
+    chk(all(rel < stol),
+        sprintf("%s: the group tests of %s are unchanged%s", lab, paste(tk, collapse = ", "),
+                if (sing) sprintf(" (F within %.2f%%; df not compared)", 100 * max(rel)) else ""),
+        sprintf("%s: a group test changed with the origin (%s)", lab,
+                paste(sprintf("%s %.2g", tk, rel), collapse = ", ")))
     b1 <- val(o1, "intercept"); b2 <- val(o2, "intercept")
     if (tr == "linear") {
       s1 <- val(o1, "avg_rate")

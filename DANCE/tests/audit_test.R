@@ -76,6 +76,11 @@ expect_lte <- function(object, expected, ...) {
   else .fail(sprintf("expect_lte: %s !<= %s", format(object), format(expected)))
   invisible(object)
 }
+expect_gte <- function(object, expected, ...) {
+  if (isTRUE(object >= expected)) .pass()
+  else .fail(sprintf("expect_gte: %s !>= %s", format(object), format(expected)))
+  invisible(object)
+}
 
 cat("Running tests/testthat/test-cosinor-audit.R under a base-R shim\n")
 cat(strrep("-", 68), "\n")

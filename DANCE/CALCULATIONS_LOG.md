@@ -1522,6 +1522,11 @@ are the same, and only two things change:
 - linear: the intercept, b₀′ = b₀ − d·b;
 - saturating: A′ = A·e^{d/τ} and b₀′ = b₀ + A − A′.
 
+For mixed-effects models this holds up to lme4's convergence. With a
+random-effect variance near zero, the optimiser's stopping point and the
+Satterthwaite df depend on the parameterisation. In the test the estimates
+agree to about 1e-4 and the F statistics to 1.4%.
+
 So for a rising trend, the extrapolated level at wake is **lower** than at
 the first observation, and A is larger. It is higher only for a falling
 trend. τ itself does not change with the origin, but the share of A reached
@@ -1534,6 +1539,10 @@ origin, so its fit changes too; the panel says so.
 - passes `t_origin = 0` to `dance_ts_fit_all()` and `dance_ts_model_set()`
   (the model set now also gets its `k_max`);
 - uses `t0 = 0` for the mixed model, as before.
+
+Also in this commit, the exported script's per-participant table
+(`cosinor_params`) and its bootstrap print call the fit's constant
+`intercept`. They had called it `midline_level` since the MESOR rename.
 
 **Test:** `tests/time_origin_app_test.R` runs mixed-effects and two-stage,
 each with a linear and a saturating trend, with an origin at 06:00 against a

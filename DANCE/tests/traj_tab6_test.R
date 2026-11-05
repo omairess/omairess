@@ -78,7 +78,9 @@ ui_all <- paste(unlist(lapply(
 # fail on the bug it was written for is worse than no check.
 placed <- vapply(srv_inputs, function(i) {
   pat <- sprintf('[A-Za-z0-9_.]+\\(\\s*(inputId\\s*=\\s*)?"%s"', i)
-  grepl(pat, ui_all) || grepl(pat, srv)
+  # or set from JavaScript: Shiny.setInputValue('name', ...) creates the input
+  js <- sprintf("Shiny\\.setInputValue\\('%s'", i)
+  grepl(pat, ui_all) || grepl(pat, srv) || grepl(js, srv) || grepl(js, ui_all)
 }, logical(1))
 # FOUR PRE-EXISTING ORPHANS, verified benign and recorded rather than hidden.
 # These predate P21 and live in other modules. Each read is guarded -- the code

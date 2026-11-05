@@ -207,7 +207,7 @@ testServer(server, {
     sc <- tryCatch(script_fits(), error = function(e) conditionMessage(e))
     if (is.character(sc)) { fail("the exported cosinor section did not run:", sc); next }
     m <- match(app$subject, sc$subject)
-    chk(!anyNA(m) && isTRUE(all.equal(unname(app$mesor), unname(sc$mesor[m]), tolerance = 1e-6)),
+    chk(!anyNA(m) && isTRUE(all.equal(unname(app$mesor), unname(sc$intercept[m]), tolerance = 1e-6)),
         sprintf("%s: the script's intercepts equal the app's, participant 3 included", cfg$label),
         sprintf("%s: the script's intercepts differ from the app's", cfg$label))
   }
