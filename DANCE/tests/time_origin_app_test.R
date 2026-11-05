@@ -86,6 +86,46 @@ testServer(server, {
                 paste(sprintf("%.3f -> %.3f", b1, b2), collapse = "; ")),
         sprintf("%s: intercept %s, expected %s", lab, paste(round(b2, 4), collapse = ", "),
                 paste(round(want, 4), collapse = ", ")))
+    # THE PLOT drawn from the time origin (trend view): the curve starts at the
+    # origin at 0, the annotations start on the curve at the first observation,
+    # and the interval before it is marked as extrapolated. Unticked, the curve
+    # and its annotations both start at 0 at the first observation.
+    if (tr == "exp_sat") for (fo in c(TRUE, FALSE)) {
+      session$setInputs(harmonic_traj_component = "trend", harmonic_traj_band = "pointwise",
+                        harmonic_traj_annot = c("change", "tangent", "asymptote"),
+                        harmonic_traj_from_origin = fo, harmonic_traj_raw = FALSE)
+      b <- plotly::plotly_build(harmonic_plot_finish(harmonic_traj_curves_build(), FALSE,
+                                                     pre_sample = harmonic_traj_from_origin()))$x
+      tr_d <- Filter(function(d) identical(d$mode, "lines") && length(unlist(d$x)) > 20 &&
+                       identical(d$fill %||% "none", "none"), b$data)
+      xs <- lapply(tr_d, function(d) as.numeric(unlist(d$x))); ys <- lapply(tr_d, function(d) as.numeric(unlist(d$y)))
+      x0 <- min(unlist(xs)); first <- vapply(seq_along(xs), function(i) ys[[i]][which.min(xs[[i]])], numeric(1))
+      # the curves at the first observation (t = 2), from the solid and the
+      # dotted pieces together
+      at1 <- vapply(seq_along(xs), function(i) { ok <- is.finite(ys[[i]])
+        if (sum(ok) < 2) NA_real_ else stats::approx(xs[[i]][ok], ys[[i]][ok], 2, rule = 2)$y }, numeric(1))
+      at1 <- at1[is.finite(at1)]
+      ann_l <- Filter(function(d) identical(d$mode, "lines") && length(unlist(d$x)) == 2 &&
+                        any(grepl("average trend rate", unlist(d$hovertemplate %||% ""))), b$data)
+      a_x <- vapply(ann_l, function(d) as.numeric(unlist(d$x))[1], numeric(1))
+      a_y <- vapply(ann_l, function(d) as.numeric(unlist(d$y))[1], numeric(1))
+      labs <- vapply(b$layout$annotations %||% list(), function(a) a$text %||% "", character(1))
+      if (fo) {
+        chk(abs(x0) < 1e-9 && all(abs(first) < 1e-6) && all(at1 > 0.05) &&
+              length(a_x) >= 2 && all(abs(a_x - 2) < 1e-9) && all(vapply(a_y, function(y) min(abs(y - at1)) < 0.01, TRUE)) &&
+              "before the first sample" %in% labs,
+            sprintf("%s: drawn from the origin, the trend is 0 at 06:00, the change line starts on the curve at 08:00, and the pre-sample interval is marked", lab),
+            sprintf("%s: the plot from the origin is wrong (x0 %.3g, first %s, rate line from %s at %s, labels %s)", lab, x0,
+                    paste(round(first, 3), collapse = ","), paste(a_x, collapse = ","), paste(round(a_y, 3), collapse = ","),
+                    paste(labs, collapse = "|")))
+      } else {
+        chk(abs(x0 - 2) < 1e-9 && all(abs(first) < 1e-6) && length(a_x) >= 2 && all(abs(a_x - 2) < 1e-9) && all(abs(a_y) < 1e-9) &&
+              !"before the first sample" %in% labs,
+            sprintf("%s: unticked, the curve and the change line start at 0 at the first observation", lab),
+            sprintf("%s: the sampled-window plot is wrong (x0 %.3g, rate line from %s at %s)", lab, x0,
+                    paste(a_x, collapse = ","), paste(a_y, collapse = ",")))
+      }
+    }
     # stated: in the assumptions and the summary
     asm <- paste(dance_cosinor_assumptions_text(dance_cosinor_assumptions(mod, if (ap == "mixed") harmonic_traj())),
                  collapse = " ")

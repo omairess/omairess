@@ -519,14 +519,16 @@ dance_ts_pairwise <- function(df, mod, what, adjust = c("holm", "bonferroni", "n
 # trend every participant has their own tau, the curves are not linear in shared
 # coefficients, and the band stays pointwise (simultaneous_ok = FALSE).
 dance_ts_group_curves <- function(mod, group_values, times, include_trend = TRUE,
-                                  conf = 0.95, component = NULL, band = "pointwise") {
+                                  conf = 0.95, component = NULL, band = "pointwise",
+                                  ref_time = NULL) {
+  # ref_time: where the "trend" view is zero (default: the first observation)
   df <- dance_ts_frame(mod, group_values)
   if (is.null(df)) return(NULL)
   period <- mod$period %||% 24; K <- mod$n_harmonics %||% 1L
   trend <- mod$trend_type %||% "none"
   component <- component %||% (if (isTRUE(include_trend)) "full" else "baseline_harm")
   if (identical(component, "rhythm")) component <- "baseline_harm"
-  t0 <- min(mod$time_vec, na.rm = TRUE)
+  t0 <- ref_time %||% min(mod$time_vec, na.rm = TRUE)
   n_tr <- switch(trend, none = 0L, linear = 1L, log = 1L, exp_sat = 2L, 0L)
   kh <- dance_traj_component_harmonic(component)
   # coefficients the view uses (for the simultaneous band)

@@ -639,6 +639,7 @@ ui_tab_harmonic <- tabItem(
                                                     "Asymptote A and the 63.2% point at tau (trend view)" = "asymptote",
                                                     "Acrophase and amplitude (rhythm views)" = "acro"),
                                         selected = c("mean", "change", "acro"), inline = TRUE),
+                     uiOutput("harmonic_traj_origin_ui"),
                      plotlyOutput("harmonic_traj_curves", height = "440px"),
                      uiOutput("harmonic_traj_annot_note"),
                      uiOutput("harmonic_traj_band_note"),

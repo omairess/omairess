@@ -217,7 +217,9 @@ dance_traj_component_mask <- function(fit, X, component) {
 # ------------------------------------------------------------------------------
 dance_traj_predict <- function(fit, times = NULL, conf = 0.95,
                                band = c("pointwise", "simultaneous"),
-                               n_time = 200, component = "full") {
+                               n_time = 200, component = "full", ref_time = NULL) {
+  # ref_time: where the "trend" view is zero -- the first observation by
+  # default, or the time origin t0 when the curves are drawn back to it
   band <- match.arg(band)
   if (!isTRUE(fit$ok)) return(list(ok = FALSE, message = fit$message))
   # validated against what THIS fit can offer, rather than match.arg against a
@@ -244,7 +246,8 @@ dance_traj_predict <- function(fit, times = NULL, conf = 0.95,
       # f(t) - f(t1), as a contrast on the design matrix, so the band is zero at
       # the first observation t1 rather than merely the point estimate being
       # zero there (t1 is the time origin t0 unless an earlier origin was set)
-      X0 <- dance_traj_design_rows(fit, grid[i, , drop = FALSE], min(spec$data$t, na.rm = TRUE))
+      X0 <- dance_traj_design_rows(fit, grid[i, , drop = FALSE],
+                                   ref_time %||% min(spec$data$t, na.rm = TRUE))
       X0[, !mask] <- 0
       X <- sweep(X, 2, X0[1, ], "-")
     }

@@ -214,7 +214,8 @@ dance_plot_mark_gaps <- function(p, gaps, sample_times) {
                                   y0 = 0, y1 = 1, fillcolor = "rgba(120,120,120,0.10)", line = list(width = 0),
                                   layer = "below")
     an[[length(an) + 1L]] <- list(x = (gaps$start[i] + gaps$end[i]) / 2, y = 1, xref = "x", yref = "paper",
-                                  text = "no samples", showarrow = FALSE, yanchor = "bottom",
+                                  text = if (!is.null(gaps$label)) gaps$label[i] else "no samples",
+                                  showarrow = FALSE, yanchor = "bottom",
                                   font = list(size = 10, color = "#777"),
                                   hovertext = attr(gaps, "hover")[i] %||% "no sampling time in this interval")
   }

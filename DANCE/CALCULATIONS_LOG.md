@@ -1552,3 +1552,31 @@ recording starting at 08:00. It checks:
 - that the assumptions and the equations state the origin;
 - that the script reproduces every estimate;
 - that an invalid time is refused.
+
+**Drawing the curves from the time origin** (display only; no estimate,
+test or script number changes). With an origin set, the Estimated
+trajectories plot offers to draw the curves from the origin. It is ticked by
+default and can be switched off.
+
+When drawn from the origin:
+- **Trend view:** f(t) − f(0), zero at the origin, not at the first
+  observation.
+- **Extrapolated interval:** the interval from the origin to the first
+  observation is shaded, labelled "before the first sample", and the curves
+  are dotted over it.
+- **Annotations:** they stay on the sampled window and start on the drawn
+  curve at the first observation.
+  - The total-change line runs from f(t₁) to f(T).
+  - The tangent's slope is the rate at t₁.
+  - The asymptote is drawn at A − f(ref), and the 63.2% point at t = τ
+    after the origin.
+
+**A fix:** the mixed-effects plot had passed the origin, not the first
+observation, as the annotations' window start. That put the average-rate
+line's start at the origin.
+
+**Test:** in `tests/time_origin_app_test.R`, for both approaches:
+- the trend is 0 at the origin;
+- the change line starts on the curve at the first observation;
+- the interval before it is marked;
+- unticked, curve and line start at 0 at the first observation.

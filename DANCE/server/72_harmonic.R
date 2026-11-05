@@ -5082,9 +5082,31 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     ts <- harmonic_ts(); if (is.null(ts) || !isTRUE(ts$ok)) return(NULL)
     mod <- ts$mod
     tv <- mod$time_vec
-    times <- seq(min(tv, na.rm = TRUE), max(tv, na.rm = TRUE), length.out = 160)
-    dance_ts_group_curves(mod, ts$gvals, times, component = component, band = band)
+    fo <- harmonic_traj_from_origin()
+    times <- seq(if (fo) 0 else min(tv, na.rm = TRUE), max(tv, na.rm = TRUE), length.out = 160)
+    dance_ts_group_curves(mod, ts$gvals, times, component = component, band = band,
+                          ref_time = if (fo) 0 else NULL)
   }
+
+  # DRAWN FROM THE TIME ORIGIN: when an origin before the first observation was
+  # set, the curves can be drawn back to it, so the non-periodic change is
+  # f(t) - f(0) from the origin. Display only: the part before the first
+  # observation is an extrapolation, drawn dotted over a shaded interval, and no
+  # estimate or test changes.
+  harmonic_origin_lead <- function() {
+    l <- suppressWarnings(as.numeric(values$harmonic_model$origin_lead %||% 0))
+    if (length(l) == 1L && is.finite(l)) l else 0
+  }
+  harmonic_traj_from_origin <- function() harmonic_origin_lead() > 1e-9 && isTRUE(input$harmonic_traj_from_origin %||% TRUE)
+  output$harmonic_traj_origin_ui <- renderUI({
+    if (harmonic_origin_lead() <= 1e-9) return(NULL)
+    mod <- values$harmonic_model
+    checkboxInput("harmonic_traj_from_origin", sprintf(
+      "Draw from the time origin (%s): the trend counted from it, extrapolated before the first observation (%s)",
+      dance_clock_label(dance_clock_origin(mod), 24, show_day = FALSE),
+      dance_clock_label(dance_clock_origin(mod) + min(mod$time_vec, na.rm = TRUE), 24, show_day = FALSE)),
+      isolate(input$harmonic_traj_from_origin) %||% TRUE)
+  })
 
   # ---- THE ANNOTATIONS OF THE THREE GRAPHS ---------------------------------------
   # Every number drawn here is read off harmonic_outcomes(), the table the "By
@@ -5103,7 +5125,10 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       else if (grepl("^(amplitude|phase)", w)) "acro" else character(0)
     unique(c(a, implied_of(w), implied_of(wc %||% "")))
   }
-  harmonic_annotate <- function(p, cmp, cells, cols, t0, t_end, period) {
+  # t0, t_end: the SAMPLED window (first to last observation). curves: the
+  # drawn table (t, fit, cell), so a trend annotation starts on the drawn curve
+  # wherever its zero is (the first observation, or the time origin).
+  harmonic_annotate <- function(p, cmp, cells, cols, t0, t_end, period, curves = NULL) {
     ann <- harmonic_traj_annot_set()
     if (!length(ann)) return(p)
     o <- tryCatch(harmonic_outcomes(), error = function(e) NULL)
@@ -5121,37 +5146,58 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
                                hovertemplate = sprintf("%s time-averaged fitted response %.3f<extra></extra>", cl, m))
       }
       if (identical(cmp, "trend")) {
+        # y0: the drawn curve at the first observation -- 0 when the view is
+        # zero there, f(t1) - f(0) when it is drawn from the time origin
+        y0 <- 0; x_lo <- t0
+        if (!is.null(curves)) {
+          dc <- curves[curves$cell == cl, , drop = FALSE]
+          if (nrow(dc) > 1) {
+            y0 <- stats::approx(dc$t, dc$fit, xout = t0, rule = 2)$y
+            x_lo <- min(dc$t, na.rm = TRUE)
+          }
+        }
         ch <- val(c("sat_change", "change"), cl)
         if ("change" %in% ann && is.finite(ch))
           p <- p %>%
-            add_lines(x = c(t0, t_end), y = c(0, ch), legendgroup = cl, showlegend = FALSE, line = dash(cl, 0.7),
+            add_lines(x = c(t0, t_end), y = c(y0, y0 + ch), legendgroup = cl, showlegend = FALSE, line = dash(cl, 0.7),
                       hovertemplate = sprintf("%s average trend rate %.4g per hour<extra></extra>", cl, ch / Tw)) %>%
-            add_markers(x = t_end, y = ch, legendgroup = cl, showlegend = FALSE,
+            add_markers(x = t_end, y = y0 + ch, legendgroup = cl, showlegend = FALSE,
                         marker = list(color = cols[[cl]], size = 9, symbol = "diamond"),
-                        hovertemplate = sprintf("%s total trend change %.3f<extra></extra>", cl, ch))
-        r0 <- val(c("init_slope", "rate0", "avg_rate", "sat_avg_rate"), cl)
+                        hovertemplate = sprintf("%s total trend change over the recording %.3f<extra></extra>", cl, ch))
+        # A: the per-cell model's or the per-participant mean, else (tau shared
+        # and held) the saturating trend's own coefficient
+        A <- if (identical(o$trend, "exp_sat")) val(c("A_sat", "trend"), cl) else NA_real_
+        tau <- val("tau", cl)
+        # the slope at the first observation: rate0 is that slope; A/tau is the
+        # slope at the time origin, carried to the first observation by e^(-t1/tau)
+        r0 <- val(c("rate0", "avg_rate", "sat_avg_rate"), cl)
+        if (!is.finite(r0)) {
+          r0 <- val("init_slope", cl)
+          if (is.finite(r0) && is.finite(tau) && t0 > 0) r0 <- r0 * exp(-t0 / tau)
+        }
         if ("tangent" %in% ann && is.finite(r0)) {
           # the tangent at the first observation, drawn over the first quarter of
           # the window (or until it would leave the range of the change)
           tl <- Tw / 4
           if (is.finite(ch) && ch != 0 && r0 != 0) tl <- min(tl, abs(ch / r0) * 1.2)
-          p <- p %>% add_lines(x = c(t0, t0 + tl), y = c(0, r0 * tl), legendgroup = cl, showlegend = FALSE,
+          p <- p %>% add_lines(x = c(t0, t0 + tl), y = c(y0, y0 + r0 * tl), legendgroup = cl, showlegend = FALSE,
                                line = list(color = cols[[cl]], width = 2, dash = "dot"),
                                hovertemplate = sprintf("%s initial trend rate %.4g per hour<extra></extra>", cl, r0))
         }
-        # A: the per-cell model's or the per-participant mean, else (tau shared
-        # and held) the saturating trend's own coefficient
-        A <- if (identical(o$trend, "exp_sat")) val(c("A_sat", "trend"), cl) else NA_real_
-        tau <- val("tau", cl)
         if ("asymptote" %in% ann && is.finite(A) && is.finite(tau)) {
+          # on the drawn scale: f counts from the time origin (model time 0), so
+          # the asymptote is A - f(ref) and the 63.2% point is at t = tau
+          f_t0 <- A * (1 - exp(-t0 / tau))
+          yA <- A - f_t0 + y0
+          y63 <- A * (1 - exp(-1)) - f_t0 + y0
           p <- p %>%
-            add_lines(x = c(t0, t_end), y = c(A, A), legendgroup = cl, showlegend = FALSE,
+            add_lines(x = c(x_lo, t_end), y = c(yA, yA), legendgroup = cl, showlegend = FALSE,
                       line = list(color = dance_group_rgba(cols[[cl]], 0.5), width = 1, dash = "longdash"),
                       hovertemplate = sprintf("%s asymptote A = %.3f (where the trend is heading)<extra></extra>", cl, A))
-          if (tau <= Tw * 1.5)
-            p <- p %>% add_markers(x = t0 + tau, y = A * (1 - exp(-1)), legendgroup = cl, showlegend = FALSE,
+          if (tau >= x_lo && tau <= t_end + Tw * 0.5)
+            p <- p %>% add_markers(x = tau, y = y63, legendgroup = cl, showlegend = FALSE,
                                    marker = list(color = cols[[cl]], size = 8, symbol = "circle-open"),
-                                   hovertemplate = sprintf("%s t = tau = %.2f h: 63.2%% of A<extra></extra>", cl, tau))
+                                   hovertemplate = sprintf("%s t = tau = %.2f h after the time origin: 63.2%% of A<extra></extra>", cl, tau))
         }
       }
       kh <- dance_traj_component_harmonic(cmp)
@@ -5221,12 +5267,15 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     }
     co <- dance_clock_origin(mod); P <- mod$period %||% 24
     p <- harmonic_annotate(p, harmonic_traj_component(), gc$cells, cols,
-                           min(mod$time_vec, na.rm = TRUE), max(mod$time_vec, na.rm = TRUE), P)
+                           min(mod$time_vec, na.rm = TRUE), max(mod$time_vec, na.rm = TRUE), P,
+                           curves = gc$table)
     brk <- pretty(range(gc$times), n = 8); brk <- brk[brk >= min(gc$times) & brk <= max(gc$times)]
     p %>% layout(
       xaxis = list(title = if (co != 0) "Clock time" else "Time", tickmode = "array", tickvals = brk,
                    ticktext = dance_clock_label(brk + co, P, show_day = TRUE, with_minutes = FALSE)),
-      yaxis = list(title = if (!identical(harmonic_traj_component(), "full"))
+      yaxis = list(title = if (identical(harmonic_traj_component(), "trend") && harmonic_traj_from_origin())
+                     "Non-periodic change from the time origin"
+                   else if (!identical(harmonic_traj_component(), "full"))
                      dance_traj_component_label(harmonic_traj_component(), P)
                    else if (!is.null(mod$dv_name)) paste0(mod$dv_name, if (!is.null(mod$dv_units)) paste0(" (", mod$dv_units, ")") else "") else "Response"),
       hovermode = "x unified", legend = list(orientation = "h", y = -0.18))
@@ -5465,7 +5514,9 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
   # the original scale when asked (the full response only -- a component is a
   # log ratio, and stays on the log scale, saying so); and on every run the
   # unsampled intervals shaded, the fitted curve dashed across them.
-  harmonic_plot_finish <- function(p, original) {
+  # pre_sample: the curves start at the time origin, so the interval from it to
+  # the first observation is marked as extrapolated, like an unsampled gap
+  harmonic_plot_finish <- function(p, original, pre_sample = FALSE) {
     mod <- values$harmonic_model
     if (is.null(mod) || !inherits(p, "plotly")) return(p)
     sc <- mod$scale %||% dance_scale_spec()
@@ -5493,6 +5544,17 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       attr(gp, "hover") <- sprintf("No sampling time between %s%s and %s%s: %s. Set the threshold under Unsampled intervals (0 = off).",
         lab(gp$start), if (!is.na(gp$start_col[1] %||% NA)) sprintf(" ['%s']", gp$start_col) else "",
         lab(gp$end), if (!is.na(gp$end_col[1] %||% NA)) sprintf(" ['%s']", gp$end_col) else "", attr(gp, "rule"))
+    }
+    if (isTRUE(pre_sample) && harmonic_origin_lead() > 1e-9) {
+      t1 <- min(mod$time_vec, na.rm = TRUE)
+      hv <- c(sprintf(paste("Before the first observation: from the time origin (%s) to the first sample (%s)",
+                            "nothing was observed, and the curve here is an extrapolation of the fitted model."),
+                      dance_clock_label(dance_clock_origin(mod), 24, show_day = FALSE),
+                      dance_clock_label(dance_clock_origin(mod) + t1, 24, show_day = FALSE)),
+              if (!is.null(gp) && nrow(gp)) attr(gp, "hover") %||% rep("no sampling time in this interval", nrow(gp)))
+      gp <- rbind(data.frame(start = 0, end = t1, label = "before the first sample"),
+                  if (!is.null(gp) && nrow(gp)) data.frame(start = gp$start, end = gp$end, label = "no samples"))
+      attr(gp, "hover") <- hv
     }
     dance_plot_mark_gaps(p, gp, mod$time_vec)
   }
@@ -6100,9 +6162,12 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
   harmonic_traj_curves_build <- function() {
     if (!harmonic_is_mixed()) return(ts_curves_plot())
     ff <- harmonic_traj(); req(isTRUE(ff$ok))
+    fo <- harmonic_traj_from_origin()
     pr <- dance_traj_predict(ff, conf = 0.95,
                              band = input$harmonic_traj_band %||% "pointwise",
                              component = harmonic_traj_component(),
+                             times = if (fo) seq(ff$spec$t0, max(ff$spec$data$t, na.rm = TRUE), length.out = 160),
+                             ref_time = if (fo) ff$spec$t0 else NULL,
                              n_time = 160)
     req(isTRUE(pr$ok))
     cols <- dance_group_colors(pr$cells)
@@ -6150,7 +6215,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       },
       harmonics = "Harmonics only (centred on 0)",
       baseline_harm = "Intercept + harmonics (trend removed)",
-      trend = "Non-periodic change from the first observation")
+      trend = if (fo) "Non-periodic change from the time origin" else "Non-periodic change from the first observation")
     # CLOCK TIME ON THE AXIS, not elapsed. The model is fitted on an axis
     # anchored at the first observation, but nobody reads a sleepiness
     # trajectory in "hours since the study started", and every other plot in
@@ -6158,8 +6223,10 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     # axis so the traces do not move; only the labels are converted.
     co <- ff$clock_origin %||% 0
     P <- ff$spec$period %||% 24
-    p <- harmonic_annotate(p, cmp, pr$cells, cols, ff$spec$t0,
-                           max(ff$spec$data$t, na.rm = TRUE), P)
+    # the annotations belong to the SAMPLED window, which starts at the first
+    # observation (not at the time origin, when an earlier one was set)
+    p <- harmonic_annotate(p, cmp, pr$cells, cols, min(ff$spec$data$t, na.rm = TRUE),
+                           max(ff$spec$data$t, na.rm = TRUE), P, curves = pr$table)
     brk <- pretty(range(pr$times), n = 8)
     brk <- brk[brk >= min(pr$times) & brk <= max(pr$times)]
     p %>% layout(
@@ -6175,7 +6242,8 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
   output$harmonic_traj_curves <- renderPlotly(
     harmonic_plot_finish(harmonic_traj_curves_build(),
                          isTRUE(input$harmonic_traj_original %||% TRUE) &&
-                           identical(harmonic_traj_component(), "full")))
+                           identical(harmonic_traj_component(), "full"),
+                         pre_sample = harmonic_traj_from_origin()))
 
   output$harmonic_traj_band_note <- renderUI({
     if (!harmonic_is_mixed()) {
@@ -6189,7 +6257,12 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     req(isTRUE(pr$ok))
     # the statistic this view is a picture of: where each curve ENDS is the
     # cell's non-periodic change over the recording, tested in the panel below
-    stat <- if (identical(cmp, "trend")) paste0(
+    stat <- if (identical(cmp, "trend") && harmonic_traj_from_origin()) paste0(
+      " Drawn from the time origin: each curve is the trend since the origin, f(t) &minus; f(0), dotted",
+      " over the shaded interval before the first observation, where it is an extrapolation. The change",
+      " over the recording, estimated and compared under <i>Intercept, midline level and change</i>",
+      " below, is the rise from the first to the last observation (the dashed line and the diamond).")
+    else if (identical(cmp, "trend")) paste0(
       " Each curve ends at its cell's non-periodic change over the recording, which is",
       " estimated and compared under <i>Intercept, midline level and change</i> below. The model",
       " has one trend coefficient per cell (the ",
