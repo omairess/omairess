@@ -19,7 +19,11 @@ dance_eq_context <- function(mod = NULL) {
   sc <- mod$scale %||% list(type = "original", offset = 0)
   list(trend = mod$trend_type %||% "none", K = as.integer(mod$n_harmonics %||% 1L), period = mod$period %||% 24,
        approach = mod$approach %||% "mixed", log = identical(sc$type, "log"), offset = sc$offset %||% 0,
-       tau_mode = mod$tau_spec$mode %||% "fixed", T = diff(range(mod$time_vec %||% c(0, 0))))
+       tau_mode = mod$tau_spec$mode %||% "fixed", T = diff(range(mod$time_vec %||% c(0, 0))),
+       # the sampled window in hours since the time origin: a > 0 only when an
+       # origin before the first observation was set
+       a = { a0 <- suppressWarnings(min(mod$time_vec, na.rm = TRUE)); if (is.finite(a0)) a0 else 0 },
+       b = { b0 <- suppressWarnings(max(mod$time_vec, na.rm = TRUE)); if (is.finite(b0)) b0 else NA_real_ })
 }
 
 .eq <- function(...) paste0('<div style="font-family:Georgia,serif;font-size:15px;margin:8px 0 10px 0;',
@@ -77,6 +81,28 @@ dance_equation <- function(key, ctx = dance_eq_context()) {
     linear = "<i>b</i>&middot;<i>T</i>", log = "<i>b</i>&middot;ln(1 + <i>T</i>)",
     exp_sat = "<i>A</i>&middot;(1 &minus; e<sup>&minus;<i>T</i>/<i>&tau;</i></sup>)", "0")
   rate0 <- switch(ctx$trend, linear = "<i>b</i>", log = "<i>b</i>", exp_sat = "<i>A</i>/<i>&tau;</i>", "0")
+  # WITH A TIME ORIGIN BEFORE THE FIRST OBSERVATION the window is [t1, T] in hours
+  # since the origin, not [0, T]: the same quantities, over the sampled window
+  # (dance_trend_factors(..., a = t1) in server/08_helpers_cosinor.R)
+  shifted <- is.finite(ctx$a %||% NA) && ctx$a > 1e-9
+  lo <- "0"; f0 <- "<i>f</i>(0)"; w_len <- "<i>T</i>"; at0 <- "0"
+  if (shifted) {
+    win <- sprintf(paste("the sampled window from <i>t</i><sub>1</sub> = %s h to <i>T</i> = %s h, in hours since the time",
+                         "origin (%s h of observation)"), format(round(ctx$a, 2)), format(round(ctx$b, 2)),
+                   format(round(ctx$b - ctx$a, 2)))
+    lo <- "<i>t</i><sub>1</sub>"; f0 <- "<i>f</i>(<i>t</i><sub>1</sub>)"; at0 <- lo
+    w_len <- "(<i>T</i> &minus; <i>t</i><sub>1</sub>)"
+    mean_of_f <- switch(ctx$trend,
+      linear  = "<i>b</i>&middot;(<i>t</i><sub>1</sub> + <i>T</i>)/2",
+      log     = paste0("<i>b</i>&middot;{[(<i>T</i> + 1) ln(1 + <i>T</i>) &minus; <i>T</i>] &minus; [(<i>t</i><sub>1</sub> + 1) ln(1 + <i>t</i><sub>1</sub>) &minus; <i>t</i><sub>1</sub>]}/", w_len),
+      exp_sat = paste0("<i>A</i>&middot;[1 &minus; <i>&tau;</i>(e<sup>&minus;<i>t</i><sub>1</sub>/<i>&tau;</i></sup> &minus; e<sup>&minus;<i>T</i>/<i>&tau;</i></sup>)/", w_len, "]"),
+      "0")
+    chg <- switch(ctx$trend,
+      linear = paste0("<i>b</i>&middot;", w_len), log = "<i>b</i>&middot;[ln(1 + <i>T</i>) &minus; ln(1 + <i>t</i><sub>1</sub>)]",
+      exp_sat = "<i>A</i>&middot;(e<sup>&minus;<i>t</i><sub>1</sub>/<i>&tau;</i></sup> &minus; e<sup>&minus;<i>T</i>/<i>&tau;</i></sup>)", "0")
+    rate0 <- switch(ctx$trend, linear = "<i>b</i>", log = "<i>b</i>/(1 + <i>t</i><sub>1</sub>)",
+                    exp_sat = "(<i>A</i>/<i>&tau;</i>)&middot;e<sup>&minus;<i>t</i><sub>1</sub>/<i>&tau;</i></sup>", "0")
+  }
   logn <- if (isTRUE(ctx$log)) .p("Fitted on the log scale: read back on the original scale as e<sup><i>x</i></sup> &minus; <i>c</i>",
                                    if (base %in% c("fitted_mean", "mesor", "intercept")) " (a geometric mean when <i>c</i> = 0)"
                                    else if (base == "amplitude") "; an amplitude <i>A</i> as the peak-to-trough ratio e<sup>2<i>A</i></sup>"
@@ -92,26 +118,32 @@ dance_equation <- function(key, ctx = dance_eq_context()) {
          if (identical(ctx$approach, "mixed")) "A joint Wald F test of all the group contrasts at once."
          else "A one-way MANOVA (Wilks' &Lambda;) on the participants' coefficient vectors."))),
     fitted_mean = list("Time-averaged fitted response", paste0(
-      .eq("<i>&#563;&#772;</i> = (1/<i>T</i>) &int;<sub>0</sub><sup><i>T</i></sup> <i>&#375;</i>(<i>t</i>) d<i>t</i>"),
+      .eq("<i>&#563;&#772;</i> = (1/", w_len, ") &int;<sub>", lo, "</sub><sup><i>T</i></sup> <i>&#375;</i>(<i>t</i>) d<i>t</i>"),
       .p("The fitted curve, rhythm included, averaged over ", win, ". Over whole cycles the harmonics average to zero and this equals the time-averaged midline level."),
       grp, logn)),
     mesor = list("Time-averaged midline level", paste0(
-      .eq("<i>M&#772;</i> = (1/<i>T</i>) &int;<sub>0</sub><sup><i>T</i></sup> [", .b(0), " + <i>f</i>(<i>t</i>)] d<i>t</i> = ",
+      .eq("<i>M&#772;</i> = (1/", w_len, ") &int;<sub>", lo, "</sub><sup><i>T</i></sup> [", .b(0), " + <i>f</i>(<i>t</i>)] d<i>t</i> = ",
           .b(0), " + ", mean_of_f),
       .p("The midline (intercept + trend, harmonics excluded) averaged over ", win,
          ". It generalizes the classical MESOR to a time-varying baseline; without a trend it is ", .b(0), "."),
       grp, logn)),
-    intercept = list("Initial midline (t = 0)", paste0(
+    intercept = list(if (shifted) "Midline at the time origin (t = 0)" else "Initial midline (t = 0)", paste0(
       .eq("<i>m</i>(0) = ", .b(0), " + <i>f</i>(0) = ", .b(0)),
-      .p("The midline at the first sampling time, where every trend term is zero."), grp, logn)),
+      .p(if (shifted) sprintf(paste("The midline at the time origin, %s h before the first sampling time, where every",
+                                    "trend term is zero. An extrapolation: nobody was sampled there."), format(round(ctx$a, 2)))
+         else "The midline at the first sampling time, where every trend term is zero."), grp, logn)),
     change = , sat_change = list("Total trend change over the window", paste0(
-      .eq("&Delta; = <i>f</i>(<i>T</i>) &minus; <i>f</i>(0) = ", chg), .p(dance_eq_trend_term(ctx$trend), "; ", win, "."),
+      .eq("&Delta; = <i>f</i>(<i>T</i>) &minus; ", f0, " = ", chg), .p(dance_eq_trend_term(ctx$trend), "; ", win, "."),
       grp, logn)),
     avg_rate = , sat_avg_rate = list("Average trend rate", paste0(
-      .eq("&Delta;/<i>T</i> = [<i>f</i>(<i>T</i>) &minus; <i>f</i>(0)]/<i>T</i> = ", chg, "/<i>T</i>"),
+      .eq("&Delta;/", w_len, " = [<i>f</i>(<i>T</i>) &minus; ", f0, "]/", w_len, " = ", chg, "/", w_len),
       .p("The total change per hour of the window: the same quantity as the change in other units, so it shares its test."), grp)),
-    rate0 = , init_slope = list("Initial trend rate", paste0(
-      .eq("<i>f</i>&prime;(0) = ", rate0), .p("The slope of the trend at the first sampling time."), grp)),
+    rate0 = list("Initial trend rate", paste0(
+      .eq("<i>f</i>&prime;(", at0, ") = ", rate0), .p("The slope of the trend at the first sampling time."), grp)),
+    init_slope = list("Initial trend rate A/tau", paste0(
+      .eq("<i>f</i>&prime;(0) = <i>A</i>/<i>&tau;</i>"),
+      .p(if (shifted) "The slope of the saturating trend at the time origin (t = 0), before the first sampling time."
+         else "The slope of the trend at the first sampling time."), grp)),
     A_sat = list("Saturating rise A", paste0(.eq("<i>f</i>(<i>t</i>) = <i>A</i>(1 &minus; e<sup>&minus;<i>t</i>/<i>&tau;</i></sup>) &rarr; <i>A</i> as <i>t</i> &rarr; &infin;"),
       .p("The asymptote of the trend above the intercept."), grp)),
     tau = list("Time constant tau", paste0(.eq("<i>f</i>(<i>&tau;</i>) = <i>A</i>(1 &minus; e<sup>&minus;1</sup>) &asymp; 0.632&middot;<i>A</i>"),

@@ -599,7 +599,11 @@ dance_apa_report <- function(values, input, title = NULL) {
       if (!is.null(hm$dv_name))
         add(" The dependent variable was ", hm$dv_name,
             if (!is.null(hm$dv_units)) paste0(" (", hm$dv_units, ")") else "", ".")
-      add(" Time was measured from the first observation, and the period was ",
+      add(" Time was measured from ", if (identical(dance_origin_phrase(hm), "the time origin"))
+            paste0("a time origin set at ", dance_clock_label(dance_clock_origin(hm), 24, show_day = FALSE),
+                   ", ", format(signif(hm$origin_lead, 3)), " h before the first observation ",
+                   "(the intercept is the extrapolated midline there)") else "the first observation",
+          ", and the period was ",
           "FIXED rather than estimated, so amplitude and acrophase are conditional ",
           "on that choice; acrophases are reported in clock time.")
       add(" Effects of the design factors were tested as marginal contrasts on the ",
@@ -1087,9 +1091,10 @@ dance_apa_report <- function(values, input, title = NULL) {
           dance_window_clock(tw$t0, tw$t_max, ff$clock_origin %|% 0, ff$spec$period %|% 24)
         add("Cell values are the fixed effects of the one model. The midline is the ",
             "curve without its harmonics (intercept plus trend); the intercept is the ",
-            "midline at the first observation",
+            "midline at ", dance_origin_phrase(hm),
             if (has_tr && !is.null(wc)) paste0(
-              " (", wc$start, "); the time-averaged midline level is that midline averaged over the ",
+              " (", dance_clock_label((ff$clock_origin %|% 0) + (ff$spec$t0 %|% 0), 24, show_day = FALSE),
+              "); the time-averaged midline level is that midline averaged over the ",
               "recording (", wc$text, "), and the change is how far the trend moves ",
               "it over the same window") else "; without a trend it is the time-averaged midline level",
             ". Amplitudes and acrophases are read off each cell's (cosine, sine) ",
@@ -1285,7 +1290,7 @@ dance_apa_report <- function(values, input, title = NULL) {
       if (!gtr) grows$Change <- NULL
       if (!gtr) grows$`Midline level` <- NULL
       L <- c(L, dance_md_table(grows)); blank()
-      add(if (gtr) paste0("Intercept is the midline at the first observation; the time-averaged midline level is the ",
+      add(if (gtr) paste0("Intercept is the midline at ", dance_origin_phrase(hm), "; the time-averaged midline level is the ",
                           "mean of the participants' midlines averaged over the recording ",
                           "(the rhythm-adjusted mean); Change is the mean non-periodic ",
                           "change from the first to the last observation. ")

@@ -2255,12 +2255,27 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       # continuity with earlier runs"; it put the trend and the harmonics on two
       # different anchors and made the intercept the value at neither. There is
       # no analysis that needs it, so it is not offered.
-      time_origin <- "first_observation"
-      origin_shift <- min(time_vec, na.rm = TRUE)
+      # Optionally a clock time BEFORE the first observation (e.g. wake time):
+      # the intercept and the trend are then anchored there, and every window
+      # quantity is still taken over the sampled window. dance_time_origin()
+      # (server/08_helpers_cosinor.R), the function the exported script calls.
+      origin_clock <- NULL
+      if (identical(input$harmonic_origin %||% "first", "clock")) {
+        origin_clock <- dance_parse_clock_hours(input$harmonic_origin_clock)
+        if (!is.finite(origin_clock)) {
+          showNotification(paste("The time origin must be a clock time such as 08:00",
+                                 "(or decimal hours, 0 to 24)."), type = "error", duration = 10)
+          return()
+        }
+      }
+      .org <- dance_time_origin(time_vec, origin_clock)
+      time_origin <- .org$mode
+      origin_shift <- .org$shift
       time_vec_model <- time_vec - origin_shift
 
-      # Store time offsets for prediction
-      t_offset_global <- min(time_vec_model)
+      # Store time offsets for prediction: the trend is anchored at model time
+      # 0, the origin (the first observation unless an earlier origin was set)
+      t_offset_global <- 0
       t_center_global <- mean(time_vec_model)
 
       # Read parameter bounding options from UI
@@ -2316,7 +2331,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
                          amplitude_min = amplitude_min, amplitude_max = amplitude_max,
                          A_sat_min = A_sat_min, A_sat_max = A_sat_max,
                          tau_min = tau_min, tau_max = tau_max, tau_fixed = tau_fixed,
-                         progress = function(i, n) setProgress(i / n)))
+                         t_origin = 0, progress = function(i, n) setProgress(i / n)))
       individual_fits <- .ts$fits
       individual_params <- .ts$params
       failed_fits <- .ts$failed
@@ -2892,7 +2907,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
         model_selection <- withProgress(message = "Fitting the model comparison set...", value = 0,
           dance_ts_model_set(Y, time_vec_model, period = period, n_harmonics = n_harmonics,
                              trend_type = trend_type, tau_min = tau_min, tau_max = tau_max,
-                             tau_fixed = tau_fixed, k_max = ms_k_max,
+                             tau_fixed = tau_fixed, k_max = ms_k_max, t_origin = 0,
                              progress = function(j, n, label) setProgress(j / n, detail = label)))
       }
 
@@ -2939,7 +2954,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
 
         # condition number of the linearised design at each origin
         kappa_at <- function(tv, tau_hat) {
-          X <- cbind(1, 1 - exp(-(tv - min(tv)) / tau_hat))
+          X <- cbind(1, 1 - exp(-(tv - t_anchor) / tau_hat))
           for(h in seq_len(n_harmonics)) {
             w <- 2 * pi * h / period
             X <- cbind(X, cos(w * tv), sin(w * tv))
@@ -2949,8 +2964,9 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
         }
         tau_hat <- mean(individual_params$tau, na.rm = TRUE)
         if(is.finite(tau_hat) && tau_hat > 0) {
+          t_anchor <- 0
           conditioning$kappa_before <- tryCatch(kappa_at(time_vec, tau_hat), error = function(e) NA_real_)
-          conditioning$kappa_after  <- tryCatch(kappa_at(time_vec - min(time_vec), tau_hat),
+          conditioning$kappa_after  <- tryCatch(kappa_at(time_vec_model, tau_hat),
                                                 error = function(e) NA_real_)
         }
 
@@ -2980,7 +2996,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
             y_i <- as.numeric(Y[individual_params$subject[r], ]); ok <- !is.na(y_i)
             if(sum(ok) < 2 * n_harmonics + 2 + 1) next
             tv <- time_vec_model[ok]; yv <- y_i[ok]
-            X <- cbind(1, 1 - exp(-(tv - min(time_vec_model)) / tau_fix))
+            X <- cbind(1, 1 - exp(-tv / tau_fix))
             for(h in seq_len(n_harmonics)) {
               w <- 2 * pi * h / period
               X <- cbind(X, cos(w * tv), sin(w * tv))
@@ -3058,6 +3074,9 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
                              paste0("covariate:", input$harmonic_time_var)),
         time_origin = time_origin,
         origin_shift = origin_shift,
+        # hours from the time origin to the first observation (0 by default)
+        origin_lead = .org$lead,
+        origin_clock = .org$clock,
         time_vec_clock = time_vec,           # display axis, always clock-linearised
         group_var_name = if(!is.null(harmonic_group_var_eff()) &&
                             harmonic_group_var_eff() != "_none_") harmonic_group_var_eff() else NULL,
@@ -3077,7 +3096,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
           amplitude_min = amplitude_min, amplitude_max = amplitude_max,
           A_sat_min = A_sat_min, A_sat_max = A_sat_max,
           tau_min = tau_min, tau_max = tau_max, tau_fixed = tau_fixed,
-          t_origin = min(time_vec_model)),
+          t_origin = 0, origin_clock = if (is.null(origin_clock)) NA_real_ else origin_clock),
         t_offset = t_offset_global,
         t_center = t_center_global,
         subjects_with_nas = subjects_with_nas,
@@ -3227,8 +3246,11 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     } else {
       kv("Grouping factor", mod$group_var_name %||% "none")
     }
-    kv("Time origin", sprintf("the recording's first time point; t = 0 is %s on the clock",
-                              dance_clock_label(clock_o, period, show_day = FALSE)))
+    kv("Time origin", if (identical(dance_origin_phrase(mod), "the time origin"))
+      sprintf("%s on the clock, %s h before the first time point; the intercept is extrapolated to it",
+              dance_clock_label(clock_o, period, show_day = FALSE), fmtn(mod$origin_lead, 2))
+      else sprintf("the recording's first time point; t = 0 is %s on the clock",
+                   dance_clock_label(clock_o, period, show_day = FALSE)))
     kv("Data", paste0("raw observations",
                       if (isTRUE((mod$subjects_with_nas %||% 0) > 0))
                         sprintf(" (%d participant(s) have missing values; the fit uses the observations present)",
@@ -3296,7 +3318,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
         cat("Clock times: ", paste(fmtn(mod$time_vec_clock %||% mod$time_vec, 2), collapse = ", "), "\n", sep = "")
       }
       if (isTRUE(clock_o > 0))
-        cat("Model times (t = 0 at the first observation): ",
+        cat("Model times (t = 0 at ", dance_origin_phrase(mod), "): ",
             paste(fmtn(mod$time_vec, 2), collapse = ", "), "\n", sep = "")
     }
     diffs <- diff(mod$time_vec)
@@ -3327,13 +3349,13 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     } else {
       cat(sym, " + e,   fitted separately to each participant's series\n", sep = "")
     }
-    cat("  beta_0 = the intercept: the midline at the first observation (t = 0)\n")
+    cat("  beta_0 = the intercept: the midline at ", dance_origin_phrase(mod), " (t = 0)\n", sep = "")
     if (trend_type != "none")
       cat("  Time-averaged midline level = the midline beta_0 + trend averaged over the window (beta_0 itself without a trend)\n")
     if (nh >= 1)
-      cat("  A_h, phi_h = amplitude and acrophase of harmonic h; t in hours from the first observation\n")
+      cat("  A_h, phi_h = amplitude and acrophase of harmonic h; t in hours from ", dance_origin_phrase(mod), "\n", sep = "")
     else
-      cat("  t in hours from the first observation; no harmonics (trend-only model)\n")
+      cat("  t in hours from ", dance_origin_phrase(mod), "; no harmonics (trend-only model)\n", sep = "")
     if (trend_type == "linear") cat(sprintf("  beta = slope, in %s per hour\n", uu))
     if (trend_type == "log")
       cat(sprintf("  beta = log-trend coefficient, in %s per unit of log(1 + hours)\n", uu))
@@ -3724,7 +3746,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       pt <- dance_traj_participant_table(ff); req(isTRUE(pt$ok))
       tb <- pt$table
       has_tr <- !identical(ff$spec$trend %||% "none", "none")
-      push(if (has_tr) "Intercept (midline at the first observation)" else "Intercept = time-averaged midline level (no trend)",
+      push(if (has_tr) paste0("Intercept (midline at ", dance_origin_phrase(ff), ")") else "Intercept = time-averaged midline level (no trend)",
            tb$intercept, key = "intercept")
       if (has_tr) {
         push("Time-averaged midline level", tb$mesor, key = "mesor")
@@ -4792,12 +4814,13 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     # THE FIT ITSELF is dance_traj_run() (server/08e), the function the exported
     # script calls too: tau held, or profiled within the range (a flat profile
     # holds the held value), and on request A and tau per cell. t = 0 is the
-    # first time point of the recording -- the origin of the model axis, the
-    # same instant the two-stage fits and the clock conversion use, even when
-    # nobody was observed at it.
+    # time origin (the first time point of the recording unless an earlier
+    # origin was set) -- the origin of the model axis, the same instant the
+    # two-stage fits and the clock conversion use, even when nobody was
+    # observed at it.
     ff <- withProgress(message = "Fitting the mixed-effects cosinor...", value = 0,
       dance_traj_run(d, period = mod$period %||% 24, n_harmonics = mod$n_harmonics %||% 1,
-                     trend = trend, roles = roles, t0 = min(tv),
+                     trend = trend, roles = roles, t0 = 0,
                      tau_mode = if (identical(ti$mode, "estimate")) "estimate" else "fixed",
                      tau_value = ti$value %||% NA_real_, tau_lo = ti$lo %||% NA_real_,
                      tau_hi = ti$hi %||% NA_real_, sat_cells = isTRUE(ti$sat_cells),
@@ -4808,6 +4831,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     # the offset that turns this model's elapsed axis back into clock time,
     # carried on the fit so every panel converts the same way
     ff$clock_origin <- dance_clock_origin(mod)
+    ff$origin_lead <- as.numeric(mod$origin_lead %||% 0)
     ff$dv_units <- mod$dv_units
     # the frame and roles, so the model comparison refits exactly these data
     ff$long_frame <- d; ff$roles <- roles
@@ -5616,7 +5640,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
         "<b>Read the omnibus first</b>: it asks whether the groups differ at all. The domains then say",
         "how. The <b>time-averaged fitted response</b> is the whole fitted curve averaged over the",
         "recording (rhythm included); the <b>time-averaged midline level</b> is the midline (intercept + trend) averaged over it;",
-        "the <b>initial midline</b> is the midline at the first observation, not the curve's value there.",
+        "the <b>initial midline</b> is the midline at", dance_origin_phrase(values$harmonic_model), "(t = 0), not the curve's value there.",
         if (st %in% c("trend", "combined")) paste(
         "Over one common window the <b>total trend change</b> and the <b>average trend rate</b> are one",
         "quantity in two units and share one test; the <b>initial trend rate</b> describes how fast a",
@@ -5991,7 +6015,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
             "Without a trend the midline is flat, so the intercept is the time-averaged midline level.")
           else paste(
             "The <b>intercept</b> is the midline (intercept + trend, without the",
-            "harmonics) at the first observation; the <b>time-averaged midline level</b> is that midline",
+            "harmonics) at", dance_origin_phrase(values$harmonic_model), "(t = 0); the <b>time-averaged midline level</b> is that midline",
             "averaged over the recording. The trend row tests the one trend",
             "coefficient per cell, which is the same test as the non-periodic change",
             "over the recording -- shown in the response's units under <i>Intercept,",
@@ -6214,7 +6238,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       approach = "mixed", trend = sp$trend %||% "none", tau = sp$tau,
       tau_estimated = isTRUE(ff$tau_estimated),
       units = ff$dv_units, n_cells = length(unique(ls$table$cell)),
-      wc = dance_window_clock(sp$t0, max(sp$data$t, na.rm = TRUE),
+      wc = dance_window_clock(min(sp$data$t, na.rm = TRUE), max(sp$data$t, na.rm = TRUE),
                               ff$clock_origin %||% 0, sp$period %||% 24),
       pair = function(q, adj) harmonic_traj_ct(q, adj, input$harmonic_df_method %||% "kr")))
   })
@@ -6401,7 +6425,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
                   n_cells = ts$n_groups, mod = mod, df = ts$df,
                   pair = function(q, adj) dance_ts_pairwise(ts$df, mod, q, adjust = adj),
                   curves = function() dance_ts_sat_curves(ts$df, mod),
-                  clock_origin = dance_clock_origin(mod), t0 = min(mod$time_vec, na.rm = TRUE),
+                  clock_origin = dance_clock_origin(mod), t0 = as.numeric(mod$t_offset %||% 0),
                   period = mod$period %||% 24))
     }
     ff <- harmonic_traj()

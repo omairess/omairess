@@ -1053,7 +1053,7 @@ dance_traj_beta_row <- function(fit, cell_row, bvals) {
 }
 
 # For every design cell, each as a row of the map from beta:
-#   level0     the fitted CURVE value at t0 (intercept + every cosine coefficient)
+#   level0     the fitted CURVE value at the first observation
 #   intercept  the midline at t0, where every trend column is zero
 #   mesor      the midline (intercept + trend) averaged over the observed window
 #   change     the non-periodic change from the first to the last observation
@@ -1064,10 +1064,10 @@ dance_traj_cell_functionals <- function(fit) {
   grid <- dance_traj_cell_grid(spec)
   bt <- spec$basis_terms
   zero <- stats::setNames(rep(0, length(bt)), bt)
-  tw <- dance_traj_trend_window(spec$trend %||% "none", spec$t0,
-                                max(spec$data$t, na.rm = TRUE), spec$tau)
+  tw <- dance_traj_spec_window(spec)
   hm <- dance_harmonic_mean_factors(length(spec$harm_terms) / 2, spec$period,
-                                    max(spec$data$t, na.rm = TRUE) - spec$t0)
+                                    max(spec$data$t, na.rm = TRUE) - spec$t0,
+                                    a = min(spec$data$t, na.rm = TRUE) - spec$t0)
   cells <- lapply(seq_len(nrow(grid)), function(i) {
     cr <- grid[i, , drop = FALSE]
     z <- dance_traj_beta_row(fit, cr, zero)
@@ -1088,7 +1088,7 @@ dance_traj_cell_functionals <- function(fit) {
     for (h in seq_along(hm$cos)) {
       fitted_mean <- fitted_mean + hm$cos[h] * coef[[paste0("c", h)]] + hm$sin[h] * coef[[paste0("s", h)]]
     }
-    list(level0 = drop(dance_traj_design_rows(fit, cr, spec$t0)),
+    list(level0 = drop(dance_traj_design_rows(fit, cr, min(spec$data$t, na.rm = TRUE))),
          intercept = z, mesor = mesor, change = change, avg_rate = avg_rate,
          rate0 = rate0, fitted_mean = fitted_mean, coef = coef)
   })

@@ -219,6 +219,20 @@ observed window. It generalizes the classical cosinor MESOR to models with a
 time-varying baseline; without a trend the midline is flat, and it equals the
 intercept and the MESOR. The term MESOR is not used anywhere in the app.
 
+## The time origin
+
+By default t = 0 is the first observation, so the intercept is the midline
+at the start of the recording. Under Model Specification the origin can
+instead be a clock time before it, such as wake time. The trend and the
+intercept are then anchored there, and the intercept is an extrapolation to
+a time nobody was sampled at. The time-averaged levels, the change and the
+rates stay on the sampled window.
+
+With a linear trend, or a saturating trend with τ held, this only
+re-expresses the intercept and the trend's coefficient: the fitted curve,
+the acrophases and every window quantity are unchanged. A logarithmic
+trend changes shape with its origin, so its fit changes too.
+
 ## Data contract
 
 Everything downstream reads these, and only these:

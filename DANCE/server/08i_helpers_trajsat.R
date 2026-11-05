@@ -309,10 +309,14 @@ dance_traj_sat_table <- function(sf, conf = 0.95) {
     # uncertainty carried through (not held as a known constant): the change is
     # A (1 - e^(-T/tau)), with gradient (1 - e^(-T/tau), -A (T/tau^2) e^(-T/tau) g)
     # in (A, x), and the average rate is the change over T.
-    Tw <- diff(sf$window %||% c(0, NA_real_))
-    e <- exp(-Tw / tau)
-    ch <- A * (1 - e)
-    gr <- c(1 - e, -A * (Tw / tau^2) * e * g)
+    # The window is [a, b] in hours since the time origin (a = 0 unless an
+    # origin before the first sample was set): the change is
+    # A (e^(-a/tau) - e^(-b/tau)).
+    wn <- sf$window %||% c(0, NA_real_); a0 <- wn[1]; b0 <- wn[2]
+    Tw <- b0 - a0
+    e <- exp(-b0 / tau); ea <- exp(-a0 / tau)
+    ch <- A * (ea - e)
+    gr <- c(ea - e, A * ((a0 / tau^2) * ea - (b0 / tau^2) * e) * g)
     se_ch <- sqrt(max(0, gr[1]^2 * vA + gr[2]^2 * vx + 2 * gr[1] * gr[2] * cAx))
     data.frame(cell = sf$cells[k], n_cells = sf$n_cells,
                A = A, A_se = sqrt(vA), A_lo = A - q * sqrt(vA), A_hi = A + q * sqrt(vA),
@@ -359,13 +363,15 @@ dance_traj_sat_vector <- function(sf, what) {
     # (the change over T): tau is estimated per cell here, so its uncertainty is
     # carried through the delta method, not held as known
     sat_change = , sat_avg_rate = , change = , avg_rate = {
-      A <- unname(fe[nA]); Tw <- diff(sf$window); e <- exp(-Tw / tau)
+      A <- unname(fe[nA]); a0 <- sf$window[1]; b0 <- sf$window[2]; Tw <- b0 - a0
+      e <- exp(-b0 / tau); ea <- exp(-a0 / tau)
       J <- matrix(0, G, 2L * G)
       for (k in seq_len(G)) {
-        J[k, k] <- 1 - e[k]; J[k, G + k] <- -A[k] * (Tw / tau[k]^2) * e[k] * g[k]
+        J[k, k] <- ea[k] - e[k]
+        J[k, G + k] <- A[k] * ((a0 / tau[k]^2) * ea[k] - (b0 / tau[k]^2) * e[k]) * g[k]
       }
       sc <- if (what %in% c("avg_rate", "sat_avg_rate")) 1 / Tw else 1
-      list(theta = sc * A * (1 - e), V = sc^2 * (J %*% V[c(nA, nl), c(nA, nl)] %*% t(J)),
+      list(theta = sc * A * (ea - e), V = sc^2 * (J %*% V[c(nA, nl), c(nA, nl)] %*% t(J)),
            scale = "identity")
     },
     stop(sprintf("unknown saturating parameter '%s'", what)))

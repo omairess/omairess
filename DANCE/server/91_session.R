@@ -54,8 +54,10 @@ RESTORE_INPUTS <- list(
                "harmonic_traj_resid", "harmonic_raw_style", "harmonic_traj_raw_style",
                "harmonic_structure",
                "dlmo_time_src", "dlmo_night_var", "dlmo_group_var", "dlmo_methods",
-               "dlmo_lloq_rule", "dlmo_bed_src", "dlmo_bed_var", "harmonic_scale"),
-  text     = c("harmonic_manual_times", "dlmo_manual_times", "dlmo_units", "dlmo_bed_value")
+               "dlmo_lloq_rule", "dlmo_bed_src", "dlmo_bed_var", "harmonic_scale",
+               "harmonic_origin"),
+  text     = c("harmonic_manual_times", "dlmo_manual_times", "dlmo_units", "dlmo_bed_value",
+               "harmonic_origin_clock")
 )
 
 DANCE_SESSION_FORMAT <- 1L

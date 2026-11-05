@@ -1470,3 +1470,76 @@ computes it in both cases.
 - the equations;
 - agreement between the approaches;
 - the script reproducing every estimate and test.
+
+## 30. A time origin before the first observation (e.g. wake time)
+
+**The option.** Under Model Specification, "Time origin (t = 0)" is either
+the first observation (the default, unchanged) or a clock time before it.
+The origin is the last time that clock time occurs at or before the first
+observation, so it lies 0 to 24 h before it. There is one origin for
+everyone: the harmonics share one axis, and a per-participant origin would
+put the participants' acrophases on different clocks.
+
+**What moves and what does not.** Model time 0 is the origin. Both the trend
+and the harmonics are anchored there, so the intercept is the midline at the
+origin. That is an extrapolation, since nobody was sampled there, and it is
+stated as one in the summary, the report, the assumptions and the script.
+
+Every window quantity is still taken over the sampled window [t₁, T], in
+hours since the origin, where t₁ is the first observation:
+- the time-averaged fitted response;
+- the time-averaged midline level;
+- the change, f(T) − f(t₁);
+- the average rate, the change over (T − t₁);
+- the initial rate f′(t₁), the slope at the first observation.
+
+For the saturating trend, A/τ is the slope at the origin.
+
+**The closed forms**, `dance_trend_factors(trend, T, tau, a = t₁)` and
+`dance_harmonic_mean_factors(K, P, T, a)`. With a = 0 they reduce to the
+earlier forms.
+
+| trend | mean of f over [a, T] | f(T) − f(a) | f′(a) |
+|---|---|---|---|
+| linear b·t | b(a + T)/2 | b(T − a) | b |
+| log b·ln(1+t) | b{[(T+1)ln(1+T) − T] − [(a+1)ln(1+a) − a]}/(T − a) | b[ln(1+T) − ln(1+a)] | b/(1+a) |
+| saturating A(1 − e^{−t/τ}) | A[1 − τ(e^{−a/τ} − e^{−T/τ})/(T − a)] | A(e^{−a/τ} − e^{−T/τ}) | (A/τ)e^{−a/τ} |
+
+The harmonic means are:
+- cos: [sin(ωT) − sin(ωa)]/[ω(T − a)];
+- sin: [cos(ωa) − cos(ωT)]/[ω(T − a)].
+
+Each closed form was checked against numerical integration
+(`stats::integrate`) at a = 0 and a = 2.
+
+For the per-cell saturating model (nlme), the delta-method gradient of the
+change with respect to τ is A[(a/τ²)e^{−a/τ} − (T/τ²)e^{−T/τ}].
+
+**Why the fit does not change.** With a linear trend, or a saturating trend
+with τ held, a shift of origin by d hours is a reparameterisation. The
+fitted curve, τ, every window quantity, the amplitudes and the acrophases
+are the same, and only two things change:
+- linear: the intercept, b₀′ = b₀ − d·b;
+- saturating: A′ = A·e^{d/τ} and b₀′ = b₀ + A − A′.
+
+So for a rising trend, the extrapolated level at wake is **lower** than at
+the first observation, and A is larger. It is higher only for a falling
+trend. τ itself does not change with the origin, but the share of A reached
+by a given hour does. A logarithmic trend, ln(1 + t), changes shape with its
+origin, so its fit changes too; the panel says so.
+
+**Script.** The exported script:
+- states the origin;
+- carries time_vec on the origin's axis;
+- passes `t_origin = 0` to `dance_ts_fit_all()` and `dance_ts_model_set()`
+  (the model set now also gets its `k_max`);
+- uses `t0 = 0` for the mixed model, as before.
+
+**Test:** `tests/time_origin_app_test.R` runs mixed-effects and two-stage,
+each with a linear and a saturating trend, with an origin at 06:00 against a
+recording starting at 08:00. It checks:
+- that every window quantity and its group test is unchanged;
+- that the intercept follows the reparameterisation above;
+- that the assumptions and the equations state the origin;
+- that the script reproduces every estimate;
+- that an invalid time is refused.

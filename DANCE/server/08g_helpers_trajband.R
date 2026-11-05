@@ -147,7 +147,7 @@ DANCE_TRAJ_COMPONENT_LABEL <- c(
   full          = "Full fitted trajectory",
   harmonics     = "Harmonics only (centred on zero)",
   baseline_harm = "Intercept + harmonics (trend removed)",
-  trend         = "Non-periodic change from origin (first observation)")
+  trend         = "Non-periodic change from the first observation")
 
 # "Harmonics only" is every harmonic summed, which is the right default and the
 # wrong view for the question "what is H2 doing on its own". With two harmonics
@@ -241,9 +241,10 @@ dance_traj_predict <- function(fit, times = NULL, conf = 0.95,
     mask <- dance_traj_component_mask(fit, X, component)
     X[, !mask] <- 0
     if (identical(component, "trend")) {
-      # f(t) - f(0), as a contrast on the design matrix, so the band is zero at
-      # the origin rather than merely the point estimate being zero there
-      X0 <- dance_traj_design_rows(fit, grid[i, , drop = FALSE], spec$t0)
+      # f(t) - f(t1), as a contrast on the design matrix, so the band is zero at
+      # the first observation t1 rather than merely the point estimate being
+      # zero there (t1 is the time origin t0 unless an earlier origin was set)
+      X0 <- dance_traj_design_rows(fit, grid[i, , drop = FALSE], min(spec$data$t, na.rm = TRUE))
       X0[, !mask] <- 0
       X <- sweep(X, 2, X0[1, ], "-")
     }
@@ -455,8 +456,7 @@ DANCE_TRAJ_PAIR_LABEL <- c(
 # difference is in the trend coefficient -- the two are one test.
 dance_traj_level_unit <- function(fit, what) {
   spec <- fit$spec
-  tw <- dance_traj_trend_window(spec$trend %||% "none", spec$t0,
-                                max(spec$data$t, na.rm = TRUE), spec$tau)
+  tw <- dance_traj_spec_window(spec)
   wc <- if (is.null(tw)) NULL else
     dance_window_clock(tw$t0, tw$t_max, fit$clock_origin %||% 0, spec$period %||% 24)
   win <- wc$text %||% "the observed window"
@@ -464,8 +464,10 @@ dance_traj_level_unit <- function(fit, what) {
   coef_lab <- dance_traj_trend_coef_label(spec$trend %||% "none", spec$tau, fit$dv_units,
                                           estimated = isTRUE(fit$tau_estimated))
   switch(what,
-    intercept = sprintf("difference in the intercept, in %s (the midline at the first observation%s)",
-                        u, if (is.null(wc)) "" else paste0(", ", wc$start)),
+    intercept = sprintf("difference in the intercept, in %s (the midline at %s, %s)",
+                        u, dance_origin_phrase(fit),
+                        dance_clock_label((fit$clock_origin %||% 0) + (spec$t0 %||% 0), spec$period %||% 24,
+                                          show_day = FALSE)),
     mesor     = sprintf("difference in the time-averaged midline level, in %s (the midline averaged over %s)", u, win),
     change    = if (!is.null(tw) && length(tw$end))
       sprintf(paste("difference in the non-periodic change from %s, in %s.",
@@ -584,7 +586,7 @@ dance_traj_contrasts <- function(fit, what = "level",
   }
 
   if (identical(what, "level")) {
-    tt <- at_time %||% spec$t0
+    tt <- at_time %||% min(spec$data$t, na.rm = TRUE)
     bv <- dance_traj_beta(fit)
     Xs <- lapply(seq_len(m), function(i)
       dance_traj_design_rows(fit, grid[i, , drop = FALSE], tt))
@@ -857,8 +859,7 @@ dance_traj_group_fits <- function(fit, conf = 0.95) {
       # legacy integrator was handed the saturating trend without its tau and
       # without the t0 anchoring, and returned NA or an unanchored mean
       rhythm_adjusted_mean = local({
-        tw <- dance_traj_trend_window(spec$trend %||% "none", spec$t0,
-                                      max(spec$data$t, na.rm = TRUE), spec$tau)
+        tw <- dance_traj_spec_window(spec)
         b0 + sum(vapply(intersect(names(tw$mean), names(tr)),
                         function(nm) tw$mean[[nm]] * tr[[nm]], numeric(1)))
       }),
@@ -1011,7 +1012,7 @@ dance_traj_interaction_contrast <- function(fit, cell_a1, cell_a2, cell_b1, cell
       "Unknown cell (%s). This design has: %s.",
       paste(c(cell_a1, cell_a2, cell_b1, cell_b2)[is.na(idx)], collapse = ", "),
       paste(grid$.cell, collapse = ", "))))
-  tt <- at_time %||% spec$t0
+  tt <- at_time %||% min(spec$data$t, na.rm = TRUE)
   bv <- dance_traj_beta(fit)
   X <- lapply(idx, function(i) dance_traj_design_rows(fit, grid[i, , drop = FALSE], tt))
   keep <- intersect(colnames(X[[1]]), names(bv$beta))
@@ -1177,11 +1178,14 @@ dance_traj_curve_peaks <- function(fit, component = "full", n_time = 1441L,
                                    within_period = TRUE) {
   if (!isTRUE(fit$ok)) return(NULL)
   spec <- fit$spec
+  # searched over the SAMPLED window, from the first observation (which is the
+  # time origin t0 unless an earlier origin was set)
+  t_lo <- min(spec$data$t, na.rm = TRUE)
   t_hi <- if (isTRUE(within_period))
-    min(spec$t0 + spec$period, max(spec$data$t, na.rm = TRUE))
+    min(t_lo + spec$period, max(spec$data$t, na.rm = TRUE))
   else max(spec$data$t, na.rm = TRUE)
-  if (!is.finite(t_hi) || t_hi <= spec$t0) return(NULL)
-  times <- seq(spec$t0, t_hi, length.out = max(51L, as.integer(n_time)))
+  if (!is.finite(t_hi) || t_hi <= t_lo) return(NULL)
+  times <- seq(t_lo, t_hi, length.out = max(51L, as.integer(n_time)))
   pr <- dance_traj_predict(fit, times = times, component = component)
   if (!isTRUE(pr$ok)) return(NULL)
   # THE CLOCK TIME IS COMPUTED HERE, not by whoever renders the row. The first
@@ -1216,9 +1220,9 @@ dance_traj_curve_peaks <- function(fit, component = "full", n_time = 1441L,
   }))
   rownames(out) <- NULL
   list(ok = TRUE, table = out, component = component,
-       window = c(spec$t0, t_hi), clock_origin = co,
-       window_clock = to_clock(c(spec$t0, t_hi)),
-       resolution_min = 60 * (t_hi - spec$t0) / (length(times) - 1))
+       window = c(t_lo, t_hi), clock_origin = co,
+       window_clock = to_clock(c(t_lo, t_hi)),
+       resolution_min = 60 * (t_hi - t_lo) / (length(times) - 1))
 }
 
 # ==============================================================================

@@ -1413,9 +1413,13 @@
       add(sprintf("period        <- %s", hm$period))
       add(sprintf("n_harmonics   <- %s", hm$n_harmonics))
       add(sprintf('trend_type    <- "%s"', hm$trend_type))
-      add("# hours from the recording's first time point (",
+      add("# THE TIME ORIGIN (t = 0): ", dance_origin_text(hm))
+      add("# time_vec: hours from the time origin (",
           dance_clock_label(dance_clock_origin(hm), hm$period %||% 24, show_day = FALSE),
-          " on the clock), midnight crossings unwrapped")
+          " on the clock), midnight crossings unwrapped; the origin was found with")
+      add("# dance_time_origin(clock times, ",
+          if (identical(hm$time_origin, "clock")) format(hm$origin_clock) else "NULL",
+          ")$shift and subtracted from the clock-linearised sampling times")
       add(sprintf("time_vec      <- c(%s)",
                   paste(signif(as.numeric(hm$time_vec), 10), collapse = ", ")))
       add(sprintf("cosinor_input <- %s   # %s",
@@ -1576,7 +1580,7 @@
         add("                           mesor_max = mesor_max, amplitude_min = amplitude_min,")
         add("                           amplitude_max = amplitude_max, A_sat_min = A_sat_min,")
         add("                           A_sat_max = A_sat_max, tau_min = tau_min, tau_max = tau_max,")
-        add("                           tau_fixed = tau_fixed)")
+        add("                           tau_fixed = tau_fixed, t_origin = 0)")
         add("cosinor_fits <- ts_fit$fits")
         add("# Which fits enter the summaries (non-converged never; on a bound: ",
             if (isTRUE(hm$fit_audit$include_boundary %||% TRUE)) "included" else "excluded", ")")
@@ -1652,7 +1656,9 @@
           add("# The nested model set, every candidate on the same participants")
           add("ts_models <- dance_ts_model_set(cosinor_input, time_vec, period = period,")
           add("                                n_harmonics = n_harmonics, trend_type = trend_type,")
-          add("                                tau_min = tau_min, tau_max = tau_max, tau_fixed = tau_fixed)")
+          add("                                tau_min = tau_min, tau_max = tau_max, tau_fixed = tau_fixed,")
+          add(sprintf("                                k_max = %d, t_origin = 0)",
+                      as.integer(attr(hm$model_selection, "n_harmonics_max") %||% max(1L, as.integer(hm$n_harmonics)))))
           add("print(ts_models)")
         }
         add("")

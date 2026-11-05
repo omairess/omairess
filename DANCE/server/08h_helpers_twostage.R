@@ -45,7 +45,8 @@ dance_ts_frame <- function(mod, group_values) {
 
 # Each participant's time-averaged fitted response, average and initial trend
 # rates and half-rise time, from their own coefficients, over the recording
-# window every participant shares: hours 0 to T since the first observation.
+# window every participant shares: from the first to the last observation, in
+# hours since the time origin where the trend is anchored.
 # The harmonic coefficients are recovered from amplitude and acrophase
 # (cos = A cos(phi), sin = A sin(phi)), on the same model time as the fit.
 dance_ts_derived_outcomes <- function(mod, p) {
@@ -56,7 +57,11 @@ dance_ts_derived_outcomes <- function(mod, p) {
   na <- rep(NA_real_, n)
   out <- data.frame(fitted_mean = na, avg_rate = na, rate0 = na, t50 = na)
   if (is.null(tv) || !any(is.finite(tv)) || !n) return(out)
-  T <- diff(range(tv, na.rm = TRUE))
+  # the window [a, T] in hours since the trend's anchor, the time origin (model
+  # time 0, which is the first observation unless an earlier origin was set)
+  anchor <- as.numeric(mod$t_offset %||% 0)
+  a <- min(tv, na.rm = TRUE) - anchor
+  T <- max(tv, na.rm = TRUE) - anchor
   col <- function(nm) if (nm %in% names(p)) p[[nm]] else na
   for (i in seq_len(n)) {
     coef <- switch(tr, linear = col("trend_linear")[i], log = col("trend_log")[i],
@@ -65,8 +70,8 @@ dance_ts_derived_outcomes <- function(mod, p) {
     amp <- vapply(seq_len(K), function(h) col(paste0("amplitude_", h))[i], numeric(1))
     phi <- vapply(seq_len(K), function(h) col(paste0("acrophase_rad_", h))[i], numeric(1))
     lv <- dance_level_outcomes(col("mesor")[i], tr, coef, tau, amp * cos(phi), amp * sin(phi),
-                               mod$period %||% 24, T)
-    to <- dance_trend_outcomes(tr, coef, T, tau)
+                               mod$period %||% 24, T, a = a)
+    to <- dance_trend_outcomes(tr, coef, T, tau, a = a)
     out$fitted_mean[i] <- lv$fitted_mean
     out$avg_rate[i] <- to$avg_rate
     out$rate0[i] <- to$rate0
@@ -144,13 +149,15 @@ dance_ts_sat_summary <- function(df, mod, conf = 0.95) {
 }
 
 # The saturating trend per group from the per-participant fits: each
-# participant's own A (1 - exp(-t/tau)) from the first observation, averaged
+# participant's own A (1 - exp(-t/tau)), t in hours since the time origin (the
+# first observation unless an earlier origin was set), over the sampled window, averaged
 # within the group, with a pointwise band from the spread across participants
 # -- the two-stage counterpart of the mixed model's per-cell trend curves.
 dance_ts_sat_curves <- function(df, mod, n_time = 160, conf = 0.95) {
   tv <- mod$time_vec
   if (is.null(tv) || !all(c("A_sat", "tau") %in% names(df))) return(NULL)
-  tt <- seq(0, diff(range(tv, na.rm = TRUE)), length.out = n_time)
+  anchor <- as.numeric(mod$t_offset %||% 0)
+  tt <- seq(min(tv, na.rm = TRUE), max(tv, na.rm = TRUE), length.out = n_time) - anchor
   g <- droplevels(factor(df$group))
   q <- stats::qnorm(1 - (1 - conf) / 2)
   out <- list()
@@ -269,7 +276,7 @@ dance_ts_components <- function(df, mod) {
   if (has_trend && "mesor_adj" %in% names(df))
     lt_row(lab("mesor"), df$mesor_adj, key = "mesor", domain = "level", primary = K < 1)
   lt_row(lab("intercept"), df$mesor,
-         if (has_trend) "the midline at the first observation, where the trend is zero" else NULL,
+         if (has_trend) paste0("the midline at ", dance_origin_phrase(mod), ", where the trend is zero") else NULL,
          key = "intercept", domain = "level", primary = !has_trend && K < 1)
   # ---- homeostatic-like accumulation ----
   # Over the one common window the average rate is the change divided by a
@@ -755,8 +762,8 @@ dance_ts_param_row <- function(i, fit_i, time_vec, period, n_harmonics, trend_ty
   as.data.frame(row_data)
 }
 
-# Every participant's cosinor, on one time axis with one trend origin -- the
-# recording's first time point -- and one tau setting. Returns the fits (one
+# Every participant's cosinor, on one time axis with one trend origin --
+# t_origin, default the recording's first time point -- and one tau setting. Returns the fits (one
 # per row of Y; a failed fit records why), the parameter table of the fits
 # that returned, and the failures.
 #   progress   optional function(i, n)
@@ -764,7 +771,8 @@ dance_ts_fit_all <- function(Y, time_vec, period = 24, n_harmonics = 1, trend_ty
                              use_bounds = FALSE, mesor_min = NA, mesor_max = NA,
                              amplitude_min = 0, amplitude_max = NA,
                              A_sat_min = NA, A_sat_max = NA,
-                             tau_min = 0.5, tau_max = NA, tau_fixed = NA, progress = NULL) {
+                             tau_min = 0.5, tau_max = NA, tau_fixed = NA, progress = NULL,
+                             t_origin = min(time_vec, na.rm = TRUE)) {
   n_trend_params <- dance_trend_npar(trend_type)
   fits <- list(); rows <- list(); failed <- list()
   for (i in seq_len(nrow(Y))) {
@@ -776,7 +784,7 @@ dance_ts_fit_all <- function(Y, time_vec, period = 24, n_harmonics = 1, trend_ty
                          amplitude_min = amplitude_min, amplitude_max = amplitude_max,
                          A_sat_min = A_sat_min, A_sat_max = A_sat_max,
                          tau_min = tau_min, tau_max = tau_max, tau_fixed = tau_fixed,
-                         t_origin = min(time_vec, na.rm = TRUE))
+                         t_origin = t_origin)
     if (isTRUE(fit_i$success)) {
       fits[[i]] <- fit_i
       rows[[length(rows) + 1L]] <- dance_ts_param_row(i, fit_i, time_vec, period,
@@ -886,7 +894,8 @@ dance_ts_bootstrap <- function(params, B, period = 24, seed = 20240601L, progres
 #              count, at least 1)
 dance_ts_model_set <- function(Y, time_vec, period = 24, n_harmonics = 1, trend_type = "none",
                                tau_min = 0.5, tau_max = NA, tau_fixed = NA, progress = NULL,
-                               k_max = max(1L, as.integer(n_harmonics))) {
+                               k_max = max(1L, as.integer(n_harmonics)),
+                               t_origin = min(time_vec, na.rm = TRUE)) {
   ms_models <- dance_cosinor_model_set(k_max)
   n_time <- ncol(Y)
   # participants x candidates; NA where the candidate cannot be fitted
@@ -909,7 +918,7 @@ dance_ts_model_set <- function(Y, time_vec, period = 24, n_harmonics = 1, trend_
       f <- tryCatch(fit_cosinor(time_vec, y_i, period = period, n_harmonics = m$k,
                                 trend_type = m$trend, tau_min = tau_min, tau_max = tau_max,
                                 tau_fixed = if (identical(m$trend, "exp_sat")) tau_fixed else NA,
-                                t_origin = min(time_vec, na.rm = TRUE)),
+                                t_origin = t_origin),
                     error = function(e) NULL)
       if (is.null(f) || !isTRUE(f$success) || !is.finite(f$aicc)) next
       aicc[i, j] <- f$aicc

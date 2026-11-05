@@ -85,15 +85,33 @@ ui_tab_harmonic <- tabItem(
 
             hr(),
             h4("Model Specification"),
-            # The time origin is not a choice any more: t = 0 is the first
-            # observation, always. Both the trend and the harmonics are anchored
-            # there, so the intercept is the model value at the start of the
-            # recording; axes and every acrophase still read in clock time.
+            # THE TIME ORIGIN, t = 0: the first observation by default, or a
+            # clock time before it (e.g. wake time). Both the trend and the
+            # harmonics are anchored there, so the intercept is the model value
+            # at the origin; axes and every acrophase still read in clock time.
             # The period is P, not tau: tau is the saturating trend's time
             # constant, and one symbol for two quantities made "tau held at
             # 18 h" readable as a period.
             numericInput("harmonic_period", "Fundamental period P:", value = 24, min = 1, max = 168, step = 1),
             helpText("Period in the same units as your time variable (e.g., 24 for circadian)."),
+            radioButtons("harmonic_origin", "Time origin (t = 0):",
+                         choices = c("The first observation" = "first",
+                                     "A clock time before it (e.g. wake time)" = "clock"),
+                         selected = "first"),
+            conditionalPanel(
+              condition = "input.harmonic_origin == 'clock'",
+              textInput("harmonic_origin_clock", "Origin at (hh:mm):", value = "", placeholder = "e.g. 08:00"),
+              helpText(HTML("<small>One origin for everyone: the last time the clock shows this
+                             at or before the first observation. The intercept and the trend
+                             are anchored there (the intercept is then an <b>extrapolation</b>
+                             to a time nobody was sampled at), and a saturating trend's
+                             1&minus;e<sup>&minus;t/&tau;</sup> counts from it. The time-averaged
+                             levels, the change and the rates are still taken over the sampled
+                             window. With a linear or saturating trend the fitted curve, &tau; and the
+                             acrophases do not change: only the intercept and the trend's
+                             coefficients are re-expressed (A at the origin is
+                             A<sub>first</sub>&middot;e<sup>a/&tau;</sup>, a hours earlier). A logarithmic
+                             trend, log(1 + t), changes shape with its origin, so its fit changes too.</small>"))),
             # THE MODEL STRUCTURE: three analyses, chosen here, carried into
             # the fit, the tests, the plots, the comparison, the report and the
             # export. A rhythm-only model has no trend; a trend-only model has

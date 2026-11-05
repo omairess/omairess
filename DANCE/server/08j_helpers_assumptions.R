@@ -51,10 +51,7 @@ dance_cosinor_assumptions <- function(mod, ff = NULL, df_method = "kr") {
             "before it was read as a midnight crossing and moved 24 h later, with every time",
             "after it.")
       else "The times already ran forward, so no midnight crossing was assumed.")
-  a("Time", sprintf(paste(
-    "t = 0 is the first time point of the recording (%s); every trend and every harmonic",
-    "is anchored there, for every participant, so the intercept is the midline at that",
-    "instant -- also for a participant whose first observation is missing."), clock0))
+  a("Time", dance_origin_text(mod))
   if (K >= 1L) {
     a("Time", sprintf(paste(
       "The period is fixed at %s h, not estimated; amplitudes and acrophases are",

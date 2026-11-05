@@ -274,8 +274,9 @@ dance_traj_basis <- function(d, period = 24, n_harmonics = 1, trend = "none",
 # ------------------------------------------------------------------------------
 # THE TREND BASIS OVER THE OBSERVED WINDOW
 # ------------------------------------------------------------------------------
-# Every trend column is anchored at t0 (zero at the first observation), so two
-# numbers per column summarise it over the window [t0, t_max]:
+# Every trend column is anchored at t0 (zero at the time origin: the first
+# observation unless an earlier origin was set), so two numbers per column
+# summarise it over the sampled window [first observation, t_max]:
 #
 #   mean  its time average. The MIDLINE of the rhythm is intercept + trend, and
 #         the time-averaged midline level is that midline averaged over the window:
@@ -290,8 +291,12 @@ dance_traj_basis <- function(d, period = 24, n_harmonics = 1, trend = "none",
 # else, with no delta method. For the saturating trend tau is the basis's fixed
 # time constant; nothing here estimates it. These are the same window means
 # dance_rhythm_adjusted_mean() integrates numerically for the two-stage MESOR.
-dance_traj_trend_window <- function(trend = "none", t0, t_max, tau = NULL) {
-  T <- t_max - t0
+dance_traj_trend_window <- function(trend = "none", t0, t_max, tau = NULL, t_start = t0) {
+  # t0 is the ANCHOR (where every trend column is zero, the intercept's time);
+  # the window runs from the first sample t_start to the last t_max. The two
+  # coincide unless a time origin before the first sample was set.
+  if (is.null(t_start) || !is.finite(t_start)) t_start <- t0
+  T <- t_max - t_start
   if (!is.finite(T) || T <= 0) return(NULL)
   trend <- as.character(trend)
   col <- c(linear = "trend_lin", log = "trend_log", exp_sat = "trend_sat")[trend]
@@ -299,12 +304,21 @@ dance_traj_trend_window <- function(trend = "none", t0, t_max, tau = NULL) {
     out <- list(mean = numeric(0), end = numeric(0), rate0 = numeric(0), avg_rate = numeric(0))
   } else {
     # the factors are defined once, in server/08_helpers_cosinor.R
-    f <- dance_trend_factors(trend, T, tau)
+    f <- dance_trend_factors(trend, t_max - t0, tau, a = t_start - t0)
     if (is.null(f)) return(NULL)
     out <- list(mean = stats::setNames(f$mean, col), end = stats::setNames(f$end, col),
                 rate0 = stats::setNames(f$rate0, col), avg_rate = stats::setNames(f$avg_rate, col))
   }
-  c(out, list(t0 = t0, t_max = t_max, T = T, trend = trend, tau = tau))
+  # t0 stays the window START (the clock labels read it), anchor is the origin
+  c(out, list(t0 = t_start, t_max = t_max, T = T, anchor = t0, a = t_start - t0,
+              trend = trend, tau = tau))
+}
+
+# The window of a mixed fit: from its first sample to its last, with the trend
+# anchored at spec$t0 (the time origin).
+dance_traj_spec_window <- function(spec) {
+  dance_traj_trend_window(spec$trend %||% "none", spec$t0, max(spec$data$t, na.rm = TRUE),
+                          spec$tau, t_start = min(spec$data$t, na.rm = TRUE))
 }
 
 # What the factor between the trend coefficient and the change IS, in words:
@@ -312,7 +326,15 @@ dance_traj_trend_window <- function(trend = "none", t0, t_max, tau = NULL) {
 # value at the last observation, and that value has a plain meaning per trend.
 dance_traj_change_factor_text <- function(tw) {
   if (is.null(tw) || !length(tw$end)) return("")
-  f <- tw$end[[1]]; T <- tw$T
+  f <- tw$end[[1]]; T <- tw$T; a <- tw$a %||% 0
+  if (a > 1e-9) return(switch(tw$trend,
+    linear  = sprintf("%.4g, the %.4g hours from the first to the last observation", f, T),
+    log     = sprintf("%.4g = log(1 + %.4g h) - log(1 + %.4g h), the trend column at the last minus at the first observation",
+                      f, a + T, a),
+    exp_sat = sprintf(paste("%.4g = e^(-%.4g h / %.4g h) - e^(-%.4g h / %.4g h), the share of A the rise",
+                            "adds between the first and the last observation (hours since the time origin)"),
+                      f, a, tw$tau, a + T, tw$tau),
+    sprintf("%.4g", f)))
   switch(tw$trend,
     linear  = sprintf("%.4g, the %.4g hours from the first to the last observation", f, T),
     log     = sprintf("%.4g = log(1 + %.4g h)", f, T),
@@ -340,7 +362,7 @@ dance_traj_trend_coef_label <- function(trend, tau = NULL, units = NULL, short =
   switch(as.character(trend),
     linear  = if (short) "slope" else sprintf("slope beta (%s per hour)", u),
     log     = if (short) "log-trend beta" else
-      sprintf("log-trend beta (%s per unit of log(1 + hours since the first observation))", u),
+      sprintf("log-trend beta (%s per unit of log(1 + hours since t = 0))", u),
     exp_sat = if (short) "saturating rise A" else
       sprintf("saturating rise A (%s above the intercept as t grows; tau %s %s h)",
               u, if (isTRUE(estimated)) "estimated at" else "held at",

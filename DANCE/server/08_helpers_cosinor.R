@@ -845,8 +845,70 @@ dance_model_clock_range <- function(mod) {
 # both are right.
 # ============================================================================
 
+# THE TIME ORIGIN, t = 0 of the model: where the trend is anchored and what the
+# intercept is the value at. By default the first observation. Optionally a
+# clock time before it (e.g. the participants' wake time): the origin is then
+# the last occurrence of that clock time at or before the first observation,
+# so it lies 0 to 24 h before it. One origin for every participant: the
+# harmonics run on the same axis, so a per-participant origin would put their
+# acrophases on different clocks.
+#   time_vec      the sampling times, clock-linearised hours
+#   origin_clock  hours on the 24 h clock (e.g. 8 for 08:00), or NULL/NA
+# Returns the shift (the origin on the time_vec axis), the lead (hours from
+# the origin to the first observation) and the mode.
+dance_time_origin <- function(time_vec, origin_clock = NULL) {
+  m <- min(time_vec, na.rm = TRUE)
+  if (is.null(origin_clock) || length(origin_clock) != 1L || !is.finite(origin_clock))
+    return(list(shift = m, lead = 0, mode = "first_observation", clock = NA_real_))
+  lead <- (m - origin_clock) %% 24
+  if (abs(lead - 24) < 1e-9) lead <- 0
+  list(shift = m - lead, lead = lead, mode = "clock", clock = origin_clock %% 24)
+}
+
+# Where t = 0 is, as a noun phrase: "the first observation" by default, or "the
+# time origin" when an origin before it was set. `x` is a model (mod) or a
+# mixed fit (ff), both of which carry origin_lead.
+dance_origin_phrase <- function(x) {
+  lead <- suppressWarnings(as.numeric(x$origin_lead %||% 0))
+  if (length(lead) == 1L && is.finite(lead) && lead > 1e-9) "the time origin" else "the first observation"
+}
+
+# The origin in words, for the summary, the report and the script: one source.
+dance_origin_text <- function(mod) {
+  clock0 <- dance_clock_label(as.numeric(mod$origin_shift %||% 0), 24, show_day = FALSE)
+  lead <- as.numeric(mod$origin_lead %||% 0)
+  if (!identical(mod$time_origin, "clock") || !is.finite(lead) || lead <= 1e-9)
+    return(sprintf(paste(
+      "t = 0 is the first time point of the recording (%s); every trend and every harmonic",
+      "is anchored there, for every participant, so the intercept is the midline at that",
+      "instant -- also for a participant whose first observation is missing."), clock0))
+  sprintf(paste(
+    "t = 0 is the time origin chosen at %s, %s h before the first time point of the",
+    "recording (%s); every trend and every harmonic is anchored there, for every",
+    "participant, so the intercept is the midline at %s -- an extrapolation, since",
+    "nobody was sampled before %s. The time-averaged levels, the change and the rates",
+    "are taken over the sampled window, from the first to the last time point."),
+    clock0, format(signif(lead, 4)),
+    dance_clock_label(as.numeric(mod$origin_shift %||% 0) + lead, 24, show_day = FALSE),
+    clock0, dance_clock_label(as.numeric(mod$origin_shift %||% 0) + lead, 24, show_day = FALSE))
+}
+
+# "08:00", "8:30", "8", "8.5" -> hours; NA when it is not a time of day.
+dance_parse_clock_hours <- function(x) {
+  x <- trimws(as.character(x %||% ""))
+  if (!nzchar(x)) return(NA_real_)
+  if (grepl("^[0-9]{1,2}:[0-9]{2}$", x)) {
+    hm <- as.numeric(strsplit(x, ":", fixed = TRUE)[[1]])
+    if (hm[1] > 24 || hm[2] >= 60) return(NA_real_)
+    return((hm[1] + hm[2] / 60) %% 24)
+  }
+  v <- suppressWarnings(as.numeric(x))
+  if (length(v) != 1L || !is.finite(v) || v < 0 || v > 24) return(NA_real_)
+  v %% 24
+}
+
 # The clock origin a model axis is measured from. Zero unless the fit was
-# re-anchored at the first observation.
+# re-anchored (at the first observation, or at the chosen time origin).
 dance_clock_origin <- function(mod) {
   if (is.null(mod)) return(0)
   as.numeric(mod$origin_shift %||% 0)
@@ -1258,27 +1320,36 @@ dance_trend_shape <- function(trend, t, tau = NULL) {
 # The factors in the table above, for a window of T hours. NULL when the trend
 # has none (no trend, a window of no length, or a saturating trend without a
 # usable tau).
-dance_trend_factors <- function(trend, T, tau = NULL) {
+dance_trend_factors <- function(trend, T, tau = NULL, a = 0) {
+  # THE WINDOW is [a, T] on the trend's own clock (t = 0 at the trend's
+  # origin). a = 0 -- the origin is the first sample -- is every run that does
+  # not set a time origin; with an origin before the first sample, a > 0 and
+  # the window still covers only the sampled hours. Each factor is the trend
+  # column's change, mean and slope over that window, per unit coefficient.
   trend <- as.character(trend)
-  if (identical(trend, "none") || !is.finite(T) || T <= 0) return(NULL)
+  a <- if (is.null(a) || !is.finite(a)) 0 else a
+  L <- T - a
+  if (identical(trend, "none") || !is.finite(T) || !is.finite(L) || L <= 0 || a < 0) return(NULL)
   f <- switch(trend,
-    linear  = list(end = T, mean = T / 2, rate0 = 1),
-    log     = list(end = log1p(T), mean = ((T + 1) * log1p(T) - T) / T, rate0 = 1),
+    linear  = list(end = L, mean = (a + T) / 2, rate0 = 1),
+    log     = list(end = log1p(T) - log1p(a),
+                   mean = (((T + 1) * log1p(T) - T) - ((a + 1) * log1p(a) - a)) / L,
+                   rate0 = 1 / (1 + a)),
     exp_sat = if (is.null(tau) || !is.finite(tau) || tau <= 0) NULL else {
-      e <- -expm1(-T / tau)
-      list(end = e, mean = 1 - (tau / T) * e, rate0 = 1 / tau)
+      ea <- exp(-a / tau); eb <- exp(-T / tau)
+      list(end = ea - eb, mean = 1 - tau * (ea - eb) / L, rate0 = ea / tau)
     },
     NULL)
   if (is.null(f)) return(NULL)
-  f$avg_rate <- f$end / T
-  c(f, list(T = T, trend = trend, tau = tau))
+  f$avg_rate <- f$end / L
+  c(f, list(T = L, a = a, trend = trend, tau = tau))
 }
 
 # The accumulation outcomes for ONE trend coefficient (A for the saturating
 # trend). Model-specific extras for the saturating trend: the asymptote A, tau,
 # the half-rise time tau ln 2, and how far towards A the window got.
-dance_trend_outcomes <- function(trend, coef, T, tau = NULL) {
-  f <- dance_trend_factors(trend, T, tau)
+dance_trend_outcomes <- function(trend, coef, T, tau = NULL, a = 0) {
+  f <- dance_trend_factors(trend, T, tau, a)
   na <- NA_real_
   if (is.null(f) || !is.finite(coef))
     return(list(change = na, avg_rate = na, rate0 = na, trend_mean = na,
@@ -1292,13 +1363,15 @@ dance_trend_outcomes <- function(trend, coef, T, tau = NULL) {
        frac_reached = if (sat) f$end else na)
 }
 
-# The mean of each harmonic's cos and sin column over [0, T]: what a rhythm
+# The mean of each harmonic's cos and sin column over [a, T]: what a rhythm
 # adds to the window mean. Exactly zero only over a whole number of cycles.
-dance_harmonic_mean_factors <- function(n_harmonics, period, T) {
+dance_harmonic_mean_factors <- function(n_harmonics, period, T, a = 0) {
   K <- as.integer(n_harmonics)
-  if (K < 1 || !is.finite(T) || T <= 0) return(list(cos = numeric(0), sin = numeric(0)))
+  a <- if (is.null(a) || !is.finite(a)) 0 else a
+  L <- T - a
+  if (K < 1 || !is.finite(L) || L <= 0) return(list(cos = numeric(0), sin = numeric(0)))
   w <- 2 * pi * seq_len(K) / period
-  list(cos = sin(w * T) / (w * T), sin = (1 - cos(w * T)) / (w * T))
+  list(cos = (sin(w * T) - sin(w * a)) / (w * L), sin = (cos(w * a) - cos(w * T)) / (w * L))
 }
 
 # The overall-level outcomes of one fitted curve: the intercept b0, the trend
@@ -1306,10 +1379,10 @@ dance_harmonic_mean_factors <- function(n_harmonics, period, T) {
 # first observation.
 dance_level_outcomes <- function(intercept, trend = "none", coef = NA_real_, tau = NULL,
                                  beta_cos = numeric(0), beta_sin = numeric(0),
-                                 period = 24, T) {
-  f <- dance_trend_factors(trend, T, tau)
+                                 period = 24, T, a = 0) {
+  f <- dance_trend_factors(trend, T, tau, a)
   mid <- intercept + if (is.null(f)) 0 else coef * f$mean
-  hm <- dance_harmonic_mean_factors(length(beta_cos), period, T)
+  hm <- dance_harmonic_mean_factors(length(beta_cos), period, T, a)
   rhythm_mean <- if (length(beta_cos)) sum(beta_cos * hm$cos + beta_sin * hm$sin) else 0
   list(initial_midline = intercept, mean_midline = mid,
        fitted_mean = mid + rhythm_mean, rhythm_window_mean = rhythm_mean)
