@@ -111,7 +111,10 @@ ui_tab_harmonic <- tabItem(
                              acrophases do not change: only the intercept and the trend's
                              coefficients are re-expressed (A at the origin is
                              A<sub>first</sub>&middot;e<sup>a/&tau;</sup>, a hours earlier). A logarithmic
-                             trend, log(1 + t), changes shape with its origin, so its fit changes too.</small>"))),
+                             trend, log(1 + t), changes shape with its origin, so its fit changes too.</small>")),
+              checkboxInput("harmonic_draw_from_origin",
+                            "Draw the fitted curves from the origin (dotted and shaded before the first observation)",
+                            TRUE)),
             # THE MODEL STRUCTURE: three analyses, chosen here, carried into
             # the fit, the tests, the plots, the comparison, the report and the
             # export. A rhythm-only model has no trend; a trend-only model has
@@ -639,7 +642,6 @@ ui_tab_harmonic <- tabItem(
                                                     "Asymptote A and the 63.2% point at tau (trend view)" = "asymptote",
                                                     "Acrophase and amplitude (rhythm views)" = "acro"),
                                         selected = c("mean", "change", "acro"), inline = TRUE),
-                     uiOutput("harmonic_traj_origin_ui"),
                      plotlyOutput("harmonic_traj_curves", height = "440px"),
                      uiOutput("harmonic_traj_annot_note"),
                      uiOutput("harmonic_traj_band_note"),

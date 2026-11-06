@@ -1554,8 +1554,10 @@ recording starting at 08:00. It checks:
 - that an invalid time is refused.
 
 **Drawing the curves from the time origin** (display only; no estimate,
-test or script number changes). With an origin set, the Estimated
-trajectories plot offers to draw the curves from the origin. It is ticked by
+test or script number changes). With an origin set, one setting beside
+it, "Draw the fitted curves from the origin", draws every fitted-curve plot
+from the origin. That covers the Estimated trajectories views (full
+trajectory, trend and rhythm) and the Fitted curves tab. It is ticked by
 default and can be switched off.
 
 When drawn from the origin:

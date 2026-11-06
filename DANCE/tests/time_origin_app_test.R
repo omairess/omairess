@@ -93,7 +93,7 @@ testServer(server, {
     if (tr == "exp_sat") for (fo in c(TRUE, FALSE)) {
       session$setInputs(harmonic_traj_component = "trend", harmonic_traj_band = "pointwise",
                         harmonic_traj_annot = c("change", "tangent", "asymptote"),
-                        harmonic_traj_from_origin = fo, harmonic_traj_raw = FALSE)
+                        harmonic_draw_from_origin = fo, harmonic_traj_raw = FALSE)
       b <- plotly::plotly_build(harmonic_plot_finish(harmonic_traj_curves_build(), FALSE,
                                                      pre_sample = harmonic_traj_from_origin()))$x
       tr_d <- Filter(function(d) identical(d$mode, "lines") && length(unlist(d$x)) > 20 &&
@@ -125,6 +125,18 @@ testServer(server, {
             sprintf("%s: the sampled-window plot is wrong (x0 %.3g, rate line from %s at %s)", lab, x0,
                     paste(a_x, collapse = ","), paste(a_y, collapse = ",")))
       }
+    }
+    # the FULL trajectory on the Fitted curves tab, drawn back to the origin too
+    if (tr == "exp_sat") for (fo in c(TRUE, FALSE)) {
+      session$setInputs(harmonic_draw_from_origin = fo, harmonic_subject_select = "mean")
+      b <- plotly::plotly_build(harmonic_plot_finish(harmonic_fit_plot_build(), FALSE,
+                                                     pre_sample = harmonic_traj_from_origin()))$x
+      ln <- Filter(function(d) grepl("lines", d$mode %||% "") && length(unlist(d$x)) > 20, b$data)
+      x0 <- min(unlist(lapply(ln, function(d) as.numeric(unlist(d$x)))))
+      labs <- vapply(b$layout$annotations %||% list(), function(a) a$text %||% "", character(1))
+      chk(length(ln) > 0 && abs(x0 - if (fo) 0 else 2) < 1e-9 && (("before the first sample" %in% labs) == fo),
+          sprintf("%s: Fitted curves %s", lab, if (fo) "start at the origin, the pre-sample interval marked" else "start at the first observation"),
+          sprintf("%s: Fitted curves start at %s (from origin: %s)", lab, x0, fo))
     }
     # stated: in the assumptions and the summary
     asm <- paste(dance_cosinor_assumptions_text(dance_cosinor_assumptions(mod, if (ap == "mixed") harmonic_traj())),

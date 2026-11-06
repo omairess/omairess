@@ -3807,7 +3807,9 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     req(values$harmonic_model)
     mod <- values$harmonic_model
     
-    time_fine <- seq(min(mod$time_vec), max(mod$time_vec), length.out = 200)
+    # from the time origin when the curves are drawn back to it (display only)
+    fo <- harmonic_traj_from_origin()
+    time_fine <- seq(if (fo) 0 else min(mod$time_vec), max(mod$time_vec), length.out = 200)
     subject_select <- input$harmonic_subject_select
     if(is.null(subject_select)) subject_select <- "mean"
     
@@ -3821,7 +3823,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       # ======================================================================
       ff <- harmonic_traj(); req(isTRUE(ff$ok))
       pr <- dance_traj_predict(ff, conf = 0.95, band = "pointwise",
-                               component = "full", n_time = 200)
+                               component = "full", times = time_fine)
       req(isTRUE(pr$ok))
       cols <- dance_group_colors(pr$cells)
       sel <- subject_select
@@ -4053,7 +4055,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     # tick POSITIONS stay on the model's own axis, because that is where the
     # data are drawn.
     shift <- mod$origin_shift %||% 0
-    time_range <- range(mod$time_vec, na.rm = TRUE)
+    time_range <- range(c(mod$time_vec, if (fo) 0), na.rm = TRUE)
     ticks <- dance_clock_ticks(time_range + shift, mod$period)
 
     x_axis <- list(
@@ -4109,7 +4111,8 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     )
   }
   output$harmonic_fit_plot <- renderPlotly(
-    harmonic_plot_finish(harmonic_fit_plot_build(), isTRUE(input$harmonic_show_original %||% TRUE)))
+    harmonic_plot_finish(harmonic_fit_plot_build(), isTRUE(input$harmonic_show_original %||% TRUE),
+                         pre_sample = harmonic_traj_from_origin()))
   
   # Polar plot for acrophase
   # ---------------------------------------------------------------------------
@@ -5097,16 +5100,8 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     l <- suppressWarnings(as.numeric(values$harmonic_model$origin_lead %||% 0))
     if (length(l) == 1L && is.finite(l)) l else 0
   }
-  harmonic_traj_from_origin <- function() harmonic_origin_lead() > 1e-9 && isTRUE(input$harmonic_traj_from_origin %||% TRUE)
-  output$harmonic_traj_origin_ui <- renderUI({
-    if (harmonic_origin_lead() <= 1e-9) return(NULL)
-    mod <- values$harmonic_model
-    checkboxInput("harmonic_traj_from_origin", sprintf(
-      "Draw from the time origin (%s): the trend counted from it, extrapolated before the first observation (%s)",
-      dance_clock_label(dance_clock_origin(mod), 24, show_day = FALSE),
-      dance_clock_label(dance_clock_origin(mod) + min(mod$time_vec, na.rm = TRUE), 24, show_day = FALSE)),
-      isolate(input$harmonic_traj_from_origin) %||% TRUE)
-  })
+  # one display setting for every fitted-curve plot, set beside the origin
+  harmonic_traj_from_origin <- function() harmonic_origin_lead() > 1e-9 && isTRUE(input$harmonic_draw_from_origin %||% TRUE)
 
   # ---- THE ANNOTATIONS OF THE THREE GRAPHS ---------------------------------------
   # Every number drawn here is read off harmonic_outcomes(), the table the "By
