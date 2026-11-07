@@ -272,6 +272,27 @@ ui_tab_harmonic <- tabItem(
                                φ as known. Estimating φ refits the model about 25 times (and
                                repeats the τ profile when τ is estimated too).</small>")))
             ),
+            # TWO-STAGE: the same control, greyed out. Each participant's cosinor
+            # has independent residuals; the group comparison uses only the
+            # spread of the participants' estimates, which autocorrelation does
+            # not bias (Bingham et al. 1982; Cornelissen 2014). Plain disabled
+            # radios with no name: not a Shiny input, so nothing can be set here.
+            conditionalPanel(
+              condition = "input.harmonic_approach == 'two_stage'",
+              tags$div(class = "form-group dance-resid-disabled", style = "opacity:0.5;cursor:not-allowed",
+                tags$label(class = "control-label", "Residuals within a curve:"),
+                tags$div(
+                  tags$div(class = "radio", tags$label(
+                    tags$input(type = "radio", disabled = NA, checked = NA), tags$span("Independent"))),
+                  tags$div(class = "radio", tags$label(
+                    tags$input(type = "radio", disabled = NA),
+                    tags$span("Autocorrelated: continuous-time AR(1), estimated"))))),
+              helpText(HTML("<small>Not available for the two-stage cosinor: each participant is
+                             fitted with independent residuals. Autocorrelation within a participant
+                             does not bias the group comparison, which uses only the spread of the
+                             participants' estimates (Bingham et al., 1982; Cornelissen, 2014); it
+                             makes each participant's own p-value and intervals too optimistic. To
+                             model it, use the mixed-effects approach.</small>"))),
             conditionalPanel(
               condition = "input.harmonic_structure != 'rhythm'",
               helpText(HTML("<small>β<sub>0</sub> is the <b>intercept</b>: the midline at the
