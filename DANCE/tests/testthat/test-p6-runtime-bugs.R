@@ -204,11 +204,13 @@ test_that("P6.7: the harmonic tab's defaults are the ones you would want", {
   # the server fallbacks must agree, or a session that never touched the control
   # runs a different model from the one the UI shows
   srv <- code_of("server/72_harmonic.R")
-  # the time origin is no longer a control at all: t = 0 is the first
-  # observation, hard-set, and nothing reads an input for it
+  # the old origin control (midnight vs first observation) is gone; the time
+  # origin is the first observation unless a clock time before it is chosen,
+  # and the UI default and the server fallback agree on that
   expect_false(grepl("harmonic_time_origin", srv, fixed = TRUE))
-  expect_true(grepl('time_origin <- "first_observation"', srv, fixed = TRUE))
   expect_false(grepl("harmonic_time_origin", ui, fixed = TRUE))
+  expect_true(grepl('selected = "first"', sub("(?s).*radioButtons\\(\"harmonic_origin\"", "", ui, perl = TRUE), fixed = TRUE))
+  expect_true(grepl('input$harmonic_origin %||% "first"', srv, fixed = TRUE))
 })
 
 test_that("the data-source choice is GONE, not merely defaulted to raw", {

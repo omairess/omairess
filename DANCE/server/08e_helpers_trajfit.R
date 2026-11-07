@@ -667,8 +667,15 @@ dance_traj_profile_phi <- function(spec, rung = 1L, REML = TRUE, grid = NULL,
   prof <- data.frame(phi = grid[is.finite(ll)], logLik = ll[is.finite(ll)])
   n_failed <- sum(!is.finite(ll))
   jb <- which.max(prof$logLik); best <- prof$phi[jb]
-  at_upper <- jb == nrow(prof)
-  if (!at_upper) {
+  # AT THE TOP OF THE SEARCH means at the grid's last value. A best point that
+  # is the last CONVERGED one, with the grid running on past it, is not that:
+  # it is where the fits stopped converging on this random structure, a bound
+  # set by the optimiser rather than an estimate, and it is reported as such.
+  jg <- match(best, grid)
+  at_upper <- isTRUE(jg == length(grid))
+  failed_next <- is.finite(jg) && ((jg < length(grid) && !is.finite(ll[jg + 1L])) ||
+                                   (jg > 1L && !is.finite(ll[jg - 1L])))
+  if (!at_upper && jb < nrow(prof)) {
     lo_u <- u_of(prof$phi[max(1L, jb - 1L)]); hi_u <- u_of(prof$phi[jb + 1L])
     opt <- tryCatch(stats::optimize(function(u) {
       v <- ll_at(phi_of(u)); if (is.finite(v)) -v else 1e100
@@ -701,6 +708,7 @@ dance_traj_profile_phi <- function(spec, rung = 1L, REML = TRUE, grid = NULL,
        ci = c(if (is.finite(ci_lo)) ci_lo else 0, if (is.finite(ci_hi)) ci_hi else max(prof$phi)),
        ci_open = c(lower = FALSE, upper = !is.finite(ci_hi)),
        at_zero = best < 1e-3, at_upper = at_upper,
+       bounded_by_failure = isTRUE(failed_next),
        lrt = list(statistic = stat, df = 1L,
                   p = if (stat > 1e-8) 0.5 * stats::pchisq(stat, 1, lower.tail = FALSE) else 1,
                   ll_max = top, ll0 = ll0,
@@ -720,7 +728,9 @@ dance_traj_loglik <- function(fit) {
   ll <- tryCatch(stats::logLik(fit$model), error = function(e) NULL)
   if (is.null(ll)) return(NULL)
   car1 <- isTRUE(fit$phi > 0)
-  k <- as.integer(attr(ll, "df")) + as.integer(car1)
+  # phi is one parameter more; so is tau when it was estimated from these data
+  # (profiled), as the model comparison counts it -- a held tau is not
+  k <- as.integer(attr(ll, "df")) + as.integer(car1) + as.integer(isTRUE(fit$tau_estimated))
   v <- as.numeric(ll) + if (car1) dance_car1_logdet(fit$spec, fit$phi) else 0
   n <- tryCatch(stats::nobs(fit$model), error = function(e) nrow(fit$spec$data))
   list(logLik = v, df = k, n = n, REML = isTRUE(fit$REML),
@@ -769,13 +779,23 @@ dance_traj_residual_statement <- function(fit) {
   sprintf(paste(
     "Residuals are autocorrelated within each curve as a continuous-time AR(1): two",
     "residuals dt hours apart correlate phi^dt, with phi = %s per hour (95%% profile",
-    "interval %s to %s%s; %s). Against independent residuals: likelihood ratio %s,",
-    "p %s (boundary-corrected). The tests treat phi as known.%s"),
+    "interval %s to %s%s; %s). Against independent residuals, on the same observations,",
+    "fixed effects and random structure: likelihood ratio %s, p %s (boundary-corrected).",
+    "The tests treat phi as known.%s"),
     f3(ar$phi %||% fit$phi), f3(ar$ci[1]), if (isTRUE(ar$ci_open[["upper"]])) "above " else "",
     f3(ar$ci[2]), ar$method %||% "REML", f3(ar$lrt$statistic),
     if (ar$lrt$p < 0.001) "< .001" else sprintf("= %.3f", ar$lrt$p),
     paste0(if (isTRUE(ar$at_zero)) " The estimate is 0: no positive autocorrelation, and the model is the independent-residual one." else "",
-           if (isTRUE(ar$at_upper)) " The estimate sits at the top of the search (0.98): a bound, not an estimate." else "",
+           if (isTRUE(ar$at_upper)) sprintf(" The estimate sits at the top of the search (%s): a bound, not an estimate.",
+                                            f3(max(ar$grid %||% 0.98))) else "",
+           if (isTRUE(ar$bounded_by_failure) && !isTRUE(ar$at_upper)) paste(
+             " The model did not converge at the neighbouring value of phi on this random structure,",
+             "so the estimate is where the fits stopped converging -- a bound set by the optimiser, not",
+             "a maximum of the likelihood.") else "",
+           if (isTRUE(ar$optimum_below_independent)) paste(
+             " WARNING: the AR(1) model's maximised likelihood is below the independent model's, which",
+             "it contains (phi = 0); its optimisation did not reach the maximum, and the comparison is",
+             "not valid.") else "",
            if (!identical(ar$method %||% "REML", "REML")) paste(
              " The interval is computed at tau's estimate; the likelihood ratio compares with",
              "independent residuals at their own best tau.") else "",
@@ -783,6 +803,68 @@ dance_traj_residual_statement <- function(fit) {
              " %d of the %d values of phi on the grid did not converge and are not in the profile.",
              as.integer(ar$n_grid_failed), length(ar$grid)) else "",
            if (identical(ar$settled, FALSE)) " tau and phi had not settled after four rounds." else ""))
+}
+
+# ------------------------------------------------------------------------------
+# INDEPENDENT AGAINST AR(1) RESIDUALS: ONE PAIR OF FITTED MODELS
+# ------------------------------------------------------------------------------
+# The likelihood ratio, AIC and BIC of the residual comparison, all from the
+# same two fitted models, which share the observations, the fixed-effect design
+# and the random structure and differ in the residual covariance only.
+#   tau held, or no saturating trend: the two reported fits themselves, by
+#     REML (same fixed effects, so their REML likelihoods are comparable).
+#   tau estimated: REML likelihoods of fits at two different tau have
+#     different fixed-effect designs and are NOT comparable, so the pair is
+#     refitted by ML: independent residuals at their own best tau (tau_ind),
+#     AR(1) residuals at the (tau, phi) the joint estimation reached; tau is
+#     counted as a parameter in both.
+# `below` is TRUE if the AR(1) maximum lies under the independent one: the
+# AR(1) model contains independence (phi = 0), so that can only mean its
+# optimisation did not reach the maximum, and it is reported, not hidden.
+dance_traj_residual_comparison <- function(ff_ind, ff_car, joint = FALSE, tau_ind = NULL,
+                                           d = NULL, period = 24, n_harmonics = 1, t0 = NULL,
+                                           roles = NULL) {
+  rung <- ff_ind$re_rung
+  if (!identical(ff_ind$re_formula, ff_car$re_formula))
+    return(list(ok = FALSE, message = sprintf(paste(
+      "The independent and AR(1) models reached different random structures (%s; %s), so they",
+      "cannot be compared on their residuals alone."), ff_ind$re_formula, ff_car$re_formula)))
+  if (!isTRUE(joint)) {
+    if (!identical(ff_ind$spec$fixed_formula, ff_car$spec$fixed_formula) ||
+        !identical(ff_ind$spec$tau, ff_car$spec$tau))
+      return(list(ok = FALSE, message = "The two models differ in their fixed effects; REML cannot compare them."))
+    pair <- list(independent = ff_ind, car1 = ff_car); lik <- "REML"; extra <- 0L
+  } else {
+    sp0 <- dance_traj_spec(d, period = period, n_harmonics = n_harmonics, trend = "exp_sat",
+                           t0 = t0, tau = tau_ind, roles = roles)
+    f0 <- if (isTRUE(sp0$ok)) dance_traj_fit(sp0, REML = FALSE, min_rung = rung, max_rung = rung, phi = 0)
+    f1 <- dance_traj_fit(ff_car$spec, REML = FALSE, min_rung = rung, max_rung = rung, phi = ff_car$phi)
+    if (!isTRUE(f0$ok) || !isTRUE(f1$ok))
+      return(list(ok = FALSE, message = paste(
+        "The maximum-likelihood refits for comparing independent and AR(1) residuals did not",
+        "converge on the random structure of the reported model.")))
+    pair <- list(independent = f0, car1 = f1); lik <- "ML"; extra <- 1L   # tau, in both
+  }
+  rows <- lapply(names(pair), function(nm) {
+    f <- pair[[nm]]
+    l <- dance_traj_loglik(f)
+    k <- l$df + if (isTRUE(f$tau_estimated)) 0L else extra
+    data.frame(residuals = if (nm == "car1") "continuous-time AR(1)" else "independent",
+               phi = f$phi %||% 0, tau = f$spec$tau %||% NA_real_,
+               random_effects = f$re_formula, n = l$n, likelihood = lik,
+               logLik = l$logLik, df = k, AIC = -2 * l$logLik + 2 * k, BIC = -2 * l$logLik + k * log(l$n),
+               stringsAsFactors = FALSE)
+  })
+  tab <- do.call(rbind, rows)
+  diff <- tab$logLik[2] - tab$logLik[1]
+  stat <- max(0, 2 * diff)
+  list(ok = TRUE, table = tab, below = diff < -1e-6,
+       lrt = list(statistic = stat, df = 1L,
+                  p = if (stat > 1e-8) 0.5 * stats::pchisq(stat, 1, lower.tail = FALSE) else 1,
+                  ll_max = tab$logLik[2], ll0 = tab$logLik[1], likelihood = lik,
+                  method = paste0("likelihood ratio (", lik, ") against independent residuals (phi = 0)",
+                                  if (isTRUE(joint)) " with tau re-estimated" else "",
+                                  ", from the two fitted models in the comparison table, boundary-corrected")))
 }
 
 # ------------------------------------------------------------------------------
@@ -922,7 +1004,13 @@ dance_traj_run <- function(d, period = 24, n_harmonics = 1, trend = "none", role
   if (car1) {
     tau_fields <- c("tau_mode", "tau_profile", "tau_estimated", "tau_profile_ci", "tau_warning")
     joint <- identical(ff$tau_mode, "profile")
-    rung <- if (joint) ff$tau_profile$rung %||% ff$re_rung else ff$re_rung
+    # THE INDEPENDENT-RESIDUAL MODEL THIS ONE IS COMPARED WITH: the fit above,
+    # exactly as the independent option reports it. The AR(1) model is fitted on
+    # ITS random structure and nowhere else, so the two differ in the residual
+    # covariance only.
+    ff_ind <- ff
+    rung <- ff_ind$re_rung
+    joint0 <- joint      # tau estimated for the independent model: the comparison is by ML
     prof_indep <- if (joint) ff$tau_profile else NULL   # the tau profile at phi = 0
     phi_used <- 0; rounds <- 0L; settled <- TRUE
     repeat {
@@ -937,7 +1025,7 @@ dance_traj_run <- function(d, period = 24, n_harmonics = 1, trend = "none", role
       phi_used <- php$phi
       say(sprintf("Profiling tau at the residual autocorrelation (round %d)...", rounds), 0.88)
       pr <- dance_traj_profile_tau(d, period, n_harmonics, design_terms = NULL, t0 = t0,
-                                   roles = roles, tau_grid = grid, phi = phi_used)
+                                   roles = roles, tau_grid = grid, phi = phi_used, rung = rung)
       if (!isTRUE(pr$ok)) return(list(ok = FALSE, message = pr$message))
       prof <- pr[c("profile", "tau", "ci", "ci_open", "flat", "at_edge", "logLik_range",
                    "message", "rung", "grid", "n_grid_failed")]
@@ -947,10 +1035,9 @@ dance_traj_run <- function(d, period = 24, n_harmonics = 1, trend = "none", role
         ff <- fit_at(tau_value)
         if (!isTRUE(ff$ok)) return(list(ok = FALSE, message = ff$message))
         ff$tau_mode <- "fixed_after_flat"; ff$tau_profile <- prof
-        joint <- FALSE; rung <- ff$re_rung; next
+        joint <- FALSE; next
       }
       ff <- pr$fit; ff$tau_mode <- "profile"; ff$tau_profile <- prof
-      rung <- pr$rung
     }
     if (joint) {
       # THE LIKELIHOOD RATIO WITH tau ESTIMATED: independence is the model at
@@ -969,12 +1056,36 @@ dance_traj_run <- function(d, period = 24, n_harmonics = 1, trend = "none", role
                        "re-estimated, boundary-corrected")))
     }
     say("Refitting at the residual autocorrelation...", 0.9)
-    ff2 <- dance_traj_fit(ff$spec, REML = TRUE, min_rung = rung, phi = php$phi)
-    if (!isTRUE(ff2$ok)) return(list(ok = FALSE, message = ff2$message))
+    # ON THE SAME RANDOM STRUCTURE (max_rung): a refit that descended the ladder
+    # here would be compared with an independent-residual model of a different
+    # random structure, and its likelihood ratio, computed on the profile's
+    # structure, would belong to neither reported fit
+    ff2 <- dance_traj_fit(ff$spec, REML = TRUE, min_rung = rung, max_rung = rung, phi = php$phi)
+    if (!isTRUE(ff2$ok)) return(list(ok = FALSE, message = sprintf(paste(
+      "The model with AR(1) residuals did not converge at phi = %.3g on the random structure",
+      "the independent-residual model uses (%s). Fitting it on a simpler structure would",
+      "change the random effects as well as the residuals, so no AR(1) fit is reported;",
+      "use independent residuals, or simplify the design."), php$phi, ff_ind$re_label %||% "")))
     for (k in tau_fields) ff2[[k]] <- ff[[k]]
     ff <- ff2
     php$method <- if (joint) "ML, jointly with tau" else "REML"
     php$rounds <- rounds; php$settled <- settled
+    # ONE PAIR OF FITTED MODELS for the likelihood ratio, AIC and BIC
+    tau_ind <- NULL
+    if (joint0) {
+      # the independent model's best tau by ML, on this random structure
+      p0i <- if (identical(as.integer(prof_indep$rung), as.integer(rung))) prof_indep
+             else dance_traj_profile_tau(d, period, n_harmonics, design_terms = NULL, t0 = t0,
+                                         roles = roles, tau_grid = grid, phi = 0, rung = rung)
+      tau_ind <- p0i$tau %||% ff_ind$spec$tau
+    }
+    cmp <- dance_traj_residual_comparison(ff_ind, ff, joint = joint0, tau_ind = tau_ind,
+                                          d = d, period = period, n_harmonics = n_harmonics,
+                                          t0 = t0, roles = roles)
+    if (!isTRUE(cmp$ok)) return(list(ok = FALSE, message = cmp$message))
+    php$comparison <- cmp$table
+    php$lrt <- utils::modifyList(php$lrt, cmp$lrt)
+    php$optimum_below_independent <- cmp$below
     ff$residual_ar <- php
   }
   # A AND TAU IN EVERY CELL, on request: a nonlinear mixed model (nlme), the

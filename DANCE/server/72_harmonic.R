@@ -3576,6 +3576,23 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
         if (isTRUE(ff$REML))
           cat("  REML criteria compare models with the SAME fixed effects only (different random\n",
               "  structures); to compare fixed effects, the comparison tab refits by ML.\n", sep = "")
+        if (isTRUE(ff$tau_estimated))
+          cat("  tau was estimated (counted as a parameter): another run's REML criteria at a different\n",
+              "  tau have a different fixed-effect design and are not comparable with these.\n", sep = "")
+        # INDEPENDENT AGAINST AR(1) RESIDUALS: the one pair of fitted models the
+        # likelihood ratio, AIC and BIC all come from
+        ct <- ff$residual_ar$comparison
+        if (!is.null(ct)) {
+          cat(sprintf("\n  Residual model comparison (%s; same observations, fixed effects and random structure %s):\n",
+                      ct$likelihood[1], ct$random_effects[1]))
+          for (i in seq_len(nrow(ct)))
+            cat(sprintf("    %-22s phi %-6s %s logLik %s  k %d  AIC %s  BIC %s\n", ct$residuals[i],
+                        fmt3(ct$phi[i]), if (is.finite(ct$tau[i])) sprintf("tau %-6s", fmt2(ct$tau[i])) else "",
+                        fmt2(ct$logLik[i]), as.integer(ct$df[i]), fmt2(ct$AIC[i]), fmt2(ct$BIC[i])))
+          lr <- ff$residual_ar$lrt
+          cat(sprintf("    likelihood ratio %s on 1 df, p %s (half the chi-square(1) tail: phi = 0 is on the boundary)\n",
+                      fmt2(lr$statistic), if (lr$p < 0.001) "< .001" else sprintf("= %.3f", lr$p)))
+        }
       } else cat("  not available for this fit\n")
     } else if (any(c("aic", "aicc", "bic") %in% names(params))) {
       k_par <- dance_model_npar(trend_type, nh) + 1L

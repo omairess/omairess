@@ -1492,6 +1492,11 @@
         add("traj_fit$clock_origin <- origin_shift   # model time 0 on the clock, as the app sets it")
         add("cat(dance_traj_fit_report(traj_fit), \"\\n\")")
         add("cat(dance_traj_residual_statement(traj_fit), \"\\n\")")
+        if (identical(hm$resid_model, "car1")) {
+          add("# independent against AR(1) residuals: the one pair of fitted models (same observations,")
+          add("# fixed effects and random structure) the likelihood ratio, AIC and BIC come from")
+          add("print(traj_fit$residual_ar$comparison)")
+        }
         if (sat)
           add("cat(\"tau used by the trajectory model:\", traj_fit$spec$tau, \"h (\", traj_fit$tau_mode, \")\\n\")")
         add("print(summary(traj_fit$model)$coefficients)   # the fixed effects")

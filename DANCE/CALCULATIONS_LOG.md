@@ -1582,3 +1582,81 @@ line's start at the origin.
 - the change line starts on the curve at the first observation;
 - the interval before it is marked;
 - unticked, curve and line start at 0 at the first observation.
+
+## 31. Independent against continuous-time AR(1) residuals: an audit of the pair
+
+**What was required.** The two residual options of the mixed-effects cosinor
+must use the same observations, the same fixed-effect design matrix and the
+same random structure, so that they differ only in the residual covariance.
+Every comparison of the two (likelihood ratio, AIC, BIC) must come from one
+pair of fitted models.
+
+**How the AR(1) model is fitted (unchanged).** For a given φ, the CAR(1)
+model is the ordinary mixed model fitted to the whitened data W·y, W·X and
+W·Z (Prais–Winsten for unequal gaps; W R W′ = I). Its log-likelihood is the
+whitened one plus log|det W|.
+- **ML:** the identity is immediate.
+- **REML:** the restricted term log|X′V⁻¹X| is invariant under the
+  transformation (X* = WX, V* = WVW′), and log|V*| = log|V| + 2 log|det W|.
+  So L_R(y) = L_R*(Wy) + log|det W|, in lme4's convention (no log|X′X| term)
+  for both models alike.
+- **φ:** profiled on a 20-point grid in −log(1 − φ), including φ = 0 exactly,
+  then refined between the neighbours of the best grid point.
+
+**The audit** (`tests/testthat/test-traj-car1-pair.R`; simulated data with
+CAR(1) residuals, uneven times and missing values, with and without a
+within-participant factor, five trend set-ups). What already held:
+- **Same model parts:** the same rows, the same unwhitened X (and the AR(1)
+  fit's X is exactly W·X), the same random structure.
+- **φ = 0:** at identical θ, the whitened REML deviance at φ = 0 (and at
+  φ = 1e−8) equals the independent model's to 1e−8.
+- **REML correctness:** both REML log-likelihoods equal a dense direct
+  computation, −½[(n − p) log 2π + log|V| + log|X′V⁻¹X| + r′V⁻¹r], to 1e−7.
+- **Optimum:** the AR(1) optimum is above the independent one. Started from
+  the independent estimates at φ = 0.001, and at φ̂, the optimizer reaches the
+  same optimum as from the default start, to 1e−6.
+- **Parameter count:** φ is counted as one parameter more.
+- **τ held or no trend:** the reported likelihood ratio equals 2·Δℓ of the two
+  reported fits.
+
+**The inconsistencies found and corrected:**
+1. **The random structure could change between the two options.** The final
+   REML refit at φ̂ was not capped at the independent model's
+   random-effects rung (`min_rung` without `max_rung`). If that structure
+   failed there, the fit stepped down the ladder. The AR(1) model then had a
+   different random structure from the independent one, and its likelihood
+   ratio, computed on the profile's structure, belonged to neither reported
+   fit. Shown by fault injection: rung 2 was reported against rung 1, with a
+   likelihood ratio of 54.68 against 51.04 from the reported pair.
+
+   The joint τ–φ rounds re-chose a structure in each τ profile in the same
+   way. Both now use the independent model's structure only. If it fails, the
+   AR(1) fit is refused with a message; a different structure is never
+   reported.
+2. **A φ estimate bounded by non-convergence was reported as an estimate.**
+   Grid points whose fit did not converge were dropped. The best remaining
+   point could then be the edge of the converged region, and it was reported
+   as "at the top of the search (0.98)" even when that edge was 0.186. A
+   best point next to a failed grid value is now flagged
+   (`bounded_by_failure`) and reported as a bound set by the optimizer.
+   "At the top" now means the grid's last value.
+3. **With τ estimated, the likelihood ratio and the AIC/BIC came from
+   different models.** The likelihood ratio was ML (each model at its own best
+   τ), while the printed AIC/BIC were the REML values of fits whose τ, and so
+   whose fixed-effect design, can differ. Those REML values are not
+   comparable. There is now one comparison table (`residual_ar$comparison`),
+   and the likelihood ratio, AIC and BIC all come from its two rows:
+   - with τ held, or no saturating trend: the two reported fits, by REML;
+   - with τ estimated: one ML refit at each model's estimate, on the same
+     random structure.
+
+   The table is printed in the summary, the report and the exported script.
+4. **An estimated τ was not counted as a parameter** in the fitted model's
+   AIC/BIC, though the model comparison counted it. It is counted now; a held
+   τ is not. A fit whose maximized likelihood is below the independent
+   model's, which it contains, would be flagged as not having reached the
+   maximum. None of the audited cases is.
+
+**What is unchanged:** the model specification, the estimators and every
+estimate where none of the four cases applies. In the audited cases, the
+reported fits, φ̂ and the REML likelihood ratios are identical before and after.

@@ -1067,7 +1067,12 @@ dance_apa_report <- function(values, input, title = NULL) {
             ", ",
             "\u03c7<sup>2</sup>(1) = ", dance_apa_num(ar$lrt$statistic, 2), ", ",
             dance_apa_p(ar$lrt$p), " (half the \u03c7<sup>2</sup>(1) tail, as \u03c6 = 0 lies ",
-            "on the boundary).")
+            "on the boundary)",
+            if (!is.null(ar$comparison) && nrow(ar$comparison) == 2L) paste0(
+              "; ", ar$comparison$likelihood[1], " AIC ", dance_apa_num(ar$comparison$AIC[1], 1),
+              " with independent residuals and ", dance_apa_num(ar$comparison$AIC[2], 1),
+              " with AR(1) residuals, both models on the same observations, fixed effects and ",
+              "random structure") else "", ".")
       blank()
       ce <- tryCatch(dance_traj_cell_equations(ff), error = function(e) NULL)
       if (!is.null(ce)) {
