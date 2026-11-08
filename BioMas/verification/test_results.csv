@@ -1,0 +1,23 @@
+"test","nb","failed","error","warning","passed"
+"local date-times use one explicit offset and an explicit date order",13,0,FALSE,0,13
+"spreadsheet date and time cells combine without reinterpretation",5,0,FALSE,0,5
+"bedtime rows become whole sleep opportunities with an audited role",11,0,FALSE,0,11
+"habitual baseline uses circular means across midnight",9,0,FALSE,0,9
+"column proposals cover common actigraphy and diary exports",4,0,FALSE,0,4
+"interface defaults to the paper's 10 h baseline time in bed",7,0,FALSE,0,7
+"bedtime-interval workflow simulates REST time in bed and derives the baseline",23,0,FALSE,0,23
+"pre-study baseline needs pre-study nights",2,0,FALSE,0,2
+"propose_clock_times returns every requested example",7,0,FALSE,0,7
+"clock parsing validates whole tokens and never partially guesses",18,0,FALSE,0,18
+"midnight unwrapping advances all following times by 24 hours",10,0,FALSE,0,10
+"clock input counts and elapsed alignment are explicit",12,0,FALSE,0,12
+"numeric clock interpretation is opt-in and supports midnight",16,0,FALSE,0,16
+"all three inputs propose clocks in file order and align predictions",37,0,FALSE,0,37
+"ambiguous labels stay empty and never invent spacing",15,0,FALSE,0,15
+"restored entries survive initial loading and origin validation recovers",15,0,FALSE,0,15
+"branding and original layout are retained",9,0,FALSE,0,9
+"the supplied file's calculation and calibration functions are preserved",88,0,FALSE,0,88
+"VAS scaling controls and added comparison UI survive clock changes",12,0,FALSE,0,12
+"screenshot KSS headers map across midnight after one confirmation",19,0,FALSE,0,19
+"all panels preserve edits and recover from incomplete numeric clock mapping",13,0,FALSE,0,13
+"composite plot always exposes aligned English KSS anchors",25,0,FALSE,0,25

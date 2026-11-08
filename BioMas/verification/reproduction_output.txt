@@ -1,0 +1,4 @@
+reproduce.R:
+Verified: all prediction, exposure, initialization and comparison outputs reproduced.
+reproduce_bedtime.R:
+Verified: all prediction, exposure, initialization and comparison outputs reproduced.

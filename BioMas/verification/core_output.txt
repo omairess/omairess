@@ -1,0 +1,101 @@
+
+MODEL AND INITIALIZATION
+PASS Published parameters: 2021 PVT
+PASS Verified stable baseline: 2021 PVT
+PASS Published parameters: 2021 KSS
+PASS Verified stable baseline: 2021 KSS
+PASS Published parameters: 2024jtb PVT
+PASS Verified stable baseline: 2024jtb PVT
+PASS Published parameters: 2024jtb KSS
+PASS Verified stable baseline: 2024jtb KSS
+PASS Published parameters: 2024fe PVT
+PASS Verified stable baseline: 2024fe PVT
+PASS Published parameters: 2024fe KSS
+PASS Verified stable baseline: 2024fe KSS
+PASS 240 independent derivative comparisons
+Maximum derivative difference: 3.545736e-11 
+PASS 08:00 initial phase corrected: PVT
+PASS Shifted study start matches continuous history: PVT
+PASS 08:00 initial phase corrected: KSS
+PASS Shifted study start matches continuous history: KSS
+PASS Feedback stability guard catches W=20.18 below nominal Wc
+PASS Near-critical continuous baseline is verified, never silently truncated
+PASS Reject zero alpha_s
+PASS Reject zero eta_w
+PASS Reject zero xi
+PASS Reject zero lambda
+PASS Reject singular Wc=24
+PASS Published period cannot become a discontinuous 25-hour clock
+PASS 2021 structural exclusions survive edits
+PASS JTB structural feedback exclusion survives edits
+
+EVENTS, DURATION AND EXPOSURE
+PASS All sleep/duty/end boundaries appear exactly
+PASS Sleep interval uses onset-inclusive/end-exclusive states
+PASS Explicit study end is included
+PASS Continuous-wake studies need no dummy sleep interval
+PASS Reject overlapping sleep intervals
+PASS Reject reversed intervals
+PASS Reject intervals beyond explicit end
+PASS Analytic rising threshold crossing
+PASS Analytic falling threshold crossing
+PASS One-hour constant exposure has no endpoint overcount
+PASS Exactly at threshold is not strictly above
+PASS Composite AUC splits clipping corners before threshold integration
+PASS Duty mask restricts both exposure duration and severity
+PASS Zero awake exposure has defined area and undefined mean
+PASS Reject zero-sum weights
+PASS Reject negative weights
+PASS Reject zero index ceiling
+PASS Composite normalization and units
+PASS Weight normalization remains finite for large positive weights
+
+INPUTS AND OBSERVATIONS
+PASS Decimal-comma files preserve 4.5 rather than producing 45
+PASS Wrong numeric locale is rejected, not silently converted
+PASS Reject invalid numeric text
+PASS Reject infinite observations
+PASS Reject ambiguous grouping separators
+PASS Reject malformed CSV field counts
+PASS Blank/duplicate headers repaired without colliding with existing suffixes
+PASS Header repair preserves every column and value in original order
+PASS Header mapping retains original labels and column positions
+PASS Only changed headers are marked
+PASS Header repair is deterministic across imports
+PASS BOM, whitespace and missing headers become usable names
+PASS Valid headers stay unchanged
+PASS Repaired headers and their original mapping survive saved exports
+PASS Files with no columns still fail clearly
+PASS Native Excel numbers are independent of text decimal locale
+PASS SPSS numeric observations retain their values
+PASS DST change preserves elapsed UTC duration
+PASS Datetime origin carries its actual local starting phase
+PASS Reject ambiguous local datetime without offset
+PASS Reject invalid calendar date
+PASS Reject invalid UTC offsets
+PASS Reject invalid ISO clock hours
+PASS ISO datetimes can omit seconds without changing the origin
+PASS Terminal sleep includes the confirmed final epoch
+PASS All-wake actigraphy yields an empty interval table
+PASS Reject gaps in actigraphy
+PASS Reject unknown actigraphy states
+PASS Reject unobserved trailing study time
+PASS Strict wide-to-long conversion preserves values
+PASS Reject duplicate subject/occasion times
+PASS Reject duplicated participant rows
+PASS Preserve supplied app: omit rows with missing group labels
+PASS Reject out-of-range KSS
+PASS VAS endpoint rescaling
+PASS Reverse VAS endpoint rescaling
+PASS VAS out-of-range values are not clipped
+PASS PVT comparison requires explicit lapse-count unit confirmation
+
+COMPARISONS, UI STATE AND EXPORT
+PASS Comparison excludes sleep and out-of-coverage observations
+PASS Exclusion reasons retained
+PASS SD/SEM use valid independent subject rows
+PASS Empty group selection includes no observations
+PASS Single-pair RMSE and MAE are available
+PASS Constant predictions have undefined correlation
+PASS Correlation uses the standard formula
+ALL 91 CORE CHECKS PASSED

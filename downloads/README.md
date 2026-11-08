@@ -52,3 +52,11 @@ macOS and Windows builds cannot be produced on this machine — packaging has to
 run on the target operating system. Get them from the **Actions** tab
 (*Build BSRT desktop apps* → *Run workflow*), or from the Releases page if a
 version tag has been pushed. See `BSRT-desktop/README.md`.
+
+## BioMas_1.3.5.zip — biomathematical sleep model (R/Shiny)
+
+A copy of `/BioMas` (BioMas 1.3.5): the McCauley et al. 2024 fatigue model with
+KSS/PVT predictions, empirical overlays and bedtime-interval (time-in-bed)
+schedule input from actigraphy or sleep diaries. Unzip it and run
+`shiny::runApp("BioMas_1.3.5")` from the parent folder; `README.md` inside
+lists the required packages and the changes in this version.
