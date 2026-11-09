@@ -1035,8 +1035,15 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
 
   # Estimate trend direction from linear regression
   lin_fit <- lm(y ~ t_shifted)
-  lin_slope <- coef(lin_fit)[2]
-  lin_intercept <- coef(lin_fit)[1]
+  # unname(): coef() carries the regressor's name ("t_shifted"), and a start
+  # value built from it (A_sat = lin_slope * t_max, used when the slope is not
+  # positive) made nls call the parameter "A_sat.t_shifted". Every reader then
+  # looked up "A_sat" and found nothing: with tau held the fit was discarded
+  # ("Result extraction failed"), with tau estimated A_sat came back NA -- so a
+  # participant whose response FELL over the recording lost the saturating
+  # trend. See CALCULATIONS_LOG section 32.
+  lin_slope <- unname(coef(lin_fit)[2])
+  lin_intercept <- unname(coef(lin_fit)[1])
 
   # Build formula dynamically based on components
   # Always start with mesor
@@ -1144,6 +1151,9 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
   error_msgs <- c()
   conv_status <- "not_attempted"
   conv_detail <- NA_character_
+  # start values carry no names of their own: nls names each parameter after
+  # its start, so a named start would rename the parameter
+  start_list <- lapply(start_list, function(v) unname(as.numeric(v)))
 
   # AUDIT 2.3: nls.control(warnOnly = TRUE) makes nls RETURN a fit object when
   # it hits maxiter instead of raising an error, and nlsLM likewise returns on
@@ -2344,9 +2354,9 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
         failed_subjects <- sapply(failed_fits, function(x) x$subject)
         failed_nvalid <- sapply(failed_fits, function(x) x$n_valid)
         
-        msg <- sprintf("%d of %d subjects failed to fit (need %d+ valid points). Failed: %s",
-                       n_failed, n_subjects, min_required,
-                       paste(paste0("S", failed_subjects, "(", failed_nvalid, "pts)"), collapse = ", "))
+        # the REASON for each, not a point count every one of them may meet
+        msg <- dance_ts_failure_text(failed_fits, Y, min_required,
+                                     mixed = identical(approach, "mixed"))
         
         showNotification(msg, type = "warning", duration = 10)
       }

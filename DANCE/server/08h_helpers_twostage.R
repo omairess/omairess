@@ -764,6 +764,32 @@ dance_ts_param_row <- function(i, fit_i, time_vec, period, n_harmonics, trend_ty
   as.data.frame(row_data)
 }
 
+# Why per-participant fits failed, grouped by reason: too few observed points,
+# no variation at all (every value equal: nothing to fit), or a fit that did not
+# converge. Under the mixed approach these fits feed only the per-participant
+# views; the mixed model itself uses every participant's data.
+dance_ts_failure_text <- function(failed, Y, min_required, mixed = FALSE) {
+  if (!length(failed)) return(NULL)
+  subj <- vapply(failed, function(f) as.integer(f$subject), integer(1))
+  nv <- vapply(failed, function(f) as.integer(f$n_valid %||% NA), integer(1))
+  flat <- vapply(subj, function(i) {
+    v <- suppressWarnings(as.numeric(Y[i, ])); v <- v[is.finite(v)]
+    length(v) > 0 && length(unique(v)) == 1L
+  }, logical(1))
+  few <- is.finite(nv) & nv < min_required
+  why <- ifelse(few, "few", ifelse(flat, "flat", "conv"))
+  lab <- function(k) paste(sprintf("S%d", subj[why == k]), collapse = ", ")
+  parts <- c(
+    if (any(why == "few")) sprintf("too few observed points (%d needed): %s", min_required, lab("few")),
+    if (any(why == "flat")) sprintf("no variation, every value equal (nothing to fit): %s", lab("flat")),
+    if (any(why == "conv")) sprintf("the fit did not converge: %s", lab("conv")))
+  sprintf("%d of %d participants could not be fitted individually -- %s.%s",
+          length(failed), nrow(Y), paste(parts, collapse = "; "),
+          if (isTRUE(mixed)) paste(" They are missing from the per-participant views only: the",
+                                   "mixed-effects model uses every participant's data.")
+          else " They are left out of the group summaries.")
+}
+
 # Every participant's cosinor, on one time axis with one trend origin --
 # t_origin, default the recording's first time point -- and one tau setting. Returns the fits (one
 # per row of Y; a failed fit records why), the parameter table of the fits

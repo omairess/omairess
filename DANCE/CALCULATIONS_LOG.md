@@ -1660,3 +1660,55 @@ within-participant factor, five trend set-ups). What already held:
 **What is unchanged:** the model specification, the estimators and every
 estimate where none of the four cases applies. In the audited cases, the
 reported fits, φ̂ and the REML likelihood ratios are identical before and after.
+
+## 32. Per-participant saturating fits failed whenever the response fell
+
+**The report.** Pilot data, DOZEPROB, a saturating trend with 24 h and 12 h
+harmonics, mixed-effects: "9 of 107 subjects failed to fit (need 8+ valid
+points)". All nine had all 13 points.
+
+**The cause.** In the per-participant nonlinear fit, the start value for A
+is `y_range * 1.5` when the participant's linear slope is positive. Otherwise
+it is `lin_slope * t_max`, and `lin_slope` was `coef(lm(...))[2]`, which
+keeps the regressor's name. nls names each parameter after its start value,
+so the parameter became `A_sat.t_shifted`, and every reader looked up
+`A_sat`.
+- **τ held:** the fit was discarded ("Result extraction failed: missing value
+  where TRUE/FALSE needed", from `append(after = match("A_sat", ...))`).
+- **τ estimated:** the fit was kept with A = NA, so that participant's trend
+  change, average rate and time-averaged midline level were lost.
+
+So every participant whose response fell over the recording (a non-positive
+linear slope) lost the saturating trend. The nine in the pilot are exactly
+its nine participants with a non-positive slope.
+
+**Who was affected:**
+- **Two-stage approach:** those participants were excluded from the group
+  results (τ held), or dropped out of the trend summaries (τ estimated).
+- **Mixed-effects approach:** the model is fitted to every participant's data,
+  so it was unaffected. Only the per-participant views lost them.
+- **The two-stage model comparison:** its candidate fits use the same
+  function.
+- **The exported script:** it calls the same function. The fix reaches it.
+
+**The fix.** The coefficient is unnamed, and every start value is stripped of
+names before fitting. The warning now gives the reason for each failure
+(`dance_ts_failure_text()`):
+- too few observed points;
+- no variation (every value equal);
+- the fit did not converge.
+
+Under mixed-effects it also says that only the per-participant views are
+missing those participants. In the pilot, the one remaining failure, S70, has
+no variation at all (15 at every time point).
+
+**Test:** `tests/declining_trend_app_test.R`. Half the simulated participants
+fall, and one is flat. Under τ held and τ estimated, it checks that:
+- every participant with variation is fitted, and the falling ones get a
+  negative A;
+- the flat one is reported as having no variation;
+- the exported script fits the same participants and reproduces every
+  estimate.
+
+On the code before the fix, the test fails: 11 of the 12 falling participants
+are not fitted with τ held.
