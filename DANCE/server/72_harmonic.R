@@ -258,12 +258,12 @@
       conditionalPanel(
         condition = "input.harmonic_time_var == '_index_'",
         if(!is.null(suggested_times) && length(suggested_times) == n_time) {
-          helpText(HTML(paste0("<b>Note:</b> Detected time values in column names (", 
+          dance_status(HTML(paste0("<b>Note:</b> Detected time values in column names (", 
                                paste(head(suggested_times, 4), collapse=", "), 
                                if(n_time > 4) ", ..." else "",
                                "). Consider using 'Specify times manually' if spacing is unequal.")))
         } else {
-          helpText(HTML(sprintf("<b>Warning:</b> no time is read from your data: the %d columns are placed equally spaced over exactly ONE period (every P/%d h from 0). A recording longer than one period, or unequally spaced (e.g., hourly by day, 2-hourly at night), needs its clock times: use the shared clock times or 'Specify times manually'.", n_time, n_time)))
+          dance_status(HTML(sprintf("<b>Warning:</b> no time is read from your data: the %d columns are placed equally spaced over exactly ONE period (every P/%d h from 0). A recording longer than one period, or unequally spaced (e.g., hourly by day, 2-hourly at night), needs its clock times: use the shared clock times or 'Specify times manually'.", n_time, n_time)))
         }
       )
     )
@@ -337,7 +337,7 @@
   output$harmonic_design_readout <- renderUI({
     dt <- harmonic_design_terms()
     chosen <- c(dt$between, dt$within)
-    if (!length(chosen)) return(helpText(HTML(
+    if (!length(chosen)) return(dance_status(HTML(
       "<i>No design factor selected \u2014 one trajectory will be fitted for the whole sample.</i>")))
     req(values$covariates, values$data)
     # the participant identifier read at import -- the same one the fit uses.
@@ -363,7 +363,7 @@
     no_id <- is.null(values$subject_ids)
     n_cells <- prod(vapply(chosen, function(f)
       max(1L, length(unique(values$covariates[[f]][!is.na(values$covariates[[f]])]))), integer(1)))
-    helpText(HTML(sprintf(
+    dance_status(HTML(sprintf(
       "<b>Read from your data:</b><ul style='margin:4px 0 4px 16px;padding:0'>%s</ul>%d curves from %d participants, %d design cell(s).%s%s",
       paste(unlist(rows), collapse = ""), nrow(values$data), n_sub, n_cells,
       if (no_id) " <span style='color:#b8860b'>No participant identifier was read at import, so every curve counts as its own participant; a within-participant factor cannot be recognised. Name the identifier column on the Data Import tab.</span>" else "",
@@ -518,7 +518,7 @@
                   choices = setNames(1:mod$n_harmonics, paste("H", 1:mod$n_harmonics, sep="")),
                   selected = 1)
     } else {
-      helpText("Only one harmonic fitted (fundamental).")
+      dance_status("Only one harmonic fitted (fundamental).")
     }
   })
   
@@ -3896,9 +3896,45 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
           i <- key == cl
           if (one) i <- i & as.character(dd[[cvn]]) == sel
           if (!any(i)) next
+          # ONE PARTICIPANT: their data belong to THEIR legend entry, not to the
+          # group's -- hiding the group's curve must not hide this person's data
           p <- dance_add_raw(p, dd$t[i], dd$y[i], dd[[cvn]][i], cols[[cl]],
                              style = input$harmonic_raw_style %||% "points",
-                             legendgroup = cl, name = cl, grid = sort(unique(dd$t)))
+                             legendgroup = if (one) "participant" else cl,
+                             name = if (one) sprintf("Participant %s data", sel) else cl,
+                             grid = sort(unique(dd$t)), showlegend = one)
+        }
+      }
+      # 4: THE COMPONENTS per cell from the one model: each harmonic around the
+      # cell's intercept, and the midline (intercept + trend, counted from the
+      # time origin) -- each its own legend entry, so each can be switched off
+      if (isTRUE(input$harmonic_show_components) && !one) {
+        K <- as.integer(ff$spec$n_harmonics %||% 0L)
+        has_tr <- !identical(ff$spec$trend %||% "none", "none")
+        pv <- function(cmp, ref = NULL) {
+          r <- tryCatch(dance_traj_predict(ff, times = time_fine, component = cmp, ref_time = ref),
+                        error = function(e) NULL)
+          if (isTRUE(r$ok)) r$table else NULL
+        }
+        ph <- if (K >= 1L) pv("harmonics") else NULL
+        pt <- if (has_tr) pv("trend", ref = ff$spec$t0) else NULL
+        hh <- if (K > 1L) lapply(seq_len(K), function(h) pv(sprintf("harmonic%d", h))) else list(ph)
+        for (cl in pr$cells) {
+          dfull <- pr$table$fit[pr$table$cell == cl]
+          icpt <- dfull - (if (!is.null(ph)) ph$fit[ph$cell == cl] else 0) -
+                          (if (!is.null(pt)) pt$fit[pt$cell == cl] else 0)
+          for (h in seq_len(K)) {
+            dh <- hh[[h]]; if (is.null(dh)) next
+            p <- p %>% add_lines(x = time_fine, y = icpt + dh$fit[dh$cell == cl],
+                                 name = sprintf("%s: H%d (%s h)", cl, h, fmtn(mod$period / h, 1)),
+                                 legendgroup = paste0("cmp_", cl, "_h", h),
+                                 line = list(color = cols[[cl]], width = 1.4, dash = c("dot", "dashdot", "longdashdot")[(h - 1) %% 3 + 1]))
+          }
+          if (!is.null(pt))
+            p <- p %>% add_lines(x = time_fine, y = icpt + pt$fit[pt$cell == cl],
+                                 name = sprintf("%s: %s", cl, get_trend_label(mod$trend_type)),
+                                 legendgroup = paste0("cmp_", cl, "_trend"),
+                                 line = list(color = cols[[cl]], width = 1.4, dash = "dash"))
         }
       }
     } else {
@@ -3952,7 +3988,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
                                    name = "Observed data")
             } else
               p <- p %>% add_markers(x = fit_i$time, y = fit_i$y,
-                                     marker = list(color = DANCE_SERIES1, size = 6),
+                                     marker = list(color = DANCE_SERIES1, size = 9),
                                      name = "Observed data")
           }
           if (isTRUE(input$harmonic_show_components) && mod$n_harmonics >= 1) {
@@ -4568,8 +4604,9 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       return(DT::datatable(
         md$display, rownames = FALSE,
         caption = tags$caption(style = "caption-side:top;text-align:left;font-size:12px;color:#555",
-          sprintf("Shrunken (conditional-mode) estimates from the mixed model; random structure: %s. %s",
-                  md$re_label %||% "", md$note)),
+          sprintf("Each participant's values, as the mixed model estimates them (random effects: %s)",
+                  md$re_label %||% ""),
+          dance_help(md$note, title = "Each participant's values in the mixed model")),
         options = list(pageLength = 15, scrollX = TRUE)))
     }
     params <- mod$individual_params
@@ -5030,14 +5067,14 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
   ts_primary <- function() {
     ts <- harmonic_ts(); if (is.null(ts)) return(NULL)
     if (!isTRUE(ts$ok) || ts$n_groups < 2)
-      return(helpText("Select a design factor with two or more levels to compare groups."))
+      return(dance_status("Select a design factor with two or more levels to compare groups."))
     r <- dance_ts_manova(ts$df, dance_ts_coef_cols(ts$mod))
     tagList(tags$table(style = "margin:4px 0 6px 0", tags$tbody(tags$tr(
       tags$td(style = "padding:4px 12px 4px 0;font-weight:600", ts$gv),
       ts_stat_td(r),
       if (isTRUE(r$ok)) tags$td(style = "padding:4px 0;font-family:monospace",
                                 sprintf("p %s", dance_fmt_p(r$p)))))),
-      tags$div(style = "font-size:11px;color:#777",
+      dance_help(
                if (isTRUE(r$ok)) sprintf(paste("%s on the %d per-participant coefficients (constant, trend, and",
                                               "each harmonic's cosine and sine); Wilks' lambda = %.3f. The",
                                               "two-stage analogue of the full-trajectory test."),
@@ -5098,7 +5135,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
         tags$td(""))
     }
     tagList(tags$table(style = "margin:4px 0", tags$tbody(rows, drows)),
-            tags$div(style = "font-size:11px;color:#777;margin-top:6px", HTML(paste(
+            dance_help(HTML(paste(
               "Component tests on the per-participant estimates: one-way ANOVA for the",
               "scalars, Bingham et al.'s (1982) population-mean cosinor for each harmonic's",
               "amplitude and acrophase (with the joint MANOVA on the (cos, sin) vector, which",
@@ -5108,7 +5145,14 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
               "curve</b>; the fitted-curve-peak rows give that."))))
   }
 
-  ts_group_curves <- function(component = "full", band = input$harmonic_traj_band %||% "pointwise") {
+  # the band setting of the Estimated trajectories plot: pointwise,
+  # simultaneous, or none (the curves without their bands)
+  harmonic_band_show <- function() !identical(input$harmonic_traj_band, "none")
+  harmonic_band_kind <- function() {
+    b <- input$harmonic_traj_band %||% "pointwise"
+    if (b %in% c("pointwise", "simultaneous")) b else "pointwise"
+  }
+  ts_group_curves <- function(component = "full", band = harmonic_band_kind()) {
     ts <- harmonic_ts(); if (is.null(ts) || !isTRUE(ts$ok)) return(NULL)
     mod <- ts$mod
     tv <- mod$time_vec
@@ -5268,10 +5312,12 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     p <- plot_ly()
     for (cl in gc$cells) {
       d <- gc$table[gc$table$cell == cl, , drop = FALSE]
+      if (harmonic_band_show())
+        p <- p %>%
+          add_ribbons(x = d$t, ymin = d$lo, ymax = d$hi, name = cl, legendgroup = cl,
+                      line = list(width = 0), fillcolor = dance_group_rgba(cols[[cl]], 0.16),
+                      showlegend = FALSE, hoverinfo = "skip")
       p <- p %>%
-        add_ribbons(x = d$t, ymin = d$lo, ymax = d$hi, name = cl, legendgroup = cl,
-                    line = list(width = 0), fillcolor = dance_group_rgba(cols[[cl]], 0.16),
-                    showlegend = FALSE, hoverinfo = "skip") %>%
         add_lines(x = d$t, y = d$fit, name = cl, legendgroup = cl,
                   line = list(color = cols[[cl]], width = 2.4))
     }
@@ -5344,7 +5390,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
           tags$th(style = "text-align:left;padding:2px 12px 2px 0;font-size:11px;color:#777;font-weight:500", h)))),
         tags$tbody(rows)),
       tags$div(style = "font-size:11px;color:#777", r$unit),
-      tags$div(style = "font-size:11px;color:#777;margin-top:8px", r$note))
+      dance_help(r$note))
   }
 
   # The model actually fitted, its random structure, and its calibration status.
@@ -5467,7 +5513,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
                 sprintf("p %s", dance_fmt_p(r$p))))
     })
     rows <- Filter(Negate(is.null), rows)
-    if (!length(rows)) return(helpText("No testable design terms in this model."))
+    if (!length(rows)) return(dance_status("No testable design terms in this model."))
     tagList(tags$table(style = "margin:4px 0 6px 0", tags$tbody(rows)),
             tags$div(style = "font-size:11px;color:#777",
                      sprintf("%s. Each row tests the intercept, the trend and all harmonics jointly.",
@@ -5720,7 +5766,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
         else "group means of the per-participant estimates, each treated as exact"))),
       lapply(c("omnibus", "level", "rhythm", "accumulation", "accumulation_model"), section),
       harmonic_tau_diag_ui(),
-      tags$div(style = "font-size:11px;color:#777;margin-top:8px", HTML(paste(
+      dance_help(HTML(paste(
         "<b>Read the omnibus first</b>: it asks whether the groups differ at all. The domains then say",
         "how. The <b>time-averaged fitted response</b> is the whole fitted curve averaged over the",
         "recording (rhythm included); the <b>time-averaged midline level</b> is the midline (intercept + trend) averaged over it;",
@@ -5892,7 +5938,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     if (is.null(o) || !isTRUE(o$ok)) return(NULL)
     es <- o$estimates; ts <- o$tests
     if (length(unique(es$cell)) > 1L)
-      return(helpText(style = "margin-top:10px",
+      return(dance_status(style = "margin-top:10px",
         "Per-group estimates, intervals and tests are on tab 6 (Group / Condition Comparison)."))
     td <- function(..., style = "") tags$td(style = paste("padding:4px 14px 4px 0;vertical-align:top;", style), ...)
     th <- function(x) tags$th(style = "padding:4px 14px 4px 0;text-align:left;border-bottom:1px solid #ccc", x)
@@ -6088,7 +6134,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     }
     tagList(
       tags$table(style = "margin:4px 0", tags$tbody(rows, drows)),
-      tags$div(style = "font-size:11px;color:#777;margin-top:6px",
+      dance_help(
         HTML(paste(
           "Joint rows are block tests on the fitted model; derived rows come from the",
           "<b>same</b> coefficient vector and covariance, with the acrophase interval",
@@ -6117,7 +6163,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       # it makes is a statistical one, so it belongs on the screen.
       local({
         nt <- Filter(Negate(is.null), lapply(cf, function(co) co$df_note))
-        if (length(nt)) tags$div(style = "font-size:11px;color:#777;margin-top:4px",
+        if (length(nt)) dance_help(
                                  HTML(nt[[1]]))
       }),
       if (mixed) tags$div(style = "font-size:11px;color:#c0392b;margin-top:4px",
@@ -6186,7 +6232,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     ff <- harmonic_traj(); req(isTRUE(ff$ok))
     fo <- harmonic_traj_from_origin()
     pr <- dance_traj_predict(ff, conf = 0.95,
-                             band = input$harmonic_traj_band %||% "pointwise",
+                             band = harmonic_band_kind(),
                              component = harmonic_traj_component(),
                              times = if (fo) seq(ff$spec$t0, max(ff$spec$data$t, na.rm = TRUE), length.out = 160),
                              ref_time = if (fo) ff$spec$t0 else NULL,
@@ -6200,10 +6246,12 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       # its band behind -- reported from a real session, and it makes the plot
       # worse than useless: a shaded band with no curve reads as a different
       # group's uncertainty. Plotly ties visibility to the group, not the name.
+      if (harmonic_band_show())
+        p <- p %>%
+          add_ribbons(x = d$t, ymin = d$lo, ymax = d$hi, name = cl, legendgroup = cl,
+                      line = list(width = 0), fillcolor = dance_group_rgba(cols[[cl]], 0.16),
+                      showlegend = FALSE, hoverinfo = "skip")
       p <- p %>%
-        add_ribbons(x = d$t, ymin = d$lo, ymax = d$hi, name = cl, legendgroup = cl,
-                    line = list(width = 0), fillcolor = dance_group_rgba(cols[[cl]], 0.16),
-                    showlegend = FALSE, hoverinfo = "skip") %>%
         add_lines(x = d$t, y = d$fit, name = cl, legendgroup = cl,
                   line = list(color = cols[[cl]], width = 2.4))
     }
@@ -6270,11 +6318,11 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
   output$harmonic_traj_band_note <- renderUI({
     if (!harmonic_is_mixed()) {
       gc <- ts_group_curves(harmonic_traj_component())
-      return(if (is.null(gc)) NULL else tags$div(style = "font-size:11px;color:#777;margin-top:4px", gc$note))
+      return(if (is.null(gc)) NULL else dance_help(gc$note))
     }
     ff <- harmonic_traj(); req(isTRUE(ff$ok))
     cmp <- harmonic_traj_component()
-    pr <- dance_traj_predict(ff, band = input$harmonic_traj_band %||% "pointwise",
+    pr <- dance_traj_predict(ff, band = harmonic_band_kind(),
                              component = cmp, n_time = 2)
     req(isTRUE(pr$ok))
     # the statistic this view is a picture of: where each curve ENDS is the
@@ -6293,7 +6341,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
       "), so every cell's curve has the same shape scaled by that coefficient: the curves",
       " differ anywhere exactly when they differ at the end, and the change's test is the",
       " coefficient's test.") else ""
-    tags$div(style = "font-size:11px;color:#777;margin-top:4px", HTML(paste0(pr$note, stat)))
+    dance_help(HTML(paste0(pr$note, stat)))
   })
 
   # ---- 3b. INTERCEPT, MESOR AND THE NON-PERIODIC CHANGE ---------------------
@@ -6497,7 +6545,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
         "Differences are Welch's t on the per-participant estimates, as in the pairwise table, with per-comparison 95% intervals; the hover gives the raw and the adjusted p."
       else "Group means of the per-participant estimates, with 95% t intervals."
     }
-    tags$div(style = "font-size:11px;color:#777;margin-top:4px",
+    dance_help(
              HTML(paste0(what, trend_txt %||% "", " ", how)))
   })
 
@@ -6738,7 +6786,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
         td(sprintf("\u03c7\u00b2(%d) = %.2f", sf$lrt$df, sf$lrt$statistic), TRUE),
         td(dance_fmt_p(sf$lrt$p), TRUE))
     tagList(tags$table(style = "margin:4px 0", tags$tbody(rows)),
-            tags$div(style = "font-size:11px;color:#777", HTML(paste(
+            dance_help(HTML(paste(
               "Wald tests on the per-cell estimates of the nonlinear model; \u03c4 is tested on",
               "the log scale, and A/\u03c4 through the delta method. The likelihood-ratio test",
               "for \u03c4 compares the model with a \u03c4 per cell against the same model with",
@@ -6929,7 +6977,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
           tags$tbody(rows)))
     })
     u <- if (is.null(ff$dv_units) || !nzchar(ff$dv_units)) "response units" else ff$dv_units
-    tagList(blocks, tags$div(style = "font-size:11px;color:#777;margin-top:8px", paste(
+    tagList(blocks, dance_help(paste(
       switch(what,
         A_sat = sprintf("Difference in the saturating rise A, in %s.", u),
         tau = "Ratio of the time constants; tested on the log scale, so a ratio of 1 is no difference.",
@@ -7060,7 +7108,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
           tags$tbody(rows)),
         tags$div(style = "font-size:11px;color:#777", r$unit))
     })
-    tagList(blocks, tags$div(style = "font-size:11px;color:#777;margin-top:8px",
+    tagList(blocks, dance_help(
                              res[[1]]$r$note %||% ""))
   })
 

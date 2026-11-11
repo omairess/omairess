@@ -95,8 +95,10 @@ dance_outcomes_mixed <- function(ff, tests = NULL, conf = 0.95, n_draw = 6000, c
     prim <- (q == "fitted_mean") || (q == "mesor" && K == 0L) || (q == "intercept" && trend == "none" && K == 0L) ||
             (q == "change")
     E(dom, q, DANCE_TRAJ_BLOCK_LABEL[[q]], r$cell, r$estimate, r$lo, r$hi, primary = prim,
-      note = if (dom == "accumulation" && identical(trend, "exp_sat"))
-        sprintf("given the shared tau (%s h)", format(signif(spec$tau, 4))) else NA_character_)
+      note = paste(c(if (identical(q, "change_origin")) "extrapolated before the first observation",
+                     if (dom == "accumulation" && identical(trend, "exp_sat"))
+                       sprintf("given the shared tau (%s h)", format(signif(spec$tau, 4)))), collapse = "; ") |>
+        (function(x) if (nzchar(x)) x else NA_character_)())
   }
   # the trend's own coefficient per cell (A, the slope, the log-beta)
   if (!sat && length(spec$trend_terms)) {
@@ -125,6 +127,10 @@ dance_outcomes_mixed <- function(ff, tests = NULL, conf = 0.95, n_draw = 6000, c
       E("accumulation", "sat_change", "Total trend change (start to end)", st$cell[i], st$change[i],
         st$change_lo[i], st$change_hi[i], primary = TRUE, kind = "delta",
         note = "tau estimated per cell; its uncertainty carried through")
+      if (!is.null(st$change_origin) && dance_traj_has_origin(spec))
+        E("accumulation", "change_origin", "Change since the time origin (extrapolated)", st$cell[i],
+          st$change_origin[i], st$change_origin_lo[i], st$change_origin_hi[i], kind = "delta",
+          note = "extrapolated before the first observation; tau estimated per cell")
       E("accumulation", "sat_avg_rate", sprintf("Average trend rate (%s per hour)", u), st$cell[i],
         st$avg_rate[i], st$avg_rate_lo[i], st$avg_rate_hi[i], kind = "delta")
       E("accumulation", "init_slope", sprintf("Initial trend rate A/tau (%s per hour)", u), st$cell[i],
@@ -191,9 +197,15 @@ dance_outcomes_mixed <- function(ff, tests = NULL, conf = 0.95, n_draw = 6000, c
       for (h in seq_len(K)) if (!is.null(r <- z(sprintf("harmonic%d", h))))
         Tt("rhythm", sprintf("rhythm%d", h), sprintf("H%d rhythm (cos, sin): different from zero?", h), r$statistic,
            r$df1, r$df2, r$p, r$method, note = sprintf("one trajectory: H0 harmonic %d's amplitude is zero", h))
-      if (!is.null(r <- z("trend")))
+      if (!is.null(r <- z("trend"))) {
         Tt("accumulation", "change", "Non-periodic trend: different from zero?", r$statistic, r$df1, r$df2, r$p,
            r$method, primary = TRUE, note = "one trajectory: H0 the trend coefficient is zero (no change)")
+        # the change since the origin is the same coefficient on another scale
+        if (dance_traj_has_origin(spec))
+          Tt("accumulation", "change_origin", "Change since the time origin: different from zero?", r$statistic,
+             r$df1, r$df2, r$p, r$method,
+             note = "the same test as the change over the rated window: the same trend coefficient")
+      }
     }
     r <- blk("trend")
     if (!is.null(r) && !sat)
@@ -203,9 +215,14 @@ dance_outcomes_mixed <- function(ff, tests = NULL, conf = 0.95, n_draw = 6000, c
                        if (trend %in% c("log", "exp_sat")) " and the initial" else "",
                        " trend rate and the trend coefficient",
                        if (identical(trend, "exp_sat")) " (tau shared)" else ""))
+    r <- blk("change_origin")
+    if (!is.null(r) && !sat)
+      Tt("accumulation", "change_origin", "Change since the time origin (extrapolated)", r$statistic,
+         r$df1, r$df2, r$p, r$method,
+         note = "extrapolated before the first observation; the same test as the change over the rated window")
   }
   if (sat) {
-    for (q in c("sat_change", "init_slope", "A_sat", "tau")) {
+    for (q in c("sat_change", if (dance_traj_has_origin(spec)) "change_origin", "init_slope", "A_sat", "tau")) {
       r <- tryCatch(dance_traj_sat_test(ff$sat, ff, q), error = function(e) NULL)
       if (is.null(r) || !isTRUE(r$ok)) next
       Tt(if (q %in% c("A_sat", "tau")) "accumulation_model" else "accumulation", q,
@@ -258,7 +275,8 @@ dance_outcomes_ts <- function(df, mod, conf = 0.95) {
     r <- ls$table[i, ]; q <- r$quantity
     dom <- if (q %in% c("fitted_mean", "mesor", "intercept")) "level" else "accumulation"
     prim <- (q == "fitted_mean") || (q == "mesor" && K == 0L) || (q == "change")
-    E(dom, q, lab(q), r$cell, r$estimate, r$lo, r$hi, primary = prim, kind = "mean of participants")
+    E(dom, q, lab(q), r$cell, r$estimate, r$lo, r$hi, primary = prim, kind = "mean of participants",
+      note = if (identical(q, "change_origin")) "extrapolated before the first observation" else NA_character_)
   }
   tp <- switch(trend, linear = c(trend_linear = "trend_linear"), log = c(trend_log = "trend_log"),
                exp_sat = c(A_sat = "A_sat", if (!dance_ts_tau_held(mod)) c(tau = "tau", t50 = "t50")),
@@ -331,6 +349,15 @@ dance_outcomes_ts <- function(df, mod, conf = 0.95) {
         Tt("accumulation", "change", "Non-periodic trend: change different from zero?", unname(tt$statistic)^2, 1,
            unname(tt$parameter), tt$p.value, "one-sample t test (F = t\u00b2)", primary = TRUE,
            note = "one group: H0 the mean change over the window is zero")
+      }
+    }
+    if (dance_ts_has_origin(mod) && "trend_change_origin" %in% names(df)) {
+      v <- df$trend_change_origin[is.finite(df$trend_change_origin)]
+      if (length(v) >= 3L) {
+        tt <- stats::t.test(v)
+        Tt("accumulation", "change_origin", "Change since the time origin: different from zero?",
+           unname(tt$statistic)^2, 1, unname(tt$parameter), tt$p.value, "one-sample t test (F = t\u00b2)",
+           note = "one group: H0 the mean change since the origin is zero (extrapolated before the first observation)")
       }
     }
   }

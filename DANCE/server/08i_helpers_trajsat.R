@@ -45,6 +45,7 @@ dance_traj_sat_label <- function(what, units = NULL) {
   switch(what,
     sat_change   = sprintf("Total trend change, start to end (%s; tau per cell)", u),
     sat_avg_rate = sprintf("Average trend rate (%s per hour; tau per cell)", u),
+    change_origin = sprintf("Change since the time origin (%s; extrapolated; tau per cell)", u),
     init_slope   = sprintf("Initial trend rate A/tau (%s per hour)", u),
     A_sat        = sprintf("Asymptotic trend change A (%s above the intercept)", u),
     tau          = "Trend time constant tau (hours)",
@@ -318,6 +319,10 @@ dance_traj_sat_table <- function(sf, conf = 0.95) {
     ch <- A * (ea - e)
     gr <- c(ea - e, A * ((a0 / tau^2) * ea - (b0 / tau^2) * e) * g)
     se_ch <- sqrt(max(0, gr[1]^2 * vA + gr[2]^2 * vx + 2 * gr[1] * gr[2] * cAx))
+    # the change since the time origin (t = 0): A (1 - e^(-b/tau)), extrapolated
+    # over the hours before the first observation when the origin is earlier
+    ch0 <- A * (1 - e); gr0 <- c(1 - e, -A * (b0 / tau^2) * e * g)
+    se_ch0 <- sqrt(max(0, gr0[1]^2 * vA + gr0[2]^2 * vx + 2 * gr0[1] * gr0[2] * cAx))
     data.frame(cell = sf$cells[k], n_cells = sf$n_cells,
                A = A, A_se = sqrt(vA), A_lo = A - q * sqrt(vA), A_hi = A + q * sqrt(vA),
                tau = tau, tau_se = g * sqrt(vx),
@@ -327,6 +332,8 @@ dance_traj_sat_table <- function(sf, conf = 0.95) {
                init_slope_lo = s - q * se_s, init_slope_hi = s + q * se_s,
                corr_A_logtau = cAx / sqrt(vA * vx),
                change = ch, change_se = se_ch, change_lo = ch - q * se_ch, change_hi = ch + q * se_ch,
+               change_origin = ch0, change_origin_se = se_ch0,
+               change_origin_lo = ch0 - q * se_ch0, change_origin_hi = ch0 + q * se_ch0,
                avg_rate = ch / Tw, avg_rate_se = se_ch / Tw,
                avg_rate_lo = (ch - q * se_ch) / Tw, avg_rate_hi = (ch + q * se_ch) / Tw,
                t50 = tau * log(2), frac_reached = 1 - e,
@@ -362,8 +369,9 @@ dance_traj_sat_vector <- function(sf, what) {
     # the total change A (1 - e^(-T/tau)) over the window, and the average rate
     # (the change over T): tau is estimated per cell here, so its uncertainty is
     # carried through the delta method, not held as known
-    sat_change = , sat_avg_rate = , change = , avg_rate = {
-      A <- unname(fe[nA]); a0 <- sf$window[1]; b0 <- sf$window[2]; Tw <- b0 - a0
+    sat_change = , sat_avg_rate = , change = , avg_rate = , change_origin = {
+      A <- unname(fe[nA]); a0 <- if (identical(what, "change_origin")) 0 else sf$window[1]
+      b0 <- sf$window[2]; Tw <- b0 - a0
       e <- exp(-b0 / tau); ea <- exp(-a0 / tau)
       J <- matrix(0, G, 2L * G)
       for (k in seq_len(G)) {

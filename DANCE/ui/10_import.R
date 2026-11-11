@@ -113,7 +113,7 @@ ui_tab_import <- tabItem(
                "Each analysis tab can pick a different one."),
       fluidRow(
         column(4, DTOutput("group_summary")),
-        column(8, plotOutput("group_preview_plot", height = "280px"))
+        column(8, plotOutput("group_preview_plot", height = "320px"))
       )
     )
   ),
@@ -132,9 +132,7 @@ ui_tab_import <- tabItem(
                       selected = 10, width = "150px")
         )
       ),
-      DTOutput("data_preview"),
-      hr(),
-      plotOutput("raw_data_plot", height = "300px")
+      DTOutput("data_preview")
     )
   )
 )

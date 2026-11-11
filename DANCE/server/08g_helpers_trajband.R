@@ -1356,12 +1356,15 @@ dance_traj_participant_table <- function(fit) {
   list(ok = TRUE, table = tab, shrunken = TRUE, varies = varies,
        re_label = fit$re_label, random_terms = random_terms,
        note = paste(
-         "Shrunken (conditional-mode) estimates from the ONE mixed model: each row",
-         "is its cell's fixed effects plus that participant's deviation. A quantity",
-         "with no random effect in the fitted structure does not vary per",
-         "participant here -- it is the cell value for everyone -- and is marked.",
-         "Do not run a second-stage test on these rows; the model's own contrasts",
-         "in tab 6 are the group comparison."))
+         "These are each participant's values as the mixed model estimates them: the",
+         "group's value plus that person's own deviation from it. The model pulls each",
+         "person towards their group's average (\"shrinkage\"), more strongly when their",
+         "own data are few or noisy, so these values are steadier, and less extreme, than",
+         "a separate fit to each person would give. A quantity the model does not let",
+         "vary between people (no random effect for it) is simply the group's value for",
+         "everyone, and is marked as such. Use these values to describe individuals, not",
+         "to compare groups: a t test or ANOVA on them would count the same data twice.",
+         "The group comparisons are in tab 6."))
 }
 
 # ------------------------------------------------------------------------------

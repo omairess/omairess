@@ -8,17 +8,17 @@
 
 output$fanova_mixed_subject_ui <- renderUI({
   if (is.null(values$subject_ids))
-    return(helpText(HTML(
+    return(dance_status(HTML(
       "<b>No participant identifier.</b> A mixed design needs to know which rows
        belong to the same person; pick an ID column on the Data Import tab.")))
-  helpText(HTML(sprintf(
+  dance_status(HTML(sprintf(
     "Participant identifier: <b>%d</b> participants across <b>%d</b> rows.",
     length(unique(values$subject_ids)), length(values$subject_ids))))
 })
 
 output$fanova_mixed_between_ui <- renderUI({
   ch <- dance_mixed_factor_choices(values)
-  if (!length(ch)) return(helpText("No categorical covariate with 2-12 levels was found."))
+  if (!length(ch)) return(dance_status("No categorical covariate with 2-12 levels was found."))
   selectInput("fanova_mixed_between", "Between-subject factor:", choices = ch)
 })
 

@@ -510,7 +510,7 @@ ui_tab_harmonic <- tabItem(
                        column(4, 
                               h4("Display Options"),
                               uiOutput("harmonic_subject_selector"),
-                              checkboxInput("harmonic_show_ci", "Show Confidence Bands", TRUE),
+                              checkboxInput("harmonic_show_ci", "Show the 95% confidence bands", TRUE),
                               conditionalPanel(
                                 condition = "input.harmonic_scale == 'log'",
                                 checkboxInput("harmonic_show_original",
@@ -525,9 +525,10 @@ ui_tab_harmonic <- tabItem(
                                              choices = c("Points" = "points",
                                                          "Lines (one per curve; broken at missing values)" = "lines"),
                                              selected = "points")),
+                              checkboxInput("harmonic_show_components",
+                                            "Show the components (each harmonic and the trend)", FALSE),
                               conditionalPanel(
                                 condition = "input.harmonic_approach == 'two_stage'",
-                                checkboxInput("harmonic_show_components", "Show Harmonic Components", FALSE),
                                 helpText(HTML("<small>Two-stage bands: the group's mean-coefficient
                                                curve &plusmn; z&middot;SE(t), where SE(t) is the standard
                                                error across participants of their own fitted curves.
@@ -637,7 +638,8 @@ ui_tab_harmonic <- tabItem(
                                              selected = "full")),
                        column(4, selectInput("harmonic_traj_band", "Confidence band:",
                                              choices = c("Pointwise" = "pointwise",
-                                                         "Simultaneous (Scheffe)" = "simultaneous"),
+                                                         "Simultaneous (Scheffe)" = "simultaneous",
+                                                         "None (curves only)" = "none"),
                                              selected = "pointwise")),
                        column(4, checkboxInput("harmonic_traj_raw", "Overlay raw data", FALSE),
                               conditionalPanel(

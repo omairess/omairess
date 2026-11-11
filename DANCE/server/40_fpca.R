@@ -20,39 +20,12 @@
     }
   })
   
-  # Group preview plot
-  output$group_preview_plot <- renderPlot({
-    if(!is.null(values$data) && !is.null(values$group_labels)) {
-      n_time <- ncol(values$data)
-      time_points_plot <- get_plot_time()
-      time_label <- get_time_label()
-      hour_labels <- get_hour_labels()
-      # For calculations, use normalized 0-1
-      time_points <- seq(0, 1, length.out = n_time)
-      
-      groups <- levels(values$group_labels)
-      n_groups <- length(groups)
-      
-      # One palette app-wide, keyed by group NAME so filtering never repaints.
-      colors <- unname(dance_group_colors(groups)[groups])
-      
-      matplot(time_points, t(values$data), type = "l", 
-              col = rgb(0.5, 0.5, 0.5, 0.1), lty = 1,
-              xlab = time_label, ylab = "Value", 
-              main = "Functional Data by Group")
-      
-      for(i in 1:n_groups) {
-        group_idx <- which(values$group_labels == groups[i])
-        if(length(group_idx) > 0) {
-          group_mean <- colMeans(values$data[group_idx, , drop = FALSE], na.rm = TRUE)
-          lines(time_points_plot, group_mean, col = colors[i], lwd = 3)
-        }
-      }
-      
-      legend("topright", legend = groups, col = colors, lwd = 3)
-    }
-  })
-  
+  # Group preview plot: every curve faint, each group's mean on top, on the
+  # clock-time axis (server/11_import_views.R draws it). The plot that stood
+  # here put the curves on a 0-1 axis and the means on clock hours, so the
+  # means fell off the right edge.
+  output$group_preview_plot <- renderPlot(dance_raw_overview_plot())
+
   # Run PCA analysis - FIXED with better error handling
   observeEvent(input$run_analysis, {
     cat("Running PCA analysis...\n")

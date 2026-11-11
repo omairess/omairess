@@ -1262,7 +1262,7 @@
                     "Select Group Variable for Composition Analysis:",
                     choices = available_vars,
                     selected = current_selection),
-        helpText(paste("Available group variables:", paste(available_vars, collapse = ", "))),
+        dance_status(paste("Available group variables:", paste(available_vars, collapse = ", "))),
         hr()
       )
     } else {

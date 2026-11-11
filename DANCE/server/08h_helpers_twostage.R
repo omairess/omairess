@@ -31,6 +31,8 @@ dance_ts_frame <- function(mod, group_values) {
   # Stored at fit time; recomputed for a model saved before it was.
   if (!"trend_change" %in% names(p) || all(is.na(p$trend_change)))
     p$trend_change <- dance_ts_trend_change(mod, p)
+  if (dance_ts_has_origin(mod))
+    p$trend_change_origin <- dance_ts_trend_change(mod, p, from_origin = TRUE)
   # the initial slope A/tau of a saturating rise: how fast it starts, in
   # response units per hour -- stored at fit time, derived for older models
   if (identical(mod$trend_type, "exp_sat") && all(c("A_sat", "tau") %in% names(p)) &&
@@ -83,7 +85,7 @@ dance_ts_derived_outcomes <- function(mod, p) {
 # S(last observation) - S(first observation) for every participant, through the
 # same trend function the two-stage fits use (dance_trend_value), with each
 # fit's own anchoring. Zero without a trend; NA where a fit lacks a parameter.
-dance_ts_trend_change <- function(mod, p) {
+dance_ts_trend_change <- function(mod, p, from_origin = FALSE) {
   tr <- as.character(mod$trend_type %||% "none")
   if (identical(tr, "none")) return(rep(0, nrow(p)))
   tv <- mod$time_vec
@@ -98,9 +100,20 @@ dance_ts_trend_change <- function(mod, p) {
     if (is.null(coefs) || !length(coefs) || !all(is.finite(coefs))) return(NA_real_)
     fi <- tryCatch(mod$individual_fits[[p$subject[i]]], error = function(e) NULL)
     off <- fi$t_offset %||% mod$t_offset %||% 0
-    s <- dance_trend_value(tr, coefs, tt, off)
+    # from the first observation, or (from_origin) from the time origin, where
+    # the trend is zero: the change since the origin, extrapolated before the
+    # first observation
+    s <- dance_trend_value(tr, coefs, c(if (isTRUE(from_origin)) off else tt[1], tt[2]), off)
     s[2] - s[1]
   }, numeric(1))
+}
+
+# A time origin before the first observation (the trend anchored earlier than
+# the first data): the change since the origin is then reported as well.
+dance_ts_has_origin <- function(mod) {
+  tv <- mod$time_vec
+  !identical(as.character(mod$trend_type %||% "none"), "none") && !is.null(tv) &&
+    isTRUE(min(tv, na.rm = TRUE) - as.numeric(mod$t_offset %||% 0) > 1e-9)
 }
 
 # The level quantities per group, as means of the per-participant estimates with
@@ -128,7 +141,9 @@ dance_ts_level_columns <- function(mod) {
   c(if (has_h) c(fitted_mean = "fitted_mean"),
     if (has_trend) c(mesor = "mesor_adj"),
     intercept = "mesor",
-    if (has_trend) c(change = "trend_change", avg_rate = "avg_rate"),
+    if (has_trend) c(change = "trend_change"),
+    if (dance_ts_has_origin(mod)) c(change_origin = "trend_change_origin"),
+    if (has_trend) c(avg_rate = "avg_rate"),
     if (has_trend && !identical(tr, "linear")) c(rate0 = "rate0"))
 }
 
@@ -286,6 +301,11 @@ dance_ts_components <- function(df, mod) {
     lt_row(lab("change"), df$trend_change,
            "the same test as the average trend rate (the change over one common window)",
            key = "change", domain = "accumulation", primary = TRUE)
+  if (dance_ts_has_origin(mod) && "trend_change_origin" %in% names(df))
+    lt_row(lab("change_origin"), df$trend_change_origin,
+           paste("extrapolated before the first observation; with tau held (or a linear trend) the same",
+                 "test as the change over the rated window"),
+           key = "change_origin", domain = "accumulation")
   if (identical(trend, "exp_sat") && "rate0" %in% names(df))
     lt_row(lab("rate0"), df$rate0, "A/tau, from each participant's own A and tau",
            key = "rate0", domain = "accumulation")
@@ -392,6 +412,7 @@ dance_ts_pair_label <- function(what, period = 24, trend = NULL, units = NULL) {
                           else "Initial midline (t = 0)",
     mesor = , mesor_adj = "Time-averaged midline level",
     change = , trend_change = "Total trend change (start to end)",
+    change_origin = , trend_change_origin = "Change since the time origin (extrapolated)",
     fitted_mean = "Time-averaged fitted response",
     avg_rate = sprintf("Average trend rate (%s per hour)", u),
     rate0 = sprintf("Initial trend rate (%s per hour)", u),
@@ -414,9 +435,11 @@ dance_ts_pairwise <- function(df, mod, what, adjust = c("holm", "bonferroni", "n
   col <- if (!is.na(pp$harmonic)) {
     if (circular) paste0("acrophase_rad_", pp$harmonic) else paste0("amplitude_", pp$harmonic)
   } else switch(what, level = , intercept = "mesor", mesor = "mesor_adj",
-                change = "trend_change", what)
+                change = "trend_change", change_origin = "trend_change_origin", what)
   if (identical(col, "trend_change") && !col %in% names(df))
     df$trend_change <- dance_ts_trend_change(mod, df)
+  if (identical(col, "trend_change_origin") && !col %in% names(df))
+    df$trend_change_origin <- dance_ts_trend_change(mod, df, from_origin = TRUE)
   if (!col %in% names(df)) {
     # phases may be stored as time only
     if (circular && paste0("acrophase_time_", pp$harmonic) %in% names(df)) {

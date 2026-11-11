@@ -482,7 +482,7 @@ observeEvent(input$apply_selection, {
 output$row_filter_ui <- renderUI({
   fr <- values$import_full
   if (is.null(fr))
-    return(helpText(HTML(
+    return(dance_status(HTML(
       "Confirm a variable selection above (or generate the sample data) first.",
       "Every participant and every group is then listed here, all included; untick",
       "what should not be analysed and press <b>Apply selection</b>.")))
@@ -516,7 +516,7 @@ output$row_filter_ui <- renderUI({
         "<i>(missing)</i> is a curve with no value for that variable. A curve is",
         "analysed only when all of its levels are ticked.")))
   } else {
-    helpText(paste(
+    dance_status(paste(
       "No categorical scalar variable is selected, so there are no groups to choose",
       "from. Select one under 2. Variable Selection to filter by group."))
   }
@@ -545,7 +545,7 @@ output$row_filter_ui <- renderUI({
            actionButton("reset_row_filter", "Include everyone", icon = icon("undo"),
                         width = "100%"),
            br(), br(),
-           helpText("Applying clears every result, smoothing included: each analysis",
+           dance_status("Applying clears every result, smoothing included: each analysis",
                     "is re-run on the curves that are left."))
   )
 })

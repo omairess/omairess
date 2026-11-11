@@ -132,6 +132,14 @@ dance_equation <- function(key, ctx = dance_eq_context()) {
       .p(if (shifted) sprintf(paste("The midline at the time origin, %s h before the first sampling time, where every",
                                     "trend term is zero. An extrapolation: nobody was sampled there."), format(round(ctx$a, 2)))
          else "The midline at the first sampling time, where every trend term is zero."), grp, logn)),
+    change_origin = , test_change_origin = list("Change since the time origin (extrapolated)", paste0(
+      .eq("&Delta;<sub>0</sub> = <i>f</i>(<i>T</i>) &minus; <i>f</i>(0) = ", switch(ctx$trend,
+          linear = "<i>b</i>&middot;<i>T</i>", log = "<i>b</i>&middot;ln(1 + <i>T</i>)",
+          exp_sat = "<i>A</i>&middot;(1 &minus; e<sup>&minus;<i>T</i>/<i>&tau;</i></sup>)", "0")),
+      .p("The trend from the time origin (t = 0, e.g. the wake time) to the last observation. The part before the first observation",
+         if (is.finite(ctx$a %||% NA) && ctx$a > 0) sprintf(" (the first %s h)", format(round(ctx$a, 2))) else "",
+         " is an <b>extrapolation</b>: nobody was observed there. With one trend coefficient per group (tau shared or held, or a linear trend) it is the change over the rated window times a constant, so its test is the same test."),
+      grp, logn)),
     change = , sat_change = list("Total trend change over the window", paste0(
       .eq("&Delta; = <i>f</i>(<i>T</i>) &minus; ", f0, " = ", chg), .p(dance_eq_trend_term(ctx$trend), "; ", win, "."),
       grp, logn)),

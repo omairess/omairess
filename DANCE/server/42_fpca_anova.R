@@ -36,14 +36,14 @@
 # ---- controls ---------------------------------------------------------------
 output$pca_anova_controls <- renderUI({
   if (is.null(values$pca_results)) {
-    return(helpText("Run the fPCA (or time-warped fPCA) first."))
+    return(dance_status("Run the fPCA (or time-warped fPCA) first."))
   }
   nc <- if (!is.null(values$pca_results$scores)) ncol(values$pca_results$scores) else 0
-  if (nc < 1) return(helpText("The PCA produced no scores."))
+  if (nc < 1) return(dance_status("The PCA produced no scores."))
 
   gv <- values$selected_group_vars
   if (is.null(gv) || !length(gv)) {
-    return(helpText(HTML("No grouping variable is available. Select one or more
+    return(dance_status(HTML("No grouping variable is available. Select one or more
                           scalar variables at import to compare groups on the
                           component scores.")))
   }

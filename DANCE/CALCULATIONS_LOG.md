@@ -1712,3 +1712,48 @@ fall, and one is flat. Under τ held and τ estimated, it checks that:
 
 On the code before the fix, the test fails: 11 of the 12 falling participants
 are not fitted with τ held.
+
+## 33. Change since the time origin; plot and interface changes
+
+**Change since the time origin** (`change_origin`, an estimate). When an
+origin before the first observation is set, the detailed statistics also
+give the trend's change from the origin to the last observation, f(T) − f(0).
+It is flagged as extrapolated before the first observation. The window
+change, f(T) − f(t₁), stays the primary quantity.
+- **Mixed, τ shared or held (or a linear trend):** it is a linear functional
+  of the same trend coefficient, the window change times
+  f(T)/(f(T) − f(t₁)). Its Wald test is the same test (same F, same p).
+- **Mixed, τ per cell (nlme):** A(1 − e^(−T/τ)), with the delta-method
+  gradient (1 − e^(−T/τ), −A(T/τ²)e^(−T/τ)·dτ/dx) and its own Wald test.
+- **Two-stage:** each participant's own trend(T) − trend(origin), then
+  group means and the same one-way ANOVA. With τ held, or a linear trend, the
+  values are proportional to the window change, so the F is identical.
+- **Tests:** `tests/time_origin_app_test.R` checks that the row is absent
+  without an origin, and that with one it equals the window change × the
+  factor (1.0667 linear, 1.1740 saturating), with the same test, for both
+  approaches. The script round-trip covers the new rows.
+
+**Plots and interface** (display only; no estimate changes):
+- **Fitted curves, one participant:** their raw data are their own legend
+  entry, so hiding the group's curve no longer hides them.
+- **Raw points:** larger (size 8, outlined).
+- **Components:** each harmonic and the trend can now be shown under the
+  mixed-effects approach too, from the model's own component predictions,
+  each its own legend entry.
+- **Bands:** the Estimated trajectories plot has a band option "None".
+- **Group Structure:** the plot now shows the raw curves with each group's
+  mean on the clock axis. The old plot put the curves on a 0–1 axis and the
+  means on clock hours, so the means fell off the edge. The duplicate plot in
+  Data Preview is removed.
+- **Participant table:** the note on the mixed model's per-participant values
+  is rewritten in plain language.
+
+**Explanations behind an (i).** Every explanatory note is now hidden behind
+an (i) that opens a pop-up (`dance_help()`, `server/00a_help.R`). That means
+every `helpText()` in the app, and the long grey notes of the cosinor tab.
+The browser moves each (i) next to the label of the control just above it
+when both are in the same container. Messages that must be seen (nothing
+selected yet, a missing package, a test's method, warnings about the time
+axis) stay visible through `dance_status()`.
+- **Tests:** `tests/testthat/test-help-popups.R` and
+  `tests/fitted_curves_view_test.R`.

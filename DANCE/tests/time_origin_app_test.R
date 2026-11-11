@@ -138,6 +138,23 @@ testServer(server, {
           sprintf("%s: Fitted curves %s", lab, if (fo) "start at the origin, the pre-sample interval marked" else "start at the first observation"),
           sprintf("%s: Fitted curves start at %s (from origin: %s)", lab, x0, fo))
     }
+    # THE CHANGE SINCE THE ORIGIN: only with an origin; the window change times
+    # f(T)/(f(T) - f(a)), and (one coefficient per group) the same test
+    T1 <- max(mod$time_vec); a1 <- min(mod$time_vec)
+    fac <- if (tr == "linear") T1 / (T1 - a1) else
+      (1 - exp(-T1 / tau)) / (exp(-a1 / tau) - exp(-T1 / tau))
+    co <- val(o2, "change_origin"); cw <- val(o2, "change")
+    t_co <- o2$tests[o2$tests$outcome == "change_origin", ]; t_cw <- o2$tests[o2$tests$outcome == "change", ]
+    chk(!"change_origin" %in% o1$estimates$outcome && length(co) == length(cw) && length(co) > 0 &&
+          max(abs(co - cw * fac)) < 1e-6 * max(1, abs(co)) &&
+          nrow(t_co) == 1 && abs(t_co$statistic - t_cw$statistic[1]) < 1e-6 * max(1, t_cw$statistic[1]),
+        sprintf("%s: the change since the origin is the window change x %.4f, with the same test (F %.3f)", lab,
+                fac, if (nrow(t_co)) t_co$statistic else NA),
+        sprintf("%s: change since the origin wrong: %s vs %s x %.4f; F %s vs %s", lab, paste(round(co, 4), collapse = ","),
+                paste(round(cw, 4), collapse = ","), fac, paste(t_co$statistic, collapse = ","), paste(t_cw$statistic, collapse = ",")))
+    chk(grepl("extrapolation", dance_equation("change_origin", dance_eq_context(mod))$html),
+        sprintf("%s: the change since the origin has its equation, marked extrapolated", lab),
+        sprintf("%s: no equation for the change since the origin", lab))
     # stated: in the assumptions and the summary
     asm <- paste(dance_cosinor_assumptions_text(dance_cosinor_assumptions(mod, if (ap == "mixed") harmonic_traj())),
                  collapse = " ")

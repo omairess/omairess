@@ -6,6 +6,16 @@
 # both families, so both sets are kept.
 # ==============================================================================
 
+# the explanation helpers (dance_help, dance_status, and helpText routed to
+# dance_help) are defined once, in server/00a_help.R, and loaded here too so
+# the UI files use the same ones
+local({
+  cand <- c(if (exists("dance_dir", mode = "function")) file.path(dance_dir("server"), "00a_help.R"),
+            "server/00a_help.R", "DANCE/server/00a_help.R", "../server/00a_help.R")
+  f <- cand[file.exists(cand)][1]
+  if (!is.na(f)) eval(parse(f, encoding = "UTF-8"), envir = globalenv())
+})
+
 ui_theme_css <- tags$head(
   tags$style(HTML("
     .content-wrapper, .right-side {
@@ -180,6 +190,85 @@ ui_theme_css <- tags$head(
         // tabs render lazily; a whole panel appears at once, so scan then
         jQuery(document).on('shiny:visualchange shown.bs.tab', scanSoon);
       }
+    })();
+  ")),
+  # ---- EXPLANATIONS BEHIND AN (i) (server/00a_help.R: dance_help) ------------
+  # The (i) moves next to the label of the control just above it when both sit
+  # in the same container (so a note inside a conditional panel still shows
+  # and hides with it); elsewhere it stays where it is, with 'About this'.
+  # Clicking opens the text in a pop-up titled with that label. (No double
+  # quotes in the JS: it lives inside an R string.)
+  tags$style(HTML("
+    .dance-help { display: inline-block; margin: 2px 0 6px 0; font-size: 12px; }
+    .dance-help-icon { color: #1f5f7a; text-decoration: none; cursor: pointer; }
+    .dance-help-icon:hover { color: #0b3c50; text-decoration: none; }
+    .dance-help-more { margin-left: 4px; color: #6b7b85; }
+    .dance-help-inline { margin: 0 0 0 6px; font-size: 13px; }
+    .dance-help-inline .dance-help-more { display: none; }
+    #dance-help-modal .modal-body { font-size: 14px; line-height: 1.5; }
+  ")),
+  tags$script(HTML("
+    (function () {
+      function modal() {
+        var m = document.getElementById('dance-help-modal');
+        if (m) return m;
+        m = document.createElement('div');
+        m.id = 'dance-help-modal'; m.className = 'modal fade'; m.tabIndex = -1;
+        m.innerHTML = '<div class=\\'modal-dialog\\'><div class=\\'modal-content\\'>' +
+          '<div class=\\'modal-header\\'><button type=\\'button\\' class=\\'close\\' data-dismiss=\\'modal\\'>&times;</button>' +
+          '<h4 class=\\'modal-title\\'></h4></div><div class=\\'modal-body\\'></div></div></div>';
+        document.body.appendChild(m);
+        return m;
+      }
+      window.danceHelp = function (a, ev) {
+        if (ev) { ev.preventDefault(); ev.stopPropagation(); }
+        var w = a.closest('.dance-help'); if (!w) return false;
+        var body = w.querySelector('.dance-help-body');
+        var title = w.getAttribute('data-title');
+        if (!title) {
+          var lab = w.parentElement;
+          if (lab && w.classList.contains('dance-help-inline')) {
+            var c = lab.cloneNode(true);
+            c.querySelectorAll('.dance-help').forEach(function (x) { x.remove(); });
+            title = c.textContent;
+          } else title = 'Explanation';
+        }
+        var m = modal();
+        m.querySelector('.modal-title').textContent = (title || 'Explanation').trim().replace(/[:\\s]+$/, '');
+        m.querySelector('.modal-body').innerHTML = body ? body.innerHTML : '';
+        if (window.jQuery) jQuery(m).modal('show');
+        return false;
+      };
+      function place(el) {
+        if (el.getAttribute('data-placed')) return;
+        el.setAttribute('data-placed', '1');
+        var prev = el.previousElementSibling, lab = null;
+        if (prev) {
+          if (prev.matches('label, .control-label, h3, h4, h5')) lab = prev;
+          else lab = prev.querySelector('label.control-label, .control-label, .checkbox label, label');
+        }
+        if (lab && !lab.querySelector('.dance-help')) {
+          el.classList.add('dance-help-inline');
+          lab.appendChild(el);
+        }
+      }
+      function scan(root) {
+        (root || document).querySelectorAll('.dance-help:not([data-placed])').forEach(place);
+      }
+      function start() {
+        scan(document);
+        new MutationObserver(function (ms) {
+          ms.forEach(function (mu) {
+            mu.addedNodes.forEach(function (n) {
+              if (n.nodeType !== 1) return;
+              if (n.classList && n.classList.contains('dance-help')) place(n);
+              if (n.querySelectorAll) scan(n);
+            });
+          });
+        }).observe(document.body, { childList: true, subtree: true });
+      }
+      if (document.readyState !== 'loading') start();
+      else document.addEventListener('DOMContentLoaded', start);
     })();
   "))
 )

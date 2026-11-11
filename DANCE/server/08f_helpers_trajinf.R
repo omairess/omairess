@@ -132,6 +132,7 @@ DANCE_TRAJ_BLOCK_LABEL <- c(
   intercept = "Initial midline (t = 0)",
   mesor     = "Time-averaged midline level",
   change    = "Total trend change (start to end)",
+  change_origin = "Change since the time origin (extrapolated)",
   avg_rate  = "Average trend rate",
   rate0     = "Initial trend rate")
 
@@ -164,7 +165,14 @@ DANCE_TRAJ_BLOCK_H0 <- c(
 # initial midline), then accumulation (total change, average rate, initial
 # rate). Each is offered only where it is a distinct quantity -- see
 # DANCE_TRAJ_BLOCK_COMPONENTS().
-DANCE_TRAJ_LEVEL_QUANTITIES <- c("fitted_mean", "mesor", "intercept", "change", "avg_rate", "rate0")
+# A time origin before the first observation (the trend anchored earlier than
+# the first data): then the change since the origin is reported as well.
+dance_traj_has_origin <- function(spec)
+  !identical(spec$trend %||% "none", "none") &&
+    isTRUE(min(spec$data$t, na.rm = TRUE) - (spec$t0 %||% 0) > 1e-9)
+
+DANCE_TRAJ_LEVEL_QUANTITIES <- c("fitted_mean", "mesor", "intercept", "change", "change_origin",
+                                 "avg_rate", "rate0")
 
 dance_traj_block_terms <- function(fit, which = DANCE_TRAJ_BLOCKS) {
   which <- match.arg(which, DANCE_TRAJ_BLOCKS)
@@ -1065,6 +1073,11 @@ dance_traj_cell_functionals <- function(fit) {
   bt <- spec$basis_terms
   zero <- stats::setNames(rep(0, length(bt)), bt)
   tw <- dance_traj_spec_window(spec)
+  # the trend from the TIME ORIGIN (t0) to the last observation: f(T) - f(0),
+  # the change since the origin, extrapolated over the hours before the first
+  # observation; the same as the change when the origin is the first observation
+  tw0 <- dance_traj_trend_window(spec$trend %||% "none", spec$t0, max(spec$data$t, na.rm = TRUE),
+                                 spec$tau, t_start = spec$t0)
   hm <- dance_harmonic_mean_factors(length(spec$harm_terms) / 2, spec$period,
                                     max(spec$data$t, na.rm = TRUE) - spec$t0,
                                     a = min(spec$data$t, na.rm = TRUE) - spec$t0)
@@ -1076,7 +1089,8 @@ dance_traj_cell_functionals <- function(fit) {
       dance_traj_beta_row(fit, cr, b) - z
     })
     names(coef) <- bt
-    mesor <- z; change <- z * 0; avg_rate <- z * 0; rate0 <- z * 0
+    mesor <- z; change <- z * 0; avg_rate <- z * 0; rate0 <- z * 0; change_origin <- z * 0
+    for (j in intersect(names(tw0$end), bt)) change_origin <- change_origin + tw0$end[[j]] * coef[[j]]
     for (j in intersect(names(tw$mean), bt)) {
       mesor    <- mesor    + tw$mean[[j]]     * coef[[j]]
       change   <- change   + tw$end[[j]]      * coef[[j]]
@@ -1089,7 +1103,8 @@ dance_traj_cell_functionals <- function(fit) {
       fitted_mean <- fitted_mean + hm$cos[h] * coef[[paste0("c", h)]] + hm$sin[h] * coef[[paste0("s", h)]]
     }
     list(level0 = drop(dance_traj_design_rows(fit, cr, min(spec$data$t, na.rm = TRUE))),
-         intercept = z, mesor = mesor, change = change, avg_rate = avg_rate,
+         intercept = z, mesor = mesor, change = change, change_origin = change_origin,
+         avg_rate = avg_rate,
          rate0 = rate0, fitted_mean = fitted_mean, coef = coef)
   })
   list(grid = grid, cells = cells, basis = bt, window = tw)
@@ -1104,6 +1119,7 @@ dance_traj_functional_row <- function(cell, cp) {
     ".intercept" = cell$intercept,
     ".mesor"     = cell$mesor,
     ".change"    = cell$change,
+    ".change_origin" = cell$change_origin,
     ".avg_rate"  = cell$avg_rate,
     ".rate0"     = cell$rate0,
     ".fitted_mean" = cell$fitted_mean,
@@ -1196,6 +1212,8 @@ DANCE_TRAJ_BLOCK_COMPONENTS <- function(spec, block) {
     # blocks exist only where they are distinct quantities
     mesor     = if (has_trend) ".mesor" else character(0),
     change    = if (has_trend) ".change" else character(0),
+    # only when a time origin before the first observation was set
+    change_origin = if (dance_traj_has_origin(spec)) ".change_origin" else character(0),
     avg_rate  = if (has_trend) ".avg_rate" else character(0),
     # a straight line's initial rate IS its average rate
     rate0     = if (has_trend && !identical(spec$trend, "linear")) ".rate0" else character(0),
@@ -1453,6 +1471,7 @@ dance_traj_tests <- function(ff, df_method = "kr", progress = NULL) {
     c("full", "trend", "intercept", "mesor")
   else
     c("full", "shape", "circadian", "trend", "fitted_mean", "intercept", "mesor")
+  if (!identical(ff$spec$trend, "none")) want <- c(want, "change_origin")   # empty unless an origin was set
   # each harmonic on its own, when there is more than one (with one, it is the
   # circadian block itself)
   K_h <- length(ff$spec$harm_terms) %/% 2L

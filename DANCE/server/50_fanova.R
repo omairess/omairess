@@ -97,7 +97,7 @@
           ),
           multiple = TRUE
         ),
-        helpText("Select at least 2 groups to compare. Deselect groups you want to exclude.")
+        dance_status("Select at least 2 groups to compare. Deselect groups you want to exclude.")
       )
     }
 
@@ -226,7 +226,7 @@
           ),
           multiple = TRUE
         ),
-        helpText("Select at least 2 levels to compare. Deselect levels you want to exclude.")
+        dance_status("Select at least 2 levels to compare. Deselect levels you want to exclude.")
       )
     } else {
       # Only 2 or fewer levels - no need for selection

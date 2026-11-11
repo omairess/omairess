@@ -1242,18 +1242,20 @@ dance_raw_paths <- function(t, y, curve, grid = sort(unique(t[is.finite(t)]))) {
 # Raw data on a plotly figure, as points or as lines (one per curve, broken at
 # missing values), faint so the fitted curves stay readable.
 dance_add_raw <- function(p, t, y, curve, color_rgb, style = "points", legendgroup = NULL,
-                          name = NULL, grid = NULL) {
+                          name = NULL, grid = NULL, showlegend = FALSE) {
   if (identical(style, "lines")) {
     pth <- dance_raw_paths(t, y, curve, grid %||% sort(unique(t[is.finite(t)])))
     if (!length(pth$x)) return(p)
     plotly::add_lines(p, x = pth$x, y = pth$y, legendgroup = legendgroup, name = name,
-                      showlegend = FALSE, hoverinfo = "skip", connectgaps = FALSE,
+                      showlegend = showlegend, hoverinfo = "skip", connectgaps = FALSE,
                       line = list(color = dance_group_rgba(color_rgb, 0.25), width = 1))
   } else {
     ok <- is.finite(y) & is.finite(t)
+    # big enough to see and to hover on, faint enough to keep the curves readable
     plotly::add_markers(p, x = t[ok], y = y[ok], legendgroup = legendgroup, name = name,
-                        showlegend = FALSE, hoverinfo = "skip",
-                        marker = list(color = dance_group_rgba(color_rgb, 0.35), size = 4))
+                        showlegend = showlegend, hoverinfo = "skip",
+                        marker = list(color = dance_group_rgba(color_rgb, 0.45), size = 8,
+                                      line = list(color = dance_group_rgba(color_rgb, 0.8), width = 0.5)))
   }
 }
 

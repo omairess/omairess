@@ -1,8 +1,9 @@
 # ==========================================================================
 # server/11_import_views.R
 #
-# PORTED VERBATIM by tools/port_fck.py — do not hand-edit the ranges
-# below without updating that script's manifest.  Provenance:
+# Originally ported from WaPaa (tools/port_fck.py is no longer in the repo).
+# The raw-data plot is now dance_raw_overview_plot(), drawn in the Group
+# Structure box. Provenance:
 #   WaPaa1_3.R lines 1817-1843  (recommended n_basis when the data change)
 #   WaPaa1_3.R lines 1902-1967  (raw data plot with clock-time axis)
 # ==========================================================================
@@ -34,7 +35,9 @@
                 n_time, recommended_nb))
   })
 
-  output$raw_data_plot <- renderPlot({
+  # The raw curves with each group's mean, on the clock-time axis: shown in the
+  # Group Structure box of the data tab (output$group_preview_plot).
+  dance_raw_overview_plot <- function() {
     if(is.null(values$data)) {
       plot(1, type = "n", xlab = "", ylab = "", main = "No analysis data available")
       return()
@@ -54,9 +57,8 @@
         groups <- levels(values$group_labels)
         n_groups <- length(groups)
         
-        # Create scalable color palette
-        base_cols <- c("red","blue","green","orange","purple","brown","cyan","magenta","darkgray","gold")
-        colors <- colorRampPalette(base_cols)(n_groups)
+        # one palette app-wide, keyed by group NAME
+        colors <- unname(dance_group_colors(groups)[groups])
         
         matplot(time_points_plot, t(values$data), type = "l", 
                 col = rgb(0.5, 0.5, 0.5, 0.1), lty = 1,
@@ -99,4 +101,4 @@
     }, error = function(e) {
       plot(1, type = "n", xlab = "", ylab = "", main = paste("Error:", e$message))
     })
-  })
+  }

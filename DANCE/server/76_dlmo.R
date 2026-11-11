@@ -29,8 +29,8 @@ output$dlmo_bed_var_ui <- renderUI({
 
 output$dlmo_hockey_status <- renderUI({
   if (requireNamespace("dlmoR", quietly = TRUE))
-    helpText(sprintf("Hockey-stick: dlmoR %s found.", as.character(utils::packageVersion("dlmoR"))))
-  else helpText(HTML(paste0(
+    dance_status(sprintf("Hockey-stick: dlmoR %s found.", as.character(utils::packageVersion("dlmoR"))))
+  else dance_status(HTML(paste0(
     "Hockey-stick: the <b>dlmoR</b> package is not installed, so this method is unavailable ",
     "(it is not reimplemented here). dlmoR is on GitHub only: ",
     "<code>remotes::install_github(\"tscnlab/dlmoR\")</code>, then restart the app.")),
@@ -365,7 +365,7 @@ dlmo_cmp <- reactive({
 output$dlmo_desc_table <- renderTable(dlmo_desc_frame(dlmo_cmp()$desc), na = "")
 output$dlmo_test_note <- renderUI({
   cp <- dlmo_cmp()$test
-  helpText(if (isTRUE(cp$ok)) paste0("Test: ", cp$method,
+  dance_status(if (isTRUE(cp$ok)) paste0("Test: ", cp$method,
                                      if (!is.null(cp$n_pairs)) sprintf(" (%d participants with an onset on both nights; %d without)",
                                                                        cp$n_pairs, cp$n_unpaired) else "")
            else cp$message)
@@ -380,7 +380,7 @@ output$dlmo_pa_desc_table <- renderTable({
 }, na = "")
 output$dlmo_pa_test_note <- renderUI({
   cp <- dlmo_cmp()$pa_test
-  if (!is.null(cp)) helpText(if (isTRUE(cp$ok)) paste("Test:", cp$method) else cp$message)
+  if (!is.null(cp)) dance_status(if (isTRUE(cp$ok)) paste("Test:", cp$method) else cp$message)
 })
 output$dlmo_pa_test_table <- renderTable({
   cp <- dlmo_cmp()$pa_test
