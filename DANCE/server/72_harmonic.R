@@ -632,8 +632,20 @@
         if (is.finite(hi) && val > hi) v <<- c(v, nm)
       }
       chk(fit$mesor, mesor_min, mesor_max, "mesor")
-      for (a in fit$amplitudes) chk(a, amplitude_min, amplitude_max, "amplitude")
+      # P19.19: only the MAXIMUM is a constraint the optimiser can act on. The
+      # minimum is reported and never imposed (see P0.5 in
+      # fit_cosinor_nonlinear: forcing a flat participant up to a floor would
+      # invent a rhythm), so an amplitude below it is not a reason to leave the
+      # closed-form fit. It used to count as a violation here: the fit was sent
+      # to the optimiser, which cannot raise it, came back with the same
+      # amplitude, and was labelled as constrained.
+      for (a in fit$amplitudes) chk(a, -Inf, amplitude_max, "amplitude")
       length(v) > 0
+    }
+    .below_min <- function(fit) {
+      if (!isTRUE(fit$success) || !is.finite(amplitude_min) || amplitude_min <= 0 ||
+          !length(fit$amplitudes)) return(integer(0))
+      which(is.finite(fit$amplitudes) & fit$amplitudes < amplitude_min)
     }
 
     if(use_bounds && trend_type %in% c("linear", "log", "none")) {
@@ -642,7 +654,10 @@
       if(!.bounds_violated(.free)) {
         .free$bounds_active <- FALSE
         .free$bounds_requested <- TRUE
+        .free$amplitude_below_min <- .below_min(.free)
         .free$fit_route <- "closed-form least squares (no bound was binding)"
+        if (length(.free$amplitude_below_min))
+          .free$fit_route <- "closed-form least squares (no bound was binding; an amplitude is below the stated minimum, which is reported and not imposed)"
         return(.free)
       }
       .con <- fit_cosinor_nonlinear(time, y, period, n_harmonics, trend_type,
@@ -4632,6 +4647,13 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
         f <- mod$individual_fits[[sid]]
         if (is.null(f) || is.null(f$bounds_hit) || !length(f$bounds_hit)) ""
         else paste(f$bounds_hit, collapse = "; ")
+      }, character(1)),
+      # P19.19: the amplitude minimum is reported, not imposed. It was stored
+      # on each fit (amplitude_below_min) and shown nowhere.
+      amplitude_below_min = vapply(params$subject, function(sid) {
+        f <- mod$individual_fits[[sid]]
+        b <- if (is.null(f)) integer(0) else f$amplitude_below_min
+        if (!length(b)) "" else paste0("H", b, collapse = ", ")
       }, character(1)),
       n_bounds_hit = vapply(params$subject, function(sid) {
         f <- mod$individual_fits[[sid]]

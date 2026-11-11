@@ -259,9 +259,50 @@ dance_smoothing_axis <- function(input, values) {
   }
   using_real_time <- !is.null(real_time)
   t_full <- if (using_real_time) real_time else seq_len(n_time)
+  cyc <- dance_cyclic_period(values$time_labels, n_time, using_real_time)
   list(n_time = n_time, t_full = t_full, t_rng = range(t_full),
        using_real_time = using_real_time,
-       cyclic = isTRUE(input$is_cyclic))
+       cyclic = isTRUE(input$is_cyclic),
+       period = cyc$period, period_source = cyc$source)
+}
+
+# ==============================================================================
+# dance_cyclic_period(time_labels, n_time, using_real_time)
+# ==============================================================================
+# P19.3. The length of ONE CYCLE in the units of the smoothing axis, for the
+# Fourier basis of cyclic smoothing.
+#
+# The basis used to be created without a period on the index axis, and fda then
+# takes the WIDTH OF THE RANGE: columns 1..n span n - 1, so 24 hourly columns
+# (00:00 ... 23:00) were fitted with a 23-column period. That forces the curve
+# at 23:00 to equal the curve at 00:00, one hour early, and it misfits an exactly
+# 24-hour signal by a visible amount at both ends. A cycle sampled at n evenly
+# spaced columns without repeating its first point is n columns long, not n - 1.
+#
+# The rule, in order:
+#   real clock time in use      24 (hours), as before;
+#   clock hours parse AND the   24 / step columns, so 48 hourly columns are two
+#   columns are evenly spaced   cycles of 24 and 00:00 ... 24:00 (25 columns,
+#                               the endpoint repeated) is still 24;
+#   otherwise                   n_time columns: the columns are taken to be one
+#                               cycle, the last one a step before it repeats.
+# `source` says which applied, so the summary can state it.
+dance_cyclic_period <- function(time_labels, n_time, using_real_time = FALSE) {
+  if (isTRUE(using_real_time))
+    return(list(period = 24, source = "24 h of real clock time"))
+  cum <- tryCatch(dance_cumulative_hours(time_labels), error = function(e) NULL)
+  if (!is.null(cum) && length(cum) == n_time && n_time >= 2) {
+    d <- diff(cum)
+    if (all(is.finite(d)) && (max(d) - min(d)) <= 1e-6 * max(d)) {
+      per <- 24 / mean(d)
+      if (is.finite(per) && per >= 2)
+        return(list(period = per,
+                    source = sprintf("24 h = %s columns, from the clock times in the column names",
+                                     format(signif(per, 6)))))
+    }
+  }
+  list(period = n_time,
+       source = sprintf("the %d columns taken as one cycle", n_time))
 }
 
 # The basis production fits. `nb` is the requested number of B-spline
@@ -301,10 +342,13 @@ dance_smoothing_basis <- function(axis, nb, method = "manual", nb_fourier = NULL
   nb <- max(4L, min(as.integer(nb), axis$n_time))
   if (isTRUE(axis$cyclic)) {
     nb_used <- if (is.null(nb_fourier)) min(axis$n_time, 13) else as.integer(nb_fourier)
-    b <- if (isTRUE(axis$using_real_time))
-      fda::create.fourier.basis(rangeval = axis$t_rng, nbasis = nb_used, period = 24)
-    else
-      fda::create.fourier.basis(rangeval = axis$t_rng, nbasis = nb_used)
+    # P19.3: the period is stated, never left to fda's default (the width of the
+    # range, which is one column short of a cycle). An axis built by hand
+    # without one gets the same rule dance_cyclic_period() applies.
+    per <- axis$period
+    if (is.null(per) || !is.finite(per) || per <= 0)
+      per <- if (isTRUE(axis$using_real_time)) 24 else axis$n_time
+    b <- fda::create.fourier.basis(rangeval = axis$t_rng, nbasis = nb_used, period = per)
   } else if (identical(method, "none")) {
     # the straight-line representation dance_fd_no_smoothing() uses
     b <- fda::create.bspline.basis(rangeval = axis$t_rng, breaks = axis$t_full,

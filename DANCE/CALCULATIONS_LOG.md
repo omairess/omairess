@@ -1865,3 +1865,92 @@ participant's product. The test checks the result against the dense sum to
   row height per row.
 - With more than 200 participants, the "Show" menu of the Fitted curves
   loads its options from the server (server-side selectize).
+
+## 36. External review (P19): import, Watson-Williams, cyclic smoothing, registration, bounds
+
+Seven corrections. Each lists the rule, its source, its effect on results, what
+reaches the exported script, and its test. All tests are in
+`tests/testthat/test-p19-corrections.R` unless another file is named; that
+file was also run against the code as it stood before, where every test of an
+existing function fails.
+
+**P19.1 Curve columns read as text (import).**
+- **Was.** The analysis matrix was built with `data.matrix()`, which turns a
+  character column into its factor codes without an error: "3,5", "1,0",
+  "12,5" became 3, 1, 2.
+- **Now.** `dance_numeric_matrix()` (`server/02e_helpers_numeric.R`) reads the
+  strings with `as.numeric()`. A declared gap ("", NA, n/a, ".", "-") is
+  missing; any other unreadable cell is missing and counted, and the import
+  names the columns, the counts and up to three of the strings. A column with
+  no readable cell stops the import. `dance_fix_decimal_commas()` converts
+  whole columns that are numbers written with a decimal comma (curves and
+  scalar variables) and names them; the new "Decimal mark" control switches
+  it off ("Point").
+- **Effect on results.** Any earlier analysis of a file whose curve columns
+  were read as text is wrong and has to be re-run.
+- **Script.** No change: the script carries the analysis matrix as literal
+  values.
+
+**P19.2 Watson-Williams correction factor.**
+- **Was.** `g = 1 - 1/(24 kappa^2)`.
+- **Now.** `g = 1 + 3/(8 kappa)` (Watson & Williams 1956; Stephens 1972;
+  Mardia & Jupp 2000, section 7.4), in `dance_watson_williams_test()`.
+- **Effect on results.** F is larger by the factor's ratio: about 4% at
+  kappa = 20, about 20% at kappa = 2. Earlier p-values were too large.
+- **Script.** The kernel is emitted from the same function, so the script
+  changes with it.
+- **Tests.** Equal to `circular::watson.williams.test` to 1e-8 (skipped when
+  the package is absent), and equal to the definition rebuilt in the test.
+  The two pins in `tests/circular_inference_test.R` held the old values and
+  were replaced.
+
+**P19.3 / P19.4 The cycle of cyclic smoothing.**
+- **Was.** On the column index the Fourier basis took fda's default period,
+  the width of the range: n - 1 columns, so 23 h for 24 hourly columns. With
+  real clock times the smoothing used 24 h, but the fd object was re-expressed
+  on 0-1 with the window as its period, so it was not the smoothed curve.
+- **Now.** `dance_cyclic_period()` (`server/04_helpers_fd.R`) gives the cycle
+  in axis units: 24 h on real clock time; 24/step columns when the column
+  names give evenly spaced clock times; otherwise n columns. The 0-1 basis of
+  the fd object uses the same cycle (period / width of the axis). The period
+  and its source are stored in `smooth_fit_metrics`, shown when smoothing is
+  applied, and stated in the report.
+- **Effect on results.** Every cyclic smooth changes, most at the two ends of
+  the series. On an exactly 24-hour test signal of amplitude 6.6 the old fit
+  was off by up to 0.79; the new one reproduces it. Non-cyclic smoothing is
+  untouched.
+- **Script.** NOT COVERED. The exported script has never written a Fourier
+  basis (nor the real-time axis); a cyclic run still cannot be reproduced
+  from it. This is open and is not introduced by this change.
+
+**P19.16 Loadings CSV.** `length(harmonics)` (3 for every fd object) replaced
+by `dance_n_harmonics()`: one column per component. Export only.
+
+**P19.17 Shift registration on fewer than 10 time points.**
+- **Was.** An unused 10-function smooth of the warping functions threw, and
+  the error handler returned the identity: no curve was registered and
+  nothing said so.
+- **Now.** The unused smooth is removed. A handler result carries
+  `failed = TRUE` and `error_message`; the fPCA step shows the error and
+  produces no time-warped PCA.
+- **Effect on results.** Runs with 8 or 9 time points that reported a
+  time-warped PCA were standard PCAs.
+- **Script.** The kernel is emitted from the same function.
+
+**P19.18 Periodic shift limit.** The quarter-domain cap now applies to the
+open interval only; on a cycle a shift is identified up to half a cycle.
+Curves more than a quarter cycle out of phase are now fully registered.
+Kernel emitted from the same function.
+
+**P19.19 Amplitude minimum.**
+- **Rule (unchanged, P0.5).** The minimum is reported and never imposed.
+- **Was.** An amplitude below it counted as a violated bound, so the
+  closed-form fit was replaced by the constrained optimiser, which cannot
+  raise it, and the route said "constrained". `amplitude_below_min` was
+  stored and shown nowhere.
+- **Now.** Such a fit stays the closed-form fit, carries
+  `amplitude_below_min`, says so in `fit_route`, and the individual table has
+  a column for it.
+- **Effect on results.** Estimates for those participants are now the exact
+  least-squares ones.
+- **Script.** The kernel is emitted from the same function.

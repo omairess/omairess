@@ -32,10 +32,12 @@
     content = function(file) {
       if(!is.null(values$pca_results) && !is.null(values$pca_results$harmonics)) {
         time_points <- seq(0, 1, length.out = 100)
-        loadings_mat <- matrix(NA, 100, length(values$pca_results$harmonics))
-        for(i in 1:length(values$pca_results$harmonics)) {
-          loadings_mat[,i] <- eval.fd(time_points, values$pca_results$harmonics[i])
-        }
+        # P19.16: `harmonics` is an fd object, whose length() is 3 whatever
+        # nharm was (the P6.3 defect, which survived here): five components
+        # exported as three and two failed with "subscript out of bounds".
+        n_pc <- dance_n_harmonics(values$pca_results)
+        loadings_mat <- eval.fd(time_points, values$pca_results$harmonics)
+        loadings_mat <- matrix(as.numeric(loadings_mat), nrow = 100, ncol = n_pc)
         loadings_df <- data.frame(Time = time_points, loadings_mat)
         colnames(loadings_df)[-1] <- paste0("PC", 1:ncol(loadings_mat))
         write.csv(loadings_df, file, row.names = FALSE)

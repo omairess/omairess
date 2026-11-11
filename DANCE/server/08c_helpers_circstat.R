@@ -113,7 +113,13 @@ dance_watson_williams_test <- function(angles_list) {
     1 / (r_bar_total^3 - 4 * r_bar_total^2 + 3 * r_bar_total)
   }
   
-  g <- 1 - 1 / (3 * 8 * kappa^2)
+  # P19.2: the correction factor of the Watson-Williams F is 1 + 3 / (8 kappa)
+  # (Watson & Williams 1956; Stephens 1972; Mardia & Jupp 2000, section 7.4;
+  # Zar's K). This line read 1 - 1 / (24 kappa^2), which is below 1 where the
+  # factor is above 1, so F was too small by 4% at kappa = 20 and by about 20%
+  # at kappa = 2. Checked against circular::watson.williams.test in
+  # tests/testthat/test-p19-corrections.R.
+  g <- 1 + 3 / (8 * kappa)
   sum_R <- sum(R)
   F_stat <- g * (N - k) * (sum_R - R_total) / ((k - 1) * (N - sum_R))
   

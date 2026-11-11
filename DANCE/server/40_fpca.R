@@ -111,6 +111,21 @@
         }
         
         # Check if warping was successful
+        # P19.17: a registration that fell back to the identity is a failure,
+        # not a result. Say so, and do not present an unregistered PCA as a
+        # time-warped one.
+        if(!is.null(warp_fd) && isTRUE(warp_fd$failed)) {
+          showNotification(
+            paste0("The registration failed and NO curve was warped (",
+                   warp_fd$error_message %||% "unknown error",
+                   "). No time-warped PCA was produced; run the standard functional PCA, ",
+                   "or change the registration settings."),
+            type = "error", duration = 20)
+          values$warping_results <- NULL
+          values$pca_results <- NULL
+          return()
+        }
+
         if(is.null(warp_fd)) {
           cat("Warping failed, using default alignment\n")
           warp_fd <- linear_shift_alignment(values$fd_obj,

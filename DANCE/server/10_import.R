@@ -100,6 +100,23 @@ observeEvent(input$load_data, {
 
     # Header cells formatted as times arrive from readxl as fractions of a day
     # (and a CSV written from such a frame keeps them): read back as clock times.
+    # P19.1: numbers written with a decimal comma arrive as text. Whole columns
+    # that are plainly such numbers are converted here, curves and scalar
+    # variables alike, and named; "Point" under Decimal mark switches it off.
+    dec_mode <- input$dec %||% "auto"
+    if (!dec_mode %in% c("auto", "comma", "point")) dec_mode <- "auto"
+    dcf <- dance_fix_decimal_commas(raw_data, dec_mode)
+    if (length(dcf$converted)) {
+      raw_data <- dcf$data
+      msg <- sprintf("%d column%s used a decimal comma and %s read as numbers: %s.",
+                     length(dcf$converted), if (length(dcf$converted) == 1) "" else "s",
+                     if (length(dcf$converted) == 1) "was" else "were",
+                     paste(utils::head(dcf$converted, 12), collapse = ", "))
+      if (length(dcf$converted) > 12) msg <- paste0(sub("[.]$", "", msg), ", ...")
+      cat(msg, "\n")
+      showNotification(msg, type = "message", duration = 12)
+    }
+
     dfn <- dance_dayfraction_names(names(raw_data))
     if (any(dfn$converted)) {
       names(raw_data) <- dfn$names
@@ -240,17 +257,30 @@ observeEvent(input$apply_selection, {
 
     temp_data <- values$raw_df[, data_cols, drop = FALSE]
 
-    temp_data_mat <- tryCatch({
-      data.matrix(temp_data)
-    }, error = function(e) {
-      mat <- matrix(NA, nrow = nrow(temp_data), ncol = ncol(temp_data))
-      for(j in 1:ncol(temp_data)) mat[, j] <- as.numeric(as.character(temp_data[, j]))
-      mat
-    })
-    # Force numeric storage: fda chokes on integer/character matrices and it
-    # was the cause of WaPaa's -Inf R-squared bug.
-    if(typeof(temp_data_mat) != "double" && typeof(temp_data_mat) != "integer") {
-      mode(temp_data_mat) <- "numeric"
+    # P19.1: never through data.matrix(), which turns a text column into its
+    # factor codes without an error. dance_numeric_matrix() reads the strings
+    # with as.numeric() and counts every cell it could not read
+    # (server/02e_helpers_numeric.R).
+    dec_sel <- input$dec %||% "auto"
+    if (!dec_sel %in% c("auto", "comma", "point")) dec_sel <- "auto"
+    num_res <- dance_numeric_matrix(temp_data, dec_sel)
+    temp_data_mat <- num_res$matrix
+    num_msg <- dance_numeric_matrix_message(num_res)
+    if (!is.null(num_msg)) {
+      cat("Import:", num_msg, "\n")
+      showNotification(
+        paste(num_msg, "Correct the file, or the decimal mark under 1. Load Data, if these",
+              "should be numbers."),
+        type = "warning", duration = 20)
+    }
+    all_text <- names(num_res$n_bad)[num_res$n_bad == nrow(temp_data) & nrow(temp_data) > 0]
+    if (length(all_text)) {
+      showNotification(
+        sprintf("No cell of %s could be read as a number. Nothing was processed; deselect %s or correct the file.",
+                paste(all_text, collapse = ", "),
+                if (length(all_text) == 1) "that column" else "those columns"),
+        type = "error", duration = 15)
+      return()
     }
 
     # ---- ONE scalar picker, TWO consumers -----------------------------------

@@ -58,16 +58,21 @@ chk(identical(e$dance_circular_sd(rep(1.2, 5)), 0),
     "identical angles give a circular SD of exactly 0",
     "the zero-dispersion case changed")
 
+# P19.2: these two pins were 90.868128 and 42.880696, values produced by the
+# wrong correction factor (1 - 1/(24 kappa^2)). The pins below are the factor
+# 1 + 3/(8 kappa) and equal circular::watson.williams.test on the same angles
+# to ten decimals; tests/testthat/test-p19-corrections.R makes that comparison
+# itself whenever the circular package is installed.
 cat("\n-- Watson-Williams ---------------------------------------------------\n")
 set.seed(11)
 g1 <- rnorm(20, 0.4, 0.30); g2 <- rnorm(20, 1.1, 0.30); g3 <- rnorm(20, 0.5, 0.30)
 ww2 <- e$dance_watson_williams_test(list(g1, g2))
-chk(near(ww2$F, 90.8681279306, 1e-8) && ww2$df1 == 1 && ww2$df2 == 38,
+chk(near(ww2$F, 96.6989549208, 1e-8) && ww2$df1 == 1 && ww2$df2 == 38,
     sprintf("two groups: F(%d, %d) = %.6f, p = %.3g", ww2$df1, ww2$df2, ww2$F, ww2$p),
     sprintf("two-group Watson-Williams changed: F = %.6f on (%s, %s)",
             ww2$F, ww2$df1, ww2$df2))
 ww3 <- e$dance_watson_williams_test(list(g1, g2, g3))
-chk(near(ww3$F, 42.8806964228, 1e-8) && ww3$df1 == 2 && ww3$df2 == 57,
+chk(near(ww3$F, 45.1422774498, 1e-8) && ww3$df1 == 2 && ww3$df2 == 57,
     sprintf("three groups: F(%d, %d) = %.6f, p = %.3g", ww3$df1, ww3$df2, ww3$F, ww3$p),
     sprintf("three-group Watson-Williams changed: F = %.6f on (%s, %s)",
             ww3$F, ww3$df1, ww3$df2))

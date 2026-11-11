@@ -97,11 +97,23 @@ observeEvent(input$apply_smooth, {
     # interpolating B-spline through every observation when smoothing is off,
     # and an nb-function B-spline otherwise.
     basis   <- dance_smoothing_basis(axis, nb, input$smooth_method)
+    if(cyclic && input$smooth_method != "none")
+      showNotification(
+        sprintf("Cyclic smoothing: one cycle = %s %s (%s).",
+                format(signif(basis$params[1], 6)),
+                if(using_real_time) "h" else "columns", axis$period_source),
+        type = "message", duration = 10)
     nb_used <- if(cyclic) basis$nbasis else nb
 
     # The 0-1 basis used for the fd object every downstream analysis reads.
+    # P19.3/P19.4: on 0-1 the Fourier basis keeps the SAME cycle the smoothing
+    # used (its period divided by the width of the axis), so the fd object is
+    # the smoothed curve re-expressed and not a second, different periodic fit.
+    # It used to take fda's default period, the whole 0-1 window, which with
+    # real clock times is 23 h for a 24-hour basis.
+    period_01 <- if(cyclic) basis$params[1] / diff(t_rng) else NA_real_
     make_basis_01 <- function(k) {
-      if(cyclic) create.fourier.basis(rangeval = c(0, 1), nbasis = k)
+      if(cyclic) create.fourier.basis(rangeval = c(0, 1), nbasis = k, period = period_01)
       else       create.bspline.basis(rangeval = c(0, 1), nbasis = k)
     }
     # The fPCA / warping / fANOVA / clustering family works on a 0-1 range. With
@@ -314,6 +326,8 @@ observeEvent(input$apply_smooth, {
         n_subjects     = n_subjects,
         method         = input$smooth_method,
         basis_type     = if(cyclic) "fourier" else "bspline",
+        cyclic_period  = if(cyclic) basis$params[1] else NA_real_,
+        cyclic_period_source = if(cyclic) axis$period_source else NA_character_,
         time_axis      = if(using_real_time) "real clock time (hours)" else "column index",
         mean_df        = mean(df_vec, na.rm = TRUE),
         sd_df          = sd(df_vec,   na.rm = TRUE),

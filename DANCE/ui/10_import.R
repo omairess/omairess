@@ -44,6 +44,12 @@ ui_tab_import <- tabItem(
                                  Semicolon = ";", Tab = "\t"),
                      selected = "auto", inline = TRUE)
       ),
+      # P19.1: a decimal comma makes R read a number column as text. Auto-detect
+      # converts columns that are plainly such numbers and names them.
+      radioButtons("dec", "Decimal mark:",
+                   choices = c("Auto-detect" = "auto", "Point (3.5)" = "point",
+                               "Comma (3,5)" = "comma"),
+                   selected = "auto", inline = TRUE),
       conditionalPanel(
         condition = "input.datafile && input.datafile.name.match(/\\.(xls|xlsx)$/i)",
         uiOutput("excel_sheet_selector")

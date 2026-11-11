@@ -317,6 +317,7 @@ Rscript tests/glmmcosinor_crosscheck_test.R  # vs an independent implementation;
 Rscript tests/mixed_calibration_test.R   # the wider level/power grid; slow
 Rscript tests/pairwise_perm_test.R
 Rscript tests/pop_cosinor_test.R
+Rscript tests/p19_import_cyclic_app_test.R  # decimal commas and text cells at import; the cycle of cyclic smoothing
 Rscript -e 'testthat::test_dir("tests/testthat")'
 ```
 

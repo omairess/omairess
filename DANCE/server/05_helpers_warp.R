@@ -270,7 +270,12 @@ linear_shift_alignment <- function(fd_obj, periodic = FALSE,
       # is a tenth of the cycle replaced by a constant. When the design is
       # periodic the warp now wraps; when it is not, it still clamps, and the
       # amount of extrapolation is reported rather than left implicit.
-      s_max <- 0.25   # a shift beyond a quarter of the domain is not identified
+      # A shift beyond a quarter of the domain is not identified on an OPEN
+      # interval: too little of the curve still overlaps the reference. On a
+      # cycle every lag overlaps completely, so a shift is identified up to half
+      # a cycle either way. P19.18: the quarter cap was applied to both, and a
+      # curve 0.3 or 0.4 of a cycle out of phase was moved by only 0.25.
+      s_max <- if (periodic) 0.5 else 0.25
       shifts[i] <- max(-s_max, min(s_max, shifts[i]))
       h <- time_points - shifts[i]
 
@@ -303,9 +308,11 @@ linear_shift_alignment <- function(fd_obj, periodic = FALSE,
     basis <- fd_obj$basis
     reg_smooth <- list(fd = dance_refd(registered_curves, time_points, basis))
     
-    # Create warping function fd objects
-    warp_basis <- create.bspline.basis(rangeval = c(0, 1), nbasis = 10)
-    warp_smooth <- smooth.basis(time_points, warp_functions, warp_basis)
+    # P19.17: a 10-function B-spline smooth of the warping functions was built
+    # here and never used. On fewer than 10 time points it threw, the handler
+    # below returned the identity, and no curve was registered at all -- with
+    # nothing on screen saying so. It is gone, and the handler now marks its
+    # result as a failure (failed = TRUE, error_message) for the caller to show.
     
     return(list(
       regfd = reg_smooth$fd,
@@ -331,6 +338,8 @@ linear_shift_alignment <- function(fd_obj, periodic = FALSE,
       warp_functions = matrix(rep(time_points, n_curves), n_time, n_curves),
       shifts = rep(0, n_curves),
       method = "identity",
+      failed = TRUE,
+      error_message = conditionMessage(e),
       time_points = time_points
     ))
   })
@@ -524,6 +533,8 @@ parametric_alignment <- function(fd_obj, family = "power",
       warp_functions = matrix(rep(time_points, n_curves), n_time, n_curves),
       alpha_values = rep(1, n_curves),
       method = "identity",
+      failed = TRUE,
+      error_message = conditionMessage(e),
       time_points = time_points
     ))
   })

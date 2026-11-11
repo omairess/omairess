@@ -274,7 +274,14 @@ dance_apa_report <- function(values, input, title = NULL) {
                                             sm$time_axis %|% "the column index", ". ")
         else paste0("Each series was represented in a ",
                     if (isTRUE(input$is_cyclic)) "Fourier" else "B-spline", " basis of ",
-                    sm$n_basis %|% "--", " functions over ", sm$time_axis %|% "the column index", ". "),
+                    sm$n_basis %|% "--", " functions over ", sm$time_axis %|% "the column index",
+                    # P19.3: the length of the cycle the Fourier basis used, and
+                    # where it came from, as stored with the smoothing itself
+                    if (!is.null(sm$cyclic_period) && isTRUE(is.finite(sm$cyclic_period)))
+                      paste0(", with a cycle of ", format(signif(sm$cyclic_period, 6)), " ",
+                             if (identical(sm$time_axis, "real clock time (hours)")) "h" else "columns",
+                             " (", sm$cyclic_period_source %|% "as set", ")") else "",
+                    ". "),
         if (identical(meth, "none"))
           "No smoothing was applied: each curve is its observations joined by straight lines (an order-2 B-spline basis with a knot at every observation time), with a missing value read off the line between its neighbouring observations."
         else if (identical(meth, "auto"))
