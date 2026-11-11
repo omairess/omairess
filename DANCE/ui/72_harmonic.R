@@ -706,7 +706,7 @@ ui_tab_harmonic <- tabItem(
                                   choices = c("Estimates per cell" = "cells",
                                               "Pairwise differences" = "pairs"),
                                   selected = "cells", inline = TRUE),
-                     plotlyOutput("harmonic_traj_levels_plot", height = "340px"),
+                     uiOutput("harmonic_traj_levels_plot_ui"),
                      uiOutput("harmonic_traj_levels_note"),
 
                      # The saturating trend's own parameters per cell: the rise A,
@@ -723,7 +723,7 @@ ui_tab_harmonic <- tabItem(
                                                 "Trend curves" = "curves",
                                                 "Profile of \u03c4" = "profile"),
                                     selected = "cells", inline = TRUE),
-                       plotlyOutput("harmonic_traj_sat_plot", height = "340px"),
+                       uiOutput("harmonic_traj_sat_plot_ui"),
                        uiOutput("harmonic_traj_sat_tests")),
 
                      hr(),

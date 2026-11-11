@@ -76,6 +76,7 @@ dance_cosinor_assumptions <- function(mod, ff = NULL, df_method = "kr") {
       else sprintf("none (%s).", attr(gp, "rule")))
   a("Data", paste("Raw observations; a missing observation is left out, not imputed or",
                   "smoothed, and each fit uses the observations present."))
+  if (mixed && !is.null(ff$spec$missing_note)) a("Data", ff$spec$missing_note)
 
   # ---- the trend -----------------------------------------------------------------
   if (identical(trend, "log"))

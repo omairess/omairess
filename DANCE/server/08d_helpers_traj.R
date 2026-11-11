@@ -88,6 +88,8 @@ dance_traj_long <- function(curves, time_points, subject, factors = list()) {
   for (nm in names(factors)) {
     col <- dance_traj_safe_name(nm)
     v <- factors[[nm]]
+    # a blank cell is a missing value, not a level called ""
+    if (is.character(v) || is.factor(v)) { v <- as.character(v); v[!is.na(v) & !nzchar(trimws(v))] <- NA }
     d[[col]] <- if (is.numeric(v) && length(unique(v[!is.na(v)])) > 12)
       rep(v, each = p) else factor(rep(as.character(v), each = p))
     labels[[col]] <- nm
@@ -526,6 +528,33 @@ dance_traj_spec <- function(d, period = 24, n_harmonics = 1, trend = "none",
     return(bad("The long frame needs subject, t and y columns; build it with dance_traj_long()."))
   if (!nrow(d)) return(bad("No usable observations."))
 
+  # A participant with no value for a factor of the design cannot be placed in
+  # a cell. lme4 would drop those rows on its own (na.omit), while everything
+  # built from this frame (the per-participant curves, the residuals, the
+  # counts) would still carry them. So they are dropped HERE, once, and the
+  # drop is reported.
+  fac_cols <- intersect(c(design_terms %||% names(attr(d, "labels")), covariates), names(d))
+  miss <- if (length(fac_cols)) Reduce(`|`, lapply(fac_cols, function(f) is.na(d[[f]]))) else logical(nrow(d))
+  missing_note <- NULL
+  if (any(miss)) {
+    lost <- unique(as.character(d$subject[miss]))
+    lbl <- attr(d, "labels")
+    nm <- vapply(fac_cols, function(f) lbl[[f]] %||% f, character(1))
+    missing_note <- sprintf(paste(
+      "%d participant%s with no value for %s %s excluded (%d observation%s): %s."),
+      length(lost), if (length(lost) == 1L) "" else "s",
+      paste(sprintf("'%s'", nm[vapply(fac_cols, function(f) any(is.na(d[[f]])), logical(1))]), collapse = ", "),
+      if (length(lost) == 1L) "was" else "were", sum(miss), if (sum(miss) == 1L) "" else "s",
+      paste(utils::head(lost, 20), collapse = ", "))
+    if (length(lost) > 20L) missing_note <- sub("\\.$", sprintf(", and %d more.", length(lost) - 20L), missing_note)
+    keep_attr <- attributes(d)[c("labels")]
+    d <- d[!miss, , drop = FALSE]
+    d$subject <- droplevels(d$subject)
+    for (f in fac_cols) if (is.factor(d[[f]])) d[[f]] <- droplevels(d[[f]])
+    if (!is.null(keep_attr$labels)) attr(d, "labels") <- keep_attr$labels
+    if (!nrow(d)) return(bad(paste("No usable observations.", missing_note)))
+  }
+
   cls <- tryCatch(dance_traj_classify(d, roles = roles),
                   error = function(e) conditionMessage(e))
   if (is.character(cls)) return(bad(cls))
@@ -631,7 +660,7 @@ dance_traj_spec <- function(d, period = 24, n_harmonics = 1, trend = "none",
     basis_terms = bas$basis_terms, harm_terms = bas$harm_terms,
     trend_terms = bas$trend_terms,
     design_terms = design_terms, covariates = covariates,
-    constant_terms = constant,
+    constant_terms = constant, missing_note = missing_note,
     constant_note = if (length(constant)) sprintf(paste(
       "%s dropped: %s only one level in these data, so every column it would",
       "contribute is aliased with the intercept. The model below does not include",
@@ -679,6 +708,7 @@ dance_traj_describe <- function(spec) {
         sprintf(" -- the data look like '%s'", r$role_from_data) else "")
   }
   if (length(spec$constant_terms)) a("Dropped:           %s", spec$constant_note)
+  if (!is.null(spec$missing_note)) a("Excluded:          %s", spec$missing_note)
   a("Curve (session):   %s; %d curve(s) over %d participant(s)",
     spec$curve_definition, spec$n_curves, spec$n_participants)
   a("Time sampling:     %s",

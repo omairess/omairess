@@ -390,7 +390,8 @@ dance_traj_pair_label <- function(what, period = 24, n_harmonics = 1L, trend = N
       linear  = "Slope beta (per hour)",
       log     = "Log-trend beta (per unit of log(1 + hours))",
       unname(DANCE_TRAJ_PAIR_LABEL["trend"])))
-  unname(DANCE_TRAJ_PAIR_LABEL[what]) %||% what
+  lab <- unname(DANCE_TRAJ_PAIR_LABEL[what])
+  if (length(lab) != 1L || is.na(lab)) what else lab
 }
 
 # Which comparisons this fit can actually answer. The level quantities first --
@@ -445,6 +446,7 @@ DANCE_TRAJ_PAIR_LABEL <- c(
   intercept = "Initial midline (t = 0)",
   mesor     = "Time-averaged midline level",
   change    = "Total trend change (start to end)",
+  change_origin = "Change since the time origin (extrapolated)",
   avg_rate  = "Average trend rate",
   rate0     = "Initial trend rate",
   amplitude = "Amplitude",
@@ -477,6 +479,9 @@ dance_traj_level_unit <- function(fit, what) {
                     "The change is the %s times %s, so its test is the test of that coefficient."),
               win, u, coef_lab, dance_traj_change_factor_text(tw))
       else sprintf("difference in the non-periodic change over the recording, in %s", u),
+    change_origin = sprintf(paste("difference in the non-periodic change from %s to the end of %s, in %s.",
+                                  "It is extrapolated before the first observation."),
+                            dance_origin_phrase(fit), win, u),
     fitted_mean = sprintf("difference in the time-averaged fitted response, in %s: the whole fitted curve (midline and rhythm) averaged over %s",
                           u, win),
     avg_rate  = if (!is.null(tw) && length(tw$end))
@@ -1400,9 +1405,11 @@ dance_traj_r2 <- function(fit) {
                             else stats::predict(m, re.form = NA)), error = function(e) NULL)
   if (is.null(Xb)) return(NULL)
   var_f <- stats::var(Xb)
-  Z <- tryCatch(if (car1) Matrix::t(as.matrix(lme4::lFormula(stats::formula(m),
-                  data = fit$spec$data)$reTrms$Zt))
-                else as.matrix(lme4::getME(m, "Z")), error = function(e) NULL)
+  # Z is kept SPARSE: dense, it is observations x (participants x terms), which
+  # for a few thousand participants is gigabytes of zeros
+  Z <- tryCatch(if (car1) Matrix::t(lme4::lFormula(stats::formula(m),
+                  data = fit$spec$data)$reTrms$Zt)
+                else lme4::getME(m, "Z"), error = function(e) NULL)
   vc <- tryCatch(lme4::VarCorr(m), error = function(e) NULL)
   if (is.null(Z) || is.null(vc)) return(NULL)
   # the full random-effect covariance, block-diagonal over grouping levels, in
@@ -1414,15 +1421,21 @@ dance_traj_r2 <- function(fit) {
     nl <- nlevels(flist[[g]])
     blocks[[g]] <- list(S = Sg, nl = nl)
   }
-  # z_i' Sigma z_i for every observation, block by block
-  var_r <- 0; col <- 0L
+  # z_i' Sigma z_i for every observation, grouping factor by grouping factor.
+  # Within a factor the columns run level by level, term by term; a row has
+  # non-zeros under ONE level only, so summing the term-a by term-b products
+  # over all levels gives that level's product:
+  #   z_i' S z_i = sum_ab S[a, b] * sum_l Z[i, (l, a)] * Z[i, (l, b)]
+  var_r <- numeric(nrow(Z)); col <- 0L
   for (g in names(cnms)) {
     b <- blocks[[g]]; q <- ncol(b$S)
-    for (l in seq_len(b$nl)) {
-      Zl <- Z[, col + seq_len(q), drop = FALSE]
-      var_r <- var_r + rowSums((Zl %*% b$S) * Zl)
-      col <- col + q
+    idx <- function(a) col + (seq_len(b$nl) - 1L) * q + a
+    for (a in seq_len(q)) for (bb in seq_len(q)) {
+      if (b$S[a, bb] == 0) next
+      var_r <- var_r + b$S[a, bb] *
+        as.numeric(Matrix::rowSums(Z[, idx(a), drop = FALSE] * Z[, idx(bb), drop = FALSE]))
     }
+    col <- col + q * b$nl
   }
   var_r <- mean(var_r)
   var_e <- stats::sigma(m)^2

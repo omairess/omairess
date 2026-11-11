@@ -1821,3 +1821,47 @@ analysis report, after the results tables.
   - the rhythm joint test is stated with its F;
   - Table 1 uses the group labels;
   - every sentence starts with a capital, with no doubled nouns.
+
+## 35. Participants without a group; a sparse R-squared; labels and panel grid
+
+**Participants with no group value (result-relevant).**
+- **What happened.** A participant with a blank or missing group was kept
+  in the mixed model's data frame. lme4 left those rows out of the fit on
+  its own (`na.omit`), but everything built from the frame still carried
+  them. So:
+  - the residuals were longer than the fitted values ("longer object length
+    is not a multiple");
+  - a blank cell was read as a group called "", which has no colour, and
+    the Fitted curves plot stopped ("subscript out of bounds").
+- **Now.**
+  - `dance_traj_long()` reads a blank label as missing.
+  - `dance_traj_spec()` drops participants with a missing value for a
+    factor of the design, once, and records it in `spec$missing_note`
+    (how many, which factor, which participants).
+  - The note is printed in "What this run assumed", so it reaches the
+    summary, the report and the exported script.
+  - Two-stage (`dance_ts_frame()`) also reads a blank label as missing, as
+    the population cosinor already did (`dance_group_audit()`).
+- **Effect on results.** The mixed model's estimates do not change: lme4
+  had already left those rows out. Two-stage group summaries no longer
+  include a group "".
+- **Tests:** `tests/testthat/test-traj-missing-factor.R`.
+
+**R-squared with a sparse Z (same formula).** `dance_traj_r2()` made the
+random-effects design matrix Z dense. Z is observations × (participants ×
+terms), so on a large data set this needed 1.3 GiB. The sum of z_i' Σ z_i is
+now computed with Z kept sparse. A row has non-zeros under one participant
+only, so summing the term-by-term products over all participants gives that
+participant's product. The test checks the result against the dense sum to
+1e-10, and `test-traj-r2.R` still passes.
+
+**Display only (no script change).**
+- The pairwise "Compare" menu showed "NA" for the change since the time
+  origin, which had no label. It now has one, and a name without a label is
+  shown as itself.
+- The panel titles under "Intercept, midline level and change" now name
+  `fitted_mean`, `change_origin`, `avg_rate` and `rate0` in words.
+- Dot-and-whisker panels wrap after 4 per row, and the plot grows by one
+  row height per row.
+- With more than 200 participants, the "Show" menu of the Fitted curves
+  loads its options from the server (server-side selectize).

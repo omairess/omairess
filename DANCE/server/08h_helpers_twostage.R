@@ -23,6 +23,9 @@ dance_ts_frame <- function(mod, group_values) {
   p <- mod$individual_params
   if (is.null(p) || !nrow(p)) return(NULL)
   g <- if (is.null(group_values)) rep("(all)", nrow(p)) else as.character(group_values[p$subject])
+  # a blank label is missing, as for the population cosinor (dance_group_audit):
+  # those participants are in no group, not in a group called ""
+  g[!is.na(g) & !nzchar(trimws(g))] <- NA
   p$group <- droplevels(factor(g))
   p <- p[!is.na(p$group), , drop = FALSE]
   if (!nrow(p)) return(NULL)

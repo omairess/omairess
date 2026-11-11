@@ -469,6 +469,19 @@
   })
   
   # Subject selector for individual plots
+  # The "Show" menu. With many participants the options are sent from the
+  # server as the user types (server-side selectize), so the browser is not
+  # handed thousands of options at once.
+  harmonic_subject_menu <- function(label, choices, selected = "mean") {
+    if (length(choices) <= 200L)
+      return(selectInput("harmonic_subject_select", label, choices = choices, selected = selected))
+    session$onFlushed(function()
+      updateSelectizeInput(session, "harmonic_subject_select", choices = choices,
+                           selected = selected, server = TRUE), once = TRUE)
+    selectizeInput("harmonic_subject_select", label, choices = NULL,
+                   options = list(placeholder = "Type a participant ID..."))
+  }
+
   output$harmonic_subject_selector <- renderUI({
     req(values$harmonic_model)
     mod <- values$harmonic_model
@@ -480,11 +493,10 @@
       d <- ff$spec$data
       cv <- if ("curve" %in% names(d)) "curve" else "subject"
       curves <- unique(as.character(d[[cv]]))
-      return(selectInput("harmonic_subject_select", "Show:",
-                  choices = c("Cell curves (the fitted model)" = "mean",
-                              "All participants (shrunken) over the cells" = "all",
-                              stats::setNames(curves, paste("Participant", curves))),
-                  selected = "mean"))
+      return(harmonic_subject_menu("Show:",
+                  c("Cell curves (the fitted model)" = "mean",
+                    "All participants (shrunken) over the cells" = "all",
+                    stats::setNames(curves, paste("Participant", curves)))))
     }
     if(!is.null(mod$individual_fits)) {
       n_subj <- length(mod$individual_fits)
@@ -501,11 +513,10 @@
         }
       })
       
-      selectInput("harmonic_subject_select", "Select Subject:", 
-                  choices = c("All (overlay)" = "all", 
-                              "Mean curve" = "mean",
-                              setNames(1:n_subj, subject_labels)),
-                  selected = "mean")
+      harmonic_subject_menu("Select Subject:",
+                  c("All (overlay)" = "all",
+                    "Mean curve" = "mean",
+                    setNames(as.character(1:n_subj), subject_labels)))
     }
   })
   
@@ -3862,7 +3873,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
           for (cl in keep) {
             dcl <- pp$table[pp$table$curve == cl, , drop = FALSE]
             if (!nrow(dcl)) next
-            col <- cols[[dcl$cell[1]]] %||% "#777777"
+            col <- if (dcl$cell[1] %in% names(cols)) cols[[dcl$cell[1]]] else "#777777"
             p <- p %>% add_lines(
               x = dcl$t, y = dcl$fit,
               name = if (one) sprintf("Participant %s (shrunken)", dcl$subject[1])
@@ -4018,7 +4029,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
         cells <- if (!is.null(gc)) gc$cells else character(0)
         cols <- if (grouped) dance_group_colors(cells)
                 else stats::setNames(as.list(rep(DANCE_EMPHASIS, length(cells))), cells)
-        pcol <- function(cl) cols[[cl]] %||% "#777777"
+        pcol <- function(cl) if (cl %in% names(cols)) cols[[cl]] else "#777777"
         cell_of <- function(i) {
           if (!grouped) return("(all)")
           cl <- as.character(gvals[i]); if (is.na(cl) || !nzchar(cl)) NA_character_ else cl
@@ -6393,6 +6404,10 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
                   else "Intercept = time-averaged midline level (no trend)",
       mesor  = sprintf("Time-averaged midline level (%s)", lv$wc$text),
       change = sprintf("Change, %s", lv$wc$text),
+      change_origin = "Change since the time origin (extrapolated)",
+      fitted_mean = sprintf("Time-averaged fitted response (%s)", lv$wc$text),
+      avg_rate = "Average trend rate (per hour)",
+      rate0 = "Initial trend rate (per hour)",
       q)
   }
 
@@ -6402,6 +6417,29 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
   # same way. `tab` has quantity, cell, estimate, lo, hi; `res` is one pairwise
   # result per quantity (cell1, cell2, estimate, lo, hi, p_raw, p_adj), and a
   # result flagged `ratio` is drawn on a log axis around 1 instead of 0.
+  # at most DW_PER_ROW panels side by side; more wrap onto further rows, and
+  # the plot grows by DW_ROW_PX per row (dw_plot_ui)
+  DW_PER_ROW <- 4L; DW_ROW_PX <- 360L
+  dw_rows <- function(n) max(1L, as.integer(ceiling(n / DW_PER_ROW)))
+  dw_grid <- function(panels, shareY) {
+    if (!length(panels)) return(dw_msg("Nothing to show."))
+    if (length(panels) == 1L) return(panels[[1]])
+    nr <- dw_rows(length(panels))
+    # a short last row keeps the width of a full one: empty panels fill it
+    pad <- nr * min(DW_PER_ROW, length(panels)) - length(panels)
+    if (pad > 0) panels <- c(panels, rep(list(plotly_empty() %>%
+      layout(xaxis = list(visible = FALSE), yaxis = list(visible = FALSE))), pad))
+    if (nr == 1L) return(subplot(panels, nrows = 1L, shareY = shareY, titleX = TRUE, titleY = TRUE, margin = 0.03))
+    # plotly takes the bottom margin off every row but the last and the top
+    # margin off every row but the first; row heights that give that back
+    # make the plotting areas equal
+    tm <- 0.05; bm <- 0.16
+    extra <- c(bm, rep(tm + bm, max(0L, nr - 2L)), tm)
+    base <- (1 - sum(extra)) / nr
+    subplot(panels, nrows = nr, shareY = shareY, titleX = TRUE, titleY = TRUE,
+            margin = c(0.03, 0.03, tm, bm), heights = base + extra)
+  }
+  dw_plot_ui <- function(id, n_panels) plotlyOutput(id, height = sprintf("%dpx", DW_ROW_PX * dw_rows(n_panels)))
   dw_msg <- function(m) plotly_empty() %>% layout(title = list(text = m, font = list(size = 12)))
   # readable ticks for a log axis: 1-2-5 steps inside the range, instead of
   # plotly's default of labelling every minor tick
@@ -6441,9 +6479,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
                      range = c(0.4, length(cells) + 0.6)),
         yaxis = list(title = ytitle(q)))
     })
-    p <- if (length(panels) == 1L) panels[[1]] else
-      subplot(panels, nrows = 1, shareY = FALSE, titleX = TRUE, titleY = TRUE, margin = 0.06)
-    p %>% layout(showlegend = FALSE, hovermode = "closest")
+    dw_grid(panels, shareY = FALSE) %>% layout(showlegend = FALSE, hovermode = "closest")
   }
   dw_pairs_plot <- function(res, qs, axis_lab, adj) {
     ok <- vapply(res[qs], function(r) isTRUE(r$ok), logical(1))
@@ -6453,7 +6489,11 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
     pair_lab <- function(tb) sprintf("%s - %s", tb$cell1, tb$cell2)
     all_pairs <- unique(unlist(lapply(res[qs[ok]], function(r) pair_lab(r$table))))
     n <- length(all_pairs)
-    panels <- lapply(qs[ok], function(q) {
+    qok <- qs[ok]
+    panels <- lapply(seq_along(qok), function(i) {
+      q <- qok[i]
+      # the pair names on the first panel of each row only
+      first_in_row <- (i - 1L) %% DW_PER_ROW == 0L
       tb <- res[[q]]$table
       ratio <- isTRUE(res[[q]]$ratio)
       lab <- pair_lab(tb)
@@ -6482,12 +6522,22 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
                                       dw_log_ticks(range(c(tb$lo, tb$hi), na.rm = TRUE)))
                          else NULL),
                yaxis = list(tickmode = "array", tickvals = rev(seq_len(n)), ticktext = all_pairs,
+                            showticklabels = first_in_row,
                             range = c(0.4, n + 0.6), automargin = TRUE))
     })
-    p <- if (length(panels) == 1L) panels[[1]] else
-      subplot(panels, nrows = 1, shareY = TRUE, titleX = TRUE, titleY = TRUE, margin = 0.02)
-    p %>% layout(showlegend = FALSE, hovermode = "closest")
+    dw_grid(panels, shareY = FALSE) %>% layout(showlegend = FALSE, hovermode = "closest")
   }
+
+  output$harmonic_traj_levels_plot_ui <- renderUI({
+    lv <- harmonic_traj_levels()
+    dw_plot_ui("harmonic_traj_levels_plot", if (isTRUE(lv$ok)) length(lv$quantities) else 1L)
+  })
+  output$harmonic_traj_sat_plot_ui <- renderUI({
+    si <- harmonic_traj_satinfo()
+    view <- input$harmonic_traj_sat_view %||% "cells"
+    n <- if (isTRUE(si$ok) && view %in% c("cells", "pairs")) length(si$quantities %||% DANCE_TRAJ_SAT_PARS) else 1L
+    dw_plot_ui("harmonic_traj_sat_plot", n)
+  })
 
   output$harmonic_traj_levels_plot <- renderPlotly({
     lv <- harmonic_traj_levels()
