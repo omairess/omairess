@@ -1766,3 +1766,58 @@ are shown. Every cosinor curve plot is drawn back to front, in this order:
 3. the fitted lines (`dance_plot_layers()`).
 
 So the fits are never buried under the data.
+
+## 34. One sign for every pairwise row; publication-ready text in the report
+
+**The sign of a pairwise difference.** A row labelled "a vs b" is now
+a − b for every quantity, under both approaches.
+- **The bug.** Under the mixed model, the amplitude and acrophase rows were
+  b − a, while the level and change rows were a − b. With Group 2's
+  amplitude larger than Group 1's, the row "1 vs 2" showed a positive
+  difference. The estimates were right; only the sign of those rows was
+  reversed.
+- **Where it came from.** The low-level helpers `dance_traj_phase_contrast()`
+  and `dance_traj_pair_joint()` (`server/08f`) return second − first. Their
+  own tests, including the GLMMcosinor crosscheck, pin that.
+- **The fix.** `dance_traj_contrasts()` (`server/08g`) now flips the
+  estimate, the statistic and the CI of those rows, so the table it hands on
+  is a − b. The p values do not change. The two-stage pairwise rows
+  (`dance_ts_pairwise()`) were already a − b.
+- **Two-stage amplitude pairwise.** Under the two-stage approach, the
+  amplitude pairwise row compares the mean of the participants' own
+  amplitudes (Welch). The group amplitude in the outcome table is the
+  population-mean cosinor's amplitude (the vector mean, Bingham et al.,
+  1982). The two estimators differ, so the pairwise difference need not
+  equal the difference of the two table values. The same holds for
+  acrophase (Watson-Williams on the participants' acrophases).
+- **Tests:**
+  - `tests/pairwise_sign_app_test.R` checks that "a vs b" = est(a) − est(b)
+    for level, change, amplitude and acrophase under both approaches;
+  - `tests/glmmcosinor_crosscheck_test.R` checks the amplitude contrast
+    against GLMMcosinor with the sign that "a vs b" now carries.
+
+**Publication-ready text (report only, no new number).**
+`dance_pub_cosinor()` (`server/08p_helpers_pubtext.R`) writes a "Statistical
+Analysis" section, a "Results" section and a "Table 1" with a Note into the
+analysis report, after the results tables.
+- **Its numbers.** Every number is read from the outcome table
+  (`harmonic_outcomes()`) and the pairwise table
+  (`harmonic_pairwise_all()`). Nothing is computed anew, so the exported
+  script needs no change: it already reproduces both tables.
+- **Its wording, by rule:**
+  - a test is called significant when p < alpha (.05);
+  - a significant pairwise difference is written positive, with the larger
+    group named first; the others are listed with their p;
+  - amplitude pairwise comparisons are called exploratory, with a caution
+    when the joint rhythm test is not significant or nothing is adjusted;
+  - the summary names the domains whose tests were significant.
+- **Its caveats.** The report says the text is for adaptation and must be
+  read against the results. It also says the components describe the
+  observed trajectories, not endogenous circadian or homeostatic processes.
+- **Tests:** `tests/pub_text_app_test.R` checks:
+  - the section exists under both approaches and for numeric group levels;
+  - the level estimates and CIs equal the outcome table's;
+  - the level contrast is stated positive, with the larger group first;
+  - the rhythm joint test is stated with its F;
+  - Table 1 uses the group labels;
+  - every sentence starts with a capital, with no doubled nouns.

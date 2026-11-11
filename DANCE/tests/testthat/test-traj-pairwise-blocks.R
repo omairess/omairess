@@ -241,9 +241,10 @@ test_that("the harmonic in the name is the harmonic compared", {
   expect_true(isTRUE(a1$ok) && isTRUE(a2$ok))
   expect_false(isTRUE(all.equal(a1$table$estimate, a2$table$estimate)))
   g <- function(ct, c1, c2) ct$table$estimate[ct$table$cell1 == c1 & ct$table$cell2 == c2]
-  # H1 separates A from B and not A from C; H2 does the opposite. Planted at 4.
-  expect_gt(g(a1, "A", "B"), 3); expect_lt(abs(g(a1, "A", "C")), 1.5)
-  expect_gt(g(a2, "A", "C"), 3); expect_lt(abs(g(a2, "A", "B")), 1.5)
+  # H1 separates A from B and not A from C; H2 does the opposite. Planted at 4,
+  # larger in B (H1) and in C (H2); "A vs B" is A minus B, so negative.
+  expect_lt(g(a1, "A", "B"), -3); expect_lt(abs(g(a1, "A", "C")), 1.5)
+  expect_lt(g(a2, "A", "C"), -3); expect_lt(abs(g(a2, "A", "B")), 1.5)
   # the unit line names the harmonic and its period, so a printed table cannot
   # be read as being about the wrong rhythm
   expect_match(a1$unit, "H1"); expect_match(a1$unit, "24")

@@ -1650,6 +1650,79 @@ dance_apa_report <- function(values, input, title = NULL) {
         "analysis and regenerate it.")
   }
 
+  # ------------------------------------------- publication-ready text (cosinor)
+  # Statistical Analysis, Results and Table 1 in APA style, from the same
+  # outcome and pairwise tables as the sections above (server/08p_helpers_pubtext.R)
+  # local(): none of its names (o, info, ...) may rebind the report's own
+  pub <- tryCatch(local({
+    hm <- values$harmonic_model
+    if (is.null(hm) || !exists("harmonic_outcomes", mode = "function")) NULL else {
+      o <- harmonic_outcomes()
+      if (!isTRUE(o$ok)) NULL else {
+        mixed <- identical(hm$approach %|% "two_stage", "mixed") && isTRUE(hm$traj$ok)
+        ff <- hm$traj
+        pub_pw <- tryCatch(harmonic_pairwise_all(), error = function(e) NULL)
+        Y <- hm$Y; tv <- hm$time_vec; co <- dance_clock_origin(hm); P <- hm$period %|% 24
+        wc <- dance_window_clock(min(tv, na.rm = TRUE), max(tv, na.rm = TRUE), co, P)
+        win <- sub(" (+1d)", " the following day", sprintf("a %s-hour period (%s–%s)",
+                   format(round(max(tv) - min(tv), 2)), wc$start, wc$end), fixed = TRUE)
+        cells <- unique(o$estimates$cell)
+        # participants per group (curves per design cell)
+        gn <- if (mixed) {
+          dd <- ff$spec$data; dts <- ff$spec$design_terms
+          key <- if (length(dts)) do.call(paste, c(lapply(dts, function(f) as.character(dd[[f]])), list(sep = " x ")))
+                 else rep(cells[1], nrow(dd))
+          cv <- if ("curve" %in% names(dd)) "curve" else "subject"
+          vapply(cells, function(cl) length(unique(dd[[cv]][key == cl])), integer(1))
+        } else {
+          tsx <- tryCatch(harmonic_ts(), error = function(e) NULL)
+          if (!is.null(tsx$df)) vapply(cells, function(cl) sum(as.character(tsx$df$group) == cl), integer(1)) else NULL
+        }
+        re_terms <- if (mixed) {
+          tm <- trimws(strsplit(gsub("\\|.*$", "", gsub("^\\(|\\)$", "", strsplit(ff$re_formula, ")\\s*\\+\\s*\\(")[[1]][1])), "\\+")[[1]])
+          lab <- unique(ifelse(tm == "1", "intercept", ifelse(grepl("^trend", tm), "trend",
+                        ifelse(grepl("^[cs][0-9]+$", tm), "harmonic components", tm))))
+          lab
+        } else NULL
+        r2 <- if (mixed) tryCatch(dance_traj_r2(ff), error = function(e) NULL) else NULL
+        prm <- hm$individual_params
+        tsp <- hm$tau_spec %|% list()
+        info <- list(
+          approach = if (mixed) "mixed" else "two_stage",
+          factor = paste(hm$group_var_name %|% (ff$spec$design_terms %|% "group"), collapse = " x "),
+          role = if (mixed && length(ff$spec$within_terms %|% character(0))) "within-subjects" else "between-subjects",
+          n_part = if (mixed) ff$spec$n_participants else nrow(Y), n_obs = sum(is.finite(Y)), n_time = length(tv),
+          n_missing = sum(!is.finite(Y)), window = win, period = P, K = as.integer(hm$n_harmonics %|% 1L),
+          window_short = sprintf("%s h, %s\u2013%s", format(round(max(tv) - min(tv), 2)), wc$start, wc$end),
+          tau = if (mixed) ff$spec$tau else tsp$value,
+          tau_mode = if (mixed) (if (isTRUE(ff$sat$ok)) "per_cell" else if (isTRUE(ff$tau_estimated)) "estimate" else "fixed")
+                     else (if (identical(tsp$mode, "fixed")) "fixed" else "estimate"),
+          re_terms = re_terms, re_uncorrelated = mixed && grepl("||", ff$re_formula, fixed = TRUE),
+          residuals = if (mixed && isTRUE(ff$phi > 0)) "car1" else "independent", phi = if (mixed) ff$phi else NA,
+          df_method = if (identical(input$harmonic_df_method %|% "kr", "satterthwaite")) "Satterthwaite" else "Kenward–Roger",
+          r2_marginal = r2$marginal %|% NA, r2_conditional = r2$conditional %|% NA,
+          r2_ts = if (!mixed && !is.null(prm$r_squared)) c(mean(prm$r_squared, na.rm = TRUE),
+                    range(prm$r_squared, na.rm = TRUE)) else NULL,
+          group_n = gn, log_scale = dance_scale_is_log(hm$scale %|% list()),
+          origin_text = if (identical(dance_origin_phrase(hm), "the time origin"))
+            sprintf("Time was measured from a time origin at %s, %s h before the first observation, so that the intercept and the trend were anchored there (an extrapolation over the interval without data).",
+                    dance_clock_label(co, 24, show_day = FALSE), format(signif(hm$origin_lead, 3))) else NULL,
+          origin_clock = dance_clock_label(co, 24, show_day = FALSE),
+          versions = c(R = as.character(getRversion()), lme4 = pkg("lme4"), lmerTest = pkg("lmerTest")))
+        dance_pub_cosinor(o, pub_pw, info)
+      }
+    }
+  }), error = function(e) NULL)
+  if (length(pub)) {
+    h(2, "Publication-ready text: cosinor regression")
+    add("*Written from the results above, in APA style, for adaptation into a manuscript. Every number is ",
+        "taken from the tables of this report; the wording is chosen by rule (a test is called significant ",
+        "at p < .05). Read it against your results, and edit the interpretation, before use.*")
+    blank()
+    L <- c(L, pub)
+    blank()
+  }
+
   # -------------------------------------------------------- reproducibility --
   h(2, "Reproducibility")
   pkgs <- c("shiny", "fda", "mgcv", "minpack.lm", "cluster", "fda.usc",

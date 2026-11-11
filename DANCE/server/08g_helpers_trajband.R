@@ -666,6 +666,13 @@ dance_traj_contrasts <- function(fit, what = "level",
     rows <- Filter(Negate(is.null), rows)
     if (!length(rows)) return(list(ok = FALSE, message = "No contrast could be formed."))
     tab <- do.call(rbind, rows)
+    # ONE SIGN CONVENTION FOR EVERY ROW: "a vs b" is a minus b, as for the level,
+    # trend and two-stage contrasts. The amplitude and phase helpers return the
+    # second cell minus the first (their own tests pin that), so the table turns
+    # them round here: estimate, statistic and the interval (whose ends swap).
+    lo0 <- tab$lo
+    tab$estimate <- -tab$estimate; tab$statistic <- -tab$statistic
+    tab$lo <- -tab$hi; tab$hi <- -lo0
     # NAME THE HARMONIC. A column of amplitude differences that does not say
     # which rhythm it is about is a column of unidentified numbers, and this
     # panel showed H1 under a bare "Amplitude" for as long as it existed.

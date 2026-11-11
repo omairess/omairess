@@ -117,7 +117,9 @@ for (lv in c("A", "B")) {
   i <- match(lv, ap2$table$cell)
   agree(sprintf("amplitude, group %s", lv), ap2$table$amplitude[i], gv(b2$tt, lv, "amp"), 1e-4, "VAS")
 }
-agree("amplitude contrast B - A", ca2$table$estimate[1], t2$ind.test$conf.int[1], 1e-4, "VAS")
+# the table's row "A vs B" is A minus B (one sign convention for every row);
+# GLMMcosinor reports B minus A
+agree("amplitude contrast A - B", ca2$table$estimate[1], -t2$ind.test$conf.int[1], 1e-4, "VAS")
 
 cat("\n-- AGREEMENT: contrasts, planted phase difference (2.0 vs 2.8 rad) ----\n")
 b3 <- fit_both(gen(303, phB = 2.8))
