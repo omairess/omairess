@@ -1243,20 +1243,39 @@ dance_raw_paths <- function(t, y, curve, grid = sort(unique(t[is.finite(t)]))) {
 # missing values), faint so the fitted curves stay readable.
 dance_add_raw <- function(p, t, y, curve, color_rgb, style = "points", legendgroup = NULL,
                           name = NULL, grid = NULL, showlegend = FALSE) {
+  # ONE curve (a single participant): large, outlined points; MANY curves:
+  # small and faint, so a whole sample does not bury the fitted curves
+  many <- length(unique(curve[is.finite(y) & is.finite(t)])) > 1L
   if (identical(style, "lines")) {
     pth <- dance_raw_paths(t, y, curve, grid %||% sort(unique(t[is.finite(t)])))
     if (!length(pth$x)) return(p)
     plotly::add_lines(p, x = pth$x, y = pth$y, legendgroup = legendgroup, name = name,
                       showlegend = showlegend, hoverinfo = "skip", connectgaps = FALSE,
-                      line = list(color = dance_group_rgba(color_rgb, 0.25), width = 1))
+                      meta = "dance_bg",
+                      line = list(color = dance_group_rgba(color_rgb, if (many) 0.18 else 0.6),
+                                  width = if (many) 0.8 else 1.4))
   } else {
     ok <- is.finite(y) & is.finite(t)
-    # big enough to see and to hover on, faint enough to keep the curves readable
     plotly::add_markers(p, x = t[ok], y = y[ok], legendgroup = legendgroup, name = name,
-                        showlegend = showlegend, hoverinfo = "skip",
-                        marker = list(color = dance_group_rgba(color_rgb, 0.45), size = 8,
-                                      line = list(color = dance_group_rgba(color_rgb, 0.8), width = 0.5)))
+                        showlegend = showlegend, hoverinfo = "skip", meta = "dance_bg",
+                        marker = if (many) list(color = dance_group_rgba(color_rgb, 0.22), size = 5)
+                                 else list(color = dance_group_rgba(color_rgb, 0.45), size = 8,
+                                           line = list(color = dance_group_rgba(color_rgb, 0.8), width = 0.5)))
   }
+}
+
+# THE LAYERS OF A CURVE PLOT, back to front: the data (raw points, every
+# participant's own curve: traces marked meta = "dance_bg"), then the bands,
+# then the fitted lines and their annotations -- whatever order they were
+# added in, so the fits are never buried under the data.
+dance_plot_layers <- function(p) {
+  b <- if (inherits(p, "plotly") && is.null(p$x$data)) plotly::plotly_build(p) else p
+  if (is.null(b$x$data) || !length(b$x$data)) return(b)
+  tr <- b$x$data
+  is_bg <- vapply(tr, function(t) identical(unlist(t$meta)[1], "dance_bg"), logical(1))
+  is_band <- vapply(tr, function(t) !is.null(t$fill) && !identical(t$fill, "none"), logical(1)) & !is_bg
+  b$x$data <- c(tr[is_bg], tr[is_band], tr[!is_bg & !is_band])
+  b
 }
 
 

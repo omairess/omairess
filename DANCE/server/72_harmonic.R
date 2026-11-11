@@ -3868,7 +3868,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
               name = if (one) sprintf("Participant %s (shrunken)", dcl$subject[1])
                      else sprintf("%s participant", dcl$cell[1]),
               legendgroup = if (one) "participant" else paste0("pp_", dcl$cell[1]),
-              showlegend = one,
+              showlegend = one, meta = if (one) "dance_fg" else "dance_bg",
               line = list(color = dance_group_rgba(col, if (one) 0.95 else 0.30),
                           width = if (one) 2.2 else 1))
           }
@@ -4030,7 +4030,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
             cl <- cell_of(i); if (is.na(cl)) next
             p <- p %>% add_lines(x = time_fine, y = predict_cosinor(fit_i, time_fine),
                                  name = if (grouped) sprintf("%s participant", cl) else "participant",
-                                 legendgroup = paste0("pp_", cl), showlegend = FALSE,
+                                 legendgroup = paste0("pp_", cl), showlegend = FALSE, meta = "dance_bg",
                                  line = list(color = dance_group_rgba(pcol(cl), 0.35), width = 1))
           }
         }
@@ -5624,7 +5624,7 @@ fit_cosinor_nonlinear <- function(time, y, period, n_harmonics, trend_type = "no
                   if (!is.null(gp) && nrow(gp)) data.frame(start = gp$start, end = gp$end, label = "no samples"))
       attr(gp, "hover") <- hv
     }
-    dance_plot_mark_gaps(p, gp, mod$time_vec)
+    dance_plot_layers(dance_plot_mark_gaps(p, gp, mod$time_vec))
   }
 
   harmonic_outcomes <- reactive({

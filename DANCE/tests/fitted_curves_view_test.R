@@ -34,6 +34,19 @@ testServer(server, {
       sprintf("the participant's data are in legend group '%s'", if (length(raw)) raw[[1]]$legendgroup else "none"))
   chk(length(raw) == 1 && isTRUE(raw[[1]]$marker$size >= 8), "raw points are size 8",
       sprintf("raw point size %s", if (length(raw)) raw[[1]]$marker$size else NA))
+  # EVERYONE, with raw data and every participant's curve: small faint points,
+  # and the data drawn first, the bands next, the fitted lines on top
+  session$setInputs(harmonic_subject_select = "all", harmonic_show_data = TRUE, harmonic_show_ci = TRUE)
+  d <- harmonic_plot_finish(harmonic_fit_plot_build(), FALSE)$x$data
+  raw <- Filter(function(t) identical(t$mode, "markers"), d)
+  chk(length(raw) >= 2 && all(vapply(raw, function(t) t$marker$size <= 5, logical(1))),
+      "everyone: the raw points are small and faint", "everyone: the raw points are still large")
+  kind <- vapply(d, function(t) if (identical(unlist(t$meta)[1], "dance_bg")) "data"
+                 else if (!is.null(t$fill) && !identical(t$fill, "none")) "band" else "fit", character(1))
+  first_fit <- min(which(kind == "fit")); last_data <- max(which(kind == "data")); last_band <- max(which(kind == "band"))
+  chk(last_data < min(which(kind == "band")) && last_band < first_fit,
+      "the data are drawn first, the bands next, the fitted lines on top",
+      sprintf("drawing order: %s", paste(kind, collapse = " ")))
   # COMPONENTS under the mixed approach
   session$setInputs(harmonic_subject_select = "mean", harmonic_show_data = FALSE, harmonic_show_components = TRUE)
   d <- built(harmonic_fit_plot_build())

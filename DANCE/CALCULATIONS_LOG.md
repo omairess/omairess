@@ -1757,3 +1757,12 @@ selected yet, a missing package, a test's method, warnings about the time
 axis) stay visible through `dance_status()`.
 - **Tests:** `tests/testthat/test-help-popups.R` and
   `tests/fitted_curves_view_test.R`.
+
+**Plot layering (display only).** Raw data are drawn large and outlined for
+one participant, and small and faint (size 5, 22% opacity) when many curves
+are shown. Every cosinor curve plot is drawn back to front, in this order:
+1. the data (raw points, every participant's own curve);
+2. the bands;
+3. the fitted lines (`dance_plot_layers()`).
+
+So the fits are never buried under the data.
