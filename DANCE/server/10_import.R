@@ -33,24 +33,51 @@
 #     covariates and a binary outcome.
 # ==============================================================================
 
-# --- Excel sheet picker (from CIRCAREG) --------------------------------------
+# --- Excel sheet picker (from CIRCAREG) and the text-file separator ---------
+# Both are rendered HERE, from the uploaded file's name. They used to sit in
+# conditionalPanels whose condition read input.datafile.name in the browser,
+# where a file input has no such value: the condition was never true, so
+# neither the sheet picker nor the separator was ever shown, and every Excel
+# file was read from its first sheet.
 output$excel_sheet_selector <- renderUI({
   req(input$datafile)
-  file_ext <- tools::file_ext(input$datafile$name)
+  file_ext <- tolower(tools::file_ext(input$datafile$name))
 
-  if(tolower(file_ext) %in% c("xls", "xlsx")) {
+  if (file_ext %in% c("xls", "xlsx")) {
     tryCatch({
       if(!requireNamespace("readxl", quietly = TRUE)) {
         return(div(style = "color: red;",
                    "readxl package required for Excel files. Install with: install.packages('readxl')"))
       }
       sheet_names <- readxl::excel_sheets(input$datafile$datapath)
-      selectInput("excel_sheet", "Select Sheet:",
-                  choices = sheet_names, selected = sheet_names[1])
+      tagList(
+        selectInput("excel_sheet", "Sheet (tab) with the data:",
+                    choices = sheet_names, selected = sheet_names[1]),
+        uiOutput("excel_sheet_preview"))
     }, error = function(e) {
       div(style = "color: red;", paste("Error reading Excel file:", e$message))
     })
+  } else {
+    radioButtons("sep", "Separator:",
+                 choices = c("Auto-detect" = "auto", Comma = ",",
+                             Semicolon = ";", Tab = "\t"),
+                 selected = "auto", inline = TRUE)
   }
+})
+
+# What the chosen sheet holds, before it is loaded: its size and first column
+# names, so the right tab can be recognised without opening the file.
+output$excel_sheet_preview <- renderUI({
+  req(input$datafile, input$excel_sheet)
+  pv <- tryCatch(suppressMessages(as.data.frame(readxl::read_excel(
+    input$datafile$datapath, sheet = input$excel_sheet, col_names = isTRUE(input$header),
+    n_max = 200))), error = function(e) NULL)
+  if (is.null(pv)) return(dance_status("This sheet could not be read."))
+  if (!ncol(pv)) return(dance_status("This sheet is empty."))
+  nm <- names(pv)
+  dance_status(sprintf("%s%d column%s: %s%s", if (nrow(pv) >= 200) "200+ rows, " else sprintf("%d row%s, ", nrow(pv), if (nrow(pv) == 1) "" else "s"),
+                       ncol(pv), if (ncol(pv) == 1) "" else "s",
+                       paste(utils::head(nm, 6), collapse = ", "), if (length(nm) > 6) ", ..." else ""))
 })
 
 # --- 1. Load the raw file ----------------------------------------------------
@@ -146,6 +173,9 @@ observeEvent(input$load_data, {
 
     values$raw_df <- raw_data
     values$uploaded_data <- raw_data   # RM-ANOVA pickers read this one
+    # where the data came from, for the report and the script header
+    values$data_source <- list(file = input$datafile$name,
+                               sheet = if (ext %in% c("xls", "xlsx")) as.character(sheet_to_read) else NULL)
 
     # A new file voids everything downstream, in every family -- including the
     # participant/group selection, which named people in the OLD file.
@@ -744,6 +774,7 @@ observeEvent(input$generate_sample, {
     }
 
     values$raw_df <- NULL        # hide the selection UI: nothing to select
+    values$data_source <- list(file = "simulated sample data (Generate Sample Data)", sheet = NULL)
     values$uploaded_data <- NULL
     values$subject_ids <- NULL   # a file's identifiers do not describe this set
 

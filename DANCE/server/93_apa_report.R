@@ -163,7 +163,11 @@ dance_apa_report <- function(values, input, title = NULL) {
       if (n_sub == 1) "" else "s", " observed at ", n_time, " time points",
       if (!is.null(values$time_labels))
         paste0(", from ", values$time_labels[1], " to ",
-               values$time_labels[length(values$time_labels)]) else "", ".")
+               values$time_labels[length(values$time_labels)]) else "", ".",
+      if (!is.null(values$data_source$file))
+        paste0(" It was read from ", values$data_source$file,
+               if (!is.null(values$data_source$sheet)) paste0(", sheet \"", values$data_source$sheet, "\"") else "",
+               ".") else "")
 
   # Exclusions made on the Data Import tab (server/02d_helpers_rowfilter.R).
   # APA 7 asks for the number excluded and the criterion; the app knows both,

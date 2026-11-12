@@ -249,21 +249,153 @@ dance_n_harmonics <- function(pca_res) {
 #
 # dance_smoothing_axis() resolves the time coordinates exactly as production
 # does, and reports whether real clock time was actually usable.
-dance_smoothing_axis <- function(input, values) {
-  n_time <- ncol(values$data)
+dance_smoothing_axis <- function(input, values)
+  dance_smoothing_axis_from(values$time_labels, ncol(values$data),
+                            use_real_time = isTRUE(input$use_real_time),
+                            cyclic = isTRUE(input$is_cyclic))
+
+# The same axis from literal settings, so the exported script builds it with
+# the app's own code (it has no `input` or `values`).
+dance_smoothing_axis_from <- function(time_labels, n_time, use_real_time = FALSE,
+                                      cyclic = FALSE) {
   real_time <- NULL
-  if (isTRUE(input$use_real_time)) {
-    real_time <- tryCatch(dance_cumulative_hours(values$time_labels),
+  if (isTRUE(use_real_time)) {
+    real_time <- tryCatch(dance_cumulative_hours(time_labels),
                           error = function(e) NULL)
     if (is.null(real_time) || length(real_time) != n_time) real_time <- NULL
   }
   using_real_time <- !is.null(real_time)
   t_full <- if (using_real_time) real_time else seq_len(n_time)
-  cyc <- dance_cyclic_period(values$time_labels, n_time, using_real_time)
+  cyc <- dance_cyclic_period(time_labels, n_time, using_real_time)
   list(n_time = n_time, t_full = t_full, t_rng = range(t_full),
        using_real_time = using_real_time,
-       cyclic = isTRUE(input$is_cyclic),
+       cyclic = isTRUE(cyclic),
        period = cyc$period, period_source = cyc$source)
+}
+
+# ==============================================================================
+# dance_smooth_curves() -- THE smoothing step, as a pure function
+# ==============================================================================
+# The computation of server/20_smoothing.R, moved here so the app and the
+# exported script run the same code (emit_kernel). The script used to retype a
+# simpler smooth -- every curve at once on 0-1, no per-curve handling of
+# missing values, no real-time axis, no Fourier basis, no holding of the ends,
+# no bounds -- so a run with any of those was not reproducible from it.
+#
+#   data      curves in rows, the observations as imported (NAs allowed)
+#   axis      dance_smoothing_axis() / dance_smoothing_axis_from()
+#   basis     dance_smoothing_basis(axis, nb, method)
+#   method    "auto" (lambda by GCV, dance_auto_lambda), "manual" or "none"
+#   lambda    the roughness penalty for "manual"
+#   allow_extrapolation  FALSE holds each curve flat before its first and after
+#             its last observation
+#   bounds    NULL, or c(min, max) to clamp the smoothed values
+#   progress  optional function(i, n) called as curves are smoothed
+#
+# Each curve is smoothed on its own observed points with fdPar(basis, 2,
+# lambda) and evaluated at every time point (which is what fills its gaps); a
+# curve the smoother cannot fit, or with fewer points than the basis needs
+# (3 Fourier, 4 B-spline), is interpolated linearly and counted as failed. The
+# fd object the fPCA family reads is the smoothed matrix re-expressed on 0-1
+# with lambda = 0, on a basis of the same size and, for a Fourier basis, the
+# same cycle (P19.3/P19.4).
+dance_smooth_curves <- function(data, axis, basis, method = c("auto", "manual", "none"),
+                                lambda = NULL, allow_extrapolation = FALSE,
+                                bounds = NULL, progress = NULL) {
+  method <- match.arg(method)
+  data <- as.matrix(data)
+  n_subjects <- nrow(data); n_time <- ncol(data)
+  cyclic <- isTRUE(axis$cyclic)
+  t_full <- axis$t_full; t_rng <- axis$t_rng
+  time_points_01 <- if (isTRUE(axis$using_real_time)) (t_full - t_rng[1]) / diff(t_rng)
+                    else seq(0, 1, length.out = n_time)
+  if (identical(method, "none"))
+    return(list(method = "none", smooth_mat = data, time_points_01 = time_points_01,
+                fd_obj = dance_fd_no_smoothing(data, time_points_01)))
+
+  min_points_needed <- if (cyclic) 3 else 4
+  lambda_n_used <- NA_integer_; auto_failed <- FALSE
+  lam <- if (identical(method, "auto")) {
+    al <- dance_auto_lambda(data, t_full, basis, min_points_needed = min_points_needed)
+    if (is.null(al)) { auto_failed <- TRUE; 0 } else { lambda_n_used <- al$n_used; al$lambda }
+  } else as.numeric(lambda)
+  fdParobj <- fda::fdPar(basis, 2, lam)
+
+  smooth_mat <- matrix(NA, nrow = n_subjects, ncol = n_time)
+  n_failed <- 0; failed_subjects <- c()
+  df_vec <- rep(NA_real_, n_subjects); gcv_vec <- rep(NA_real_, n_subjects)
+  for (i in seq_len(n_subjects)) {
+    y_i <- data[i, ]
+    valid_idx <- !is.na(y_i)
+    n_valid <- sum(valid_idx)
+    if (n_valid >= min_points_needed) {
+      tryCatch({
+        sb_i <- fda::smooth.basis(t_full[valid_idx], y_i[valid_idx], fdParobj)
+        smooth_mat[i, ] <- as.vector(fda::eval.fd(t_full, sb_i$fd))
+        df_vec[i] <- sb_i$df
+        gcv_vec[i] <- sb_i$gcv
+      }, error = function(e) {
+        smooth_mat[i, ] <<- stats::approx(t_full[valid_idx], y_i[valid_idx],
+                                          xout = t_full, rule = 2)$y
+        n_failed <<- n_failed + 1
+        failed_subjects <<- c(failed_subjects, i)
+      })
+    } else if (n_valid >= 2) {
+      smooth_mat[i, ] <- tryCatch(
+        stats::approx(t_full[valid_idx], y_i[valid_idx], xout = t_full, rule = 2)$y,
+        error = function(e) rep(mean(y_i[valid_idx]), n_time))
+    } else if (n_valid == 1) {
+      smooth_mat[i, ] <- rep(as.numeric(y_i[valid_idx]), n_time)
+      n_failed <- n_failed + 1
+      failed_subjects <- c(failed_subjects, i)
+    } else {
+      n_failed <- n_failed + 1
+      failed_subjects <- c(failed_subjects, i)
+    }
+    if (is.function(progress)) progress(i, n_subjects)
+  }
+
+  # outside each curve's observed range: held flat at its first/last
+  # observation unless extrapolation was allowed
+  n_clamped <- 0L
+  if (!isTRUE(allow_extrapolation)) {
+    for (i in seq_len(n_subjects)) {
+      obs_i <- which(!is.na(data[i, ]))
+      if (!length(obs_i)) next
+      lo <- min(obs_i); hi <- max(obs_i)
+      if (lo > 1) { smooth_mat[i, seq_len(lo - 1)] <- smooth_mat[i, lo]; n_clamped <- n_clamped + lo - 1L }
+      if (hi < n_time) { smooth_mat[i, (hi + 1):n_time] <- smooth_mat[i, hi]; n_clamped <- n_clamped + n_time - hi }
+    }
+  }
+  if (length(bounds) == 2L && all(is.finite(bounds)) && bounds[1] < bounds[2])
+    smooth_mat <- pmin(pmax(smooth_mat, bounds[1]), bounds[2])
+
+  # fit against the ORIGINAL values, where they were observed
+  r_squared_vec <- numeric(n_subjects); rmse_vec <- numeric(n_subjects)
+  for (i in seq_len(n_subjects)) {
+    valid_idx <- !is.na(data[i, ])
+    if (sum(valid_idx) > 1) {
+      o <- data[i, valid_idx]; f <- smooth_mat[i, valid_idx]
+      rmse_vec[i] <- sqrt(mean((o - f)^2))
+      ss_tot <- sum((o - mean(o))^2)
+      r_squared_vec[i] <- if (ss_tot > 0) 1 - sum((o - f)^2) / ss_tot else NA
+    } else { r_squared_vec[i] <- NA; rmse_vec[i] <- NA }
+  }
+
+  # the fd object on 0-1: the same curves re-expressed, not smoothed again
+  nb_used <- basis$nbasis
+  basis_01 <- if (cyclic)
+    fda::create.fourier.basis(rangeval = c(0, 1), nbasis = nb_used,
+                              period = basis$params[1] / diff(t_rng))
+  else fda::create.bspline.basis(rangeval = c(0, 1), nbasis = nb_used)
+  fd_obj <- fda::smooth.basis(time_points_01, t(smooth_mat), fda::fdPar(basis_01, 2, 0))$fd
+
+  list(method = method, smooth_mat = smooth_mat, fd_obj = fd_obj,
+       time_points_01 = time_points_01, lambda = lam, lambda_n_used = lambda_n_used,
+       auto_failed = auto_failed, nb_used = nb_used,
+       cyclic_period = if (cyclic) basis$params[1] else NA_real_,
+       df_vec = df_vec, gcv_vec = gcv_vec, r_squared = r_squared_vec, rmse = rmse_vec,
+       n_failed = n_failed, failed_subjects = failed_subjects, n_clamped = n_clamped)
 }
 
 # ==============================================================================

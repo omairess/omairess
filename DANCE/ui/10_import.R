@@ -35,25 +35,16 @@ ui_tab_import <- tabItem(
       hr(),
       checkboxInput("header", "File has header row", TRUE),
 
-      # CIRCAREG offered an explicit separator, WaPaa sniffed it from the first
-      # line. Both are kept: "Auto-detect" is WaPaa's behaviour and the default.
-      conditionalPanel(
-        condition = "input.datafile && !input.datafile.name.match(/\\.(xls|xlsx)$/i)",
-        radioButtons("sep", "Separator:",
-                     choices = c("Auto-detect" = "auto", Comma = ",",
-                                 Semicolon = ";", Tab = "\t"),
-                     selected = "auto", inline = TRUE)
-      ),
       # P19.1: a decimal comma makes R read a number column as text. Auto-detect
       # converts columns that are plainly such numbers and names them.
       radioButtons("dec", "Decimal mark:",
                    choices = c("Auto-detect" = "auto", "Point (3.5)" = "point",
                                "Comma (3,5)" = "comma"),
                    selected = "auto", inline = TRUE),
-      conditionalPanel(
-        condition = "input.datafile && input.datafile.name.match(/\\.(xls|xlsx)$/i)",
-        uiOutput("excel_sheet_selector")
-      ),
+      # the separator (text files; "Auto-detect" sniffs it from the first line)
+      # or the sheet (Excel), once a file is chosen;
+      # rendered by the server, which knows the file's name (server/10_import.R)
+      uiOutput("excel_sheet_selector"),
       hr(),
       radioButtons("data_format", "Data Format:",
                    choices = list("Wide (subjects in rows)" = "wide",

@@ -1954,3 +1954,53 @@ Kernel emitted from the same function.
 - **Effect on results.** Estimates for those participants are now the exact
   least-squares ones.
 - **Script.** The kernel is emitted from the same function.
+
+## 37. The smoothing step in the exported script; the sheet of an Excel file
+
+**Smoothing reproduced by the script (closes the gap noted at P19.3).**
+- **Was.** The script retyped a simpler smooth. It smoothed every curve at
+  once on a 0-1 grid with a B-spline basis. It had no Fourier basis, no
+  real-time axis, no per-curve handling of missing values, no holding of the
+  ends and no bounds. A cyclic or real-time run, or any run with missing
+  values, was not reproducible from it.
+- **Now.** The computation of the Smoothing tab is one pure function,
+  `dance_smooth_curves()` (`server/04_helpers_fd.R`), with
+  `dance_smoothing_axis_from()` for the axis. The app calls them, and the
+  script receives them through `emit_kernel()` and calls them with the run's
+  settings written as values. The settings are:
+  - the method;
+  - the number of basis functions;
+  - lambda (or the GCV search);
+  - real time;
+  - cyclic;
+  - extrapolation;
+  - bounds.
+
+  The script's comments state the basis, the cycle and its source, the axis,
+  and the treatment of the ends.
+- **Effect on results.** None in the app. Its smoothed curves, fd
+  coefficients and lambda are identical, to the bit, to the code it replaced.
+  This was checked on six settings (B-spline manual, real time, GCV with
+  bounds, Fourier on the column index, Fourier on real time with GCV, none).
+  The script's smoothed curves now equal the app's. `smooth_curves` in the
+  script is the app's smoothed matrix at the observed times, as the app's
+  analyses read it.
+- **Tests.**
+  - `tests/smoothing_export_test.R` runs the real Smoothing tab for the six
+    settings, then runs the generated script in a clean R session. The
+    smoothed curves, the fd object and lambda agree to 1e-10 (exactly, in
+    practice).
+  - `tests/export_roundtrip_test.R` now builds its app-side smooth with the
+    app's function, and every downstream comparison agrees exactly.
+
+**The sheet (tab) of an Excel file (display and import; no estimate).**
+- **Was.** The sheet picker and the separator choice sat in panels whose
+  condition read `input.datafile.name` in the browser, where a file input
+  has no such value. Neither control was ever shown, and every Excel file
+  was read from its first sheet.
+- **Now.** Both controls are rendered by the server from the file's name.
+  The picker lists every sheet and describes the chosen one (rows, columns,
+  first column names) before loading. The file and sheet are recorded and
+  named in the report ("It was read from ..., sheet ...") and in the
+  script's header. The script still carries the data as values.
+- **Tests.** `tests/excel_sheet_app_test.R`.

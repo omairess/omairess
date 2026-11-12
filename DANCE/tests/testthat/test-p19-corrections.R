@@ -151,11 +151,16 @@ test_that("an exactly 24-hour signal is reproduced, on either axis, and by the f
 })
 
 test_that("the smoothing step builds its 0-1 Fourier basis with the smoothing's period", {
-  code <- paste(readLines(file.path(app_dir, "server", "20_smoothing.R"), encoding = "UTF-8"),
-                collapse = "\n")
-  expect_match(code, "period_01 <- if(cyclic) basis$params[1] / diff(t_rng)", fixed = TRUE)
-  expect_match(code, "create.fourier.basis(rangeval = c(0, 1), nbasis = k, period = period_01)",
-               fixed = TRUE)
+  # the step is dance_smooth_curves() since P20 (the app and the script call it)
+  for (rt in c(FALSE, TRUE)) {
+    tt <- 0:23
+    y <- rbind(10 + 5 * cos(2 * pi * (tt - 3) / 24), 8 + 2 * sin(2 * pi * tt / 24))
+    ax <- dance_smoothing_axis_from(sprintf("%02d:00", tt), 24, rt, cyclic = TRUE)
+    b <- dance_smoothing_basis(ax, 13, "manual")
+    sm <- dance_smooth_curves(y, ax, b, "manual", lambda = 1e-8)
+    expect_equal(sm$fd_obj$basis$params, b$params[1] / diff(ax$t_rng))
+    expect_lt(max(abs(t(eval.fd(sm$time_points_01, sm$fd_obj)) - sm$smooth_mat)), 1e-6)
+  }
 })
 
 # ---- P19.16 ------------------------------------------------------------------

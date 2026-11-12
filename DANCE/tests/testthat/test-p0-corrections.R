@@ -179,9 +179,20 @@ test_that("a constant trajectory does not produce NaN or -Inf", {
 })
 
 test_that("smoothing handles 0, 1 and 2 observed points explicitly", {
-  src <- code_of("server/20_smoothing.R")
-  expect_true(grepl("} else if(n_valid == 1) {", src, fixed = TRUE))
-  expect_true(grepl("} else if(n_valid >= 2) {", src, fixed = TRUE))
+  # the step is dance_smooth_curves() (server/04_helpers_fd.R) since P20; the
+  # cases are checked by running it, not by reading its source
+  skip_if_not_installed("fda")
+  ev <- new.env()
+  for (f in c("01_helpers_time.R", "03_helpers_clock.R", "04_helpers_fd.R"))
+    sys.source(file.path(app_dir, "server", f), envir = ev)
+  ax <- ev$dance_smoothing_axis_from(sprintf("%02d:00", 0:9), 10, FALSE, FALSE)
+  Y <- rbind(sin(1:10), NA, c(NA, NA, 4, rep(NA, 7)), c(NA, 2, rep(NA, 6), 5, NA))
+  sm <- ev$dance_smooth_curves(Y, ax, ev$dance_smoothing_basis(ax, 6, "manual"), "manual",
+                               lambda = 1e-2, allow_extrapolation = TRUE)
+  expect_true(all(is.na(sm$smooth_mat[2, ])))                 # nothing observed
+  expect_equal(sm$smooth_mat[3, ], rep(4, 10))                 # one point: held flat
+  expect_equal(sm$smooth_mat[4, ], approx(c(2, 9), c(2, 5), xout = 1:10, rule = 2)$y)  # two: a line
+  expect_setequal(sm$failed_subjects, c(2, 3))                 # 0 and 1 point are counted
   # approx() with one point raises; that must not reach the module handler,
   # which reverts the WHOLE run to raw data
   expect_error(approx(5, 3.2, xout = 1:10, rule = 2))

@@ -105,36 +105,22 @@ observeEvent(input$apply_smooth, {
         type = "message", duration = 10)
     nb_used <- if(cyclic) basis$nbasis else nb
 
-    # The 0-1 basis used for the fd object every downstream analysis reads.
-    # P19.3/P19.4: on 0-1 the Fourier basis keeps the SAME cycle the smoothing
-    # used (its period divided by the width of the axis), so the fd object is
-    # the smoothed curve re-expressed and not a second, different periodic fit.
-    # It used to take fda's default period, the whole 0-1 window, which with
-    # real clock times is 23 h for a 24-hour basis.
-    period_01 <- if(cyclic) basis$params[1] / diff(t_rng) else NA_real_
-    make_basis_01 <- function(k) {
-      if(cyclic) create.fourier.basis(rangeval = c(0, 1), nbasis = k, period = period_01)
-      else       create.bspline.basis(rangeval = c(0, 1), nbasis = k)
-    }
-    # The fPCA / warping / fANOVA / clustering family works on a 0-1 range. With
-    # real times that rescaling has to preserve the spacing, otherwise the fd
-    # object would put the columns back on an even grid and undo the point of
-    # the option. (This matches WaPaa's calculate_time_positions(), which
-    # normalises the same cumulative hours for the plot axes.)
-    time_points_01 <- if(using_real_time) (t_full - t_rng[1]) / diff(t_rng)
-                      else seq(0, 1, length.out = n_time)
-
+    # THE COMPUTATION is dance_smooth_curves() (server/04_helpers_fd.R), the
+    # function the exported script calls too: per-curve smoothing on the axis
+    # above, gaps filled by the fit, the ends held flat unless extrapolation is
+    # allowed, optional bounds, and the fd object re-expressed on 0-1 with the
+    # same basis size and (Fourier) the same cycle (P19.3/P19.4). This block
+    # only reports what it did.
+    bounds <- if(isTRUE(input$constrain_bounds)) c(input$min_bound, input$max_bound) else NULL
     if(input$smooth_method == "none") {
       # ---- raw data, no smoothing -------------------------------------------
-      values$smooth_data <- values$data
-
       # fd_obj still has to exist for the fPCA family: the data points joined by
-      # straight lines (server/04_helpers_fd.R), a missing value read off the
-      # line between its neighbours for that representation only
-      # (values$smooth_data keeps the real NAs). WaPaa built this on
-      # min(20, n_time - 2) basis functions, which on 24 hourly columns is a
-      # real smooth applied under a control labelled "no smoothing".
-      values$fd_obj <- dance_fd_no_smoothing(values$data, time_points_01)
+      # straight lines, a missing value read off the line between its
+      # neighbours for that representation only (values$smooth_data keeps the
+      # real NAs).
+      sm <- dance_smooth_curves(values$data, axis, basis, "none")
+      values$smooth_data <- sm$smooth_mat
+      values$fd_obj <- sm$fd_obj
       values$smooth_fit_metrics <- list(
         method        = "none",
         n_basis       = ncol(values$data),
@@ -143,7 +129,9 @@ observeEvent(input$apply_smooth, {
         fill_headline = dance_fill_headline(values$fill_status),
         extrapolation = paste("missing values read off the straight line between the curve's neighbouring",
                               "observations (the nearest observation before the first or after the last),",
-                              "for the curve representation only; values$smooth_data keeps the real NAs")
+                              "for the curve representation only; values$smooth_data keeps the real NAs"),
+        settings      = list(method = "none", nb = nb, use_real_time = using_real_time,
+                             cyclic = cyclic, allow_extrapolation = FALSE, bounds = NULL)
       )
       values$smoothing_avg_metrics <- NULL
       showNotification(
@@ -151,162 +139,36 @@ observeEvent(input$apply_smooth, {
         type = "message", duration = 8)
 
     } else {
-      # ---- per-subject smoothing --------------------------------------------
-      # AUDIT (P0.2). This block used to read:
-      #
-      #     # lambda = 0 in "auto" mode: smooth.basis then uses REML/GCV
-      #     # internally rather than a lambda search here.
-      #     lam <- if(input$smooth_method == "auto") 0 else 10^(-input$smooth_factor)
-      #
-      # That comment was false and I wrote it. smooth.basis() never searches
-      # for lambda: it uses the value it is given and REPORTS a GCV score for
-      # that value. lambda = 0 is the UNPENALISED fit. Worse, nb is capped at
-      # min(n_basis, n_time) a few lines above, so in "auto" mode the system was
-      # square: on 16 time points the fit had 16 effective df, 0 residual df,
-      # and reproduced the data to 9e-16. The control labelled "Automatic
-      # smoothing (REML)" was doing no smoothing at all, and it is the default,
-      # upstream of fPCA, fANOVA, clustering and FoSR.
-      #
-      # Auto mode now performs a real GCV search with the SAME estimator that
-      # does the smoothing, which is the only way the selected lambda means
-      # anything for the fit that follows. See dance_auto_lambda() in
-      # server/04_helpers_fd.R.
-      lambda_n_used <- NA_integer_   # how many subjects entered the GCV objective
-      lam <- if(input$smooth_method == "auto") {
-        al <- dance_auto_lambda(values$data, t_full, basis, min_points_needed =
-                                if(cyclic) 3 else 4)
-        if (is.null(al)) {
+      # AUDIT (P0.2): "auto" is a real GCV search with the same estimator that
+      # does the smoothing (dance_auto_lambda), not lambda = 0.
+      sm <- withProgress(message = 'Smoothing subjects...', value = 0,
+        dance_smooth_curves(values$data, axis, basis, input$smooth_method,
+                            lambda = 10^(-input$smooth_factor),
+                            allow_extrapolation = isTRUE(input$allow_extrapolation),
+                            bounds = bounds,
+                            progress = function(i, n) if(i %% 10 == 0) incProgress(10 / n)))
+      if(identical(input$smooth_method, "auto")) {
+        if(isTRUE(sm$auto_failed))
           showNotification(
             "Automatic smoothing could not evaluate GCV for any subject (too few observed points). Falling back to an unpenalised basis fit; set a lambda by hand on the Manual setting if you want a smooth.",
             type = "warning", duration = 12)
-          0
-        } else {
+        else
           showNotification(
             sprintf("Automatic smoothing (GCV): lambda = %s, chosen by minimising the mean GCV score across %d subjects.",
-                    format(al$lambda, digits = 3), al$n_used),
+                    format(sm$lambda, digits = 3), sm$lambda_n_used),
             type = "message", duration = 10)
-          # P12.1: carried through so the report can STATE the number instead of
-          # claiming a scope. The search is over every scorable subject now, and
-          # a subject with too few observed points is still excluded, so the
-          # count and the sample size need not be equal -- which is exactly why
-          # the report prints the count.
-          lambda_n_used <- al$n_used
-          al$lambda
-        }
-      } else 10^(-input$smooth_factor)
-      fdParobj <- fdPar(basis, 2, lam)
-
-      smooth_mat      <- matrix(NA, nrow = n_subjects, ncol = n_time)
-      n_failed        <- 0
-      failed_subjects <- c()
-      df_vec          <- rep(NA_real_, n_subjects)   # effective df per subject
-      gcv_vec         <- rep(NA_real_, n_subjects)   # GCV score per subject
-
-      # A Fourier basis needs fewer points than a cubic B-spline (CIRCAREG).
-      min_points_needed <- if(cyclic) 3 else 4
-
-      withProgress(message = 'Smoothing subjects...', value = 0, {
-        for(i in 1:n_subjects) {
-          y_i       <- values$data[i, ]
-          valid_idx <- !is.na(y_i)
-          n_valid   <- sum(valid_idx)
-
-          if(n_valid >= min_points_needed) {
-            tryCatch({
-              t_valid <- t_full[valid_idx]
-              y_valid <- y_i[valid_idx]
-
-              sb_i <- smooth.basis(t_valid, y_valid, fdParobj)
-
-              # Evaluated at ALL time points: this is what interpolates the NAs.
-              smooth_mat[i, ] <- as.vector(eval.fd(t_full, sb_i$fd))
-              df_vec[i]       <- sb_i$df
-              gcv_vec[i]      <- sb_i$gcv
-            }, error = function(e) {
-              smooth_mat[i, ] <<- approx(t_full[valid_idx], y_i[valid_idx],
-                                         xout = t_full, rule = 2)$y
-              n_failed <<- n_failed + 1
-              failed_subjects <<- c(failed_subjects, i)
-            })
-          } else if(n_valid >= 2) {
-            # approx() needs two distinct points; with fewer it raises
-            # "need at least two non-NA values to interpolate", which used to
-            # escape to the MODULE-level handler and revert the whole run to
-            # raw data for every subject (P0.6).
-            smooth_mat[i, ] <- tryCatch(
-              approx(t_full[valid_idx], y_i[valid_idx], xout = t_full, rule = 2)$y,
-              error = function(e) rep(mean(y_i[valid_idx]), n_time))
-          } else if(n_valid == 1) {
-            # One observation carries no shape. Held flat at that value and
-            # counted as a failure so it is reported rather than passed off as
-            # a smoothed curve.
-            smooth_mat[i, ] <- rep(as.numeric(y_i[valid_idx]), n_time)
-            n_failed <- n_failed + 1
-            failed_subjects <- c(failed_subjects, i)
-          } else {
-            n_failed <- n_failed + 1
-            failed_subjects <- c(failed_subjects, i)
-          }
-
-          if(i %% 10 == 0) incProgress(10 / n_subjects)
-        }
-      })
-
-      # ---- extrapolation ------------------------------------------------------
-      # eval.fd() is evaluated across the WHOLE grid, including stretches where a
-      # subject has no data at either side. A B-spline carried past its data
-      # follows its end polynomial, so a subject measured for 6 h of a 38 h
-      # protocol can come back with values that are not merely uncertain but
-      # arbitrary. Holding the fitted value flat past the last observation at
-      # least keeps it in range; those points are still invented, and the
-      # missing-data map marks them.
-      if(!isTRUE(input$allow_extrapolation)) {
-        st <- values$fill_status
-        n_clamped <- 0L
-        for(i in seq_len(n_subjects)) {
-          obs_i <- which(st[i, ] == DANCE_FILL_OBSERVED)
-          if(!length(obs_i)) next
-          lo <- min(obs_i); hi <- max(obs_i)
-          if(lo > 1)      { smooth_mat[i, seq_len(lo - 1)] <- smooth_mat[i, lo]; n_clamped <- n_clamped + lo - 1L }
-          if(hi < n_time) { smooth_mat[i, (hi + 1):n_time] <- smooth_mat[i, hi]; n_clamped <- n_clamped + n_time - hi }
-        }
-        if(n_clamped > 0)
-          cat(sprintf("Held %d extrapolated values flat at each subject's last observation.\n", n_clamped))
       }
-
-      if(input$constrain_bounds) {
-        min_val <- input$min_bound
-        max_val <- input$max_bound
-        if(!is.na(min_val) && !is.na(max_val) && min_val < max_val) {
-          smooth_mat <- pmin(pmax(smooth_mat, min_val), max_val)
-        }
-      }
-
+      if(sm$n_clamped > 0)
+        cat(sprintf("Held %d extrapolated values flat at each subject's last observation.\n", sm$n_clamped))
+      smooth_mat      <- sm$smooth_mat
+      lam             <- sm$lambda
+      lambda_n_used   <- sm$lambda_n_used
+      df_vec          <- sm$df_vec
+      gcv_vec         <- sm$gcv_vec
+      failed_subjects <- sm$failed_subjects
+      r_squared_vec   <- sm$r_squared
+      rmse_vec        <- sm$rmse
       values$smooth_data <- smooth_mat
-
-      # ---- fit metrics: smoothed vs ORIGINAL, where the original was present -
-      r_squared_vec <- numeric(n_subjects)
-      rmse_vec      <- numeric(n_subjects)
-
-      for(i in 1:n_subjects) {
-        orig_i    <- values$data[i, ]
-        smooth_i  <- smooth_mat[i, ]
-        valid_idx <- !is.na(orig_i)
-
-        if(sum(valid_idx) > 1) {
-          orig_valid   <- orig_i[valid_idx]
-          smooth_valid <- smooth_i[valid_idx]
-
-          rmse_vec[i] <- sqrt(mean((orig_valid - smooth_valid)^2))
-
-          ss_tot <- sum((orig_valid - mean(orig_valid))^2)
-          ss_res <- sum((orig_valid - smooth_valid)^2)
-          r_squared_vec[i] <- if(ss_tot > 0) 1 - ss_res / ss_tot else NA
-        } else {
-          r_squared_vec[i] <- NA
-          rmse_vec[i]      <- NA
-        }
-      }
 
       data_range   <- max(values$data, na.rm = TRUE) - min(values$data, na.rm = TRUE)
       rel_rmse_pct <- if(data_range > 0) {
@@ -338,7 +200,12 @@ observeEvent(input$apply_smooth, {
         fill_headline  = dance_fill_headline(values$fill_status),
         extrapolation  = if(isTRUE(input$allow_extrapolation))
           "carried past each subject's observed range by the fitted curve"
-        else "held flat at each subject's first/last observation"
+        else "held flat at each subject's first/last observation",
+        # the settings the exported script passes back to dance_smooth_curves()
+        settings       = list(method = input$smooth_method, nb = nb, lambda = lam,
+                              use_real_time = using_real_time, cyclic = cyclic,
+                              allow_extrapolation = isTRUE(input$allow_extrapolation),
+                              bounds = bounds)
       )
 
       values$smoothing_avg_metrics <- c(
@@ -348,13 +215,7 @@ observeEvent(input$apply_smooth, {
         MAE         = NA
       )
 
-      # ---- fd object on 0-1 --------------------------------------------------
-      # smooth_mat is ALREADY smoothed, so lambda = 0 here: this step only
-      # re-expresses the same curves on the 0-1 range that fPCA, warping,
-      # fANOVA and clustering assume. Smoothing twice would over-smooth.
-      basis_01 <- make_basis_01(nb_used)
-      values$fd_obj <- smooth.basis(time_points_01, t(smooth_mat),
-                                    fdPar(basis_01, 2, 0))$fd
+      values$fd_obj <- sm$fd_obj
 
       cat(sprintf("Smoothed on %s with a %s basis (%d functions); fd object re-expressed on 0-1.\n",
                   if(using_real_time) sprintf("real elapsed hours %.2f-%.2f", t_rng[1], t_rng[2])

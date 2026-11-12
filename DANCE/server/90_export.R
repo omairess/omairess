@@ -459,6 +459,11 @@
     add("# FUNCTIONAL DATA ANALYSIS - REPRODUCIBLE CODE")
     add("# Generated from DANCE")
     add("# Date: ", Sys.Date())
+    # where the data came from; the data themselves are written below as values
+    if (!is.null(values$data_source$file))
+      add("# Data: ", values$data_source$file,
+          if (!is.null(values$data_source$sheet)) paste0(", sheet \"", values$data_source$sheet, "\"") else "",
+          " (the values are written into this script; the file is not read)")
     add("# =============================================================================")
     add("#")
     # AUDIT (P2.2): a script that names no versions is not reproducible, it is
@@ -776,92 +781,63 @@
 
     if(!is.null(values$smooth_fit_metrics)) {
       metrics <- values$smooth_fit_metrics
+      # THE APP'S OWN SMOOTHING, through dance_smooth_curves() and the axis and
+      # basis helpers it uses (server/04_helpers_fd.R): the B-spline or Fourier
+      # basis, the cycle of a Fourier basis, the real-time axis, the per-curve
+      # fits that fill the gaps, the held ends and the bounds. The script used to
+      # retype a simpler smooth (every curve at once on 0-1), so a cyclic or a
+      # real-time run, or any run with missing values, was not reproducible.
+      st <- metrics$settings %||% list(
+        method = input$smooth_method %||% "auto",
+        nb = dance_smoothing_nbasis(input, ncol(values$data)),
+        lambda = if (identical(input$smooth_method, "manual")) 10^(-(input$smooth_factor %||% 1)) else NA_real_,
+        use_real_time = isTRUE(input$use_real_time), cyclic = isTRUE(input$is_cyclic),
+        allow_extrapolation = isTRUE(input$allow_extrapolation),
+        bounds = if (isTRUE(input$constrain_bounds)) c(input$min_bound, input$max_bound) else NULL)
+      smooth_method <- st$method
+      for (k in c("dance_smoothing_axis_from", "dance_smoothing_basis", "dance_smooth_curves"))
+        emit_kernel(k)
+      add("# Smoothing method: ", switch(smooth_method,
+          none = "none (each curve is its data points joined by straight lines)",
+          auto = "automatic: lambda chosen by GCV (dance_auto_lambda), the app's own search",
+          manual = sprintf("manual, lambda = %s", format(st$lambda, digits = 6))))
+      add("# Basis: ", if (isTRUE(st$cyclic)) sprintf("Fourier (cyclic), %s functions, one cycle = %s %s (%s)",
+                                                       metrics$n_basis %||% "--",
+                                                       format(signif(metrics$cyclic_period, 6)),
+                                                       if (isTRUE(st$use_real_time)) "h" else "columns",
+                                                       metrics$cyclic_period_source %||% "")
+                   else if (identical(smooth_method, "none")) "order-2 B-spline, a knot at every time point"
+                   else sprintf("B-spline, %s functions", st$nb))
+      add("# Time axis: ", if (isTRUE(st$use_real_time)) "real clock time (hours from the column names)" else "column index")
+      if (!identical(smooth_method, "none"))
+        add("# Outside each curve's observed range: ",
+            if (isTRUE(st$allow_extrapolation)) "carried by the fitted curve" else "held flat at its first/last observation",
+            if (length(st$bounds) == 2L) sprintf("; values clamped to [%s, %s]", st$bounds[1], st$bounds[2]) else "")
+      add("time_labels <- ", dance_export_vec(values$time_labels))
+      add("smoothing_axis <- dance_smoothing_axis_from(time_labels, ncol(data_matrix),")
+      add("                                            use_real_time = ", isTRUE(st$use_real_time),
+          ", cyclic = ", isTRUE(st$cyclic), ")")
+      add("basis <- dance_smoothing_basis(smoothing_axis, ", as.integer(st$nb), ", \"", smooth_method, "\")")
+      add("smoothing <- dance_smooth_curves(data_matrix, smoothing_axis, basis, \"", smooth_method, "\",")
+      add("                                 lambda = ", if (identical(smooth_method, "manual")) sprintf("%.17g", st$lambda) else "NULL",
+          ", allow_extrapolation = ", isTRUE(st$allow_extrapolation), ",")
+      add("                                 bounds = ", dance_export_vec(st$bounds), ")")
+      if (identical(smooth_method, "auto"))
+        add("cat('GCV-selected lambda:', smoothing$lambda, '(app: ", sprintf("%.10g", st$lambda), ")\\n')")
+      add("fd_obj <- smoothing$fd_obj")
+      if (!identical(smooth_method, "none")) add("lambda <- smoothing$lambda")
+      add("# the smoothed curves at the observed times, as the app's analyses read them")
+      add("smooth_curves <- smoothing$smooth_mat")
+      add("")
 
-      # Determine smoothing method used
-      smooth_method <- if(!is.null(input$smooth_method)) input$smooth_method else "auto"
-
-      if(smooth_method == "none") {
-        add("# Smoothing method: None (raw data)")
-        add("# Each curve is its data points joined by straight lines (an order-2")
-        add("# B-spline basis with a knot at every time point); a missing value is")
-        add("# read off the line between its neighbouring observations.")
-        emit_kernel("dance_fd_no_smoothing")
-        add("fd_obj <- dance_fd_no_smoothing(data_matrix, time_points)")
-        add("")
-      } else if(smooth_method == "auto") {
-        n_basis <- if(!is.null(input$n_basis)) input$n_basis else 20
-        # AUDIT (P3.5b, found while wiring the round-trip test): this branch was
-        # the last surviving copy of the P0.2 defect. It emitted
-        #     # Smoothing method: Automatic (REML optimization)
-        #     # Smooth with REML (lambda = 0 triggers automatic optimization)
-        #     fd_par <- fdPar(basis, Lfdobj = 2, lambda = 0)
-        # Neither sentence is true of fda: smooth.basis() never searches for a
-        # smoothing parameter and never uses REML, and lambda = 0 is the
-        # UNPENALISED fit. So the exported script for an auto-mode run
-        # reproduced neither the app's smoothing nor any automatic selection --
-        # it fitted an unpenalised spline and labelled it REML. The app selects
-        # lambda by GCV (dance_auto_lambda); the script now states the value that
-        # search returned and offers the search itself as a re-run.
-        add("# Smoothing method: Automatic, lambda chosen by GCV (dance_auto_lambda)")
-        add("# Number of B-spline basis functions: ", n_basis)
-        add("")
-        add("# Create B-spline basis")
-        add("n_basis <- ", n_basis)
-        add("basis <- create.bspline.basis(rangeval = c(0, 1), nbasis = n_basis)")
-        add("")
-        if(!is.null(metrics$lambda) && is.finite(metrics$lambda)) {
-          add("# The lambda the app's GCV search selected on THIS data set. Using the")
-          add("# recorded value reproduces the app's fit exactly; re-running the")
-          add("# search (below) reproduces the app's PROCEDURE on new data.")
-          add("lambda <- ", sprintf("%.10e", metrics$lambda))
-        } else {
-          add("# No lambda was recorded for this run; re-run the search below.")
-          add("lambda <- NA_real_")
-        }
-        add("")
-        add("# The app's own GCV search, emitted verbatim. Uncomment to re-select:")
-        emit_kernel("dance_auto_lambda")
-        add("# lambda <- dance_auto_lambda(data_matrix, time_points, basis)$lambda")
-        add("")
-        add("fd_par <- fdPar(basis, Lfdobj = 2, lambda = lambda)")
-        add("smooth_result <- smooth.basis(time_points, t(data_matrix), fd_par)")
-        add("fd_obj <- smooth_result$fd")
-        add("")
-      } else if(smooth_method == "manual") {
-        n_basis <- if(!is.null(input$n_basis_manual)) input$n_basis_manual else 20
-        smooth_factor <- if(!is.null(input$smooth_factor)) input$smooth_factor else 1
-        lambda <- 10^(-smooth_factor)
-        add("# Smoothing method: Manual")
-        add("# Number of B-spline basis functions: ", n_basis)
-        add("# Smoothing factor: ", smooth_factor, " (lambda = 10^(-", smooth_factor, ") = ", sprintf("%.6e", lambda), ")")
-        add("")
-        add("# Create B-spline basis")
-        add("n_basis <- ", n_basis)
-        add("basis <- create.bspline.basis(rangeval = c(0, 1), nbasis = n_basis)")
-        add("")
-        add("# Smooth with specified lambda")
-        add("lambda <- 10^(-", smooth_factor, ")  # = ", sprintf("%.6e", lambda))
-        add("fd_par <- fdPar(basis, Lfdobj = 2, lambda = lambda)")
-        add("smooth_result <- smooth.basis(time_points, t(data_matrix), fd_par)")
-        add("fd_obj <- smooth_result$fd")
-        add("")
-      }
-
+      if (!identical(smooth_method, "none")) {
       # Fit statistics
-      add("# Smoothing fit statistics:")
+      add("# Smoothing fit statistics in the app:")
       add("#   Mean R²: ", sprintf("%.4f", metrics$mean_r_squared),
           " (SD: ", sprintf("%.4f", metrics$sd_r_squared), ")")
       add("#   Mean RMSE: ", sprintf("%.4f", metrics$mean_rmse),
           " (SD: ", sprintf("%.4f", metrics$sd_rmse), ")")
       add("")
-
-      # Bounds constraint
-      if(!is.null(input$constrain_bounds) && input$constrain_bounds) {
-        add("# Value bounds constraint applied")
-        add("min_bound <- ", input$min_bound)
-        add("max_bound <- ", input$max_bound)
-        add("# Smoothed values were clamped to [min_bound, max_bound]")
-        add("")
       }
     } else if (!is.null(values$fd_obj)) {
       # NO SMOOTHING STEP, BUT AN ANALYSIS RAN: the app then built its curves
@@ -892,10 +868,12 @@
       add("")
     }
 
-    add("# Evaluate smoothed curves")
-    add("smooth_curves <- eval.fd(time_points, fd_obj)")
-    add("smooth_curves <- t(smooth_curves)  # Back to subjects x time format")
-    add("")
+    if (is.null(values$smooth_fit_metrics)) {
+      add("# Evaluate smoothed curves")
+      add("smooth_curves <- eval.fd(time_points, fd_obj)")
+      add("smooth_curves <- t(smooth_curves)  # Back to subjects x time format")
+      add("")
+    }
 
     # ---- SECTION 4: TIME WARPING ----
     if(!is.null(values$warping_results)) {

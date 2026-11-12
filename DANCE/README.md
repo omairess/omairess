@@ -318,6 +318,8 @@ Rscript tests/mixed_calibration_test.R   # the wider level/power grid; slow
 Rscript tests/pairwise_perm_test.R
 Rscript tests/pop_cosinor_test.R
 Rscript tests/p19_import_cyclic_app_test.R  # decimal commas and text cells at import; the cycle of cyclic smoothing
+Rscript tests/smoothing_export_test.R     # the smoothing step (B-spline, Fourier, real time), app against script
+Rscript tests/excel_sheet_app_test.R      # choosing the sheet of an Excel file
 Rscript -e 'testthat::test_dir("tests/testthat")'
 ```
 

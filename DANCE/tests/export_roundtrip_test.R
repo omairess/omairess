@@ -103,13 +103,15 @@ server <- function(input, output, session) {
   # Straight in the server body, as tests/codegen_test.R does: an observe()
   # here would need a reactive flush that testServer does not reliably give.
   local({
-    time_points <- seq(0, 1, length.out = n_t)
-    basis  <- create.bspline.basis(rangeval = c(0, 1), nbasis = 12)
-    al     <- dance_auto_lambda(raw, time_points, basis)
-    lambda <- al$lambda
-    fdp    <- fdPar(basis, 2, lambda)
-    fd_obj <- smooth.basis(time_points, t(raw), fdp)$fd
-    smooth_curves <- t(eval.fd(time_points, fd_obj))
+    # THE APP'S SMOOTHING (dance_smooth_curves, the function the smoothing tab
+    # runs): automatic lambda by GCV on 12 B-splines over the column index
+    sm_settings <- list(method = "auto", nb = 12L, lambda = NA_real_, use_real_time = FALSE,
+                        cyclic = FALSE, allow_extrapolation = FALSE, bounds = NULL)
+    ax     <- dance_smoothing_axis_from(sprintf("%02d:00", hours), n_t, FALSE, FALSE)
+    sm     <- dance_smooth_curves(raw, ax, dance_smoothing_basis(ax, 12, "auto"), "auto")
+    lambda <- sm$lambda; sm_settings$lambda <- lambda
+    fd_obj <- sm$fd_obj
+    smooth_curves <- sm$smooth_mat
 
     # ---- the app's numbers -------------------------------------------------
     set.seed(101)
@@ -128,10 +130,10 @@ server <- function(input, output, session) {
     values$time_labels <- sprintf("%02d:00", hours)
     values$group_labels <- groups
     values$covariates  <- covs
-    values$smooth_fit_metrics <- list(method = "manual", n_basis = 12,
+    values$smooth_fit_metrics <- list(method = "auto", n_basis = 12,
                                       lambda = lambda, mean_r_squared = NA,
                                       mean_rmse = NA, mean_df = NA,
-                                      time_axis = "hours")
+                                      time_axis = "column index", settings = sm_settings)
     values$fanova_results  <- app_fanova
     values$fanova_results$design <- "between"
     values$harmonic_model <- list(
@@ -164,26 +166,29 @@ server <- function(input, output, session) {
   # body, and the script referenced subject_id and rm_factor without defining
   # them, so it could not run at all.
   local({
-    time_points <- seq(0, 1, length.out = n_t)
-    basis  <- create.bspline.basis(rangeval = c(0, 1), nbasis = 12)
-    lambda <- dance_auto_lambda(rm_raw, time_points, basis)$lambda
-    fd_obj <- smooth.basis(time_points, t(rm_raw), fdPar(basis, 2, lambda))$fd
+    ax     <- dance_smoothing_axis_from(sprintf("%02d:00", hours), n_t, FALSE, FALSE)
+    sm     <- dance_smooth_curves(rm_raw, ax, dance_smoothing_basis(ax, 12, "auto"), "auto")
+    lambda <- sm$lambda
+    fd_obj <- sm$fd_obj
 
     set.seed(303)
     app_rm <- perform_rm_fanova(fd_obj, rm_subject, rm_cond,
                                 n_permutations = 100, alpha = 0.05)
 
     values$data        <- rm_raw
-    values$smooth_data <- t(eval.fd(time_points, fd_obj))
+    values$smooth_data <- sm$smooth_mat
     values$time_labels <- sprintf("%02d:00", hours)
     values$group_labels <- rm_cond
     values$covariates  <- NULL
     values$reg_model   <- NULL
     values$harmonic_model <- NULL
-    values$smooth_fit_metrics <- list(method = "manual", n_basis = 12,
+    values$smooth_fit_metrics <- list(method = "auto", n_basis = 12,
                                       lambda = lambda, mean_r_squared = NA,
                                       mean_rmse = NA, mean_df = NA,
-                                      time_axis = "hours")
+                                      time_axis = "column index",
+                                      settings = list(method = "auto", nb = 12L, lambda = lambda,
+                                                      use_real_time = FALSE, cyclic = FALSE,
+                                                      allow_extrapolation = FALSE, bounds = NULL))
     values$fanova_results <- app_rm
     values$fanova_results$design     <- "within"
     values$fanova_results$subject_id <- as.character(rm_subject)
