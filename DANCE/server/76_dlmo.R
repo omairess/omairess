@@ -12,10 +12,10 @@ dlmo_covariates <- reactive(names(values$covariates) %||% character(0))
 output$dlmo_var_ui <- renderUI({
   cv <- dlmo_covariates()
   tagList(
-    selectInput("dlmo_night_var", "Night / condition column (one row per night):",
+    selectInput("dlmo_night_var", "Within participants: night / condition column (one row per night or condition):",
                 choices = c("None: one row per participant" = "_none_", cv),
                 selected = isolate(input$dlmo_night_var) %||% "_none_"),
-    selectInput("dlmo_group_var", "Group (between participants):",
+    selectInput("dlmo_group_var", "Between participants: group column:",
                 choices = c("None" = "_none_", cv),
                 selected = isolate(input$dlmo_group_var) %||% "_none_"))
 })
@@ -330,7 +330,11 @@ dlmo_test_frame <- function(cp) {
              Difference = ifelse(is.finite(tt$estimate), dance_dlmo_fmt_diff(tt$estimate), ""),
              `95% CI (h)` = ifelse(is.finite(tt$lo), sprintf("[%.2f, %.2f]", tt$lo, tt$hi), ""),
              Statistic = vapply(seq_len(nrow(tt)), function(i) dance_dlmo_test_text(tt[i, ]), ""),
-             n = tt$n, check.names = FALSE, stringsAsFactors = FALSE)
+             n = tt$n, check.names = FALSE, stringsAsFactors = FALSE) -> out
+  # the Holm-adjusted p of the pairwise contrasts, when there are any
+  if (any(is.finite(tt$p_adj)))
+    out[["p (Holm)"]] <- ifelse(is.finite(tt$p_adj), sub("^0", "", sprintf("%.3f", tt$p_adj)), "")
+  out
 }
 
 output$dlmo_compare_ui <- renderUI({
@@ -344,16 +348,19 @@ output$dlmo_compare_ui <- renderUI({
     if (length(r$methods) > 1L)
       selectInput("dlmo_compare_method", "Method:", choices = setNames(r$methods, DANCE_DLMO_METHOD_LABEL[r$methods]),
                   selected = isolate(input$dlmo_compare_method)),
-    h4("DLMO"), tableOutput("dlmo_desc_table"), uiOutput("dlmo_test_note"), tableOutput("dlmo_test_table"),
+    h4("DLMO"), uiOutput("dlmo_design_note"), tableOutput("dlmo_desc_table"), uiOutput("dlmo_test_note"),
+    tableOutput("dlmo_test_table"),
     if (r$has_bed) tagList(h4("Phase angle (bedtime - DLMO, h)"), tableOutput("dlmo_pa_desc_table"),
                            uiOutput("dlmo_pa_test_note"), tableOutput("dlmo_pa_test_table")),
     if (length(r$methods) > 1L) tagList(h4("Agreement between methods"), tableOutput("dlmo_agree_table")),
     helpText(HTML(paste(
       "Only determined onsets enter the means and tests. If being undetermined depends on the condition",
       "(an onset pushed past the window, for instance), the comparison is biased; the counts per cell",
-      "are reported for that reason. Nights are compared within participant: a paired t test for two",
-      "nights, otherwise a linear mixed model with a random intercept per participant (lmerTest,",
-      "Satterthwaite df). Groups alone: Welch's t test, or Welch's one-way ANOVA."))))
+      "are reported for that reason. Nights / conditions are compared within participant (the",
+      "participant identifier must repeat across a participant's rows): a paired t test for two",
+      "conditions, otherwise a linear mixed model with a random intercept per participant (lmerTest,",
+      "Satterthwaite df), with every pair of conditions as a contrast, Holm-adjusted within each group.",
+      "Groups alone: Welch's t test, or Welch's one-way ANOVA."))))
 })
 
 dlmo_cmp <- reactive({
@@ -362,6 +369,7 @@ dlmo_cmp <- reactive({
   if (!m %in% r$methods) m <- r$methods[1]
   dance_dlmo_comparisons(r, m)
 })
+output$dlmo_design_note <- renderUI(dance_status(dlmo_cmp()$design))
 output$dlmo_desc_table <- renderTable(dlmo_desc_frame(dlmo_cmp()$desc), na = "")
 output$dlmo_test_note <- renderUI({
   cp <- dlmo_cmp()$test

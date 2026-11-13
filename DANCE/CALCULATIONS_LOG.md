@@ -2004,3 +2004,72 @@ Kernel emitted from the same function.
   named in the report ("It was read from ..., sheet ...") and in the
   script's header. The script still carries the data as values.
 - **Tests.** `tests/excel_sheet_app_test.R`.
+
+## 38. DLMO within participants; VARIMAX rotation of the fPCA
+
+**DLMO: conditions compared within participants (result-relevant).**
+- **Was.** A night / condition factor was compared within participants, but:
+  - with three or more conditions the mixed model gave only the omnibus F,
+    with no pairwise differences;
+  - nothing checked that participants were actually seen in more than one
+    condition;
+  - the controls spoke of nights only.
+- **Now** (`dance_dlmo_compare()`, `server/08l_helpers_dlmo.R`):
+  - two conditions without groups: a paired t test, as before;
+  - otherwise a linear mixed model with a random intercept per participant
+    (lmerTest, Satterthwaite df), as before, plus every pair of conditions
+    as a contrast from that model;
+  - with three or more conditions, the pairs of one group are one family,
+    Holm-adjusted (`p_adj`; Holm 1979, `stats::p.adjust`);
+  - each contrast's n is the number of participants with an onset in both of
+    its conditions;
+  - a design with no repeated participant is refused, with the reason (the
+    participant identifier must repeat across a participant's rows);
+  - the design is stated in the tab, the report and the script
+    (`dance_dlmo_design_text()`): the factors, the conditions, how many
+    participants, and how many were seen in every condition.
+- **Effect on results.** The paired t test, the omnibus F and the
+  two-condition contrasts are unchanged. Three or more conditions now also
+  have pairwise contrasts. The n of a two-condition contrast is now the
+  number of participants with an onset in both conditions (it was the
+  number of onsets in the group).
+- **Script.** It is emitted from the same functions (`emit_kernel`) and
+  prints the design line.
+- **Tests:**
+  - `tests/testthat/test-dlmo.R`: three conditions with known effects
+    recovered; the Holm adjustment; the refusal without repeated
+    identifiers;
+  - `tests/dlmo_app_test.R`: three conditions through the app, the report,
+    and the script equal to the app.
+
+**fPCA: optional VARIMAX rotation (result-relevant when chosen).**
+- **Rule.** `fda::varmx.pca.fd()` after `fda::pca.fd()` (Ramsay & Silverman
+  2005, section 8.5), through `dance_fpca()` (`server/04_helpers_fd.R`).
+  Nothing is reimplemented.
+- **What changes.**
+  - The retained components are rotated to make each load on fewer parts of
+    the time axis.
+  - The components are no longer ordered by variance or nested; a rotated
+    set depends on how many components were retained.
+  - Each component's share of the variance is recomputed, and the set
+    explains the same total.
+  - The scores are rotated with them, so the component ANOVA uses the
+    rotated scores.
+  - The unrotated shares are kept and reported beside the rotated ones.
+- **Where it is stated.**
+  - The summary labels rotated components RC1, RC2, ... with the unrotated
+    PC shares in brackets.
+  - The loadings and variance plots are labelled.
+  - The report adds a sentence and an "Unrotated PC (%)" column.
+  - The script calls `dance_fpca()` with the rotation.
+- **Accuracy.** fda's rotation matrix is orthogonal to about 1e-7, because
+  `varmx()` writes cos 45° as 0.7071068. Curves rebuilt from rotated and
+  unrotated components agree to the same order.
+- **Tests:**
+  - `tests/testthat/test-fpca-varimax.R`: the result is fda's own; the
+    rotation is orthogonal and leaves the rebuilt curves and the total
+    variance unchanged; fda's VARIMAX equals `stats::varimax`
+    (unnormalised) on the same component matrix, up to the order and sign
+    of the columns;
+  - `tests/fpca_rotation_app_test.R`: the app with and without rotation,
+    the report, and the script equal to the app.

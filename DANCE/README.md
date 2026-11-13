@@ -320,6 +320,7 @@ Rscript tests/pop_cosinor_test.R
 Rscript tests/p19_import_cyclic_app_test.R  # decimal commas and text cells at import; the cycle of cyclic smoothing
 Rscript tests/smoothing_export_test.R     # the smoothing step (B-spline, Fourier, real time), app against script
 Rscript tests/excel_sheet_app_test.R      # choosing the sheet of an Excel file
+Rscript tests/fpca_rotation_app_test.R    # fPCA with and without VARIMAX, app against script
 Rscript -e 'testthat::test_dir("tests/testthat")'
 ```
 

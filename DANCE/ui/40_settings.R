@@ -136,6 +136,15 @@ ui_tab_settings <- tabItem(
                            identical and simply makes PC4 and PC5 available, so
                            the display controls downstream are not silently
                            capped at three.")),
+            radioButtons("pca_rotation", "Rotation:",
+                         choices = c("None" = "none", "VARIMAX" = "varimax"),
+                         selected = "none", inline = TRUE),
+            helpText(HTML("VARIMAX (fda::varmx.pca.fd) turns the retained components so each
+                           loads on fewer parts of the time axis, which can make them easier to
+                           name. The rotated components are not ordered by variance and change
+                           with the number of components retained; together they explain the
+                           same variance as the unrotated set, and the scores are rotated with
+                           them.")),
             actionButton("run_analysis", "Run Analysis", class = "btn-success")
           )
         )

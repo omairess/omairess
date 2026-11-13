@@ -861,16 +861,22 @@ dance_apa_report <- function(values, input, title = NULL) {
     if (nk >= 1) {
       h(3, "Functional principal component analysis")
       vp <- pr$varprop[seq_len(nk)]
+      rot <- identical(pr$rotation, "varimax")
       add("The first ", nk, " functional principal component",
           if (nk == 1) "" else "s", " accounted for ",
           dance_apa_num(100 * sum(vp), 1), "% of the variance",
           if (!is.null(wr))
             " of the *registered* curves, so these components describe amplitude variation; the phase variation is carried by the warping parameters"
-          else "", ".")
-      rows <- data.frame(Component = paste0("PC", seq_len(nk)),
+          else "", ".",
+          if (rot) paste0(" The ", nk, " components were rotated by VARIMAX (fda::varmx.pca.fd; Ramsay & ",
+                          "Silverman, 2005). The rotated components (RC) explain the same total variance, ",
+                          "are not ordered by variance, and depend on the number of components retained; ",
+                          "the component scores analysed below are the rotated scores.") else "")
+      rows <- data.frame(Component = paste0(if (rot) "RC" else "PC", seq_len(nk)),
                          `Variance (%)` = dance_apa_num(100 * vp, 1),
                          `Cumulative (%)` = dance_apa_num(100 * cumsum(vp), 1),
                          check.names = FALSE, stringsAsFactors = FALSE)
+      if (rot) rows$`Unrotated PC (%)` <- dance_apa_num(100 * pr$varprop_unrotated[seq_len(nk)], 1)
       blank(); L <- c(L, dance_md_table(rows)); blank()
       add("*What these numbers do not establish.* The number of components ",
           "retained was chosen by the analyst. Variance explained is not ",

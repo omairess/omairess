@@ -205,3 +205,32 @@ test_that("a rise that starts between samples is interpolated early (sparse samp
   expect_equal(r$time, 20 + 2 / 3)
   expect_lt(r$time, 20.5 + 1 / 3)
 })
+
+test_that("three conditions within participants: the mixed model and every pair, Holm-adjusted", {
+  skip_if_not_installed("lmerTest")
+  set.seed(4); n <- 16; t5 <- seq(18, 26, by = 0.5)
+  on <- 20.5 + rnorm(n, 0, 0.6)
+  shift <- c(base = 0, sd = 1.5, rec = 0.5)            # condition effects on the onset, h
+  f <- function(o) 1 + 6 * pmax(0, t5 - o) + rnorm(length(t5), 0, 0.05)
+  Y <- do.call(rbind, lapply(names(shift), function(k) t(sapply(on + shift[[k]] + rnorm(n, 0, 0.2), f))))
+  pr <- e$dance_dlmo_profiles(Y, t5, rep(sprintf("S%02d", 1:n), 3), night = rep(names(shift), each = n))
+  tab <- e$dance_dlmo_run(pr, "fixed", list(threshold = 3))
+  cp <- e$dance_dlmo_compare(tab, within = TRUE)
+  expect_true(cp$ok)
+  expect_match(cp$method, "Holm")
+  pw <- cp$tests[cp$tests$test == "contrast (Satterthwaite)", ]
+  expect_equal(nrow(pw), 3L)
+  lv <- sort(names(shift))                              # factor levels: base, rec, sd
+  want <- c(shift[[lv[2]]] - shift[[lv[1]]], shift[[lv[3]]] - shift[[lv[1]]], shift[[lv[3]]] - shift[[lv[2]]])
+  expect_equal(pw$effect, c(sprintf("%s - %s", lv[2], lv[1]), sprintf("%s - %s", lv[3], lv[1]), sprintf("%s - %s", lv[3], lv[2])))
+  expect_lt(max(abs(pw$estimate - want)), 0.2)
+  expect_equal(pw$p_adj, stats::p.adjust(pw$p, "holm"))
+  expect_true(all(pw$n == n))                           # every participant in both conditions of each pair
+  expect_equal(cp$n_complete, n)
+  expect_match(e$dance_dlmo_design_text(tab, within = TRUE), "3 nights / conditions \\(base, rec, sd\\); 16 participants")
+  # one identifier per row (no repeat): nothing to pair, and said so
+  tab2 <- tab; tab2$id <- paste0(tab2$id, "_", tab2$night)
+  r2 <- e$dance_dlmo_compare(tab2, within = TRUE)
+  expect_false(r2$ok)
+  expect_match(r2$message, "must repeat")
+})

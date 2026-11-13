@@ -263,9 +263,18 @@ dance_dlmo_compare <- function(d, value = "dlmo_h", between = FALSE, within = FA
   if (within && nlevels(d$night) < 2L) return(none("Only one night has determined onsets."))
   if (!within && any(duplicated(d$id)))
     return(none("Participants contribute several profiles; compare the nights as a within-participant factor."))
-  row <- function(effect, test, est = NA, lo = NA, hi = NA, stat = NA, df1 = NA, df2 = NA, p = NA, n = NA)
+  # A within-participant comparison needs participants seen in more than one
+  # condition. With one row per condition that rests on the participant
+  # identifier repeating across a participant's rows; when it does not, there
+  # is nothing to pair, and saying so beats a model with one onset per person.
+  if (within && !any(duplicated(d$id)))
+    return(none(paste("Each participant has an onset in only one night / condition, so nothing can be",
+                      "compared within participants. With one row per condition, the participant",
+                      "identifier chosen at Data Import must repeat across a participant's rows.")))
+  row <- function(effect, test, est = NA, lo = NA, hi = NA, stat = NA, df1 = NA, df2 = NA, p = NA, n = NA,
+                  p_adj = NA)
     data.frame(effect = effect, test = test, estimate = est, lo = lo, hi = hi, statistic = stat,
-               df1 = df1, df2 = df2, p = p, n = n, stringsAsFactors = FALSE)
+               df1 = df1, df2 = df2, p = p, p_adj = p_adj, n = n, stringsAsFactors = FALSE)
   if (within && !between && nlevels(d$night) == 2L) {
     w <- stats::reshape(d[, c("id", "night", "v")], idvar = "id", timevar = "night", direction = "wide")
     lv <- levels(d$night); a <- w[[paste0("v.", lv[2])]]; b <- w[[paste0("v.", lv[1])]]
@@ -299,23 +308,47 @@ dance_dlmo_compare <- function(d, value = "dlmo_h", between = FALSE, within = FA
   tests <- do.call(rbind, lapply(seq_len(nrow(a)), function(i)
     row(rownames(a)[i], "F (Satterthwaite)", stat = a[i, "F value"], df1 = a[i, "NumDF"],
         df2 = a[i, "DenDF"], p = a[i, "Pr(>F)"], n = nrow(d))))
-  # the night difference within each group (or overall), from the model
-  em <- NULL
-  if (nlevels(d$night) == 2L) {
-    lv <- levels(d$night)
-    gl <- if (between) levels(d$group) else NA
-    em <- do.call(rbind, lapply(gl, function(g) {
-      nd <- data.frame(night = factor(lv, levels = lv), group = if (between) factor(g, levels = levels(d$group)) else NA)
-      X <- stats::model.matrix(stats::delete.response(stats::terms(lme4::nobars(fml))), nd)
-      L <- X[2, names(lme4::fixef(m))] - X[1, names(lme4::fixef(m))]
+  # the night / condition differences within each group (or overall), from
+  # the model: every pair of levels, later minus earlier in the order of the
+  # levels. With three or more levels the pairs of one group are one family,
+  # Holm-adjusted (p_adj); with two there is one difference per group.
+  lv <- levels(d$night)
+  prs <- utils::combn(seq_along(lv), 2, simplify = FALSE)
+  gl <- if (between) levels(d$group) else NA
+  em <- do.call(rbind, lapply(gl, function(g) {
+    nd <- data.frame(night = factor(lv, levels = lv), group = if (between) factor(g, levels = levels(d$group)) else NA)
+    X <- stats::model.matrix(stats::delete.response(stats::terms(lme4::nobars(fml))), nd)
+    fe <- names(lme4::fixef(m))
+    fam <- do.call(rbind, lapply(prs, function(pr) {
+      L <- X[pr[2], fe] - X[pr[1], fe]
       ct <- lmerTest::contest(m, matrix(L, nrow = 1), joint = FALSE, confint = TRUE, level = conf)
-      row(sprintf("%s - %s%s", lv[2], lv[1], if (between) paste0(" in ", g) else ""), "contrast (Satterthwaite)",
-          ct$Estimate, ct$lower, ct$upper, ct[["t value"]], ct$df, NA, ct[["Pr(>|t|)"]],
-          sum(if (between) d$group == g else TRUE))
+      in_g <- if (between) d$group == g else rep(TRUE, nrow(d))
+      n_both <- sum(tapply(d$night[in_g] %in% lv[pr], d$id[in_g], function(x) sum(x) == 2L), na.rm = TRUE)
+      row(sprintf("%s - %s%s", lv[pr[2]], lv[pr[1]], if (between) paste0(" in ", g) else ""), "contrast (Satterthwaite)",
+          ct$Estimate, ct$lower, ct$upper, ct[["t value"]], ct$df, NA, ct[["Pr(>|t|)"]], n_both)
     }))
-  }
-  list(ok = TRUE, method = "linear mixed model, random intercept per participant",
-       tests = rbind(tests, em), model = m)
+    if (nrow(fam) > 1L) fam$p_adj <- stats::p.adjust(fam$p, "holm")
+    fam
+  }))
+  list(ok = TRUE, method = paste0("linear mixed model, random intercept per participant",
+                                  if (length(lv) > 2L) "; pairwise contrasts Holm-adjusted within each family" else ""),
+       tests = rbind(tests, em), model = m,
+       n_participants = length(unique(d$id)),
+       n_complete = sum(tapply(d$night, d$id, function(x) all(lv %in% x))))
+}
+
+# The design of a comparison in words, for the tab, the report and the script:
+# which factor varies within and which between participants, and how many
+# participants were seen in every condition.
+dance_dlmo_design_text <- function(d, between = FALSE, within = FALSE) {
+  d <- d[d$status == "determined", , drop = FALSE]
+  lv <- sort(unique(d$night)); gl <- sort(unique(stats::na.omit(d$group)))
+  nid <- length(unique(d$id))
+  comp <- sum(tapply(d$night, d$id, function(x) all(lv %in% x)))
+  w <- sprintf("within participants: %d nights / conditions (%s); %d participants with a determined onset, %d of them in every condition",
+               length(lv), paste(lv, collapse = ", "), nid, comp)
+  b <- sprintf("between participants: %d groups (%s)", length(gl), paste(gl, collapse = ", "))
+  paste0("Design: ", if (within && between) paste0(b, " x ", w) else if (within) w else if (between) b else "no factor", ".")
 }
 
 # Two methods on the same profiles: the mean and SD of their difference.
@@ -394,6 +427,7 @@ dance_dlmo_comparisons <- function(r, method, conf = 0.95) {
   d <- r$tab[r$tab$method == method, , drop = FALSE]
   by <- c(if (r$has_group) "group", if (r$has_night) "night")
   out <- list(method = method,
+              design = dance_dlmo_design_text(d, r$has_group, r$has_night),
               desc = dance_dlmo_describe(d, "dlmo_h", by),
               test = dance_dlmo_compare(d, "dlmo_h", r$has_group, r$has_night, conf))
   if (r$has_bed) {
@@ -434,7 +468,7 @@ dance_dlmo_apa <- function(r) {
       if (ds$n_before[i] + ds$n_after[i] + ds$n_other[i] > 0)
         sprintf("; not determined: %d before the window, %d no onset, %d other", ds$n_before[i], ds$n_after[i], ds$n_other[i])
       else ""), "")
-    add(sprintf("*%s.* Mean DLMO %s.", ml[[m]], paste(cells, collapse = "; ")))
+    add(sprintf("*%s.* %s Mean DLMO %s.", ml[[m]], cp$design, paste(cells, collapse = "; ")))
     if (isTRUE(cp$test$ok)) {
       tt <- cp$test$tests
       add(sprintf("Comparison (%s%s): %s.", cp$test$method,
@@ -442,7 +476,10 @@ dance_dlmo_apa <- function(r) {
                   paste(vapply(seq_len(nrow(tt)), function(i) sprintf("%s%s, %s", tt$effect[i],
                     if (is.finite(tt$estimate[i])) sprintf(" %s [%s, %s]", dance_dlmo_fmt_diff(tt$estimate[i]),
                                                             sprintf("%.2f", tt$lo[i]), sprintf("%.2f", tt$hi[i])) else "",
-                    dance_dlmo_test_text(tt[i, ])), ""), collapse = "; ")))
+                    paste0(dance_dlmo_test_text(tt[i, ]),
+                           if (is.finite(tt$p_adj[i])) sprintf(", Holm-adjusted p %s",
+                             if (tt$p_adj[i] < .001) "< .001" else paste("=", sub("^0", "", sprintf("%.3f", tt$p_adj[i])))) else "")),
+                    ""), collapse = "; ")))
     } else if (r$has_group || r$has_night) add(sprintf("No comparison: %s", cp$test$message))
     if (r$has_bed) {
       pd <- cp$pa_desc

@@ -229,6 +229,34 @@ dance_n_harmonics <- function(pca_res) {
 }
 
 # ==============================================================================
+# dance_fpca(fd_obj, nharm, rotation) -- functional PCA, optionally rotated
+# ==============================================================================
+# fda::pca.fd(), then, on request, fda::varmx.pca.fd(): the VARIMAX rotation of
+# the retained components (Ramsay & Silverman 2005, section 8.5), not
+# reimplemented here. The rotation turns the nharm components so each has
+# large values on fewer parts of the time axis, which can make them easier to
+# name. What it changes, and the summary and report say so:
+#   * the components are no longer ordered by variance, nor nested -- a rotated
+#     set depends on how many components were retained;
+#   * each component's share of the variance is recomputed (varprop), and the
+#     total explained by the set is unchanged;
+#   * the scores are rotated with them, so analyses of the scores use the
+#     rotated components.
+# The unrotated shares are kept (varprop_unrotated) so they can be reported.
+dance_fpca <- function(fd_obj, nharm, rotation = c("none", "varimax")) {
+  rotation <- match.arg(rotation)
+  pr <- fda::pca.fd(fd_obj, nharm = nharm)
+  pr$rotation <- "none"
+  if (identical(rotation, "varimax") && nharm >= 2L) {
+    vp0 <- pr$varprop
+    pr <- fda::varmx.pca.fd(pr)
+    pr$varprop_unrotated <- vp0
+    pr$rotation <- "varimax"
+  }
+  pr
+}
+
+# ==============================================================================
 # dance_smoothing_axis(input, values) / dance_smoothing_basis(...)
 # ==============================================================================
 # AUDIT (P9.3). The smoothing basis was built inline in server/20_smoothing.R,

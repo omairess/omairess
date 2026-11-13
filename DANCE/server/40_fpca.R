@@ -45,6 +45,11 @@
       m <- nrow(data_to_use)
       
       n_components <- min(input$n_components, m-1, 10)
+      # VARIMAX (fda::varmx.pca.fd) on request, through dance_fpca()
+      pca_rotation <- if (identical(input$pca_rotation, "varimax")) "varimax" else "none"
+      if (identical(pca_rotation, "varimax") && n_components < 2)
+        showNotification("A rotation needs at least two components; the single component is not rotated.",
+                         type = "warning", duration = 8)
       time_grid <- seq(0, 1, length.out = n)
       
       if(is.null(values$fd_obj)) {
@@ -58,7 +63,7 @@
       if(input$pca_type == "fpca") {
         # Regular functional PCA
         cat("Running standard functional PCA...\n")
-        values$pca_results <- pca.fd(values$fd_obj, nharm = n_components)
+        values$pca_results <- dance_fpca(values$fd_obj, n_components, pca_rotation)
         values$warping_results <- NULL
         showNotification("Functional PCA completed!", type = "message", duration = 5)
         
@@ -165,7 +170,7 @@
         # Run PCA on warped curves with error checking
         if(!is.null(warp_fd$regfd)) {
           cat("Running PCA on warped fd object\n")
-          values$pca_results <- pca.fd(warp_fd$regfd, nharm = n_components)
+          values$pca_results <- dance_fpca(warp_fd$regfd, n_components, pca_rotation)
         } else if(!is.null(warp_fd$registered_curves) && ncol(warp_fd$registered_curves) > 0) {
           cat("Creating fd from registered curves\n")
           # back onto the curves' own basis: straight lines through the
@@ -173,10 +178,10 @@
           # min(20, n - 2, max(4, n / 3)) cubic B-splines -- 6 on 18 points --
           # a smoothing step nobody asked for)
           reg_fd <- dance_refd(warp_fd$registered_curves, time_grid, values$fd_obj$basis)
-          values$pca_results <- pca.fd(reg_fd, nharm = n_components)
+          values$pca_results <- dance_fpca(reg_fd, n_components, pca_rotation)
         } else {
           cat("Warning: No valid warped data, using original fd_obj\n")
-          values$pca_results <- pca.fd(values$fd_obj, nharm = n_components)
+          values$pca_results <- dance_fpca(values$fd_obj, n_components, pca_rotation)
         }
         
         showNotification("Time-warped PCA completed!", type = "message", duration = 5)
@@ -256,12 +261,17 @@
           # total, which is what you need to decide how many to keep.
           nk <- min(dance_n_harmonics(pca_res), length(pca_res$varprop))
           if (nk < 1) nk <- length(pca_res$varprop)
-          cat("Variance explained:\n")
+          rot <- identical(pca_res$rotation, "varimax")
+          if (rot)
+            cat("Rotation: VARIMAX (fda::varmx.pca.fd). The rotated components are not ordered by\n",
+                "variance and depend on how many were retained; the set explains the same total.\n", sep = "")
+          cat("Variance explained", if (rot) " (rotated components; unrotated in brackets)", ":\n", sep = "")
           cs <- 0
           for(i in seq_len(nk)) {
             cs <- cs + pca_res$varprop[i]
-            cat(sprintf("  PC%d: %6.2f%%   (cumulative %6.2f%%)\n",
-                        i, pca_res$varprop[i] * 100, cs * 100))
+            cat(sprintf("  %s%d: %6.2f%%   (cumulative %6.2f%%)%s\n",
+                        if (rot) "RC" else "PC", i, pca_res$varprop[i] * 100, cs * 100,
+                        if (rot) sprintf("   [PC%d: %.2f%%]", i, 100 * pca_res$varprop_unrotated[i]) else ""))
           }
           cat(sprintf("  ---\n  %d component%s retained, %.2f%% of the total variance.\n",
                       nk, if (nk == 1) "" else "s", cs * 100))
@@ -319,14 +329,15 @@
                                y = as.vector(loading_vals),
                                type = 'scatter',
                                mode = 'lines',
-                               name = paste("PC", i),
+                               name = paste(if (identical(pca_res$rotation, "varimax")) "RC" else "PC", i),
                                line = list(color = colors[i], width = 2))
         }
       }
       
       # A centred title with plotly's default top margin lands on the topmost
       # trace. Reserve the space rather than shrinking the title.
-      p <- p %>% layout(title = list(text = "Principal component loadings",
+      p <- p %>% layout(title = list(text = paste0("Principal component loadings",
+                                                        if (identical(pca_res$rotation, "varimax")) " (VARIMAX-rotated)" else ""),
                                      x = 0.5, xanchor = "center"),
                         yaxis = list(title = "Loading"),
                         margin = list(t = 60))
@@ -383,7 +394,10 @@
                   line = list(color = DANCE_EMPHASIS),
                   marker = list(color = DANCE_EMPHASIS))
       
-      p %>% layout(title = list(text = "Variance explained", x = 0.5, xanchor = "center"),
+      p %>% layout(title = list(text = paste0("Variance explained",
+                                             if (identical(pca_res$rotation, "varimax"))
+                                               " (VARIMAX-rotated: not ordered by variance)" else ""),
+                               x = 0.5, xanchor = "center"),
                    margin = list(t = 60),
                    xaxis = list(title = "Component", dtick = 1),
                    yaxis = list(title = "Variance Explained (%)"),
@@ -454,7 +468,7 @@
             y = plus_2sd,
             type = 'scatter',
             mode = 'lines',
-            name = paste("PC", i, "+2SD"),
+            name = paste(if (identical(pca_res$rotation, "varimax")) "RC" else "PC", i, "+2SD"),
             legendgroup = paste0("PC", i),
             line = list(color = colors[i], dash = 'solid')
           )
@@ -466,7 +480,7 @@
             y = minus_2sd,
             type = 'scatter',
             mode = 'lines',
-            name = paste("PC", i, "-2SD"),
+            name = paste(if (identical(pca_res$rotation, "varimax")) "RC" else "PC", i, "-2SD"),
             legendgroup = paste0("PC", i),
             line = list(color = colors[i], dash = 'dash')
           )
@@ -522,7 +536,7 @@
       
       n_comp <- ncol(pca_res$scores)
       for(i in 1:n_comp) {
-        scores_df[paste0("PC", i)] <- round(pca_res$scores[,i], 3)
+        scores_df[paste0(if (identical(pca_res$rotation, "varimax")) "RC" else "PC", i)] <- round(pca_res$scores[,i], 3)
       }
       
       datatable(scores_df, 

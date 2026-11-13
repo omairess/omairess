@@ -174,6 +174,51 @@ names(d2)[-(1:4)] <- sprintf("Mel_%02d", clock)
 d2[3, "Mel_18"] <- NA
 run_layout("one row per night", d2, names(d2)[-(1:4)], "night", "mel_long.csv")
 
+# Layout 3: three conditions within participants, one row per condition, no
+# group. The exported script must give the app's pairwise contrasts.
+on3 <- on1 + 3          # whole hours: a rise starting between hourly samples is interpolated early
+Y3 <- t(sapply(on3, prof))
+d4 <- data.frame(ID = rep(sprintf("P%02d", 1:n), 3), cond = rep(c("A_base", "B_drug", "C_rec"), each = n),
+                 rbind(Y1, Y2, Y3))
+names(d4)[-(1:2)] <- sprintf("Mel_%02d", clock)
+csv4 <- tempfile(fileext = ".csv"); write.csv(d4, csv4, row.names = FALSE)
+testServer(server, {
+  cat("\n-- three conditions within participants --\n")
+  session$setInputs(datafile = list(name = "mel3.csv", datapath = csv4), header = TRUE, sep = ",",
+                    data_format = "wide", load_data = 1)
+  session$setInputs(sel_data_vars = names(d4)[-(1:2)], sel_cov_vars = "cond", subject_id_var = "ID",
+                    apply_selection = 1)
+  session$setInputs(dlmo_time_src = "_shared_", dlmo_units = "pg/mL", dlmo_night_var = "cond",
+                    dlmo_group_var = "_none_", dlmo_gap_h = 6, dlmo_methods = "fixed", dlmo_threshold = 3,
+                    dlmo_confirm = 1, dlmo_max_gap = 2, dlmo_lloq = NA, dlmo_bed_src = "none", run_dlmo = 1)
+  r <- values$dlmo_results
+  cp <- dance_dlmo_comparisons(r, "fixed")
+  pw <- cp$test$tests[cp$test$tests$test == "contrast (Satterthwaite)", ]
+  dB <- pw$estimate[pw$effect == "B_drug - A_base"]; dC <- pw$estimate[pw$effect == "C_rec - A_base"]
+  want_B <- mean(on2 - on1); want_C <- 3
+  chk(isTRUE(cp$test$ok) && nrow(pw) == 3 && abs(dB - want_B) < 0.05 && abs(dC - want_C) < 0.05 &&
+        all(is.finite(pw$p_adj)),
+      sprintf("three conditions: every pair compared, Holm-adjusted (drug - base %.2f h, rec - base %.2f h)", dB, dC),
+      sprintf("three conditions: the pairwise contrasts are missing or wrong: %s", paste(capture.output(print(pw[, c("effect","estimate","p","p_adj","n")])), collapse = "\n")))
+  for (o in c("dlmo_compare_ui", "dlmo_design_note", "dlmo_test_table")) render(paste("three conditions", o), output[[o]])
+  chk(grepl("3 nights / conditions", paste(unlist(output$dlmo_design_note), collapse = "")) &&
+        any(grepl("p (Holm)", render("three conditions table", output$dlmo_test_table), fixed = TRUE)),
+      "three conditions: the design is stated and the Holm column shown",
+      "three conditions: the design line or the Holm column is missing")
+  rep <- render("three conditions report", dance_apa_report(values, input, "T"))
+  chk(any(grepl("Holm-adjusted p", rep)) && any(grepl("within participants: 3 nights / conditions", rep)),
+      "three conditions: the report states the design and the adjusted p",
+      "three conditions: the report lacks the design or the adjusted p")
+  code <- render("three conditions script", generate_analysis_code())
+  env <- new.env(parent = globalenv()); env$dance_input_data <- values$data
+  ok <- tryCatch({ eval(parse(text = code), envir = env); TRUE }, error = function(e) { cat("   script error:", conditionMessage(e), "\n"); FALSE })
+  sc <- if (ok) env$dance_dlmo_comparisons(env$dlmo_run, "fixed")$test$tests else NULL
+  chk(ok && isTRUE(all.equal(sc[, c("estimate", "lo", "hi", "statistic", "df1", "df2", "p", "p_adj")],
+                             cp$test$tests[, c("estimate", "lo", "hi", "statistic", "df1", "df2", "p", "p_adj")])),
+      "three conditions: the exported script gives the app's tests and contrasts",
+      "three conditions: the script's comparisons differ from the app's")
+})
+
 # Column names whose first number is not the hour: two columns read as the
 # same time, and the run is refused rather than run on wrong times
 d3 <- d1; names(d3)[-(1:3)] <- c(sprintf("Mel_%02d", clock), sprintf("Mel_N2_%02d", clock))

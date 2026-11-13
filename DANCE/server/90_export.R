@@ -1090,12 +1090,18 @@
       }
       add("")
 
-      add("# Perform functional PCA")
+      add("# Perform functional PCA (the app's dance_fpca: fda::pca.fd, then fda::varmx.pca.fd")
+      add("# when a VARIMAX rotation was asked for)")
+      pca_rot <- if (identical(values$pca_results$rotation, "varimax")) "varimax" else "none"
+      add("# Rotation: ", if (pca_rot == "varimax")
+            "VARIMAX -- the rotated components are not ordered by variance and depend on n_components"
+          else "none")
+      emit_kernel("dance_fpca")
       add("n_components <- ", n_comp)
       if(!is.null(values$warping_results)) {
-        add("pca_results <- pca.fd(reg_fd, nharm = n_components)")
+        add("pca_results <- dance_fpca(reg_fd, n_components, \"", pca_rot, "\")")
       } else {
-        add("pca_results <- pca.fd(fd_obj, nharm = n_components)")
+        add("pca_results <- dance_fpca(fd_obj, n_components, \"", pca_rot, "\")")
       }
       add("")
       add("# Extract results")
@@ -1868,7 +1874,7 @@
           ", has_bed = ", dl$has_bed, ")")
       add("for (m in ", dance_export_vec(dl$methods), ") {")
       add("  cp <- dance_dlmo_comparisons(dlmo_run, m)")
-      add("  cat('\\n==', m, '==\\n'); print(cp$desc)")
+      add("  cat('\\n==', m, '==\\n'); cat(cp$design, '\\n'); print(cp$desc)")
       add("  if (isTRUE(cp$test$ok)) print(cp$test$tests) else cat(cp$test$message, '\\n')")
       add("  if (!is.null(cp$pa_test) && isTRUE(cp$pa_test$ok)) print(cp$pa_test$tests)")
       add("}")
